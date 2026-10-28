@@ -179,58 +179,56 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       case "providers":
         return (
           <div>
-            <Head t="供应商" h="OpenAI 兼容接口。API Key 只读环境变量，不落盘不回传；保存后无需重启。" />
-            {provider?.configured && !pEditing ? (
+            <Head t="供应商" h="OpenAI 兼容接口 · API Key 只读环境变量（不落盘不回传）· 保存后无需重启" />
+            {provider?.configured ? (
               <div style={S.card}>
                 <div style={S.rowBetween}>
                   <span style={S.meta}>
+                    <span style={S.providerIcon}><Icon name="cloud-upload" size={15} /></span>
                     <span style={S.metaTitle}>{provider.provider}</span>
-                    <span style={provider.usable ? BADGE.ok : BADGE.warn}>
-                      {provider.usable ? "可用" : provider.reason ?? "不可用"}
-                    </span>
-                    <span style={provider.hasApiKey ? BADGE.ok : BADGE.warn}>
-                      {provider.hasApiKey ? "密钥就绪" : "缺少密钥"}
-                    </span>
+                    <span style={provider.usable ? BADGE.ok : BADGE.warn}>{provider.usable ? "已连接" : "待验证"}</span>
                   </span>
                   <span style={S.icons}>
-                    <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: provider.provider ?? pForm.provider, baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" }).then(setTestRes).catch(bad)} />
+                    <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" }).then(setTestRes).catch(bad)} />
                     <Btn label="编辑" small onClick={() => setPEditing(true)} />
-                    <Btn label="删除" small onClick={() => void api.settings.clearProvider().then(() => { setProvider(null); setPEditing(false); ok("已清除供应商配置"); }).catch(bad)} />
+                    <Btn label="删除" small onClick={() => void api.settings.clearProvider().then(() => { setProvider(null); setPEditing(false); ok("已删除供应商配置"); }).catch(bad)} />
                   </span>
                 </div>
-                <div style={S.kv}>
-                  <Kv k="接口地址" v={provider.baseUrl ?? "-"} />
-                  <Kv k="默认模型" v={provider.model ?? "-"} />
+                <div style={S.providerRows}>
+                  <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{provider.baseUrl ?? "—"}</span></div>
+                  <div style={S.providerRow}><span style={S.providerKey}>模型</span><span style={S.providerVal}>{provider.model ?? "—"}</span></div>
+                  <div style={S.providerRow}><span style={S.providerKey}>密钥</span><span style={S.providerVal}>{provider.hasApiKey ? "环境变量已设置" : "未设置（LOOPSOAR_API_KEY）"}</span></div>
                 </div>
                 {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
-                <div style={S.btns}>
-                  <Btn label="添加供应商配置" primary onClick={() => setPEditing(true)} />
-                </div>
+                {!pEditing ? <div style={S.btns}><Btn label="添加供应商配置" primary onClick={() => { setPForm({ provider: "", baseUrl: "", model: "" }); setPEditing(true); }} /></div> : null}
               </div>
-            ) : (
-              <div>
-                <div style={S.btns}>
+            ) : null}
+            {!provider?.configured || pEditing ? (
+              <div style={S.card}>
+                <div style={S.formHead}>{provider?.configured ? "编辑供应商" : "添加供应商"}</div>
+                <div style={S.presetRow}>
                   <span style={S.tag}>快速填充</span>
                   {[
                     { name: "DeepSeek", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
                     { name: "OpenAI", provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-                    { name: "本地 llama.cpp", provider: "local", baseUrl: "http://127.0.0.1:8080/v1", model: "local-model" },
+                    { name: "OpenRouter", provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-chat" },
+                    { name: "本地", provider: "local", baseUrl: "http://127.0.0.1:8080/v1", model: "local-model" },
                   ].map((preset) => (
                     <Btn key={preset.name} label={preset.name} small onClick={() => setPForm({ provider: preset.provider, baseUrl: preset.baseUrl, model: preset.model })} />
                   ))}
                 </div>
-                <Field l="服务商名称"><In v={pForm.provider} ph="deepseek" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
+                <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
                 <Field l="接口地址"><In v={pForm.baseUrl} ph="https://api.deepseek.com/v1" on={(x) => setPForm({ ...pForm, baseUrl: x })} /></Field>
-                <Field l="模型名"><In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} /></Field>
+                <Field l="模型"><In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} /></Field>
                 <div style={S.btns}>
                   <Btn label="测试连接" onClick={() => void api.settings.testProvider(pForm).then(setTestRes).catch(bad)} />
-                  <Btn label="保存配置" primary onClick={() => void saveProvider().then(() => setPEditing(false))} />
+                  <Btn label="保存" primary onClick={() => void saveProvider().then(() => setPEditing(false))} />
                   {provider?.configured ? <Btn label="取消" onClick={() => setPEditing(false)} /> : null}
                   {testRes ? <span style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</span> : null}
                 </div>
               </div>
-            )}
-            <div style={S.note}>环境变量：<code style={S.code}>LOOPSOAR_API_KEY=&lt;密钥&gt;</code>（重启应用生效）</div>
+            ) : null}
+            <div style={S.note}>密钥走环境变量（重启生效）：<code style={S.code}>LOOPSOAR_API_KEY=&lt;密钥&gt;</code></div>
           </div>
         );
 
@@ -430,6 +428,21 @@ const S: Record<string, React.CSSProperties> = {
   btns: { display: "flex", alignItems: "center", gap: 10, paddingTop: 12, flexWrap: "wrap" },
   card: { border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 12, marginBottom: 10, background: BRAND.inkPanel },
   metaTitle: { fontSize: 13.5, fontWeight: 700, color: BRAND.linen },
+  providerIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    display: "grid",
+    placeItems: "center",
+    background: BRAND.ochreSoft,
+    color: BRAND.ochreHover,
+  },
+  providerRows: { display: "grid", gap: 4, margin: "10px 0 4px" },
+  providerRow: { display: "flex", gap: 10, alignItems: "baseline", fontSize: 11.5 },
+  providerKey: { width: 54, flexShrink: 0, color: BRAND.linenFaint },
+  providerVal: { color: BRAND.linen, fontFamily: "ui-monospace, Consolas, monospace", fontSize: 11, wordBreak: "break-all" },
+  formHead: { fontSize: 13, fontWeight: 700, marginBottom: 10 },
+  presetRow: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 10 },
   meta: { display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
   icons: { display: "inline-flex", gap: 4, flexShrink: 0 },
   tag: { fontSize: 10.5, color: BRAND.linenFaint },

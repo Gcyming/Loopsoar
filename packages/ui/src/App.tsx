@@ -152,6 +152,7 @@ export default function App(): React.JSX.Element {
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [permMenuOpen, setPermMenuOpen] = useState(false);
   const [modelList, setModelList] = useState<{ models: string[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
@@ -469,6 +470,16 @@ export default function App(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [api]);
 
+  // E2E 深链：?e2e=settings&section=xxx 直接打开对应设置分区
+  useEffect(() => {
+    if (typeof location === "undefined") return;
+    const params = new URLSearchParams(location.search);
+    if (params.get("e2e") !== "settings") return;
+    setSettingsOpen(true);
+    const wanted = params.get("section");
+    if (wanted) setSettingsSection(wanted);
+  }, []);
+
   // 修复遮挡：应用内浮层（设置）打开时隐藏原生 WebContentsView
   useEffect(() => {
     if (!api) return;
@@ -660,6 +671,55 @@ export default function App(): React.JSX.Element {
                 style={styles.textarea}
                 rows={3}
               />
+              {permMenuOpen && permSummary ? (
+                <div style={styles.modelMenu}>
+                  <div style={styles.modelMenuHead}>本会话工具权限</div>
+                  {[
+                    { key: "read", label: "读取文件" },
+                    { key: "write", label: "写入文件" },
+                    { key: "terminal", label: "执行命令" },
+                    { key: "network", label: "网络访问" },
+                  ].map((cat) => (
+                    <div key={cat.key} style={styles.permRow}>
+                      <span style={styles.permCat}>{cat.label}</span>
+                      <span style={styles.permSeg}>
+                        {(["allow", "confirm", "deny"] as const).map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            className="perm-seg"
+                            style={{
+                              ...styles.permSegBtn,
+                              ...(permSummary.permissions[cat.key as "read"] === v ? styles.permSegBtnOn : {}),
+                            }}
+                            onClick={() => {
+                              const next = {
+                                ...permSummary,
+                                permissions: { ...permSummary.permissions, [cat.key]: v },
+                              };
+                              setPermSummary(next);
+                              void api?.settings.setPermissions(next.permissions).catch(() => {});
+                            }}
+                          >
+                            {v === "allow" ? "允许" : v === "confirm" ? "询问" : "拒绝"}
+                          </button>
+                        ))}
+                      </span>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="model-item"
+                    style={styles.modelMenuFoot}
+                    onClick={() => {
+                      setPermMenuOpen(false);
+                      openSettings("permissions");
+                    }}
+                  >
+                    打开完整权限设置…
+                  </button>
+                </div>
+              ) : null}
               {modelMenuOpen ? (
                 <div style={styles.modelMenu}>
                   <div style={styles.modelMenuHead}>
@@ -713,8 +773,8 @@ export default function App(): React.JSX.Element {
                   type="button"
                   className="chip"
                   style={styles.chip}
-                  title="当前会话权限（点击修改）"
-                  onClick={() => openSettings("permissions")}
+                  title="当前会话权限"
+                  onClick={() => setPermMenuOpen((v) => !v)}
                 >
                   <Icon name="check" size={12} style={{ marginRight: 4 }} />
                   {permSummary ? permissionLabel(permSummary) : "权限"}
@@ -778,6 +838,7 @@ export default function App(): React.JSX.Element {
 
       {settingsOpen ? (
         <Settings
+          key={settingsSection || "settings"}
           api={api}
           initialSection={(settingsSection || undefined) as never}
           onClose={() => {
@@ -994,6 +1055,23 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeft: `1px solid ${BRAND.border}`,
     transition: "background 120ms",
   },
+  permRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "5px 8px",
+  },
+  permCat: { fontSize: 11.5, color: BRAND.linenMuted },
+  permSeg: { display: "inline-flex", border: `1px solid ${BRAND.border}`, borderRadius: 6, overflow: "hidden" },
+  permSegBtn: {
+    padding: "2px 7px",
+    border: "none",
+    background: "transparent",
+    color: BRAND.linenFaint,
+    fontSize: 10.5,
+    cursor: "pointer",
+  },
+  permSegBtnOn: { background: BRAND.ochre, color: BRAND.ink, fontWeight: 700 },
   modelMenu: {
     position: "absolute",
     right: 8,
