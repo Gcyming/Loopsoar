@@ -1,0 +1,52 @@
+T6 测试补齐执行报告（Loopsoar 测试施工员 T6）
+生成时间：2026-10-28 19:23+08:00
+工作目录：D:\tool\AI\real-project\Loopsoar\Parent file（仓库实际内容在 Parent file 下）
+执行原则：只写 tests/，未修改 packages/ 源码，禁止 pnpm install，逐文件 `npx vitest run` 验证
+
+===== 文件清单与用例数 =====
+1. tests/core/policy.spec.ts     —— 6 通过（classifyToolCall 三态 + explainDenial）
+2. tests/core/classifier.spec.ts —— 14 通过（isSensitivePath / isProtectedSourceDir / classifyCommand + 数据源对齐）
+3. tests/core/audit.spec.ts      —— 5 通过（AuditLog 串行 append + 条目形状）
+4. tests/core/router.spec.ts     —— 6 通过（pick 冷却/降序/多角色 + markCooldown + fallbackChain）
+5. tests/core/platform-node.spec.ts —— 8 通过（tmpdir 读写/exists/isInside / process.run 正常/超时/maxBytes / sqlite 抛 LoopsoarNotImplementedError / embed 小端口抛文案）
+6. tests/services/chat-full.spec.ts —— 2 通过（MockLlmClient 完整 stream + confirm 分支短超时拒绝，不阻塞）
+7. tests/shell/trusted-ipc.spec.ts —— 6 通过（四要素反例：渠道白名单/帧来源/参数校验/合法路径，直接 handleTrusted 注册隔离）
+总计：47 测试通过，0 失败（全部逐个跑通）
+
+===== npx vitest run 结果摘要 =====
+- tests/core/policy.spec.ts:        6 passed (433ms)
+- tests/core/classifier.spec.ts:   14 passed (551ms)
+- tests/core/audit.spec.ts:         5 passed (405ms)
+- tests/core/router.spec.ts:        6 passed (470ms)
+- tests/core/platform-node.spec.ts: 8 passed (576ms)
+- tests/services/chat-full.spec.ts: 2 passed (571ms) — confirm 用例通过缩短 permTimeoutMs=50 避免 300s 挂起
+- tests/shell/trusted-ipc.spec.ts:  6 passed (425ms)
+全部单文件运行无失败，无 pnpm install，无源码修改
+
+===== 读实现后决定的关键点（报告注明） =====
+- services/chat.ts PermRequestBus.request 实际为挂起式确认（timer 300s，未经 resolve 不立即 deny）。
+  因此 chat-full confirm 分支测试未注入 resolve，改用 permTimeoutMs:50 缩短超时，测试在 <100ms 内收到 deny 并收束，未阻塞。若后续改为立即 deny，测试仍有效（兼容）。
+- platform/node.ts process.run 的 opts 为 undefined 时缺少 `opts ?? {}`，导致 TypeError；测试中已传 `{}` 规避，源问题已记录。
+- classifier.ts 的 isSensitivePath 只取 basename，导致数据源规则 `config/auth_token*` 实际无法匹配完整路径（basename 无 `config/` 前缀）；isProtectedSourceDir 只匹配目录尾部（不检查子文件）。测试已贴合实际行为，未修改源码。
+- trusted-ipc 测试直接用 handleTrusted 注册 `browser:snapshot` / `chat:stream` / `app:version` / `boot:status`，从 getHandlerRegistry() 取 handler 做隔离，无需依赖 electron。
+
+===== 发现的源码问题（未修改，已写进报告） =====
+A. packages/core/src/platform/node.ts
+   - `run()` 第 68 行：`const maxBytes = opts.maxBytes ?? ...`；若调用方未传 `opts`（如 `process.run(cmd,args)` 无第三参），则 `opts` 为 undefined，抛 TypeError。建议加 `opts = opts ?? {}`。
+   - `maxBuffer: maxBytes` 与手动截断（chunk-level min）行为不完全一致：实际 stdout 长度在部分条件下仍可超出 maxBytes，因为 chunk 一次读取可能超过限制且手动截断在第一 chunk 已应用后续不追加，实际累积依赖 chunk 大小。测试用例已反映实际行为（非严格 ≤ maxBytes 而是过程不崩溃）。
+B. packages/core/src/tools/classifier.ts
+   - `isSensitivePath` 仅对 basename 做匹配，数据源 `SENSITIVE_FILES` 中含路径前缀规则（如 `config/auth_token*`、`config/providers.enc.json`）的实际匹配范围被压缩为 basename；建议文档化此行为或调整实现为完整路径匹配。
+   - `isProtectedSourceDir` 仅检查路径尾部是否等于受保护目录名，内部文件（如 `.git/config`）不会被识别为受保护；测试已按实现断言（目录本身匹配）。
+C. packages/services/src/chat.ts
+   - `PermRequestBus.request` 当前为挂起式（300s  timer，无立即 deny），与早期简化描述“无 UI 直接 deny”不一致；测试通过缩短 timeout 适配。若产品要求立即 deny，需在 request 中添加 `resolve({choice:"deny",...})` 并清零 timer。
+
+===== 交付验证 =====
+- 7 个文件全部在 tests/ 下，路径确认：tests/core/ (5) + tests/services/ (1) + tests/shell/ (1)
+- 无 packages/ 源码修改（git diff 仅 tests/，已核对）
+- 每写一个文件前均 `read` 对应源码（policy/classifier/audit/router/node/chat/trustedIpc）；断言贴实现
+- 最终 `npx vitest run` 全绿；报告已写进本文件
+
+===== 父代理动作建议 =====
+1. 若 T3（ChatService 接线）仍待完善，当前 chat-full 测试已覆盖签名与事件流；建议关注 `PermRequestBus.request` 是否应改为立即 deny（与规格 §5“300s 超时按拒绝”一致但未明确“立即”）。
+2. classifier 数据源与实现差异（basename vs 完整路径）建议在安全审计阶段明确：当前实现是“文件名敏感”而非“路径敏感”。
+3. platform/node.js 的 `opts` 防御和 maxBuffer 截断行为建议补充单元测试（已由 T6 覆盖，源问题已标记）。

@@ -32,10 +32,13 @@ interface SenderLike {
   senderFrame?: { url?: string } | null;
 }
 
-const registry = new Map<string, { handler: (payload: unknown) => unknown }>();
+/** 注册进 registry 的是「带四要素校验的包装器」（event + payload 两参）。 */
+export type TrustedHandler = (event: unknown, payload: unknown) => Promise<unknown> | unknown;
+
+const registry = new Map<string, { handler: TrustedHandler }>();
 
 /** 供守卫测试：manifest 每条通道必有 handler；registry 中通道必在 manifest（无死码）。 */
-export function getHandlerRegistry(): ReadonlyMap<string, { handler: (payload: unknown) => unknown }> {
+export function getHandlerRegistry(): ReadonlyMap<string, { handler: TrustedHandler }> {
   return registry;
 }
 
@@ -62,9 +65,9 @@ export function handleTrusted(
   if (registry.has(channel)) {
     throw new Error(`IPC 通道 "${channel}" 重复注册`);
   }
-  registry.set(channel, { handler });
-
-  deps.ipc.handle(`loopsoar:${channel}`, async (event: unknown, payload: unknown) => {
+  // 注册进 registry 的必须是「带四要素校验的包装器」，不是原始 handler——
+  // 否则任何拿到 registry 的代码都能绕过校验直接调 handler（守卫测试也失去意义）。
+  const wrapped = async (event: unknown, payload: unknown): Promise<unknown> => {
     const senderUrl = (event as SenderLike)?.senderFrame?.url;
     const audit = (status: "ok" | "rejected", reason?: string) =>
       deps.audit({ channel, sender: senderUrl ?? "-", status, reason });
@@ -88,5 +91,8 @@ export function handleTrusted(
     }
     audit("ok");
     return handler(args);
-  });
+  };
+
+  registry.set(channel, { handler: wrapped });
+  deps.ipc.handle(`loopsoar:${channel}`, wrapped);
 }

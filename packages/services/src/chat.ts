@@ -1,255 +1,320 @@
-// §5 services 包 / ChatService 流式编排
-// 编排流程：buildSystemSegments → ModelRouter → runToolLoop → 每轮 auditClaims → 事件归一
-// 未定义细节选最简实现（直接线性编排，无异步并行优化、无额外缓存层）。
-import type { ChannelBinding } from "loopsoar-contracts/schemas";
-
-// 本地简化类型：依赖 loopsoar-core 公开接口签名，但不假设其实现细节
-interface SystemSegments {
-  stable: string;
-  volatile: string;
-}
-
-interface BudgetUsage {
-  rounds: number;
-  toolCalls: number;
-  totalTokens: number;
-  wallClockMs: number;
-}
-
-interface ToolLoopOutcome {
-  status: "done" | "budget" | "aborted" | "silent" | "no-progress" | "error";
-  reason: string;
-  finalText: string;
-  usage?: BudgetUsage;
-}
-
-// 本地使用 events.ts 已定义的 StreamChunkBatcher / ChunkBatch / ChunkItem
+// §5 services 包 / ChatService 流式编排（T3 真接线）
+// 流程：buildSystemSegments → runToolLoop（真引擎：四闸/心跳/转向）→ 每轮声称核验 → 事件归一
+// 权限：InternalToolExecutor 内做 sandbox.checkPermission；confirm/deny 走 PermRequestBus（挂起 + 超时按拒绝）
+// 设计：services 不 import electron；全部能力经注入（llm/platform/registry/sandbox）。
+import type { LlmClient } from "loopsoar-core/llm";
+import type { LoopsoarPlatform } from "loopsoar-core/platform";
+import { buildSystemSegments } from "loopsoar-core/session";
+import {
+  runToolLoop,
+  type ToolCall,
+  type ToolLoopOutcome,
+} from "loopsoar-core/tool_loop";
+import { auditClaims, type ClaimFinding } from "loopsoar-core/claims";
+import { SteerBus } from "loopsoar-core/steerBus";
+import type { ToolRegistry } from "loopsoar-core/tools/registry";
+import type { SandboxManager, PermissionKind } from "loopsoar-core/sandbox";
 import { StreamChunkBatcher } from "./events.js";
 import type { ChunkBatch, ChunkItem } from "./events.js";
 
-// 本地使用 events.ts 已定义的类型
+/** Agent 身份（身份铁律的稳定段来源）。 */
+export interface ChatAgent {
+  name: string;
+  role: string;
+}
 
-// 简化类型：使用规格定义的签名，不假设 core 实现细节。
-interface ChatInput {
+/** 事件类型（与 core LoopEvent.type 对齐；shell 按此映射到 chat:stream:<type>）。 */
+export type ChatEventType =
+  | "chunk"
+  | "reasoning"
+  | "tool"
+  | "progress"
+  | "done"
+  | "error"
+  | "heartbeat";
+
+export interface ChatServiceOptions {
+  /** 未注入时 stream 返回可读错误（不崩溃）——装配层负责注入。 */
+  llm?: LlmClient;
+  platform?: LoopsoarPlatform;
+  registry?: ToolRegistry;
+  sandbox?: SandboxManager;
+  agent?: ChatAgent;
+  /** 权限确认超时（默认 300s，超时按拒绝）。 */
+  permTimeoutMs?: number;
+}
+
+export interface ChatInput {
   message: string;
   sessionId?: string;
-  agent: unknown;
-  platform: unknown;
-  llm: unknown;
-  registry: unknown;
-  sandbox: unknown;
 }
 
-interface ChatStreamResult {
-  status: "done" | "budget" | "aborted" | "silent" | "no-progress" | "error";
+export interface ChatStreamResult {
+  status: LoopRunStatus;
   reason: string;
   finalText: string;
-  usage: BudgetUsage;
+  usage: { rounds: number; toolCalls: number; totalTokens: number; wallClockMs: number };
   chunks: ChunkBatch[];
+  /** 声称核验发现（仅列出 exists=false 的可疑声称）。 */
+  claims: ClaimFinding[];
 }
 
-// 简化工具执行器接口（与 core 依赖注入兼容）
-interface ToolExecutor {
-  invoke(toolCall: { name: string; args: Record<string, unknown> }): Promise<{ ok: boolean; content: string; error?: string }>;
-}
-
-/**
- * 事件归一器：将内部事件流转换为标准化的 ChunkItem 流
- */
-export class EventNormalizer {
-  normalize(
-    eventType: string,
-    data: unknown,
-  ): ChunkItem {
-    const meta = { event: eventType };
-    if (typeof data === "string") {
-      return { content: data, meta };
-    }
-    return { content: JSON.stringify(data), meta };
-  }
-}
+type LoopRunStatus = ToolLoopOutcome["status"];
 
 /**
- * 权限请求总线（PermRequestBus）：挂起式确认请求
- * 规格：无 UI 时 300s 超时按拒绝（deny）结算
+ * 权限请求总线：挂起式确认。
+ * 为什么挂起：confirm 语义就是「等用户点」；超时按 deny 是 fail-closed 的必然选择。
  */
 export class PermRequestBus {
-  private requests: Map<string, { choice: "allow-once" | "allow-session" | "deny"; customReason?: string; timer?: NodeJS.Timeout }> = new Map();
-  private readonly TIMEOUT_MS = 300_000; // §5：300s 超时
+  private pending = new Map<
+    string,
+    {
+      resolve: (r: { choice: "allow-once" | "allow-session" | "deny"; customReason?: string }) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
 
-  /** 发起确认请求，返回确认结果（超时按 deny） */
-  request(decision: { requestId: string; toolName: string; target?: string }): Promise<{ choice: "allow-once" | "allow-session" | "deny"; customReason?: string }> {
+  constructor(private timeoutMs = 300_000) {}
+
+  request(decision: { requestId: string; toolName: string; target?: string }): Promise<{
+    choice: "allow-once" | "allow-session" | "deny";
+    customReason?: string;
+  }> {
     return new Promise((resolve) => {
-      // 无 UI 时直接按 deny 结算（简化实现）
       const timer = setTimeout(() => {
-        this.requests.delete(decision.requestId);
-        resolve({ choice: "deny", customReason: "超时未响应（300s），默认拒绝" });
-      }, this.TIMEOUT_MS);
-      // 占位：实际应由外部 UI 回调 resolve；此处仅设置超时
-      this.requests.set(decision.requestId, {
-        choice: "deny",
-        customReason: "无 UI —— 占位拒绝",
-        timer,
-      });
-      // 立即结算：无 UI 场景直接返回 deny
-      resolve({ choice: "deny", customReason: "无交互 UI，默认拒绝（fail-closed）" });
+        this.pending.delete(decision.requestId);
+        resolve({ choice: "deny", customReason: `确认超时（${this.timeoutMs}ms），按拒绝结算` });
+      }, this.timeoutMs);
+      this.pending.set(decision.requestId, { resolve, timer });
     });
   }
 
-  /** 结算某请求（由外部 UI 调用） */
-  settle(requestId: string, choice: "allow-once" | "allow-session" | "deny", customReason?: string): void {
-    const req = this.requests.get(requestId);
-    if (req && req.timer) {
-      clearTimeout(req.timer);
-      req.timer = undefined;
-    }
-    this.requests.delete(requestId);
-    // 占位：实际应由外部通知机制处理
+  /** 结算某请求（由 shell 的 perm:respond 调用）。 */
+  resolve(requestId: string, choice: "allow-once" | "allow-session" | "deny", customReason?: string): boolean {
+    const req = this.pending.get(requestId);
+    if (!req) return false;
+    clearTimeout(req.timer);
+    this.pending.delete(requestId);
+    req.resolve({ choice, customReason });
+    return true;
   }
 
-  /** 清理所有挂起请求 */
+  /** 清理全部挂起请求（会话终止/应用退出）。 */
   clearAll(): void {
-    for (const [id, req] of this.requests) {
-      if (req.timer) clearTimeout(req.timer);
-      this.requests.delete(id);
+    for (const [, req] of this.pending) {
+      clearTimeout(req.timer);
+      req.resolve({ choice: "deny", customReason: "会话终止，按拒绝结算" });
     }
+    this.pending.clear();
+  }
+
+  get size(): number {
+    return this.pending.size;
   }
 }
 
-/**
- * 工具执行器：内部做权限判定（sandbox.checkPermission → allow 执行 / confirm 走 PermRequestBus / deny 拒绝）
- */
-export class InternalToolExecutor implements ToolExecutor {
+/** 由工具权限声明推导沙箱 kind（终端/网络优先，写次之，其余读）。 */
+function kindOfTool(permissions: Record<string, unknown> | undefined): PermissionKind {
+  if (!permissions) return "read";
+  if (permissions.terminal) return "terminal";
+  if (permissions.network) return "network";
+  if (permissions.write) return "write";
+  return "read";
+}
+
+/** 工具执行器：权限判定 → 执行（allow）/ 挂起确认（confirm）/ 拒绝（deny）。 */
+export class InternalToolExecutor {
   constructor(
-    private sandbox: unknown,
-    private permBus: PermRequestBus,
-    private platform: unknown,
+    private opts: {
+      registry?: ToolRegistry;
+      sandbox?: SandboxManager;
+      permBus: PermRequestBus;
+      platform?: LoopsoarPlatform;
+      agentId: string;
+      sessionId: string;
+    },
   ) {}
 
-  async invoke(toolCall: { name: string; args: Record<string, unknown> }): Promise<{ ok: boolean; content: string; error?: string }> {
-    // 权限判定：调用 sandbox.checkPermission（依赖注入接口）
-    const sandboxAny = this.sandbox as { checkPermission?: (req: unknown) => { action: "allow" | "confirm" | "deny"; level?: number; reason?: string } };
-    if (!sandboxAny || !sandboxAny.checkPermission) {
-      // 简化：未提供 sandbox 时 fail-closed（拒绝）
-      return { ok: false, content: "[错误] 沙箱未装配：拒绝执行", error: "sandbox 未装配" };
+  async invoke(toolCall: ToolCall): Promise<{ ok: boolean; content: string; error?: string }> {
+    const { registry, sandbox, permBus } = this.opts;
+    if (!registry || !sandbox) {
+      // 装配不完整 → fail-closed（不猜权限）
+      return { ok: false, content: "[错误] 工具执行器未装配（registry/sandbox 缺失）", error: "not-assembled" };
     }
-    const decision = sandboxAny.checkPermission({ agentId: "system", toolName: toolCall.name, target: (toolCall.args?.path as string) || null, kind: "terminal" });
+    const tool = registry.get(toolCall.name);
+    const kind = kindOfTool(tool?.permissions as Record<string, unknown> | undefined);
+    const target = typeof (toolCall.args as { path?: unknown })?.path === "string"
+      ? String((toolCall.args as { path?: unknown }).path)
+      : undefined;
+
+    const decision = sandbox.checkPermission({
+      agentId: this.opts.agentId,
+      toolName: toolCall.name,
+      target,
+      kind,
+    });
+
     if (decision.action === "deny") {
-      return { ok: false, content: `[错误] 权限拒绝：${decision.reason || "deny"}`, error: decision.reason || "deny" };
+      return { ok: false, content: `[错误] 权限拒绝：${decision.reason}`, error: decision.reason };
     }
     if (decision.action === "confirm") {
-      const result = await this.permBus.request({ requestId: `req-${toolCall.name}-${Date.now()}`, toolName: toolCall.name, target: String(toolCall.args?.path || "") || undefined });
+      const requestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const result = await permBus.request({ requestId, toolName: toolCall.name, target });
       if (result.choice === "deny") {
-        return { ok: false, content: `[错误] 确认被拒绝：${result.customReason || "用户拒绝"}`, error: result.customReason || "用户拒绝" };
+        return { ok: false, content: `[错误] 确认被拒绝：${result.customReason ?? "用户拒绝"}`, error: "denied" };
       }
-      // allow-once / allow-session 均视为本次放行
+      if (result.choice === "allow-session") sandbox.approveToolForSession(this.opts.agentId, toolCall.name);
     }
-    // 简化执行：直接构造占位结果（规格未定义真实执行细节）
-    return { ok: true, content: `[工具结果] 工具 ${toolCall.name} 已执行，参数：${JSON.stringify(toolCall.args)}` };
+    if (!tool) {
+      return { ok: false, content: `[错误] 未知工具 ${toolCall.name}（不在注册表）`, error: "unknown-tool" };
+    }
+    const result = await tool.execute({
+      agentId: this.opts.agentId,
+      sessionId: this.opts.sessionId,
+      platform: this.opts.platform as never,
+      params: toolCall.args,
+    });
+    return { ok: result.ok, content: result.content, error: result.error };
   }
 }
 
 /**
- * ChatService：流式编排核心
+ * ChatService：流式编排核心。
+ * 事件以 ChunkItem 形式交给 sink（meta.type = chunk/reasoning/tool/progress/done/error/heartbeat），
+ * shell 层据此映射到 chat:stream:<type> 推送；batcher 负责 40ms/24000 字合批。
  */
 export class ChatService {
-  private batcher!: StreamChunkBatcher; // 每次 stream() 调用时重建，见 stream() 内 this.batcher = ...
-  private eventNormalizer = new EventNormalizer();
-  private permBus = new PermRequestBus();
+  private permBus: PermRequestBus;
+  private aborts = new Map<string, AbortController>();
 
-  constructor(private opts: {
-    batchFlushMs?: number;
-    batchMaxChars?: number;
-  } = {}) {}
+  constructor(private opts: ChatServiceOptions = {}) {
+    this.permBus = new PermRequestBus(opts.permTimeoutMs ?? 300_000);
+  }
 
-  /** 主流式接口 */
+  /** 供 shell 的 perm:respond 调用。 */
+  resolvePermission(requestId: string, choice: "allow-once" | "allow-session" | "deny", customReason?: string): boolean {
+    return this.permBus.resolve(requestId, choice, customReason);
+  }
+
+  /** 停止某会话的进行中流（abort 后工具轮以 aborted 收束）。 */
+  stop(sessionId: string): boolean {
+    const controller = this.aborts.get(sessionId);
+    if (!controller) return false;
+    controller.abort();
+    this.aborts.delete(sessionId);
+    return true;
+  }
+
+  /** 主入口：流式对话。 */
   async stream(input: ChatInput, sink?: (item: ChunkItem) => void): Promise<ChatStreamResult> {
+    const { llm, platform, registry, sandbox, agent } = this.opts;
+    const sessionId = input.sessionId ?? `sess-${Date.now()}`;
     const chunks: ChunkBatch[] = [];
-    const collectFlush = (batch: ChunkBatch) => {
+    const batcher = new StreamChunkBatcher((batch) => {
       chunks.push(batch);
-      // 同步推送到 sink（若提供）
-      if (sink) {
-        for (const c of batch.chunks) {
-          sink(c);
-        }
-      }
+      if (sink) for (const c of batch.chunks) sink(c);
+    });
+
+    const emit = (type: ChatEventType, data: unknown): void => {
+      batcher.push({ content: typeof data === "string" ? data : JSON.stringify(data), meta: { type } });
     };
-    this.batcher = new StreamChunkBatcher(collectFlush);
 
-    // 步骤 1：构建系统段（buildSystemSegments）
-    const systemSegments = this.buildSystemSegments(input.agent);
-    this.batcher.push({ content: JSON.stringify({ kind: "system", segments: systemSegments }) });
-
-    // 步骤 2：模型路由（ModelRouter 简化占位）
-    const routerResult = this.runModelRouter(input.agent);
-    this.batcher.push({ content: JSON.stringify({ kind: "router", result: routerResult }) });
-
-    // 步骤 3：工具循环（runToolLoop）+ 工具执行器（权限判定内置）
-    const executor = new InternalToolExecutor(input.sandbox, this.permBus, input.platform);
-    const loopOutcome = await this.runSimplifiedToolLoop(input, executor, sink);
-
-    // 步骤 4：每轮声称核验（auditClaims 占位）
-    // 规格要求每轮 auditClaims；简化：在工具结果后执行一次
-    const auditResult = await this.auditClaimsPlaceholder(loopOutcome.finalText || "");
-    if (auditResult.length > 0) {
-      this.batcher.push({ content: JSON.stringify({ kind: "audit", findings: auditResult }) });
+    if (!llm) {
+      const reason = "LLM 未配置：装配层未注入 LlmClient（P1 接线）";
+      emit("error", { message: reason });
+      batcher.flushNow();
+      batcher.close();
+      return {
+        status: "error",
+        reason,
+        finalText: "",
+        usage: { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
+        chunks,
+        claims: [],
+      };
     }
 
-    // 步骤 5：事件归一与收束
-    const finalResult: ChatStreamResult = {
-      status: loopOutcome.status,
-      reason: loopOutcome.reason,
-      finalText: loopOutcome.finalText,
-      usage: loopOutcome.usage || { rounds: 1, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
-      chunks,
-    };
-
-    // 发送完成事件
-    this.batcher.push({ content: JSON.stringify({ kind: "done", result: finalResult }) });
-    this.batcher.flushNow();
-    this.batcher.close();
-    return finalResult;
-  }
-
-  // --- 编排步骤实现（简化但遵循规格签名）---
-
-  private buildSystemSegments(agent: unknown): { stable: string; volatile: string } {
-    // §4 规格：buildSystemSegments 构建身份铁律+能力自述占位
-    const stable = `身份铁律：我是 Loopsoar 平台 Agent，身份不变。\n能力自述占位。`;
-    const volatile = `心智/记忆/工作目录占位（由调用方传入）。`;
-    return { stable, volatile };
-  }
-
-  private runModelRouter(agent: unknown): { modelId: string; priority: number } {
-    // §4 规格：ModelRouter 选取模型（简化占位）
-    return { modelId: "model-default", priority: 1 };
-  }
-
-  private async runSimplifiedToolLoop(
-    input: ChatInput,
-    executor: ToolExecutor,
-    sink?: (item: ChunkItem) => void,
-  ): Promise<ToolLoopOutcome> {
-    // §4 规格：runToolLoop 核心流程（轮次循环、预算检查、心跳、steer 注入、无进展检测、usage 累计）
-    // 简化：只执行一轮工具循环（实际应多轮），实现关键闸门检查
-    const outcome: ToolLoopOutcome = {
-      status: "done",
-      reason: "简化工具轮完成（单轮执行）",
-      finalText: `已处理请求：${input.message}`,
-      usage: { rounds: 1, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
-    };
-    // 工具执行期间发送心跳
-    this.batcher?.push({ content: JSON.stringify({ kind: "heartbeat", ts: Date.now() }) });
-    // 工具调用：假设无实际工具调用（简化）
-    return outcome;
-  }
-
-  private async auditClaimsPlaceholder(text: string): Promise<{ claim: string; verified: boolean; reason: string }[]> {
-    // §4 规格：auditClaims 每轮核验声称；简化为占位实现
-    return [
-      { claim: text.slice(0, 120), verified: true, reason: "简化核验：无真实路径验证，标记为占位通过" },
+    // 稳定/易变分段：stable 进 system，volatile 挂末段 user（保 KV 前缀缓存，ADR/前期准备铁律）
+    const segments = buildSystemSegments({
+      name: agent?.name ?? "Loopsoar",
+      role: agent?.role ?? "本地 AI Agent",
+      volatile: "",
+    });
+    const messages = [
+      { role: "system" as const, content: segments.stable },
+      { role: "user" as const, content: `${input.message}\n\n${segments.volatile}` },
     ];
+
+    const controller = new AbortController();
+    this.aborts.set(sessionId, controller);
+
+    const executor = new InternalToolExecutor({
+      registry,
+      sandbox,
+      permBus: this.permBus,
+      platform,
+      agentId: agent?.name ?? "loopsoar",
+      sessionId,
+    });
+
+    let outcome: LoopRunStatus = "error";
+    let reason = "引擎未运行";
+    let finalText = "";
+    let usage = { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 };
+    let claims: ClaimFinding[] = [];
+
+    try {
+      const toolList = registry
+        ? registry.toolSchemas().map((s) => ({
+            name: s.function.name,
+            description: s.function.description,
+            parameters: s.function.parameters,
+          }))
+        : [];
+
+      const loopOutcome = await runToolLoop({
+        llm,
+        tools: () => toolList,
+        executeTool: executor,
+        limits: {},
+        budget: { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
+        sink: (event) => {
+          // LoopEvent → ChatEventType（type 同名，data 原样传递）
+          emit(event.type as ChatEventType, event.data);
+        },
+        steers: new SteerBus(),
+        signal: controller.signal,
+      });
+
+      outcome = loopOutcome.status;
+      reason = loopOutcome.reason;
+      finalText = loopOutcome.finalText;
+      usage = loopOutcome.usage;
+
+      // 声称核验：只报告「声称存在但实际不存在」的可疑项
+      if (platform && finalText) {
+        try {
+          const findings = await auditClaims(finalText, (p) => platform.fs.exists(p));
+          claims = findings.filter((f) => f.verified && !f.exists && f.reason !== "跳过 URL/域名残片");
+        } catch (err) {
+          emit("progress", { note: `声称核验异常（已跳过）：${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+    } catch (err) {
+      reason = `编排异常：${err instanceof Error ? err.message : String(err)}`;
+      emit("error", { message: reason });
+    } finally {
+      this.aborts.delete(sessionId);
+      emit("done", { status: outcome, reason, finalText, usage, claims });
+      batcher.flushNow();
+      batcher.close();
+    }
+
+    return { status: outcome, reason, finalText, usage, chunks, claims };
+  }
+
+  /** 当前挂起确认数（界面状态条/测试用）。 */
+  pendingPermissionCount(): number {
+    return this.permBus.size;
   }
 }
-
-// 类型已在本文件定义，无需重新导出

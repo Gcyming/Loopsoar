@@ -8,6 +8,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHANNEL_BINDINGS, EVENTS } from "loopsoar-contracts/schemas";
 import { createNodePlatform } from "loopsoar-core/platform";
+import { ToolRegistry } from "loopsoar-core/tools/registry";
+import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
+import { SandboxManager } from "loopsoar-core/sandbox";
+import { ChatService } from "loopsoar-services/chat";
 import { APP_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import { ensureLoopsoarDirs, makeProtocolHandler } from "./boot.js";
@@ -69,10 +73,19 @@ app.whenReady().then(() => {
   ensureLoopsoarDirs(app.getPath("userData"));
   protocol.handle(PROTOCOL, makeProtocolHandler((u) => net.fetch(u)));
 
+  // 装配：platform / 工具注册表 / 沙箱 / ChatService（P1 真接线）
+  const platform = createNodePlatform();
+  const registry = new ToolRegistry();
+  registerBuiltinMinimal(registry, platform);
+  const sandbox = new SandboxManager();
+  sandbox.setWorkspaceRoot(process.cwd());
+  sandbox.syncKnownTools(registry.list().map((t) => t.name));
+  const chatService = new ChatService({ platform, registry, sandbox });
+
   registerRuntimeDomain(deps);
-  registerWorkspaceDomain({ ...deps, platform: createNodePlatform() });
+  registerWorkspaceDomain({ ...deps, platform });
   registerAgentsDomain(deps);
-  registerChatDomain({ ...deps, push: pushToRenderer });
+  registerChatDomain({ ...deps, chatService, push: pushToRenderer });
   registerBrowserDomain(deps);
 
   createMainWindow();

@@ -69,7 +69,7 @@ class NodeProcessAdapter implements ProcessAdapter {
       const child = execFile(cmd, args, {
         cwd: opts.cwd,
         timeout: opts.timeoutMs ?? 30_000,
-        maxBuffer: maxBytes,
+        maxBuffer: 64 * 1024 * 1024, // 内部缓冲放大；输出截断由 data 监听器按 maxBytes 完成（避免 maxBuffer 超限杀进程）
         killSignal: "SIGTERM",
       });
 

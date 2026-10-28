@@ -63,3 +63,6 @@ export class MockLlmClient implements LlmClient {
     }
   }
 }
+
+export { createOpenAiClient, normalizeUsage } from "./openai.js";
+export type { OpenAiClientOptions, NormalizedUsage } from "./openai.js";

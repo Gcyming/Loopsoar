@@ -1,48 +1,63 @@
 /**
- * chat 域：chat:stream / chat:stop / chat:send / perm:respond。
- * 当前为占位实现（事件推送走 deps.push）；P1 接入 services 的 ChatService：
- * buildSystemSegments → ModelRouter → runToolLoop → 每轮声称核验 → 事件归一。
+ * chat 域：真实接线 ChatService（T3）。
+ * 事件映射：ChatService 的 ChunkItem.meta.type → chat:stream:<type> 推送（chunk/reasoning/tool/progress/done/error/heartbeat）；
+ * perm:respond 结算挂起确认；chat:stop 中止进行中的流。
+ * 依赖注入：ChatService 实例由 index.ts 装配（本文件不 import electron，可无壳测试）。
  */
+import type { ChatService } from "loopsoar-services/chat";
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 
 export interface ChatDeps extends TrustedIpcDeps {
+  chatService: ChatService;
   push(event: string, payload: unknown): void;
 }
 
-export function registerChatDomain(deps: ChatDeps): void {
-  handleTrusted(deps, "chat:send", (payload) => {
-    const p = payload as { message: string; sessionId?: string };
-    deps.push("chat:stream:done", {
-      sessionId: p.sessionId,
-      stub: true,
-      content: "引擎装配未完成（P1 接入 ChatService）",
+/** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
+function startStream(
+  deps: ChatDeps,
+  payload: { message: string; sessionId?: string },
+): { accepted: boolean; sessionId: string } {
+  const sessionId = payload.sessionId ?? `sess-${Date.now()}`;
+  void deps.chatService
+    .stream({ message: payload.message, sessionId }, (item) => {
+      const type = String(item.meta?.type ?? "chunk");
+      deps.push(`chat:stream:${type}`, {
+        sessionId,
+        content: item.content,
+        meta: item.meta,
+      });
+    })
+    .catch((err: unknown) => {
+      deps.push("chat:stream:error", {
+        sessionId,
+        message: err instanceof Error ? err.message : String(err),
+      });
     });
-    return { accepted: true };
-  });
+  return { accepted: true, sessionId };
+}
 
-  handleTrusted(deps, "chat:stream", (payload) => {
-    const p = payload as { message: string; sessionId?: string };
-    deps.push("chat:stream:chunk", {
-      sessionId: p.sessionId,
-      content: "（占位）引擎装配未完成（P1 接入 ChatService）",
-    });
-    deps.push("chat:stream:done", { sessionId: p.sessionId });
-    return { accepted: true };
-  });
+export function registerChatDomain(deps: ChatDeps): void {
+  handleTrusted(deps, "chat:stream", (payload) =>
+    startStream(deps, payload as { message: string; sessionId?: string }),
+  );
+
+  handleTrusted(deps, "chat:send", (payload) =>
+    startStream(deps, payload as { message: string; sessionId?: string }),
+  );
 
   handleTrusted(deps, "chat:stop", (payload) => {
     const p = payload as { sessionId: string };
-    deps.push("chat:stream:done", { sessionId: p.sessionId, stopped: true });
-    return { stopped: true };
+    const stopped = deps.chatService.stop(p.sessionId);
+    deps.push("chat:stream:done", { sessionId: p.sessionId, stopped });
+    return { stopped };
   });
 
   handleTrusted(deps, "perm:respond", (payload) => {
-    const p = payload as { requestId: string; choice: string };
-    // P1：转发给 PermRequestBus（300s 超时按拒绝结算）；当前占位记录
-    deps.push("chat:stream:heartbeat", {
-      requestId: p.requestId,
-      note: `perm:respond ${p.choice} 已接收（占位）`,
-    });
-    return { received: true };
+    const p = payload as {
+      requestId: string;
+      choice: "allow-once" | "allow-session" | "deny";
+    };
+    const received = deps.chatService.resolvePermission(p.requestId, p.choice);
+    return { received };
   });
 }
