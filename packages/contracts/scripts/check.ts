@@ -4,7 +4,7 @@
  * 用法：pnpm --filter loopsoar-contracts check（或直接 tsx scripts/check.ts）
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { resolve, basename, join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -105,6 +105,9 @@ function runCheck() {
       }
     }
   };
+
+  // 清理备份目录（比对完成后立即删除，避免污染仓库）
+  rmSync(backupDir, { recursive: true, force: true });
 
   if (diffs.length > 0) {
     console.error("校验失败：生成物与入库内容不一致。");
