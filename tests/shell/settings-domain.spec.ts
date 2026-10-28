@@ -63,6 +63,7 @@ const FULL_PREFS = {
   workspaceRoot: "",
   memoryStorePath: "",
   memoryAutoCapture: true,
+  sidebarWidth: 360,
 };
 
 let root: string;

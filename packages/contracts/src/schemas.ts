@@ -20,6 +20,16 @@ export const BrowserNavigateSchema = z.object({ url: z.string() });
 export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
 export const BrowserSetOverlaySchema = z.object({ open: z.boolean() });
+export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });
+export const SettingsListModelsSchema = z.object({
+  provider: z.string().min(1).max(64),
+  baseUrl: z.string().url(),
+  model: z.string().min(1).max(200),
+});
+export const PickPathSchema = z.object({
+  kind: z.enum(["file", "directory"]),
+  title: z.string().max(120).optional(),
+});
 export const BrowserScreenshotSchema = z.object({ selector: z.string().optional() });
 
 /**
@@ -49,6 +59,8 @@ export const PreferencesSchema = z.object({
   memoryStorePath: z.string().max(1024).optional(),
   /** 会话结束时自动从对话抽取记忆。 */
   memoryAutoCapture: z.boolean(),
+  /** 右侧 Agent 面板宽度（可拖拽调整，持久化）。 */
+  sidebarWidth: z.number().int().min(240).max(720),
 });
 
 /** 权限策略（设置 · 权限）：工具类别的默认决策。 */
@@ -216,6 +228,24 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "setOverlay",
     request: BrowserSetOverlaySchema,
+    sensitive: true,
+  },
+  "settings:listModels": {
+    domain: "settings",
+    method: "listModels",
+    request: SettingsListModelsSchema,
+    sensitive: true,
+  },
+  "dialog:pickPath": {
+    domain: "dialog",
+    method: "pickPath",
+    request: PickPathSchema,
+    sensitive: true,
+  },
+  "browser:setSidebarWidth": {
+    domain: "browser",
+    method: "setSidebarWidth",
+    request: BrowserSidebarWidthSchema,
     sensitive: true,
   },
   "memory:list": {

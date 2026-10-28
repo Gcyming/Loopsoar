@@ -3,7 +3,7 @@
  * 允许 import electron 的文件只有两个：本文件与 main/electronBrowser.ts（薄适配层）。
  * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
  */
-import { app, BrowserWindow, ipcMain, Menu, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -303,6 +303,13 @@ app.whenReady().then(async () => {
     workspaceRoot,
     env: process.env,
     appVersion: app.getVersion(),
+    pickPath: async (kind: "file" | "directory", title?: string) => {
+      const result = await dialog.showOpenDialog(mainWindow ?? undefined!, {
+        title: title ?? (kind === "directory" ? "选择文件夹" : "选择文件"),
+        properties: kind === "directory" ? ["openDirectory", "createDirectory"] : ["openFile"],
+      });
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    },
     diagnosticsExtra: () => ({
       auditEntries: auditLog.length,
       tools: registry.list().length,

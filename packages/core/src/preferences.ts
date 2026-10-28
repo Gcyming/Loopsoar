@@ -17,6 +17,7 @@ export const PreferencesSchema = z.object({
   workspaceRoot: z.string().max(1024).optional(),
   memoryStorePath: z.string().max(1024).optional(),
   memoryAutoCapture: z.boolean(),
+  sidebarWidth: z.number().int().min(240).max(720),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -30,6 +31,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   workspaceRoot: "",
   memoryStorePath: "",
   memoryAutoCapture: true,
+  sidebarWidth: 360,
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */

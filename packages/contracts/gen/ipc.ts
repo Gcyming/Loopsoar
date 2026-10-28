@@ -27,6 +27,9 @@ export const IPC_CHANNELS = {
   "browser:selectTab": { domain: "browser", method: "selectTab", sensitive: true, hasRequest: true },
   "browser:listTabs": { domain: "browser", method: "listTabs", sensitive: true, hasRequest: false },
   "browser:setOverlay": { domain: "browser", method: "setOverlay", sensitive: true, hasRequest: true },
+  "settings:listModels": { domain: "settings", method: "listModels", sensitive: true, hasRequest: true },
+  "dialog:pickPath": { domain: "dialog", method: "pickPath", sensitive: true, hasRequest: true },
+  "browser:setSidebarWidth": { domain: "browser", method: "setSidebarWidth", sensitive: true, hasRequest: true },
   "memory:list": { domain: "memory", method: "list", sensitive: true, hasRequest: false },
   "memory:add": { domain: "memory", method: "add", sensitive: true, hasRequest: true },
   "memory:update": { domain: "memory", method: "update", sensitive: true, hasRequest: true },
@@ -100,9 +103,10 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "workspace": ["read", "write"],
     "agents": ["list"],
     "runtime": ["version", "status"],
-    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay"],
+    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay", "setSidebarWidth"],
+    "settings": ["listModels", "getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "diagnostics", "about"],
+    "dialog": ["pickPath"],
     "memory": ["list", "add", "update", "delete", "stats", "clear"],
-    "settings": ["getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "diagnostics", "about"],
     "window": ["minimize", "maximize", "close", "state"]
     },
   };

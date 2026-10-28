@@ -13,15 +13,15 @@ import type {
 
 type SectionId = "general" | "permissions" | "providers" | "rules" | "memory" | "storage" | "advanced" | "about";
 
-const SECTIONS: { id: SectionId; label: string; icon: string; hint: string }[] = [
-  { id: "general", label: "通用", icon: "settings", hint: "外观、搜索、启动" },
-  { id: "permissions", label: "权限", icon: "check", hint: "工具类别决策" },
-  { id: "providers", label: "供应商", icon: "cloud-upload", hint: "模型服务" },
-  { id: "rules", label: "规则", icon: "file", hint: "AGENTS.md 逐条" },
-  { id: "memory", label: "记忆", icon: "notes", hint: "会话记忆汇总" },
-  { id: "storage", label: "存储", icon: "folders", hint: "文件位置" },
-  { id: "advanced", label: "高级", icon: "terminal", hint: "路径与版本" },
-  { id: "about", label: "关于", icon: "bulb", hint: "版本与品牌" },
+const SECTIONS: { id: SectionId; label: string; icon: string; hint: string; group: string }[] = [
+  { id: "general", group: "基础", label: "通用", icon: "settings", hint: "外观、搜索、启动" },
+  { id: "permissions", group: "基础", label: "权限", icon: "check", hint: "工具类别决策" },
+  { id: "providers", group: "能力", label: "供应商", icon: "cloud-upload", hint: "模型服务" },
+  { id: "rules", group: "能力", label: "规则", icon: "file", hint: "AGENTS.md 逐条" },
+  { id: "memory", group: "能力", label: "记忆", icon: "notes", hint: "会话记忆汇总" },
+  { id: "storage", group: "数据", label: "存储", icon: "folders", hint: "文件位置" },
+  { id: "advanced", group: "数据", label: "高级", icon: "terminal", hint: "路径与版本" },
+  { id: "about", group: "其他", label: "关于", icon: "bulb", hint: "版本与品牌" },
 ];
 
 interface DraftRule {
@@ -78,6 +78,18 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       } catch (e) { bad(e); } finally { setLoading(false); }
     })();
   }, [api, applyRules, bad]);
+
+  // 通用设置实时生效：变更后 400ms 防抖自动保存（不需要保存按钮）
+  useEffect(() => {
+    if (!api || !prefs || loading) return;
+    const timer = setTimeout(() => {
+      void api.settings
+        .setPreferences(prefs)
+        .then((r) => onPreferencesSaved?.(r.preferences))
+        .catch(() => {});
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [api, prefs, loading, onPreferencesSaved]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -146,7 +158,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Field l="默认搜索引擎"><Seg v={prefs.searchEngine} opts={[["bing", "Bing"], ["google", "Google"], ["duckduckgo", "DuckDuckGo"]]} on={(x) => setPrefs({ ...prefs, searchEngine: x as Preferences["searchEngine"] })} /></Field>
           <Field l="启动时恢复上次会话"><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
           <Field l="自动记忆汇总" h="每轮对话结束自动抽取记忆"><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
-          <SaveBtn onClick={savePrefs} label="保存通用设置" />
+          <div style={S.note}>以上设置修改后立即生效（自动保存）。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
 
       case "permissions":
@@ -191,6 +203,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   <Kv k="默认模型" v={provider.model ?? "-"} />
                 </div>
                 {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
+                <div style={S.btns}>
+                  <Btn label="添加供应商配置" primary onClick={() => setPEditing(true)} />
+                </div>
               </div>
             ) : (
               <div>
@@ -277,9 +292,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Field l="配置目录"><code style={S.code}>{locations.configDir}</code></Field>
           <Field l="规则目录"><code style={S.code}>{locations.rulesDir}</code></Field>
           <Field l="会话文件"><code style={S.code}>{locations.sessionsFile}</code></Field>
-          <Field l="工作区根" h="规则查找与沙箱根"><In v={prefs.workspaceRoot ?? ""} ph={locations.workspaceRoot} on={(x) => setPrefs({ ...prefs, workspaceRoot: x })} /></Field>
-          <Field l="记忆库路径" h="留空=数据目录 memory/memory.json"><In v={prefs.memoryStorePath ?? ""} ph={locations.defaultMemoryFile} on={(x) => setPrefs({ ...prefs, memoryStorePath: x })} /></Field>
-          <Field l="下载目录" h="留空=系统下载文件夹"><In v={prefs.downloadDir ?? ""} ph="留空使用系统默认" on={(x) => setPrefs({ ...prefs, downloadDir: x })} /></Field>
+          <Field l="工作区根" h="规则查找与沙箱根"><div style={S.rowEnd}><In v={prefs.workspaceRoot ?? ""} ph={locations.workspaceRoot} on={(x) => setPrefs({ ...prefs, workspaceRoot: x })} /><Btn label="浏览…" small onClick={() => void api.dialog.pickPath({ kind: "directory", title: "选择工作区根" }).then((r) => { if (r.path) setPrefs({ ...prefs, workspaceRoot: r.path }); })} /></div></Field>
+          <Field l="记忆库路径" h="留空=数据目录 memory/memory.json"><div style={S.rowEnd}><In v={prefs.memoryStorePath ?? ""} ph={locations.defaultMemoryFile} on={(x) => setPrefs({ ...prefs, memoryStorePath: x })} /><Btn label="浏览…" small onClick={() => void api.dialog.pickPath({ kind: "file", title: "选择记忆库文件" }).then((r) => { if (r.path) setPrefs({ ...prefs, memoryStorePath: r.path }); })} /></div></Field>
+          <Field l="下载目录" h="留空=系统下载文件夹"><div style={S.rowEnd}><In v={prefs.downloadDir ?? ""} ph="留空使用系统默认" on={(x) => setPrefs({ ...prefs, downloadDir: x })} /><Btn label="浏览…" small onClick={() => void api.dialog.pickPath({ kind: "directory", title: "选择下载目录" }).then((r) => { if (r.path) setPrefs({ ...prefs, downloadDir: r.path }); })} /></div></Field>
           <SaveBtn onClick={savePrefs} label="保存文件位置" />
         </div>) : <div style={S.muted}>读取失败</div>;
 
@@ -310,12 +325,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         <div style={S.header}><span style={S.title}>设置</span><button type="button" className="icon-btn" onClick={onClose} title="关闭（Esc）"><Icon name="close" size={14} /></button></div>
         <div style={S.bodyRow}>
           <nav style={S.nav}>
-            {SECTIONS.map((s) => (
+            {SECTIONS.map((s, index) => (
+              <React.Fragment key={s.id}>
+                {index === 0 || s.group !== SECTIONS[index - 1].group ? (
+                  <div style={S.navGroup}>{s.group}</div>
+                ) : null}
               <button key={s.id} type="button" className={`settings-nav-item${section === s.id ? " is-active" : ""}`}
                 style={{ ...S.navItem, ...(section === s.id ? S.navItemActive : {}) }} onClick={() => setSection(s.id)}>
                 <Icon name={s.icon} size={15} style={{ marginTop: 2, flex: "none" }} />
                 <span style={S.navText}><span style={S.navLabel}>{s.label}</span><span style={S.navHint}>{s.hint}</span></span>
               </button>
+              </React.Fragment>
             ))}
           </nav>
           <div style={S.content}>
@@ -382,6 +402,7 @@ const S: Record<string, React.CSSProperties> = {
   nav: { width: 190, flexShrink: 0, borderRight: `1px solid ${BRAND.border}`, padding: 8, display: "flex", flexDirection: "column", gap: 2, background: BRAND.ink, overflowY: "auto" },
   navItem: { display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, border: "none", background: "transparent", color: BRAND.linenMuted, cursor: "pointer", textAlign: "left", transition: "background 120ms, color 120ms" },
   navItemActive: { background: BRAND.ochreSoft, color: BRAND.linen },
+  navGroup: { fontSize: 10, color: BRAND.linenFaint, letterSpacing: 0.6, padding: "10px 10px 4px", textTransform: "uppercase" },
   navText: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 },
   navLabel: { fontSize: 12.5, fontWeight: 600 },
   navHint: { fontSize: 10.5, color: BRAND.linenFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },

@@ -149,7 +149,10 @@ export default function App(): React.JSX.Element {
   const [mode, setMode] = useState<"build" | "plan">("build");
   const [permReq, setPermReq] = useState<{ requestId: string; toolName: string; target?: string; kind?: string } | null>(null);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
-  const [settingsSection, setSettingsSection] = useState<string>("general");
+  const [settingsSection, setSettingsSection] = useState<string>("");
+  const [sidebarWidth, setSidebarWidth] = useState<number>(360);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelList, setModelList] = useState<{ models: string[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
@@ -171,6 +174,10 @@ export default function App(): React.JSX.Element {
       if (prefsResult.status === "fulfilled") {
         const prefs = prefsResult.value.preferences;
         setPreferences(prefs);
+        if (prefs.sidebarWidth) {
+          setSidebarWidth(prefs.sidebarWidth);
+          void api.browser.setSidebarWidth({ width: prefs.sidebarWidth }).catch(() => {});
+        }
         // 恢复上次会话（设置 · 通用 · 恢复上次会话）
         if (prefs.restoreSession) {
           const history = await api.chat.history().catch(() => null);
@@ -295,6 +302,63 @@ export default function App(): React.JSX.Element {
     setSettingsSection(section ?? "general");
     setSettingsOpen(true);
   }, []);
+
+  // 侧栏拖拽：mousemove 实时改 DOM 宽度，松开时持久化 + 同步原生视图
+  const startResize = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>): void => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = sidebarWidth;
+      const onMove = (e: MouseEvent): void => {
+        const next = Math.max(280, Math.min(720, startWidth - (e.clientX - startX)));
+        setSidebarWidth(next);
+      };
+      const onUp = (e: MouseEvent): void => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        const next = Math.max(280, Math.min(720, startWidth - (e.clientX - startX)));
+        setSidebarWidth(next);
+        void api?.browser.setSidebarWidth({ width: next }).catch(() => {});
+        if (api && preferences) {
+          void api.settings
+            .setPreferences({ ...preferences, sidebarWidth: next })
+            .then((r) => setPreferences(r.preferences))
+            .catch(() => {});
+        }
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [api, preferences, sidebarWidth],
+  );
+
+  const openModelMenu = useCallback((): void => {
+    if (!api || !provider?.configured) {
+      openSettings("providers");
+      return;
+    }
+    setModelMenuOpen((v) => !v);
+    setModelList(null);
+    void api.settings
+      .listModels({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" })
+      .then(setModelList)
+      .catch(() => setModelList({ models: [provider.model ?? ""], error: "获取失败" }));
+  }, [api, provider, openSettings]);
+
+  const chooseModel = useCallback(
+    (model: string): void => {
+      setModelMenuOpen(false);
+      if (!api || !provider) return;
+      void api.settings
+        .setProvider({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model })
+        .then(() => {
+          setProvider({ ...provider, model, configured: true });
+          setNotice(`已切换模型：${model}`);
+        })
+        .catch(() => {});
+    },
+    [api, provider],
+  );
 
   const respondPermission = useCallback((choice: "allow-once" | "allow-session" | "deny"): void => {
     if (!api || !permReq) return;
@@ -550,7 +614,8 @@ export default function App(): React.JSX.Element {
           </div>
         </section>
 
-        <aside style={{ ...styles.sidebar, width: LAYOUT.SIDEBAR_WIDTH }}>
+        <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
+        <aside style={{ ...styles.sidebar, width: sidebarWidth }}>
           <div style={styles.sidebarHeader}>
             <span style={styles.sidebarTitle}>
               <Icon name="agent" size={14} style={{ marginRight: 6 }} />
@@ -595,6 +660,44 @@ export default function App(): React.JSX.Element {
                 style={styles.textarea}
                 rows={3}
               />
+              {modelMenuOpen ? (
+                <div style={styles.modelMenu}>
+                  <div style={styles.modelMenuHead}>
+                    {provider?.provider ?? "未配置"} · 选择模型
+                  </div>
+                  {modelList === null ? (
+                    <div style={styles.modelMenuItem}>加载中…</div>
+                  ) : (
+                    <>
+                      {modelList.models.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          className="model-item"
+                          style={{ ...styles.modelMenuItem, ...(m === provider?.model ? styles.modelMenuItemActive : {}) }}
+                          onClick={() => chooseModel(m)}
+                          title={m}
+                        >
+                          <span style={styles.modelItemName}>{m}</span>
+                          {m === provider?.model ? <Icon name="check" size={12} /> : null}
+                        </button>
+                      ))}
+                      {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="model-item"
+                    style={styles.modelMenuFoot}
+                    onClick={() => {
+                      setModelMenuOpen(false);
+                      openSettings("providers");
+                    }}
+                  >
+                    管理供应商 / 添加模型…
+                  </button>
+                </div>
+              ) : null}
               <div style={styles.chipRow}>
                 <button
                   type="button"
@@ -620,8 +723,8 @@ export default function App(): React.JSX.Element {
                   type="button"
                   className="chip"
                   style={styles.chip}
-                  title="选择模型 / 供应商（点击配置）"
-                  onClick={() => openSettings("providers")}
+                  title="选择模型"
+                  onClick={openModelMenu}
                 >
                   <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
                   {provider?.configured ? provider.model : "未配置模型"}
@@ -676,7 +779,7 @@ export default function App(): React.JSX.Element {
       {settingsOpen ? (
         <Settings
           api={api}
-          initialSection={settingsSection as never}
+          initialSection={(settingsSection || undefined) as never}
           onClose={() => {
             setSettingsOpen(false);
             void api?.settings.getPermissions().then(setPermSummary).catch(() => {});
@@ -883,6 +986,60 @@ const styles: Record<string, React.CSSProperties> = {
   hintRow: { display: "flex", alignItems: "flex-start", gap: 8, color: BRAND.linenMuted, fontSize: 12.5, lineHeight: 1.6 },
   hintIcon: { marginTop: 3, color: BRAND.ochre, opacity: 0.9 },
   startUrl: { marginTop: 20, fontSize: 11.5, color: BRAND.linenFaint },
+  splitter: {
+    width: 5,
+    flexShrink: 0,
+    cursor: "col-resize",
+    background: "transparent",
+    borderLeft: `1px solid ${BRAND.border}`,
+    transition: "background 120ms",
+  },
+  modelMenu: {
+    position: "absolute",
+    right: 8,
+    bottom: "100%",
+    marginBottom: 8,
+    width: 280,
+    maxHeight: 320,
+    overflowY: "auto",
+    borderRadius: 10,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+    padding: 6,
+    zIndex: 20,
+  },
+  modelMenuHead: { fontSize: 10.5, color: BRAND.linenFaint, padding: "4px 8px 6px" },
+  modelMenuItem: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    padding: "7px 8px",
+    borderRadius: 7,
+    border: "none",
+    background: "transparent",
+    color: BRAND.linen,
+    fontSize: 12,
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  modelMenuItemActive: { background: BRAND.ochreSoft, color: BRAND.ochreHover },
+  modelItemName: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 },
+  modelMenuErr: { fontSize: 10.5, color: BRAND.danger, padding: "4px 8px" },
+  modelMenuFoot: {
+    marginTop: 4,
+    borderTop: `1px solid ${BRAND.border}`,
+    borderRadius: 0,
+    padding: "8px 8px 4px",
+    fontSize: 11.5,
+    color: BRAND.linenMuted,
+    background: "transparent",
+    border: "none",
+    width: "100%",
+    textAlign: "left",
+    cursor: "pointer",
+  },
   sidebar: {
     display: "flex",
     flexDirection: "column",
@@ -915,12 +1072,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   composer: { borderTop: `1px solid ${BRAND.border}`, padding: 10 },
   composerBox: {
+    position: "relative",
     borderRadius: 12,
     border: `1px solid ${BRAND.border}`,
     background: BRAND.ink,
     padding: "8px 8px 6px",
   },
-  chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" },
+  chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "nowrap", overflow: "hidden" },
   chip: {
     display: "inline-flex",
     alignItems: "center",

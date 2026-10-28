@@ -47,6 +47,7 @@ export interface Preferences {
   workspaceRoot?: string;
   memoryStorePath?: string;
   memoryAutoCapture: boolean;
+  sidebarWidth: number;
 }
 
 export interface PermissionCategory {
@@ -194,6 +195,7 @@ export interface LoopsoarAPI {
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[] }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
+    setSidebarWidth(payload: { width: number }): Promise<{ width: number }>;
     snapshot(): Promise<{ ok: boolean; url?: string; title?: string; text?: string; error?: string }>;
     screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
   };
@@ -211,7 +213,11 @@ export interface LoopsoarAPI {
     delete(payload: { id: string }): Promise<{ deleted: boolean }>;
     clear(): Promise<{ cleared: boolean }>;
   };
+  dialog: LoopsoarDomain & {
+    pickPath(payload: { kind: "file" | "directory"; title?: string }): Promise<{ canceled: boolean; path: string | null }>;
+  };
   settings: LoopsoarDomain & {
+    listModels(payload: { provider: string; baseUrl: string; model: string }): Promise<{ models: string[]; error: string | null }>;
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
     testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;

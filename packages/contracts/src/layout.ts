@@ -12,8 +12,8 @@ export const LAYOUT = {
   TAB_BAR_HEIGHT: 34,
   /** 顶部栏高度（omnibox + 操作按钮）。 */
   TOP_BAR_HEIGHT: 48,
-  /** 右侧 Agent 面板宽度。 */
-  SIDEBAR_WIDTH: 320,
+  /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
+  SIDEBAR_WIDTH: 360,
   /** 底部状态条高度。 */
   STATUS_BAR_HEIGHT: 32,
 } as const;

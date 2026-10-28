@@ -9,7 +9,7 @@ describe("布局契约", () => {
   it("常量与 S2 规格一致", () => {
     expect(LAYOUT.TITLE_BAR_HEIGHT).toBe(36);
     expect(LAYOUT.TOP_BAR_HEIGHT).toBe(48);
-    expect(LAYOUT.SIDEBAR_WIDTH).toBe(320);
+    expect(LAYOUT.SIDEBAR_WIDTH).toBe(360);
     expect(LAYOUT.STATUS_BAR_HEIGHT).toBe(32);
   });
 
@@ -17,7 +17,7 @@ describe("布局契约", () => {
     expect(computeBrowserViewBounds({ width: 1280, height: 800 })).toEqual({
       x: 0,
       y: 118,
-      width: 960,
+      width: 920,
       height: 650,
     });
   });

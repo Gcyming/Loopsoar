@@ -56,6 +56,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   onProviderCleared?: () => void;
   /** 通用偏好保存后回调（装配层据此切换工作区根/记忆库位置等）。 */
   onPreferencesSaved?: (prefs: Preferences) => void;
+  /** 原生文件/目录选择器（由 index 注入 dialog；不 import electron）。 */
+  pickPath?: (kind: "file" | "directory", title?: string) => Promise<string | null>;
 }
 
 export interface SettingsPaths {
@@ -441,6 +443,44 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
 
     const entries = readRuleEntries(deps);
     return { saved: true, entries, merged: mergeRules(ruleSourcesFromEntries(entries)) };
+  });
+
+  // ── 原生路径选择（文件/文件夹） ──
+  handleTrusted(deps, "dialog:pickPath", async (payload) => {
+    const p = payload as { kind: "file" | "directory"; title?: string };
+    if (!deps.pickPath) return { canceled: true, path: null };
+    const picked = await deps.pickPath(p.kind, p.title);
+    return { canceled: picked === null, path: picked };
+  });
+
+  // ── 模型列表（用于输入区模型选择弹层，不跳转） ──
+  handleTrusted(deps, "settings:listModels", async (payload) => {
+    const cfg = validateProviderConfig(payload);
+    const apiKey = resolveApiKeyFromEnv(deps.env);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(`${cfg.baseUrl}/models`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return { models: [cfg.model], error: `HTTP ${response.status}` };
+      }
+      const data = (await response.json()) as { data?: { id?: string }[] };
+      const models = (data.data ?? [])
+        .map((m) => m.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+        .slice(0, 200);
+      return { models: models.length > 0 ? models : [cfg.model], error: null };
+    } catch (err) {
+      return {
+        models: [cfg.model],
+        error: err instanceof Error ? (err.message.includes("abort") ? "获取模型列表超时" : err.message) : "获取失败",
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   // ── 诊断 / 关于 ──

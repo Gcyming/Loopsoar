@@ -35,6 +35,13 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     tabs: deps.browser?.listTabs() ?? [],
   }));
 
+  // 侧栏拖拽调宽：原生视图区域随之重算
+  handleTrusted(deps, "browser:setSidebarWidth", (payload) => {
+    const width = (payload as { width: number }).width;
+    deps.browser?.setSidebarWidth(width);
+    return { width };
+  });
+
   // 修复遮挡：设置等应用内浮层打开时隐藏原生浏览器视图
   handleTrusted(deps, "browser:setOverlay", (payload) => {
     const open = (payload as { open: boolean }).open;

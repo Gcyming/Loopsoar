@@ -64,9 +64,9 @@ describe("守卫：UI ↔ 契约一致", () => {
     const src = readApp();
     expect(src).toContain("LAYOUT");
     // 硬编码的关键尺寸不允许出现在 UI 里（320/48/32 只应该来自 LAYOUT 引用）
-    expect(src).not.toMatch(/SIDEBAR_WIDTH\s*=\s*320/);
+    expect(src).not.toMatch(/SIDEBAR_WIDTH\s*=\s*360/);
     expect(src).not.toMatch(/TOP_BAR_HEIGHT\s*=\s*48/);
-    expect(LAYOUT.SIDEBAR_WIDTH).toBe(320);
+    expect(LAYOUT.SIDEBAR_WIDTH).toBe(360);
   });
 
   it("preload 白名单注入与契约通道一致（index.ts 用 CHANNEL_BINDINGS 构建）", () => {

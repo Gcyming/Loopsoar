@@ -120,6 +120,27 @@
       "hasRequest": true
     },
     {
+      "channel": "settings:listModels",
+      "domain": "settings",
+      "method": "listModels",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "dialog:pickPath",
+      "domain": "dialog",
+      "method": "pickPath",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:setSidebarWidth",
+      "domain": "browser",
+      "method": "setSidebarWidth",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "memory:list",
       "domain": "memory",
       "method": "list",

@@ -285,8 +285,8 @@ export class ChatService {
     };
 
     if (!llm) {
-      const reason = "LLM 未配置：装配层未注入 LlmClient（P1 接线）";
-      emit("error", { message: reason });
+      const reason = "LLM 未配置：请在「设置 · 供应商」填写配置，并设置环境变量 LOOPSOAR_API_KEY 后重启";
+      emit("error", reason);
       batcher.flushNow();
       batcher.close();
       return {
@@ -376,7 +376,7 @@ export class ChatService {
       }
     } catch (err) {
       reason = `编排异常：${err instanceof Error ? err.message : String(err)}`;
-      emit("error", { message: reason });
+      emit("error", reason);
     } finally {
       this.aborts.delete(sessionId);
       emit("done", { status: outcome, reason, finalText, usage, claims });

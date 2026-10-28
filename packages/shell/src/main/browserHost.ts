@@ -8,6 +8,7 @@
  */
 import {
   computeBrowserViewBounds,
+  LAYOUT,
   type BrowserViewBounds,
   type WindowSize,
 } from "loopsoar-contracts/layout";
@@ -54,6 +55,8 @@ export class BrowserHost {
   private tabs = new Map<string, TabEntry>();
   private activeId: string | null = null;
   private overlayOpen = false;
+  /** 侧栏当前宽度（用户可拖拽；偏好持久化在 UI 层）。 */
+  private sidebarWidth: number = LAYOUT.SIDEBAR_WIDTH;
   private seq = 0;
 
   constructor(private deps: BrowserHostDeps) {}
@@ -79,8 +82,17 @@ export class BrowserHost {
   }
 
   /** 几何与可见性统一收敛：所有标签同一区域，只有活动标签可见且非浮层态。 */
+  /** 侧栏拖拽调宽：原生视图区域随之重算。 */
+  setSidebarWidth(width: number): void {
+    this.sidebarWidth = Math.max(240, Math.min(720, Math.round(width)));
+    this.applyLayout();
+  }
+
   private applyLayout(): void {
-    const bounds = computeBrowserViewBounds(this.deps.getWindowSize());
+    const bounds = computeBrowserViewBounds(this.deps.getWindowSize(), {
+      ...LAYOUT,
+      SIDEBAR_WIDTH: this.sidebarWidth,
+    } as unknown as typeof LAYOUT);
     for (const [id, entry] of this.tabs) {
       entry.view.setBounds(bounds);
       const visible = id === this.activeId && !this.overlayOpen;
