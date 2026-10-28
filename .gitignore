@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+
+# 生成物入库：packages/contracts/gen/ 不被忽略
+# （spec §2: 不忽略 packages/contracts/gen/）

@@ -1,0 +1,22 @@
+{
+  "name": "loopsoar-ui",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "react": "^19.1",
+    "react-dom": "^19.1",
+    "loopsoar-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6",
+    "vite": "^6.3",
+    "@vitejs/plugin-react": "^5",
+    "@types/react": "^19.2",
+    "@types/react-dom": "^19.2"
+  }
+}

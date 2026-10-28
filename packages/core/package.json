@@ -1,0 +1,34 @@
+{
+  "name": "loopsoar-core",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./session": "./src/session.js",
+    "./filter": "./src/filter.js",
+    "./claims": "./src/claims.js",
+    "./router": "./src/router.js",
+    "./budget": "./src/budget.js",
+    "./events": "./src/events.js",
+    "./steerBus": "./src/steerBus.js",
+    "./llm": "./src/llm/index.js",
+    "./platform": "./src/platform/index.js",
+    "./tools/registry": "./src/tools/registry.js",
+    "./tools/builtin": "./src/tools/builtin.js",
+    "./tools/hard_rules": "./src/tools/hard_rules.js",
+    "./tools/policy": "./src/tools/policy.js",
+    "./tools/classifier": "./src/tools/classifier.js",
+    "./sandbox": "./src/sandbox.js",
+    "./websearch": "./src/websearch/index.js",
+    "./audit": "./src/audit.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "loopsoar-contracts": "workspace:*",
+    "zod": "^3.23"
+  }
+}

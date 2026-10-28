@@ -1,0 +1,14 @@
+{
+  // 继承 ROOT 的 tsconfig.base.json（strict/ES2023/NodeNext/skipLibCheck 等）。
+  // core 包特有：rootDir=src，outDir=dist，开启声明与 sourceMap。
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "sourceMap": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}

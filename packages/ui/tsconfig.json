@@ -1,0 +1,17 @@
+{
+  // 继承 ROOT 的 tsconfig.base.json（由 S1 产出，定义 strict/ES2023/NodeNext 等）。
+  // 本文件只补充 ui 包特有的编译选项：JSX 用 React 17+ 自动运行时。
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    // 允许 .tsx/.jsx；rootDir 由 base 统一为 src。
+    "rootDir": "src",
+    "outDir": "dist",
+    // vite 自己处理 bundling，这里只做类型检查与声明产出。
+    "declaration": true,
+    "sourceMap": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}

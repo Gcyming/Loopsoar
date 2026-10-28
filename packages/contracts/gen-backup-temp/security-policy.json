@@ -1,0 +1,180 @@
+{
+  "sensitiveFiles": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+    "*.pem",
+    "*.key",
+    "config/providers.enc.json",
+    "config/auth_token*"
+  ],
+  "protectedSourceDirs": [
+    ".git",
+    "node_modules",
+    "packages/contracts/gen"
+  ],
+  "privateNetRanges": [
+    {
+      "v": 4,
+      "base": [
+        10,
+        0,
+        0,
+        0
+      ],
+      "prefix": 8
+    },
+    {
+      "v": 4,
+      "base": [
+        172,
+        16,
+        0,
+        0
+      ],
+      "prefix": 12
+    },
+    {
+      "v": 4,
+      "base": [
+        192,
+        168,
+        0,
+        0
+      ],
+      "prefix": 16
+    },
+    {
+      "v": 4,
+      "base": [
+        169,
+        254,
+        0,
+        0
+      ],
+      "prefix": 16
+    },
+    {
+      "v": 4,
+      "base": [
+        127,
+        0,
+        0,
+        0
+      ],
+      "prefix": 8
+    },
+    {
+      "v": 4,
+      "base": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "prefix": 8
+    },
+    {
+      "v": 4,
+      "base": [
+        100,
+        64,
+        0,
+        0
+      ],
+      "prefix": 10
+    },
+    {
+      "v": 4,
+      "base": [
+        192,
+        0,
+        0,
+        0
+      ],
+      "prefix": 24
+    },
+    {
+      "v": 4,
+      "base": [
+        192,
+        0,
+        2,
+        0
+      ],
+      "prefix": 24
+    },
+    {
+      "v": 4,
+      "base": [
+        198,
+        18,
+        0,
+        0
+      ],
+      "prefix": 15
+    },
+    {
+      "v": 4,
+      "base": [
+        198,
+        51,
+        100,
+        0
+      ],
+      "prefix": 24
+    },
+    {
+      "v": 4,
+      "base": [
+        203,
+        0,
+        113,
+        0
+      ],
+      "prefix": 24
+    },
+    {
+      "v": 6,
+      "base": [
+        0,
+        1
+      ],
+      "prefix": 128
+    },
+    {
+      "v": 6,
+      "base": [
+        64512,
+        0
+      ],
+      "prefix": 7
+    },
+    {
+      "v": 6,
+      "base": [
+        65152,
+        0
+      ],
+      "prefix": 10
+    }
+  ],
+  "maxRedirects": 5,
+  "fileWriteMaxBytes": 5242880,
+  "terminalTimeoutMs": 30000,
+  "terminalMaxBytes": 8388608,
+  "heartbeatMs": 15000,
+  "budgetHard": {
+    "maxRounds": 500,
+    "maxToolCalls": 10000,
+    "maxTotalTokens": 12000000,
+    "maxWallClockMs": 10800000
+  },
+  "loopHealth": {
+    "silentTimeoutMs": 90000,
+    "noProgressRounds": 5
+  },
+  "displayLimitDefault": 1200
+}
