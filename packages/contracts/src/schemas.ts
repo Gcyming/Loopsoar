@@ -128,6 +128,30 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: SettingsProviderSchema,
     sensitive: true,
   },
+  "window:minimize": {
+    domain: "window",
+    method: "minimize",
+    request: null,
+    sensitive: true,
+  },
+  "window:maximize": {
+    domain: "window",
+    method: "maximize",
+    request: null,
+    sensitive: true,
+  },
+  "window:close": {
+    domain: "window",
+    method: "close",
+    request: null,
+    sensitive: true,
+  },
+  "window:state": {
+    domain: "window",
+    method: "state",
+    request: null,
+    sensitive: true,
+  },
 };
 
  /**

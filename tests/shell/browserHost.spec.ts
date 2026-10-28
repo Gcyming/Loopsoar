@@ -64,7 +64,7 @@ describe("BrowserHost", () => {
     expect(host.hasView()).toBe(true);
     expect(created.length).toBe(1);
     expect(created[0].navigated[0]).toBe("https://example.com/");
-    expect(created[0].bounds).toEqual({ x: 0, y: 48, width: 1040, height: 780 });
+    expect(created[0].bounds).toEqual({ x: 0, y: 84, width: 1040, height: 744 });
   });
 
   it("危险协议导航被拒绝，且不创建视图", async () => {
@@ -109,7 +109,7 @@ describe("BrowserHost", () => {
     state.height = 700;
     host.syncBounds();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((created[0] as any).bounds).toEqual({ x: 0, y: 48, width: 680, height: 620 });
+    expect((created[0] as any).bounds).toEqual({ x: 0, y: 84, width: 680, height: 584 });
   });
 
   it("快照/截图在有视图后可用；close 后不可用", async () => {

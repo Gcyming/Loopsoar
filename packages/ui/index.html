@@ -14,11 +14,63 @@
       body {
         margin: 0;
         padding: 0;
-        background: #0b1021;
-        color: #e8eaed;
+        background: #111318;
+        color: #f4efe6;
       }
       #root {
         height: 100vh;
+      }
+      /* 交互态（内联样式无法表达 hover，这里用类集中管理；颜色仍取自品牌三色） */
+      .win-btn {
+        transition: background-color 120ms ease, color 120ms ease;
+      }
+      .win-btn:hover {
+        background: #1e2127;
+        color: #f4efe6;
+      }
+      .win-close:hover {
+        background: #c42b1c;
+        color: #ffffff;
+      }
+      .btn-primary {
+        transition: background-color 120ms ease;
+      }
+      .btn-primary:hover:not(:disabled) {
+        background: #d98a4f;
+      }
+      .btn-primary:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .btn-ghost {
+        transition: border-color 120ms ease, color 120ms ease;
+      }
+      .btn-ghost:hover:not(:disabled) {
+        border-color: #c8763c;
+        color: #f4efe6;
+      }
+      .btn-ghost:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      textarea:focus,
+      input:focus {
+        border-color: #6f6a63;
+      }
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #2a2d36;
+        border-radius: 6px;
+        border: 2px solid #111318;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #3a3e48;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
       }
     </style>
   </head>

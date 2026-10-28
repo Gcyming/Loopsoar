@@ -63,6 +63,12 @@ export interface LoopsoarAPI {
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean }>;
   };
+  window: LoopsoarDomain & {
+    minimize(): Promise<{ ok: boolean }>;
+    maximize(): Promise<{ ok: boolean; maximized: boolean }>;
+    close(): Promise<{ ok: boolean }>;
+    state(): Promise<{ maximizeSupported: boolean; maximized: boolean; focused: boolean }>;
+  };
   on(event: LoopsoarEvent, cb: (payload: unknown) => void): () => void;
 }
 

@@ -6,7 +6,9 @@
 import { z } from "zod";
 
 export const LAYOUT = {
-  /** 顶部栏高度（品牌 + omnibox + 操作按钮）。 */
+  /** 自定义标题栏高度（品牌 + 窗口控制；原生 frame 已隐藏）。 */
+  TITLE_BAR_HEIGHT: 36,
+  /** 顶部栏高度（omnibox + 操作按钮）。 */
   TOP_BAR_HEIGHT: 48,
   /** 右侧 Agent 面板宽度。 */
   SIDEBAR_WIDTH: 320,
@@ -39,7 +41,10 @@ export function computeBrowserViewBounds(
   const width = Math.max(0, size.width - layout.SIDEBAR_WIDTH);
   const height = Math.max(
     0,
-    size.height - layout.TOP_BAR_HEIGHT - layout.STATUS_BAR_HEIGHT,
+    size.height -
+      layout.TITLE_BAR_HEIGHT -
+      layout.TOP_BAR_HEIGHT -
+      layout.STATUS_BAR_HEIGHT,
   );
-  return { x: 0, y: layout.TOP_BAR_HEIGHT, width, height };
+  return { x: 0, y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT, width, height };
 }

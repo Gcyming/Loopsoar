@@ -3,7 +3,7 @@
  * 允许 import electron 的文件只有两个：本文件与 main/electronBrowser.ts（薄适配层）。
  * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
  */
-import { app, BrowserWindow, ipcMain, protocol } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, protocol } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +32,7 @@ import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
 import { registerChatDomain } from "./domains/chat.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
+import { registerWindowDomain } from "./domains/window.js";
 import { loadProviderConfig, registerSettingsDomain } from "./domains/settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -154,8 +155,10 @@ function createMainWindow(): void {
     minHeight: 600,
     title: APP_NAME,
     icon: iconPath(),
-    backgroundColor: "#0b1021",
+    backgroundColor: "#111318",
     show: false,
+    // 自定义标题栏：隐藏原生标题栏（保留系统缩放/贴边），菜单栏在 ready 时整体移除
+    titleBarStyle: "hidden",
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
@@ -271,6 +274,23 @@ app.whenReady().then(async () => {
   registerSettingsDomain({ ...deps, platform, configDir: dirs.configDir, env: process.env });
   registerChatDomain({ ...deps, chatService, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost });
+  registerWindowDomain({
+    ...deps,
+    windowControls: {
+      minimize: () => mainWindow?.minimize(),
+      toggleMaximize: () => {
+        if (!mainWindow) return;
+        if (mainWindow.isMaximized()) mainWindow.unmaximize();
+        else mainWindow.maximize();
+      },
+      close: () => mainWindow?.close(),
+      isMaximized: () => mainWindow?.isMaximized() ?? false,
+      isFocused: () => mainWindow?.isFocused() ?? false,
+    },
+  });
+
+  // 移除原生菜单栏（File/Edit/View/Window）——品牌统一由自定义标题栏承载
+  Menu.setApplicationMenu(null);
 
   createMainWindow();
   app.on("activate", () => {

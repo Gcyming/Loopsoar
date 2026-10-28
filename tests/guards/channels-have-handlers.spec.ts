@@ -11,6 +11,7 @@ import { registerChatDomain } from "../../packages/shell/src/main/domains/chat.t
 import { registerBrowserDomain } from "../../packages/shell/src/main/domains/browserAdapter.ts";
 import { registerSettingsDomain } from "../../packages/shell/src/main/domains/settings.ts";
 import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
+import { registerWindowDomain } from "../../packages/shell/src/main/domains/window.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
@@ -51,6 +52,16 @@ function assemble(): void {
     platform: {} as LoopsoarPlatform,
     configDir: "C:/tmp/loopsoar-config-test",
     env: {},
+  });
+  registerWindowDomain({
+    ...deps,
+    windowControls: {
+      minimize: () => {},
+      toggleMaximize: () => {},
+      close: () => {},
+      isMaximized: () => false,
+      isFocused: () => true,
+    },
   });
 }
 

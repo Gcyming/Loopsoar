@@ -42,6 +42,10 @@ describe("守卫：UI ↔ 契约一致", () => {
       "browser.snapshot": "browser:snapshot",
       "browser.screenshot": "browser:screenshot",
       "perm.respond": "perm:respond",
+      "window.minimize": "window:minimize",
+      "window.maximize": "window:maximize",
+      "window.close": "window:close",
+      "window.state": "window:state",
     };
     for (const call of calls) {
       const channel = methodMap[call] ?? call.replace(".", ":");

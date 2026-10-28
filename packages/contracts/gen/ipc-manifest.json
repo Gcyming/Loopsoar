@@ -97,6 +97,34 @@
       "method": "setProvider",
       "sensitive": true,
       "hasRequest": true
+    },
+    {
+      "channel": "window:minimize",
+      "domain": "window",
+      "method": "minimize",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "window:maximize",
+      "domain": "window",
+      "method": "maximize",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "window:close",
+      "domain": "window",
+      "method": "close",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "window:state",
+      "domain": "window",
+      "method": "state",
+      "sensitive": true,
+      "hasRequest": false
     }
   ],
   "events": [

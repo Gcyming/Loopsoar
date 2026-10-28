@@ -7,24 +7,25 @@ import { normalizeNavigateUrl } from "../../packages/contracts/src/navigation.ts
 
 describe("布局契约", () => {
   it("常量与 S2 规格一致", () => {
+    expect(LAYOUT.TITLE_BAR_HEIGHT).toBe(36);
     expect(LAYOUT.TOP_BAR_HEIGHT).toBe(48);
     expect(LAYOUT.SIDEBAR_WIDTH).toBe(320);
     expect(LAYOUT.STATUS_BAR_HEIGHT).toBe(32);
   });
 
-  it("原生浏览器视图避开顶栏/侧栏/状态条", () => {
+  it("原生浏览器视图避开标题栏/顶栏/侧栏/状态条", () => {
     expect(computeBrowserViewBounds({ width: 1280, height: 800 })).toEqual({
       x: 0,
-      y: 48,
+      y: 84,
       width: 960,
-      height: 720,
+      height: 684,
     });
   });
 
   it("窗口过小时钳制为 0（不产生负尺寸）", () => {
     expect(computeBrowserViewBounds({ width: 100, height: 40 })).toEqual({
       x: 0,
-      y: 48,
+      y: 84,
       width: 0,
       height: 0,
     });

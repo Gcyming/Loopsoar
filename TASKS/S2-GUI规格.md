@@ -56,3 +56,27 @@
 2. Electron 真跑（Electron 45 + `--no-sandbox`，受限会话标准参数）→ 截图证据落 `docs/screenshots/gui-1.png`；
 3. 隔离守卫扩展通过（无旧项目资产引用）；
 4. 交互冒烟：启动即显示布局与状态条数据；omnibox 导航 data/本地页 → 浏览器区出现真实内容（截图验证）。
+
+---
+
+## 6. GUI-2 增补（品牌主题 + 自定义标题栏）
+
+> 触发：用户反馈「主题色不符合应用图标配色」「顶部 File 行与更上面一行改成自定义」。
+
+### 6.1 品牌三色（单一来源：UI 内 `BRAND` 常量）
+
+| 角色 | 色值 | 用途 |
+|---|---|---|
+| 深墨 `#111318` | 底板 | 窗口背景 / 标题栏 / 状态条 |
+| 亚麻白 `#F4EFE6` | 主文本 | 正文、标题 |
+| 赭石 `#C8763C` | 强调色 | 主按钮、选中态、副标题、滚动条 hover |
+| 派生 | `#17191e` / `#15171c` / `#262a31` / `#a8a29a` | 抬升面 / 面板 / 边框 / 次级文本 |
+
+### 6.2 自定义标题栏（36px，`LAYOUT.TITLE_BAR_HEIGHT`）
+
+- 原生标题栏与菜单栏全部移除：`titleBarStyle: "hidden"` + `Menu.setApplicationMenu(null)`；
+- 标题栏左侧：∞ 图标 + Loopsoar 字标（拖动区 `-webkit-app-region: drag`，双击最大化）；
+- 右侧：最小化 / 最大化（还原）/ 关闭，经 `window:*` 受信通道驱动主进程（`window:minimize|maximize|close|state`）；
+- 关闭按钮 hover 为 Windows 红 `#c42b1c`；所有按钮 `no-drag`；
+- 布局联动：原生浏览器视图 y 偏移 = 标题栏 + 顶栏（`computeBrowserViewBounds` 已含 TITLE_BAR_HEIGHT），窗口缩放自动重算。
+

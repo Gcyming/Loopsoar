@@ -24,6 +24,10 @@ export const IPC_CHANNELS = {
   "browser:snapshot": { domain: "browser", method: "snapshot", sensitive: true, hasRequest: false },
   "settings:getProvider": { domain: "settings", method: "getProvider", sensitive: true, hasRequest: false },
   "settings:setProvider": { domain: "settings", method: "setProvider", sensitive: true, hasRequest: true },
+  "window:minimize": { domain: "window", method: "minimize", sensitive: true, hasRequest: false },
+  "window:maximize": { domain: "window", method: "maximize", sensitive: true, hasRequest: false },
+  "window:close": { domain: "window", method: "close", sensitive: true, hasRequest: false },
+  "window:state": { domain: "window", method: "state", sensitive: true, hasRequest: false },
 } as const;
 
 /**
@@ -75,7 +79,8 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "agents": ["list"],
     "runtime": ["version", "status"],
     "browser": ["navigate", "screenshot", "snapshot"],
-    "settings": ["getProvider", "setProvider"]
+    "settings": ["getProvider", "setProvider"],
+    "window": ["minimize", "maximize", "close", "state"]
     },
   };
 }
