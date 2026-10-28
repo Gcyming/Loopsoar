@@ -13,6 +13,7 @@ import { registerSettingsDomain } from "../../packages/shell/src/main/domains/se
 import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
 import { registerWindowDomain } from "../../packages/shell/src/main/domains/window.ts";
 import { registerMemoryDomain } from "../../packages/shell/src/main/domains/memory.ts";
+import { registerExtensionsDomain } from "../../packages/shell/src/main/domains/extensions.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -73,6 +74,19 @@ function assemble(): void {
       recallPrompt: () => "",
     } as never,
     push: () => {},
+  });
+  registerExtensionsDomain({
+    ...deps,
+    extensions: {
+      scan: () => ({ installed: 0, skipped: [] }),
+      list: () => [],
+      setEnabled: () => null,
+      remove: () => false,
+      dirPath: () => "C:/tmp/loopsoar-ext-test",
+      promptSummary: () => "",
+    } as never,
+    push: () => {},
+    openExtensionsDir: async () => true,
   });
   registerWindowDomain({
     ...deps,

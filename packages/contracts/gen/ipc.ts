@@ -53,6 +53,24 @@ export const IPC_CHANNELS = {
   "settings:setRules": { domain: "settings", method: "setRules", sensitive: true, hasRequest: true },
   "settings:diagnostics": { domain: "settings", method: "diagnostics", sensitive: true, hasRequest: false },
   "settings:about": { domain: "settings", method: "about", sensitive: true, hasRequest: false },
+  "browser:back": { domain: "browser", method: "back", sensitive: true, hasRequest: true },
+  "browser:forward": { domain: "browser", method: "forward", sensitive: true, hasRequest: true },
+  "browser:reload": { domain: "browser", method: "reload", sensitive: true, hasRequest: true },
+  "browser:history": { domain: "browser", method: "history", sensitive: true, hasRequest: true },
+  "browser:downloads": { domain: "browser", method: "downloads", sensitive: true, hasRequest: false },
+  "browser:downloadAction": { domain: "browser", method: "downloadAction", sensitive: true, hasRequest: true },
+  "settings:listProviders": { domain: "settings", method: "listProviders", sensitive: true, hasRequest: false },
+  "settings:upsertProvider": { domain: "settings", method: "upsertProvider", sensitive: true, hasRequest: true },
+  "settings:removeProvider": { domain: "settings", method: "removeProvider", sensitive: true, hasRequest: true },
+  "settings:setActiveProvider": { domain: "settings", method: "setActiveProvider", sensitive: true, hasRequest: true },
+  "chat:sessions": { domain: "chat", method: "sessions", sensitive: true, hasRequest: false },
+  "chat:newSession": { domain: "chat", method: "newSession", sensitive: true, hasRequest: false },
+  "chat:switchSession": { domain: "chat", method: "switchSession", sensitive: true, hasRequest: true },
+  "chat:deleteSession": { domain: "chat", method: "deleteSession", sensitive: true, hasRequest: true },
+  "extensions:list": { domain: "extensions", method: "list", sensitive: true, hasRequest: false },
+  "extensions:setEnabled": { domain: "extensions", method: "setEnabled", sensitive: true, hasRequest: true },
+  "extensions:remove": { domain: "extensions", method: "remove", sensitive: true, hasRequest: true },
+  "extensions:openDir": { domain: "extensions", method: "openDir", sensitive: true, hasRequest: false },
 } as const;
 
 /**
@@ -98,16 +116,17 @@ export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEn
 export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
-    "chat": ["stream", "stop", "send", "history"],
+    "chat": ["stream", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
     "perm": ["respond"],
     "workspace": ["read", "write"],
     "agents": ["list"],
     "runtime": ["version", "status"],
-    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay", "setSidebarWidth"],
-    "settings": ["listModels", "getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "diagnostics", "about"],
+    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay", "setSidebarWidth", "back", "forward", "reload", "history", "downloads", "downloadAction"],
+    "settings": ["listModels", "getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "diagnostics", "about", "listProviders", "upsertProvider", "removeProvider", "setActiveProvider"],
     "dialog": ["pickPath"],
     "memory": ["list", "add", "update", "delete", "stats", "clear"],
-    "window": ["minimize", "maximize", "close", "state"]
+    "window": ["minimize", "maximize", "close", "state"],
+    "extensions": ["list", "setEnabled", "remove", "openDir"]
     },
   };
 }

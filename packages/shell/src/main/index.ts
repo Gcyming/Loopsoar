@@ -3,7 +3,7 @@
  * 允许 import electron 的文件只有两个：本文件与 main/electronBrowser.ts（薄适配层）。
  * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +26,7 @@ import {
   makeUiProtocolHandler,
 } from "./boot.js";
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
-import { createElectronBrowserHost } from "./electronBrowser.js";
+import { createElectronBrowserHost, DownloadsBridge } from "./electronBrowser.js";
 import type { BrowserHost } from "./browserHost.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
@@ -38,6 +38,9 @@ import { loadProviderConfig, registerSettingsDomain, currentRulesPrompt } from "
 import { registerMemoryDomain } from "./domains/memory.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
+import { ProviderStore } from "./providerStore.js";
+import { ExtensionHost } from "./extensions.js";
+import { registerExtensionsDomain } from "./domains/extensions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -274,22 +277,29 @@ app.whenReady().then(async () => {
   let workspaceRoot = initialPrefs.workspaceRoot?.trim() || process.cwd();
   sandbox.setWorkspaceRoot(workspaceRoot);
 
-  const providerConfig = await loadProviderConfig(platform, dirs.configDir);
+  // 多供应商：providers.json（兼容旧 provider.json 自动迁移）
+  const providers = new ProviderStore(dirs.configDir);
+  const legacyProvider = await loadProviderConfig(platform, dirs.configDir);
+  if (providers.list().length === 0 && legacyProvider) {
+    const item = providers.upsert(legacyProvider);
+    providers.setActive(item.id);
+  }
   const apiKey = resolveApiKeyFromEnv(process.env);
-  const llmUsability = providerUsability(providerConfig, apiKey);
-  const buildLlm = (cfg: typeof providerConfig): LlmClient | undefined =>
-    cfg && (cfg.baseUrl ? true : false) && apiKey
-      ? createOpenAiClient({ baseUrl: cfg.baseUrl, apiKey, model: cfg.model })
-      : undefined;
-  // 惰性引用：供应商在设置里保存后立即生效（无需重启）
-  let llmRef: LlmClient | undefined =
-    providerConfig && llmUsability.usable ? buildLlm(providerConfig) : undefined;
+  const buildLlmFromActive = (): LlmClient | undefined => {
+    const active = providers.active();
+    const key = resolveApiKeyFromEnv(process.env);
+    if (!active || !key) return undefined;
+    return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model });
+  };
+  // 惰性引用：供应商增删改/切换活跃后立即生效（无需重启）
+  let llmRef: LlmClient | undefined = buildLlmFromActive();
 
   // 记忆库（路径可在设置里改）+ 会话持久化
   const memoryFile = initialPrefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
   const memory = new MemoryService({ platform, filePath: memoryFile });
   await memory.load();
-  const sessions = new SessionStore(path.join(dirs.dataDir, "sessions", "last.json"));
+  const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
+  const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
 
   // Agent 注册表（真实实现）：内置默认 Agent → 决定身份段与工具白名单
   const agents = new AgentRegistry();
@@ -316,16 +326,16 @@ app.whenReady().then(async () => {
       agents: agents.list().length,
       memoryEntries: memory.stats().total,
     }),
-    // 供应商保存 → 重建 LLM（立即可对话）
+    // 供应商增删改/切换 → 重建 LLM（立即可对话）
+    providers,
+    onProvidersChanged: () => {
+      llmRef = buildLlmFromActive();
+    },
     onProviderCleared: () => {
-      llmRef = undefined;
+      llmRef = buildLlmFromActive();
     },
     onProviderSaved: () => {
-      const key = resolveApiKeyFromEnv(process.env);
-      llmRef = undefined;
-      void loadProviderConfig(platform, dirs.configDir).then((cfg) => {
-        llmRef = cfg && key ? createOpenAiClient({ baseUrl: cfg.baseUrl, apiKey: key, model: cfg.model }) : undefined;
-      });
+      llmRef = buildLlmFromActive();
     },
     // 偏好保存 → 应用工作区根 / 记忆库位置
     onPreferencesSaved: (prefs: { workspaceRoot?: string; memoryStorePath?: string }) => {
@@ -371,6 +381,11 @@ app.whenReady().then(async () => {
   browserHost = createElectronBrowserHost(() => mainWindow, (url) => {
     void browserHost?.newTab(url);
   });
+  // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
+  const downloads = new DownloadsBridge(
+    () => loadPreferences(dirs.configDir).downloadDir ?? "",
+    () => pushToRenderer("browser:downloads", { downloads: downloads.list() }),
+  );
 
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({ ...deps, platform });
@@ -385,7 +400,13 @@ app.whenReady().then(async () => {
     shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
-  registerBrowserDomain({ ...deps, browser: browserHost });
+  registerBrowserDomain({ ...deps, browser: browserHost, downloads });
+  registerExtensionsDomain({
+    ...deps,
+    extensions,
+    push: pushToRenderer,
+    openExtensionsDir: async () => (await shell.openPath(extensions.dirPath())) === "",
+  });
   registerWindowDomain({
     ...deps,
     windowControls: {

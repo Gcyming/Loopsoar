@@ -300,6 +300,132 @@
       "method": "about",
       "sensitive": true,
       "hasRequest": false
+    },
+    {
+      "channel": "browser:back",
+      "domain": "browser",
+      "method": "back",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:forward",
+      "domain": "browser",
+      "method": "forward",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:reload",
+      "domain": "browser",
+      "method": "reload",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:history",
+      "domain": "browser",
+      "method": "history",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:downloads",
+      "domain": "browser",
+      "method": "downloads",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "browser:downloadAction",
+      "domain": "browser",
+      "method": "downloadAction",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:listProviders",
+      "domain": "settings",
+      "method": "listProviders",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:upsertProvider",
+      "domain": "settings",
+      "method": "upsertProvider",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:removeProvider",
+      "domain": "settings",
+      "method": "removeProvider",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:setActiveProvider",
+      "domain": "settings",
+      "method": "setActiveProvider",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "chat:sessions",
+      "domain": "chat",
+      "method": "sessions",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "chat:newSession",
+      "domain": "chat",
+      "method": "newSession",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "chat:switchSession",
+      "domain": "chat",
+      "method": "switchSession",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "chat:deleteSession",
+      "domain": "chat",
+      "method": "deleteSession",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:list",
+      "domain": "extensions",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "extensions:setEnabled",
+      "domain": "extensions",
+      "method": "setEnabled",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:remove",
+      "domain": "extensions",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:openDir",
+      "domain": "extensions",
+      "method": "openDir",
+      "sensitive": true,
+      "hasRequest": false
     }
   ],
   "events": [
@@ -313,6 +439,8 @@
     "perm:request",
     "boot:ready",
     "browser:tabs",
-    "memory:updated"
+    "browser:downloads",
+    "memory:updated",
+    "extensions:updated"
   ]
 }

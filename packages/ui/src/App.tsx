@@ -5,9 +5,12 @@ import type {
   AgentSummary,
   BootStatus,
   LoopsoarAPI,
+  DownloadItem,
+  HistoryEntry,
   PermissionsState,
   Preferences,
   ProviderStatus,
+  SessionMeta,
   TabState,
 } from "./types.js";
 import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
@@ -153,6 +156,13 @@ export default function App(): React.JSX.Element {
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [permMenuOpen, setPermMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const [sessionOpen, setSessionOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [modelList, setModelList] = useState<{ models: string[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
@@ -197,6 +207,13 @@ export default function App(): React.JSX.Element {
       }
       const permResult = await api.settings.getPermissions().catch(() => null);
       if (permResult) setPermSummary(permResult);
+      const sessionResult = await api.chat.sessions().catch(() => null);
+      if (sessionResult) {
+        setSessions(sessionResult.sessions);
+        setCurrentSession(sessionResult.currentId);
+      }
+      const dlResult = await api.browser.downloads().catch(() => null);
+      if (dlResult) setDownloads(dlResult.downloads);
       const tabsResult = await api.browser.listTabs().catch(() => null);
       if (tabsResult) setTabs(tabsResult.tabs);
       if (bootResult.status === "fulfilled") setBoot(bootResult.value);
@@ -261,6 +278,10 @@ export default function App(): React.JSX.Element {
         if (req?.requestId) {
           setPermReq({ requestId: req.requestId, toolName: req.toolName ?? "工具", target: req.target, kind: req.kind });
         }
+      }),
+      api.on("browser:downloads", (payload) => {
+        const p = payload as { downloads?: DownloadItem[] };
+        if (Array.isArray(p.downloads)) setDownloads(p.downloads);
       }),
       api.on("browser:tabs", (payload) => {
         const p = payload as { tabs?: TabState[] };
@@ -444,6 +465,97 @@ export default function App(): React.JSX.Element {
     [api],
   );
 
+  const goBack = useCallback((): void => {
+    if (!api) return;
+    void api.browser.back({}).then((r) => {
+      if (r.ok && r.url) {
+        setCurrentUrl(r.url);
+        setAddress(r.url);
+      }
+      void api.browser.listTabs().then((x) => setTabs(x.tabs)).catch(() => {});
+    });
+  }, [api]);
+
+  const goForward = useCallback((): void => {
+    if (!api) return;
+    void api.browser.forward({}).then((r) => {
+      if (r.ok && r.url) {
+        setCurrentUrl(r.url);
+        setAddress(r.url);
+      }
+      void api.browser.listTabs().then((x) => setTabs(x.tabs)).catch(() => {});
+    });
+  }, [api]);
+
+  const toggleHistory = useCallback((): void => {
+    if (!api) return;
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    void api.browser.history({}).then((r) => {
+      setHistoryEntries(r.entries);
+      setHistoryOpen(true);
+      setDownloadsOpen(false);
+      setModelMenuOpen(false);
+      setPermMenuOpen(false);
+    });
+  }, [api, historyOpen]);
+
+  const toggleDownloads = useCallback((): void => {
+    if (!api) return;
+    if (downloadsOpen) {
+      setDownloadsOpen(false);
+      return;
+    }
+    void api.browser.downloads().then((r) => {
+      setDownloads(r.downloads);
+      setDownloadsOpen(true);
+      setHistoryOpen(false);
+      setModelMenuOpen(false);
+      setPermMenuOpen(false);
+    });
+  }, [api, downloadsOpen]);
+
+  const refreshSessions = useCallback((): void => {
+    if (!api) return;
+    void api.chat.sessions().then((r) => {
+      setSessions(r.sessions);
+      setCurrentSession(r.currentId);
+    }).catch(() => {});
+  }, [api]);
+
+  const newSession = useCallback((): void => {
+    if (!api) return;
+    void api.chat.newSession().then((r) => {
+      setSessions(r.sessions);
+      setCurrentSession(r.currentId);
+      setMessages([]);
+      if (r.session?.sessionId) sessionIdRef.current = r.session.sessionId;
+      setSessionOpen(false);
+      setNotice("已新建会话");
+    });
+  }, [api]);
+
+  const switchSession = useCallback((sessionId: string): void => {
+    if (!api) return;
+    void api.chat.switchSession({ sessionId }).then((r) => {
+      if (!r.ok) return;
+      setCurrentSession(sessionId);
+      sessionIdRef.current = sessionId;
+      const msgs = r.session?.messages ?? [];
+      setMessages(
+        msgs.map((m) => ({
+          id: nextId(m.role),
+          role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+          text: m.text,
+          status: "done" as const,
+        })),
+      );
+      setSessionOpen(false);
+    });
+  }, [api]);
+
   const snapshot = useCallback((): void => {
     if (!api) return;
     void api.browser.snapshot().then((result) => {
@@ -519,10 +631,22 @@ export default function App(): React.JSX.Element {
 
       <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
         <div style={styles.navGroup}>
-          <button type="button" className="icon-btn" title="后退（待接历史）" disabled>
+          <button
+            type="button"
+            className="icon-btn"
+            title="后退"
+            disabled={!tabs.find((x) => x.active)?.canBack}
+            onClick={goBack}
+          >
             <Icon name="back" size={16} />
           </button>
-          <button type="button" className="icon-btn" title="前进（待接历史）" disabled>
+          <button
+            type="button"
+            className="icon-btn"
+            title="前进"
+            disabled={!tabs.find((x) => x.active)?.canForward}
+            onClick={goForward}
+          >
             <Icon name="forward" size={16} />
           </button>
           <button
@@ -533,6 +657,9 @@ export default function App(): React.JSX.Element {
             onClick={() => navigate(currentUrl)}
           >
             <Icon name="reload" size={16} />
+          </button>
+          <button type="button" className="icon-btn" title="历史记录" onClick={toggleHistory}>
+            <Icon name="history" size={16} />
           </button>
         </div>
 
@@ -554,6 +681,10 @@ export default function App(): React.JSX.Element {
         </div>
 
         <div style={styles.topActions}>
+          <button type="button" className="icon-btn" title="下载" onClick={toggleDownloads} style={{ position: "relative" }}>
+            <Icon name="download" size={17} />
+            {downloads.some((d) => d.state === "progressing") ? <span style={styles.dlDot} /> : null}
+          </button>
           <button type="button" className="icon-btn" title="页面快照" onClick={snapshot} disabled={!api}>
             <Icon name="capture" size={17} />
           </button>
@@ -565,6 +696,82 @@ export default function App(): React.JSX.Element {
           </button>
         </div>
       </header>
+
+      {historyOpen || downloadsOpen ? (
+        <div style={styles.dropPanel}>
+          {historyOpen ? (
+            <>
+              <div style={styles.dropTitle}>历史记录（本标签）</div>
+              {historyEntries.length === 0 ? (
+                <div style={styles.dropEmpty}>暂无历史</div>
+              ) : (
+                historyEntries.map((h) => (
+                  <button
+                    key={`${h.index}-${h.url}`}
+                    type="button"
+                    className="model-item"
+                    style={{ ...styles.dropItem, ...(h.current ? styles.dropItemActive : {}) }}
+                    onClick={() => {
+                      setHistoryOpen(false);
+                      void api?.browser.navigate({ url: h.url }).then((r) => {
+                        if (r.ok) {
+                          setCurrentUrl(r.url ?? h.url);
+                          setAddress(r.url ?? h.url);
+                        }
+                      });
+                    }}
+                    title={h.url}
+                  >
+                    {h.url}
+                  </button>
+                ))
+              )}
+            </>
+          ) : (
+            <>
+              <div style={styles.dropTitle}>下载</div>
+              {downloads.length === 0 ? (
+                <div style={styles.dropEmpty}>暂无下载</div>
+              ) : (
+                downloads.map((d) => (
+                  <div key={d.id} style={styles.dlRow}>
+                    <div style={styles.dlMeta}>
+                      <span style={styles.dlName} title={d.savePath}>{d.filename}</span>
+                      <span style={styles.dlState}>
+                        {d.state === "completed"
+                          ? "已完成"
+                          : d.state === "progressing"
+                            ? `${Math.round((d.received / Math.max(1, d.total)) * 100)}%`
+                            : d.state === "cancelled"
+                              ? "已取消"
+                              : "失败"}
+                      </span>
+                    </div>
+                    <div style={styles.dlActions}>
+                      {d.state === "progressing" ? (
+                        <button type="button" className="icon-btn" title="取消" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "cancel" })}>
+                          <Icon name="close" size={12} />
+                        </button>
+                      ) : null}
+                      {d.state === "completed" ? (
+                        <button type="button" className="icon-btn" title="打开" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" })}>
+                          <Icon name="arrow-go" size={12} />
+                        </button>
+                      ) : null}
+                      <button type="button" className="icon-btn" title="打开所在文件夹" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
+                        <Icon name="folder" size={12} />
+                      </button>
+                      <button type="button" className="icon-btn" title="移除记录" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "remove" }).then(() => void api.browser.downloads().then((r) => setDownloads(r.downloads)))}>
+                        <Icon name="close" size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div style={{ ...styles.tabBar, height: LAYOUT.TAB_BAR_HEIGHT }}>
         {tabs.length === 0 ? (
@@ -633,6 +840,49 @@ export default function App(): React.JSX.Element {
               Agent 对话
             </span>
             <span style={styles.sidebarAgent}>{agentLabel}</span>
+          </div>
+          <div style={styles.sessionBar}>
+            <button type="button" className="chip" style={{ ...styles.chip, maxWidth: 220 }} onClick={() => { refreshSessions(); setSessionOpen((v) => !v); }} title="切换会话">
+              <Icon name="notes" size={12} style={{ marginRight: 4 }} />
+              {sessions.find((x) => x.id === currentSession)?.title ?? "新会话"}
+            </button>
+            <button type="button" className="icon-btn" title="新建会话" onClick={newSession}>
+              <Icon name="plus" size={13} />
+            </button>
+            {sessionOpen ? (
+              <div style={styles.sessionMenu}>
+                <div style={styles.dropTitle}>会话历史</div>
+                {sessions.length === 0 ? <div style={styles.dropEmpty}>还没有会话</div> : null}
+                {sessions.map((x) => (
+                  <div key={x.id} style={styles.sessionRow}>
+                    <button
+                      type="button"
+                      className="model-item"
+                      style={{ ...styles.sessionItem, ...(x.id === currentSession ? styles.dropItemActive : {}) }}
+                      onClick={() => switchSession(x.id)}
+                      title={x.preview}
+                    >
+                      <span style={styles.sessionTitle}>{x.title}</span>
+                      <span style={styles.sessionMeta}>{new Date(x.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="删除会话"
+                      onClick={() =>
+                        void api?.chat.deleteSession({ sessionId: x.id }).then((r) => {
+                          setSessions(r.sessions);
+                          setCurrentSession(r.currentId);
+                          if (x.id === currentSession) setMessages([]);
+                        })
+                      }
+                    >
+                      <Icon name="close" size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div style={styles.messageList}>
             {messages.length === 0 ? (
@@ -1072,6 +1322,93 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   permSegBtnOn: { background: BRAND.ochre, color: BRAND.ink, fontWeight: 700 },
+  dlDot: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    background: BRAND.ochre,
+  },
+  dropPanel: {
+    position: "absolute",
+    top: 84,
+    left: 12,
+    width: 420,
+    maxHeight: 360,
+    overflowY: "auto",
+    borderRadius: 10,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+    padding: 8,
+    zIndex: 40,
+  },
+  dropTitle: { fontSize: 10.5, color: BRAND.linenFaint, padding: "2px 6px 6px" },
+  dropEmpty: { fontSize: 11.5, color: BRAND.linenFaint, padding: "8px 6px" },
+  dropItem: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "6px 8px",
+    borderRadius: 7,
+    border: "none",
+    background: "transparent",
+    color: BRAND.linenMuted,
+    fontSize: 11.5,
+    cursor: "pointer",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  dropItemActive: { background: BRAND.ochreSoft, color: BRAND.ochreHover },
+  dlRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    padding: "6px 8px",
+    borderBottom: `1px solid ${BRAND.border}`,
+  },
+  dlMeta: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 },
+  dlName: { fontSize: 11.5, color: BRAND.linen, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 240 },
+  dlState: { fontSize: 10.5, color: BRAND.linenFaint },
+  dlActions: { display: "inline-flex", gap: 2, flexShrink: 0 },
+  sessionBar: { position: "relative", display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderBottom: `1px solid ${BRAND.border}` },
+  sessionMenu: {
+    position: "absolute",
+    top: "100%",
+    left: 10,
+    width: 300,
+    maxHeight: 320,
+    overflowY: "auto",
+    borderRadius: 10,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+    padding: 6,
+    zIndex: 30,
+  },
+  sessionRow: { display: "flex", alignItems: "center", gap: 2 },
+  sessionItem: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    padding: "6px 8px",
+    borderRadius: 7,
+    border: "none",
+    background: "transparent",
+    color: BRAND.linenMuted,
+    fontSize: 11.5,
+    cursor: "pointer",
+    textAlign: "left",
+    minWidth: 0,
+  },
+  sessionTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  sessionMeta: { fontSize: 10, color: BRAND.linenFaint, flexShrink: 0 },
   modelMenu: {
     position: "absolute",
     right: 8,

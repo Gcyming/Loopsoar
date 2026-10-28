@@ -21,7 +21,12 @@ function startStream(
   deps: ChatDeps,
   payload: { message: string; sessionId?: string; mode?: "build" | "plan" },
 ): { accepted: boolean; sessionId: string } {
-  const sessionId = payload.sessionId ?? `sess-${Date.now()}`;
+  // 会话解析：显式 > 当前会话 > 新建会话（多会话列表）
+  const sessionId =
+    payload.sessionId ??
+    deps.sessions?.currentId() ??
+    deps.sessions?.newSession().sessionId ??
+    `sess-${Date.now()}`;
   let assistantText = "";
 
   void deps.chatService
@@ -95,5 +100,28 @@ export function registerChatDomain(deps: ChatDeps): void {
   handleTrusted(deps, "chat:history", () => {
     const session = deps.sessions?.load() ?? null;
     return { session };
+  });
+
+  // ── 多会话管理 ──
+  handleTrusted(deps, "chat:sessions", () => ({
+    sessions: deps.sessions?.list() ?? [],
+    currentId: deps.sessions?.currentId() ?? null,
+  }));
+
+  handleTrusted(deps, "chat:newSession", () => {
+    const session = deps.sessions?.newSession() ?? null;
+    return { session, sessions: deps.sessions?.list() ?? [], currentId: session?.sessionId ?? null };
+  });
+
+  handleTrusted(deps, "chat:switchSession", (payload) => {
+    const p = payload as { sessionId: string };
+    const ok = deps.sessions?.switchTo(p.sessionId) ?? false;
+    return { ok, session: ok ? deps.sessions?.load() ?? null : null };
+  });
+
+  handleTrusted(deps, "chat:deleteSession", (payload) => {
+    const p = payload as { sessionId: string };
+    const removed = deps.sessions?.remove(p.sessionId) ?? false;
+    return { removed, sessions: deps.sessions?.list() ?? [], currentId: deps.sessions?.currentId() ?? null };
   });
 }

@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BRAND, BADGE } from "./theme.js";
 import { Icon } from "./Icon.js";
 import type {
-  AboutInfo, DiagnosticsInfo, LocationsInfo, LoopsoarAPI, MemoryListResult,
-  PermissionsState, Preferences, ProviderStatus, RulesSnapshot, TestProviderResult,
+  AboutInfo, DiagnosticsInfo, InstalledExtension, LocationsInfo, LoopsoarAPI, MemoryListResult,
+  PermissionsState, Preferences, ProviderItem, ProviderStatus, RulesSnapshot, TestProviderResult,
 } from "./types.js";
 
 /**
@@ -11,7 +11,7 @@ import type {
  * 全部数据经 preload 白名单；规则与记忆在保存后即时生效（主进程惰性读取）。
  */
 
-type SectionId = "general" | "permissions" | "providers" | "rules" | "memory" | "storage" | "advanced" | "about";
+type SectionId = "general" | "permissions" | "providers" | "rules" | "memory" | "extensions" | "storage" | "advanced" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: string; hint: string; group: string }[] = [
   { id: "general", group: "基础", label: "通用", icon: "settings", hint: "外观、搜索、启动" },
@@ -19,6 +19,7 @@ const SECTIONS: { id: SectionId; label: string; icon: string; hint: string; grou
   { id: "providers", group: "能力", label: "供应商", icon: "cloud-upload", hint: "模型服务" },
   { id: "rules", group: "能力", label: "规则", icon: "file", hint: "AGENTS.md 逐条" },
   { id: "memory", group: "能力", label: "记忆", icon: "notes", hint: "会话记忆汇总" },
+  { id: "extensions", group: "能力", label: "扩展", icon: "puzzle", hint: "本地插件" },
   { id: "storage", group: "数据", label: "存储", icon: "folders", hint: "文件位置" },
   { id: "advanced", group: "数据", label: "高级", icon: "terminal", hint: "路径与版本" },
   { id: "about", group: "其他", label: "关于", icon: "bulb", hint: "版本与品牌" },
@@ -40,6 +41,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [perms, setPerms] = useState<PermissionsState | null>(null);
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [pForm, setPForm] = useState({ provider: "", baseUrl: "", model: "" });
+  const [providerItems, setProviderItems] = useState<ProviderItem[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [extensions, setExtensions] = useState<InstalledExtension[]>([]);
+  const [extensionsDir, setExtensionsDir] = useState("");
+  const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [pEditing, setPEditing] = useState(false);
   const [testRes, setTestRes] = useState<TestProviderResult | null>(null);
   const [rules, setRules] = useState<RulesSnapshot | null>(null);
@@ -64,9 +71,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api) { setLoading(false); return; }
     void (async () => {
       try {
-        const [p, pm, pv, ru, dg, ab, mm] = await Promise.allSettled([
+        const [p, pm, pv, ru, dg, ab, mm, pvList, ext] = await Promise.allSettled([
           api.settings.getPreferences(), api.settings.getPermissions(), api.settings.getProvider(),
           api.settings.getRules(), api.settings.diagnostics(), api.settings.about(), api.memory.list(),
+          api.settings.listProviders(), api.extensions.list(),
         ]);
         if (p.status === "fulfilled") { setPrefs(p.value.preferences); setLocations(p.value.locations); }
         if (pm.status === "fulfilled") setPerms(pm.value);
@@ -75,6 +83,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         if (dg.status === "fulfilled") setDiag(dg.value);
         if (ab.status === "fulfilled") setAbout(ab.value);
         if (mm.status === "fulfilled") setMem(mm.value);
+        if (pvList.status === "fulfilled") {
+          setProviderItems(pvList.value.items);
+          setActiveProviderId(pvList.value.activeId);
+        }
+        if (ext.status === "fulfilled") {
+          setExtensions(ext.value.extensions);
+          setExtensionsDir(ext.value.dir);
+          setExtensionSkips(ext.value.skipped);
+        }
       } catch (e) { bad(e); } finally { setLoading(false); }
     })();
   }, [api, applyRules, bad]);
@@ -176,36 +193,73 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <SaveBtn onClick={savePerms} label="保存权限策略" />
         </div>) : <div style={S.muted}>读取失败</div>;
 
-      case "providers":
+      case "providers": {
+        const refreshProviders = async (): Promise<void> => {
+          const list = await api.settings.listProviders();
+          setProviderItems(list.items);
+          setActiveProviderId(list.activeId);
+        };
+        const startEdit = (item?: ProviderItem): void => {
+          if (item) {
+            setEditingProviderId(item.id);
+            setPForm({ provider: item.provider, baseUrl: item.baseUrl, model: item.model });
+          } else {
+            setEditingProviderId("new");
+            setPForm({ provider: "", baseUrl: "", model: "" });
+          }
+          setTestRes(null);
+        };
+        const commit = async (): Promise<void> => {
+          try {
+            const r = await api.settings.upsertProvider(
+              editingProviderId && editingProviderId !== "new" ? { id: editingProviderId, ...pForm } : pForm,
+            );
+            await api.settings.setActiveProvider({ id: r.item.id });
+            await refreshProviders();
+            setEditingProviderId(null);
+            await api.settings.getProvider().then(setProvider).catch(() => {});
+            ok("供应商已保存并设为活跃");
+          } catch (e) {
+            bad(e);
+          }
+        };
         return (
           <div>
-            <Head t="供应商" h="OpenAI 兼容接口 · API Key 只读环境变量（不落盘不回传）· 保存后无需重启" />
-            {provider?.configured ? (
-              <div style={S.card}>
+            <Head t="供应商" h="可添加多条配置，选一条设为活跃；API Key 只读环境变量（不落盘不回传）" />
+            {providerItems.map((item) => (
+              <div key={item.id} style={S.card}>
                 <div style={S.rowBetween}>
                   <span style={S.meta}>
-                    <span style={S.providerIcon}><Icon name="cloud-upload" size={15} /></span>
-                    <span style={S.metaTitle}>{provider.provider}</span>
-                    <span style={provider.usable ? BADGE.ok : BADGE.warn}>{provider.usable ? "已连接" : "待验证"}</span>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title={item.id === activeProviderId ? "当前活跃" : "设为活跃"}
+                      onClick={() => void api.settings.setActiveProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); })}
+                      style={{ width: 20, height: 20 }}
+                    >
+                      <Icon name={item.id === activeProviderId ? "check" : "cloud-upload"} size={13} />
+                    </button>
+                    <span style={S.metaTitle}>{item.provider}</span>
+                    <span style={item.id === activeProviderId ? BADGE.ok : BADGE.neutral}>{item.id === activeProviderId ? "活跃" : "备用"}</span>
                   </span>
                   <span style={S.icons}>
-                    <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" }).then(setTestRes).catch(bad)} />
-                    <Btn label="编辑" small onClick={() => setPEditing(true)} />
-                    <Btn label="删除" small onClick={() => void api.settings.clearProvider().then(() => { setProvider(null); setPEditing(false); ok("已删除供应商配置"); }).catch(bad)} />
+                    <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model }).then(setTestRes).catch(bad)} />
+                    <Btn label="编辑" small onClick={() => startEdit(item)} />
+                    <Btn label="删除" small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); }).catch(bad)} />
                   </span>
                 </div>
                 <div style={S.providerRows}>
-                  <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{provider.baseUrl ?? "—"}</span></div>
-                  <div style={S.providerRow}><span style={S.providerKey}>模型</span><span style={S.providerVal}>{provider.model ?? "—"}</span></div>
-                  <div style={S.providerRow}><span style={S.providerKey}>密钥</span><span style={S.providerVal}>{provider.hasApiKey ? "环境变量已设置" : "未设置（LOOPSOAR_API_KEY）"}</span></div>
+                  <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{item.baseUrl}</span></div>
+                  <div style={S.providerRow}><span style={S.providerKey}>模型</span><span style={S.providerVal}>{item.model}</span></div>
                 </div>
-                {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
-                {!pEditing ? <div style={S.btns}><Btn label="添加供应商配置" primary onClick={() => { setPForm({ provider: "", baseUrl: "", model: "" }); setPEditing(true); }} /></div> : null}
               </div>
-            ) : null}
-            {!provider?.configured || pEditing ? (
+            ))}
+            {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
+            {editingProviderId === null ? (
+              <div style={S.btns}><Btn label="添加供应商" primary onClick={() => startEdit()} /></div>
+            ) : (
               <div style={S.card}>
-                <div style={S.formHead}>{provider?.configured ? "编辑供应商" : "添加供应商"}</div>
+                <div style={S.formHead}>{editingProviderId === "new" ? "添加供应商" : "编辑供应商"}</div>
                 <div style={S.presetRow}>
                   <span style={S.tag}>快速填充</span>
                   {[
@@ -222,15 +276,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 <Field l="模型"><In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} /></Field>
                 <div style={S.btns}>
                   <Btn label="测试连接" onClick={() => void api.settings.testProvider(pForm).then(setTestRes).catch(bad)} />
-                  <Btn label="保存" primary onClick={() => void saveProvider().then(() => setPEditing(false))} />
-                  {provider?.configured ? <Btn label="取消" onClick={() => setPEditing(false)} /> : null}
-                  {testRes ? <span style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</span> : null}
+                  <Btn label="保存并启用" primary onClick={() => void commit()} />
+                  <Btn label="取消" onClick={() => setEditingProviderId(null)} />
                 </div>
               </div>
-            ) : null}
+            )}
             <div style={S.note}>密钥走环境变量（重启生效）：<code style={S.code}>LOOPSOAR_API_KEY=&lt;密钥&gt;</code></div>
           </div>
         );
+      }
 
 
       case "rules":
@@ -283,6 +337,55 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.btns}><Btn label="清空全部记忆" onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} /></div>
         </div>) : <div style={S.muted}>读取失败</div>;
 
+      case "extensions":
+        return (
+          <div>
+            <Head t="扩展" h="本地插件：把扩展目录放入下方路径，每个扩展含 loopsoar.extension.json 清单" />
+            <div style={S.note}>扩展目录：<code style={S.code}>{extensionsDir || "—"}</code></div>
+            <div style={S.btns}>
+              <Btn label="打开扩展目录" onClick={() => void api.extensions.openDir()} />
+              <Btn label="重新扫描" onClick={() => void api.extensions.list().then((r) => { setExtensions(r.extensions); setExtensionsDir(r.dir); setExtensionSkips(r.skipped); })} />
+            </div>
+            {extensionSkips.length > 0 ? (
+              <div style={S.note}>
+                跳过 {extensionSkips.length} 个损坏扩展：
+                {extensionSkips.map((x) => (
+                  <div key={x.dir} style={S.errText}>{x.dir}：{x.reason}</div>
+                ))}
+              </div>
+            ) : null}
+            {extensions.length === 0 ? (
+              <div style={S.dashed}>暂无扩展。扩展目录为空，或尚未放入合法的 loopsoar.extension.json。</div>
+            ) : (
+              extensions.map((ext) => (
+                <div key={ext.manifest.id} style={S.card}>
+                  <div style={S.rowBetween}>
+                    <span style={S.meta}>
+                      <span style={S.metaTitle}>{ext.manifest.name}</span>
+                      <span style={BADGE.neutral}>v{ext.manifest.version}</span>
+                      {ext.manifest.author ? <span style={S.tag}>{ext.manifest.author}</span> : null}
+                    </span>
+                    <span style={S.icons}>
+                      <label style={S.tag}>
+                        <input type="checkbox" checked={ext.enabled} onChange={(e) => void api.extensions.setEnabled({ id: ext.manifest.id, enabled: e.target.checked }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} /> 启用
+                      </label>
+                      <Btn label="卸载" small onClick={() => void api.extensions.remove({ id: ext.manifest.id }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} />
+                    </span>
+                  </div>
+                  {ext.manifest.description ? <div style={S.providerVal}>{ext.manifest.description}</div> : null}
+                  {ext.manifest.permissions && ext.manifest.permissions.length > 0 ? (
+                    <div style={S.providerRows}>
+                      <div style={S.providerRow}><span style={S.providerKey}>权限</span><span style={S.providerVal}>{ext.manifest.permissions.join(" · ")}</span></div>
+                    </div>
+                  ) : null}
+                  <div style={S.providerRow}><span style={S.providerKey}>目录</span><span style={S.providerVal}>{ext.dir}</span></div>
+                </div>
+              ))
+            )}
+            <div style={S.note}>安全：扩展只提供清单与入口声明；工具执行仍走沙箱与权限确认，不绕过四要素校验。</div>
+          </div>
+        );
+
       case "storage":
         return prefs && locations ? (<div>
           <Head t="存储 / 文件位置" h="数据/配置目录只读；工作区根、记忆库、下载目录可改，保存即时生效。" />
@@ -315,7 +418,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok]);
 
   return (
     <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>

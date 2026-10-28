@@ -40,6 +40,8 @@ export interface TabState {
   url: string;
   title: string;
   active: boolean;
+  canBack: boolean;
+  canForward: boolean;
 }
 
 interface TabEntry {
@@ -47,6 +49,9 @@ interface TabEntry {
   adapter: BrowserAdapter;
   url: string;
   title: string;
+  /** 导航历史（仅记录应用内发起的导航；后退/前进按栈移动）。 */
+  history: string[];
+  index: number;
 }
 
 export type NavigateOutcome = { ok: true; url: string; tabId: string } | { ok: false; error: string };
@@ -71,7 +76,7 @@ export class BrowserHost {
     const adapter = createWebContentsViewAdapter({ view });
     this.deps.attachView(view);
     const id = this.nextId();
-    const entry: TabEntry = { view, adapter, url: "", title: "新标签页" };
+    const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1 };
     this.tabs.set(id, entry);
     if (!this.activeId) this.activeId = id;
     return entry;
@@ -110,7 +115,51 @@ export class BrowserHost {
       url: entry.url,
       title: entry.title,
       active: id === this.activeId,
+      canBack: entry.index > 0,
+      canForward: entry.index >= 0 && entry.index < entry.history.length - 1,
     }));
+  }
+
+  /** 指定标签（缺省=活动标签）。 */
+  private resolveTab(tabId?: string): [string, TabEntry] | null {
+    const id = tabId ?? this.activeId;
+    if (!id) return null;
+    const entry = this.tabs.get(id);
+    return entry ? [id, entry] : null;
+  }
+
+  /** 后退 / 前进 / 刷新：基于本地历史栈（应用内导航）。 */
+  async goBack(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId);
+    if (!resolved) return { ok: false, error: "无标签页" };
+    const [id, entry] = resolved;
+    if (entry.index <= 0) return { ok: false, error: "没有可后退的历史" };
+    entry.index -= 1;
+    return this.navigateRecorded(entry.history[entry.index], id, false);
+  }
+
+  async goForward(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId);
+    if (!resolved) return { ok: false, error: "无标签页" };
+    const [id, entry] = resolved;
+    if (entry.index >= entry.history.length - 1) return { ok: false, error: "没有可前进的历史" };
+    entry.index += 1;
+    return this.navigateRecorded(entry.history[entry.index], id, false);
+  }
+
+  async reload(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId);
+    if (!resolved) return { ok: false, error: "无标签页" };
+    const [id, entry] = resolved;
+    if (!entry.url) return { ok: false, error: "当前标签没有页面" };
+    return this.navigateRecorded(entry.url, id, false);
+  }
+
+  history(tabId?: string): { url: string; index: number; current: boolean }[] {
+    const resolved = this.resolveTab(tabId);
+    if (!resolved) return [];
+    const [, entry] = resolved;
+    return entry.history.map((url, i) => ({ url, index: i, current: i === entry.index }));
   }
 
   activeTabId(): string | null {
@@ -131,8 +180,12 @@ export class BrowserHost {
     this.applyLayout();
   }
 
-  /** 导航：默认在活动标签内；无标签则先建一个。 */
+  /** 导航：默认在活动标签内；无标签则先建一个（记录历史）。 */
   async navigate(rawUrl: string, tabId?: string): Promise<NavigateOutcome> {
+    return this.navigateRecorded(rawUrl, tabId, true);
+  }
+
+  private async navigateRecorded(rawUrl: string, tabId?: string, record = true): Promise<NavigateOutcome> {
     const normalized = normalizeNavigateUrl(rawUrl);
     if (!normalized.ok) return { ok: false, error: normalized.reason };
 
@@ -147,6 +200,11 @@ export class BrowserHost {
     try {
       const result = await entry.adapter.navigate(normalized.url);
       entry.url = result.url;
+      if (record) {
+        entry.history = entry.history.slice(0, entry.index + 1);
+        entry.history.push(result.url);
+        entry.index = entry.history.length - 1;
+      }
       try {
         const title = await entry.adapter.executeJs("document.title");
         if (typeof title === "string" && title.trim()) entry.title = title.trim().slice(0, 80);

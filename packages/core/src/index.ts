@@ -26,5 +26,6 @@ export * from "./preferences.js";
 export * from "./permissions.js";
 export * from "./rules.js";
 export * from "./memory/index.js";
+export * from "./extension.js";
 export * from "./plugin/index.js";
 export * from "./loop/index.js";

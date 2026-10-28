@@ -6,6 +6,7 @@ export interface LoopsoarDomain {
 }
 
 export interface ProviderStatus {
+  id?: string;
   configured: boolean;
   provider: string | null;
   baseUrl: string | null;
@@ -154,6 +155,53 @@ export interface TabState {
   url: string;
   title: string;
   active: boolean;
+  canBack: boolean;
+  canForward: boolean;
+}
+
+export interface HistoryEntry {
+  url: string;
+  index: number;
+  current: boolean;
+}
+
+export interface DownloadItem {
+  id: string;
+  filename: string;
+  savePath: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  received: number;
+  total: number;
+  startedAt: number;
+}
+
+export interface SessionMeta {
+  id: string;
+  title: string;
+  updatedAt: number;
+  preview: string;
+  messageCount: number;
+}
+
+export interface ProviderItem {
+  id: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+}
+
+export interface InstalledExtension {
+  manifest: {
+    id: string;
+    name: string;
+    version: string;
+    description?: string;
+    author?: string;
+    permissions?: string[];
+  };
+  dir: string;
+  enabled: boolean;
+  installedAt: number;
 }
 
 export interface ChatHistoryMessage {
@@ -173,6 +221,8 @@ export type LoopsoarEvent =
   | "perm:request"
   | "boot:ready"
   | "browser:tabs"
+  | "browser:downloads"
+  | "extensions:updated"
   | "memory:updated";
 
 export interface LoopsoarAPI {
@@ -180,6 +230,10 @@ export interface LoopsoarAPI {
     stream(payload: { message: string; sessionId?: string; mode?: "build" | "plan" }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId: string }): Promise<{ stopped: boolean }>;
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
+    sessions(): Promise<{ sessions: SessionMeta[]; currentId: string | null }>;
+    newSession(): Promise<{ session: { sessionId: string } | null; sessions: SessionMeta[]; currentId: string | null }>;
+    switchSession(payload: { sessionId: string }): Promise<{ ok: boolean; session: { sessionId: string; messages: ChatHistoryMessage[] } | null }>;
+    deleteSession(payload: { sessionId: string }): Promise<{ removed: boolean; sessions: SessionMeta[]; currentId: string | null }>;
   };
   perm: LoopsoarDomain;
   file: LoopsoarDomain;
@@ -196,6 +250,12 @@ export interface LoopsoarAPI {
     listTabs(): Promise<{ tabs: TabState[] }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
     setSidebarWidth(payload: { width: number }): Promise<{ width: number }>;
+    back(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
+    forward(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
+    reload(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
+    history(payload?: { tabId?: string }): Promise<{ entries: HistoryEntry[] }>;
+    downloads(): Promise<{ downloads: DownloadItem[] }>;
+    downloadAction(payload: { id: string; action: "cancel" | "open" | "showInFolder" | "remove" }): Promise<{ ok: boolean }>;
     snapshot(): Promise<{ ok: boolean; url?: string; title?: string; text?: string; error?: string }>;
     screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
   };
@@ -218,6 +278,10 @@ export interface LoopsoarAPI {
   };
   settings: LoopsoarDomain & {
     listModels(payload: { provider: string; baseUrl: string; model: string }): Promise<{ models: string[]; error: string | null }>;
+    listProviders(): Promise<{ items: ProviderItem[]; activeId: string | null }>;
+    upsertProvider(payload: { id?: string; provider: string; baseUrl: string; model: string }): Promise<{ item: ProviderItem; items: ProviderItem[]; activeId: string | null }>;
+    removeProvider(payload: { id: string }): Promise<{ removed: boolean; items: ProviderItem[]; activeId: string | null }>;
+    setActiveProvider(payload: { id: string }): Promise<{ ok: boolean; activeId: string | null }>;
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
     testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;
@@ -239,6 +303,12 @@ export interface LoopsoarAPI {
     maximize(): Promise<{ ok: boolean; maximized: boolean }>;
     close(): Promise<{ ok: boolean }>;
     state(): Promise<{ maximizeSupported: boolean; maximized: boolean; focused: boolean }>;
+  };
+  extensions: LoopsoarDomain & {
+    list(): Promise<{ extensions: InstalledExtension[]; dir: string; skipped: { dir: string; reason: string }[] }>;
+    setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; extension: InstalledExtension | null }>;
+    remove(payload: { id: string }): Promise<{ removed: boolean }>;
+    openDir(): Promise<{ ok: boolean; dir: string }>;
   };
   on(event: LoopsoarEvent, cb: (payload: unknown) => void): () => void;
 }

@@ -20,6 +20,21 @@ export const BrowserNavigateSchema = z.object({ url: z.string() });
 export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
 export const BrowserSetOverlaySchema = z.object({ open: z.boolean() });
+export const BrowserTabRefSchema = z.object({ tabId: z.string().optional() });
+export const BrowserDownloadActionSchema = z.object({
+  id: z.string().min(1),
+  action: z.enum(["cancel", "open", "showInFolder", "remove"]),
+});
+export const ProviderItemSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  provider: z.string().min(1).max(64),
+  baseUrl: z.string().url(),
+  model: z.string().min(1).max(200),
+});
+export const ProviderItemIdSchema = z.object({ id: z.string().min(1).max(64) });
+export const SessionRefSchema = z.object({ sessionId: z.string().min(1).max(120) });
+export const ExtensionToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
+export const ExtensionIdSchema = z.object({ id: z.string().min(1).max(120) });
 export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
@@ -386,6 +401,114 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "browser:back": {
+    domain: "browser",
+    method: "back",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:forward": {
+    domain: "browser",
+    method: "forward",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:reload": {
+    domain: "browser",
+    method: "reload",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:history": {
+    domain: "browser",
+    method: "history",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:downloads": {
+    domain: "browser",
+    method: "downloads",
+    request: null,
+    sensitive: true,
+  },
+  "browser:downloadAction": {
+    domain: "browser",
+    method: "downloadAction",
+    request: BrowserDownloadActionSchema,
+    sensitive: true,
+  },
+  "settings:listProviders": {
+    domain: "settings",
+    method: "listProviders",
+    request: null,
+    sensitive: true,
+  },
+  "settings:upsertProvider": {
+    domain: "settings",
+    method: "upsertProvider",
+    request: ProviderItemSchema,
+    sensitive: true,
+  },
+  "settings:removeProvider": {
+    domain: "settings",
+    method: "removeProvider",
+    request: ProviderItemIdSchema,
+    sensitive: true,
+  },
+  "settings:setActiveProvider": {
+    domain: "settings",
+    method: "setActiveProvider",
+    request: ProviderItemIdSchema,
+    sensitive: true,
+  },
+  "chat:sessions": {
+    domain: "chat",
+    method: "sessions",
+    request: null,
+    sensitive: true,
+  },
+  "chat:newSession": {
+    domain: "chat",
+    method: "newSession",
+    request: null,
+    sensitive: true,
+  },
+  "chat:switchSession": {
+    domain: "chat",
+    method: "switchSession",
+    request: SessionRefSchema,
+    sensitive: true,
+  },
+  "chat:deleteSession": {
+    domain: "chat",
+    method: "deleteSession",
+    request: SessionRefSchema,
+    sensitive: true,
+  },
+  "extensions:list": {
+    domain: "extensions",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "extensions:setEnabled": {
+    domain: "extensions",
+    method: "setEnabled",
+    request: ExtensionToggleSchema,
+    sensitive: true,
+  },
+  "extensions:remove": {
+    domain: "extensions",
+    method: "remove",
+    request: ExtensionIdSchema,
+    sensitive: true,
+  },
+  "extensions:openDir": {
+    domain: "extensions",
+    method: "openDir",
+    request: null,
+    sensitive: true,
+  },
 };
 
  /**
@@ -403,7 +526,9 @@ export const EVENTS = [
   "perm:request",
   "boot:ready",
   "browser:tabs",
+  "browser:downloads",
   "memory:updated",
+  "extensions:updated",
 ] as const;
 
 /**

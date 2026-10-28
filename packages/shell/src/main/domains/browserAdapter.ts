@@ -4,9 +4,11 @@
  */
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { BrowserHost } from "../browserHost.js";
+import type { DownloadsBridge } from "../electronBrowser.js";
 
 export interface BrowserDeps extends TrustedIpcDeps {
   browser?: BrowserHost;
+  downloads?: DownloadsBridge;
 }
 
 export function registerBrowserDomain(deps: BrowserDeps): void {
@@ -47,6 +49,36 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     const open = (payload as { open: boolean }).open;
     deps.browser?.setOverlayOpen(open);
     return { open };
+  });
+
+  // 前进 / 后退 / 刷新（应用内导航历史栈）
+  handleTrusted(deps, "browser:back", async (payload) => {
+    if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
+    return deps.browser.goBack((payload as { tabId?: string } | null)?.tabId);
+  });
+
+  handleTrusted(deps, "browser:forward", async (payload) => {
+    if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
+    return deps.browser.goForward((payload as { tabId?: string } | null)?.tabId);
+  });
+
+  handleTrusted(deps, "browser:reload", async (payload) => {
+    if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
+    return deps.browser.reload((payload as { tabId?: string } | null)?.tabId);
+  });
+
+  handleTrusted(deps, "browser:history", (payload) => ({
+    entries: deps.browser?.history((payload as { tabId?: string } | null)?.tabId) ?? [],
+  }));
+
+  // 下载管理（electron 会话级 will-download → DownloadsBridge）
+  handleTrusted(deps, "browser:downloads", () => ({
+    downloads: deps.downloads?.list() ?? [],
+  }));
+
+  handleTrusted(deps, "browser:downloadAction", (payload) => {
+    const p = payload as { id: string; action: "cancel" | "open" | "showInFolder" | "remove" };
+    return { ok: deps.downloads?.action(p.id, p.action) ?? false };
   });
 
   handleTrusted(deps, "browser:snapshot", async () => {

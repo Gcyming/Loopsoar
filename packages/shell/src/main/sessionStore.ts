@@ -1,7 +1,10 @@
 /**
- * 会话持久化（壳层）：把每次对话追加到 <dataDir>/sessions/last.json。
- * 为什么只存最近一份：v1 的「恢复上次会话」是单会话恢复；多会话列表属于后续版本（接口不变：load/append）。
- * 结构：{ sessionId, updatedAt, messages: [{role, text, ts}] }，最多保留 200 条。
+ * 会话持久化（壳层，多会话）：<dataDir>/sessions/
+ *   index.json            { currentId, items: [{ id, title, updatedAt, preview, messageCount }] }
+ *   <sessionId>.json      { sessionId, updatedAt, messages: [{role, text, ts}] }
+ *
+ * 兼容旧版：若存在 last.json（单会话时代），首次加载自动迁移为一条会话。
+ * 最多保留 200 条消息；列表按 updatedAt 倒序。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -18,44 +21,175 @@ export interface PersistedSession {
   messages: PersistedMessage[];
 }
 
+export interface SessionMeta {
+  id: string;
+  title: string;
+  updatedAt: number;
+  preview: string;
+  messageCount: number;
+}
+
+interface SessionIndex {
+  currentId: string | null;
+  items: SessionMeta[];
+}
+
 const MAX_MESSAGES = 200;
+const MAX_SESSIONS = 100;
 
 export class SessionStore {
-  constructor(private filePath: string) {}
+  private dir: string;
+  private indexFile: string;
 
-  load(): PersistedSession | null {
+  constructor(dir: string) {
+    this.dir = dir;
+    this.indexFile = path.join(dir, "index.json");
+    this.ensureDirs();
+    this.migrateLegacy();
+  }
+
+  private ensureDirs(): void {
+    fs.mkdirSync(this.dir, { recursive: true });
+  }
+
+  private readJson<T>(file: string): T | null {
     try {
-      if (!fs.existsSync(this.filePath)) return null;
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as PersistedSession;
-      if (!parsed || !Array.isArray(parsed.messages)) return null;
-      return parsed;
+      if (!fs.existsSync(file)) return null;
+      return JSON.parse(fs.readFileSync(file, "utf8")) as T;
     } catch {
       return null;
     }
   }
 
-  save(session: PersistedSession): void {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+  private writeJson(file: string, value: unknown): void {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
+  }
+
+  private index(): SessionIndex {
+    const raw = this.readJson<Partial<SessionIndex>>(this.indexFile);
+    if (raw && Array.isArray(raw.items)) {
+      return {
+        currentId: raw.currentId && raw.items.some((i) => i.id === raw.currentId) ? raw.currentId : (raw.items[0]?.id ?? null),
+        items: raw.items,
+      };
+    }
+    return { currentId: null, items: [] };
+  }
+
+  private saveIndex(index: SessionIndex): void {
+    const items = index.items.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SESSIONS);
+    this.writeJson(this.indexFile, { currentId: index.currentId, items });
+  }
+
+  private sessionFile(id: string): string {
+    const safe = id.replace(/[^a-zA-Z0-9._-]/g, "_");
+    return path.join(this.dir, `${safe}.json`);
+  }
+
+  /** 旧版 last.json → 会话文件 + 索引。 */
+  private migrateLegacy(): void {
+    if (fs.existsSync(this.indexFile)) return;
+    const legacy = this.readJson<PersistedSession>(path.join(this.dir, "last.json"));
+    if (!legacy || !Array.isArray(legacy.messages) || legacy.messages.length === 0) return;
+    const id = legacy.sessionId || `sess-${Date.now()}`;
+    this.writeJson(this.sessionFile(id), { ...legacy, sessionId: id });
+    this.writeJson(this.indexFile, {
+      currentId: id,
+      items: [this.metaOf(id, legacy.messages, legacy.updatedAt)],
+    });
+  }
+
+  private metaOf(id: string, messages: PersistedMessage[], updatedAt: number): SessionMeta {
+    const firstUser = messages.find((m) => m.role === "user")?.text ?? "新会话";
+    const last = messages[messages.length - 1]?.text ?? "";
+    return {
+      id,
+      title: firstUser.replace(/\s+/g, " ").slice(0, 40) || "新会话",
+      updatedAt,
+      preview: last.replace(/\s+/g, " ").slice(0, 80),
+      messageCount: messages.length,
+    };
+  }
+
+  list(): SessionMeta[] {
+    return this.index().items.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  currentId(): string | null {
+    return this.index().currentId;
+  }
+
+  get(id: string): PersistedSession | null {
+    return this.readJson<PersistedSession>(this.sessionFile(id));
+  }
+
+  /** 兼容旧接口：当前会话。 */
+  load(): PersistedSession | null {
+    const id = this.currentId();
+    return id ? this.get(id) : null;
+  }
+
+  save(session: PersistedSession): PersistedSession {
     const trimmed: PersistedSession = {
       ...session,
       messages: session.messages.slice(-MAX_MESSAGES),
     };
-    fs.writeFileSync(this.filePath, JSON.stringify(trimmed, null, 2), "utf8");
+    this.writeJson(this.sessionFile(session.sessionId), trimmed);
+    const index = this.index();
+    const meta = this.metaOf(session.sessionId, trimmed.messages, trimmed.updatedAt);
+    const at = index.items.findIndex((i) => i.id === session.sessionId);
+    if (at >= 0) index.items[at] = meta;
+    else index.items.push(meta);
+    index.currentId = index.currentId ?? session.sessionId;
+    this.saveIndex(index);
+    return trimmed;
+  }
+
+  newSession(): PersistedSession {
+    const id = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const session: PersistedSession = { sessionId: id, updatedAt: Date.now(), messages: [] };
+    this.writeJson(this.sessionFile(id), session);
+    const index = this.index();
+    index.items.push(this.metaOf(id, [], Date.now()));
+    index.currentId = id;
+    this.saveIndex(index);
+    return session;
+  }
+
+  switchTo(id: string): boolean {
+    const index = this.index();
+    if (!index.items.some((i) => i.id === id)) return false;
+    index.currentId = id;
+    this.saveIndex(index);
+    return true;
   }
 
   /** 追加一轮对话（用户消息 + 助手最终答复）。 */
   append(sessionId: string, userMessage: string, assistantReply: string): PersistedSession {
-    const current = this.load();
-    const base: PersistedSession =
-      current && current.sessionId === sessionId
-        ? current
-        : { sessionId, updatedAt: Date.now(), messages: [] };
+    const current = this.get(sessionId);
+    const base: PersistedSession = current ?? { sessionId, updatedAt: Date.now(), messages: [] };
     base.messages.push({ role: "user", text: userMessage, ts: Date.now() });
     if (assistantReply.trim()) {
       base.messages.push({ role: "assistant", text: assistantReply, ts: Date.now() });
     }
     base.updatedAt = Date.now();
-    this.save(base);
-    return base;
+    return this.save(base);
+  }
+
+  remove(id: string): boolean {
+    const index = this.index();
+    const exists = index.items.some((i) => i.id === id);
+    if (!exists) return false;
+    try {
+      const file = this.sessionFile(id);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {
+      return false;
+    }
+    index.items = index.items.filter((i) => i.id !== id);
+    if (index.currentId === id) index.currentId = index.items[0]?.id ?? null;
+    this.saveIndex(index);
+    return true;
   }
 }

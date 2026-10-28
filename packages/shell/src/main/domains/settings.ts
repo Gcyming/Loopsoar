@@ -40,6 +40,7 @@ import {
   type RuleSource,
 } from "loopsoar-core/rules";
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
+import type { ProviderStore } from "../providerStore.js";
 
 export interface SettingsDeps extends TrustedIpcDeps {
   platform: LoopsoarPlatform;
@@ -58,6 +59,10 @@ export interface SettingsDeps extends TrustedIpcDeps {
   onPreferencesSaved?: (prefs: Preferences) => void;
   /** 原生文件/目录选择器（由 index 注入 dialog；不 import electron）。 */
   pickPath?: (kind: "file" | "directory", title?: string) => Promise<string | null>;
+  /** 多供应商配置（providers.json）；未注入时回退旧单配置文件。 */
+  providers?: ProviderStore;
+  /** 供应商增删改/切换活跃后回调（装配层重建 LLM 客户端）。 */
+  onProvidersChanged?: () => void;
 }
 
 export interface SettingsPaths {
@@ -283,8 +288,47 @@ async function testProvider(
 export function registerSettingsDomain(deps: SettingsDeps): void {
   const paths = settingsPaths(deps);
 
-  // ── 供应商 ──
+  // ── 供应商（多配置列表） ──
+  const activeProvider = () => deps.providers?.active() ?? null;
+  handleTrusted(deps, "settings:listProviders", () => ({
+    items: deps.providers?.list() ?? [],
+    activeId: activeProvider()?.id ?? null,
+  }));
+
+  handleTrusted(deps, "settings:upsertProvider", (payload) => {
+    const p = payload as { id?: string; provider: string; baseUrl: string; model: string };
+    if (!deps.providers) throw new Error("供应商存储未装配");
+    const item = deps.providers.upsert(p);
+    deps.onProvidersChanged?.();
+    return { item, items: deps.providers.list(), activeId: deps.providers.active()?.id ?? null };
+  });
+
+  handleTrusted(deps, "settings:removeProvider", (payload) => {
+    const p = payload as { id: string };
+    const removed = deps.providers?.remove(p.id) ?? false;
+    if (removed) deps.onProvidersChanged?.();
+    return { removed, items: deps.providers?.list() ?? [], activeId: deps.providers?.active()?.id ?? null };
+  });
+
+  handleTrusted(deps, "settings:setActiveProvider", (payload) => {
+    const p = payload as { id: string };
+    const ok = deps.providers?.setActive(p.id) ?? false;
+    if (ok) deps.onProvidersChanged?.();
+    return { ok, activeId: deps.providers?.active()?.id ?? null };
+  });
+
   handleTrusted(deps, "settings:getProvider", async () => {
+    const active = activeProvider();
+    if (active) {
+      const apiKey = resolveApiKeyFromEnv(deps.env);
+      const cfg: ProviderConfig = { provider: active.provider, baseUrl: active.baseUrl, model: active.model };
+      const usability = providerUsability(cfg, apiKey);
+      return {
+        configured: true, provider: active.provider, baseUrl: active.baseUrl, model: active.model,
+        hasApiKey: apiKey.length > 0, usable: usability.usable, reason: usability.reason ?? null,
+        id: active.id,
+      };
+    }
     const cfg = await loadProviderConfig(deps.platform, deps.configDir);
     const apiKey = resolveApiKeyFromEnv(deps.env);
     const usability = providerUsability(cfg, apiKey);
@@ -302,7 +346,12 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:setProvider", async (payload) => {
     const cfg = validateProviderConfig(payload);
     writeJsonFile(paths.provider, cfg);
-    // 立即重建 LLM 客户端（无需重启即可对话）
+    // 同步进多供应商列表（保持单一数据源），并立即重建 LLM 客户端
+    if (deps.providers) {
+      const item = deps.providers.upsert({ provider: cfg.provider, baseUrl: cfg.baseUrl, model: cfg.model });
+      deps.providers.setActive(item.id);
+      deps.onProvidersChanged?.();
+    }
     deps.onProviderSaved?.(cfg);
     const apiKey = resolveApiKeyFromEnv(deps.env);
     const usability = providerUsability(cfg, apiKey);
@@ -312,6 +361,11 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:clearProvider", () => {
     try {
       if (fs.existsSync(paths.provider)) fs.unlinkSync(paths.provider);
+      const active = activeProvider();
+      if (active && deps.providers) {
+        deps.providers.remove(active.id);
+        deps.onProvidersChanged?.();
+      }
     } catch {
       throw new Error("删除供应商配置失败");
     }
