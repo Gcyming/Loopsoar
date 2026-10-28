@@ -10,7 +10,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "bundle:shell": "node scripts/bundle-shell.mjs",
-    "dev:gui": "pnpm --filter loopsoar-ui build && pnpm bundle:shell && electron packages/shell/dist/main.bundle.mjs"
+    "dev": "node scripts/dev-gui.mjs",
+    "dev:gui": "node scripts/dev-gui.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6",
