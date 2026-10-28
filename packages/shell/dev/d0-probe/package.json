@@ -1,0 +1,7 @@
+{
+  "name": "loopsoar-d0-probe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "D0 决策门最小验证（WebContentsView 路线可行性），独立于主应用",
+  "main": "main.cjs"
+}

@@ -87,7 +87,9 @@ async function main() {
   await new Promise((r) => setTimeout(r, 120));
   results.scrollY = await wc.executeJavaScript(`window.scrollY`, false);
 
-  // ⑥ 截图（真实像素证据）
+  // ⑥ 截图（真实像素证据）：回到顶部再截，确保截图内容是页面主体而非滚动后的空白填充区
+  await wc.executeJavaScript(`window.scrollTo(0, 0); true`, true);
+  await new Promise((r) => setTimeout(r, 150));
   const image = await wc.capturePage();
   const png = image.toPNG();
   const outPath = path.join(__dirname, "shot.png");
