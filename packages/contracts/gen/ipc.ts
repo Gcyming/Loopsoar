@@ -71,6 +71,15 @@ export const IPC_CHANNELS = {
   "extensions:setEnabled": { domain: "extensions", method: "setEnabled", sensitive: true, hasRequest: true },
   "extensions:remove": { domain: "extensions", method: "remove", sensitive: true, hasRequest: true },
   "extensions:openDir": { domain: "extensions", method: "openDir", sensitive: true, hasRequest: false },
+  "skills:list": { domain: "skills", method: "list", sensitive: true, hasRequest: false },
+  "skills:reload": { domain: "skills", method: "reload", sensitive: true, hasRequest: false },
+  "skills:setEnabled": { domain: "skills", method: "setEnabled", sensitive: true, hasRequest: true },
+  "skills:openDir": { domain: "skills", method: "openDir", sensitive: true, hasRequest: false },
+  "mcp:list": { domain: "mcp", method: "list", sensitive: true, hasRequest: false },
+  "mcp:add": { domain: "mcp", method: "add", sensitive: true, hasRequest: true },
+  "mcp:remove": { domain: "mcp", method: "remove", sensitive: true, hasRequest: true },
+  "mcp:connect": { domain: "mcp", method: "connect", sensitive: true, hasRequest: true },
+  "mcp:disconnect": { domain: "mcp", method: "disconnect", sensitive: true, hasRequest: true },
 } as const;
 
 /**
@@ -126,7 +135,9 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "dialog": ["pickPath"],
     "memory": ["list", "add", "update", "delete", "stats", "clear"],
     "window": ["minimize", "maximize", "close", "state"],
-    "extensions": ["list", "setEnabled", "remove", "openDir"]
+    "extensions": ["list", "setEnabled", "remove", "openDir"],
+    "skills": ["list", "reload", "setEnabled", "openDir"],
+    "mcp": ["list", "add", "remove", "connect", "disconnect"]
     },
   };
 }

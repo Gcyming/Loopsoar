@@ -31,7 +31,9 @@
     "./memory": "./src/memory/index.js",
     "./plugin": "./src/plugin/index.js",
     "./loop": "./src/loop/index.js",
-    "./extension": "./src/extension.js"
+    "./extension": "./src/extension.js",
+    "./skill": "./src/skill.js",
+    "./mcp": "./src/mcp.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

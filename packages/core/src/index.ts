@@ -27,5 +27,7 @@ export * from "./permissions.js";
 export * from "./rules.js";
 export * from "./memory/index.js";
 export * from "./extension.js";
+export * from "./skill.js";
+export * from "./mcp.js";
 export * from "./plugin/index.js";
 export * from "./loop/index.js";

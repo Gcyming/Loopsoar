@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BRAND, BADGE } from "./theme.js";
 import { Icon } from "./Icon.js";
 import type {
-  AboutInfo, DiagnosticsInfo, InstalledExtension, LocationsInfo, LoopsoarAPI, MemoryListResult,
-  PermissionsState, Preferences, ProviderItem, ProviderStatus, RulesSnapshot, TestProviderResult,
+  AboutInfo, DiagnosticsInfo, InstalledExtension, LocationsInfo, LoopsoarAPI, McpServerInfo, MemoryListResult,
+  PermissionsState, Preferences, ProviderItem, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
 /**
@@ -11,15 +11,17 @@ import type {
  * 全部数据经 preload 白名单；规则与记忆在保存后即时生效（主进程惰性读取）。
  */
 
-type SectionId = "general" | "permissions" | "providers" | "rules" | "memory" | "extensions" | "storage" | "advanced" | "about";
+type SectionId = "general" | "permissions" | "providers" | "rules" | "skills" | "memory" | "extensions" | "mcp" | "storage" | "advanced" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: string; hint: string; group: string }[] = [
   { id: "general", group: "基础", label: "通用", icon: "settings", hint: "外观、搜索、启动" },
   { id: "permissions", group: "基础", label: "权限", icon: "check", hint: "工具类别决策" },
   { id: "providers", group: "能力", label: "供应商", icon: "cloud-upload", hint: "模型服务" },
   { id: "rules", group: "能力", label: "规则", icon: "file", hint: "AGENTS.md 逐条" },
+  { id: "skills", group: "能力", label: "技能", icon: "bulb", hint: "SKILL.md 提示词" },
   { id: "memory", group: "能力", label: "记忆", icon: "notes", hint: "会话记忆汇总" },
   { id: "extensions", group: "能力", label: "扩展", icon: "puzzle", hint: "本地插件" },
+  { id: "mcp", group: "能力", label: "MCP", icon: "terminal", hint: "外部工具服务" },
   { id: "storage", group: "数据", label: "存储", icon: "folders", hint: "文件位置" },
   { id: "advanced", group: "数据", label: "高级", icon: "terminal", hint: "路径与版本" },
   { id: "about", group: "其他", label: "关于", icon: "bulb", hint: "版本与品牌" },
@@ -45,6 +47,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [extensions, setExtensions] = useState<InstalledExtension[]>([]);
+  const [skills, setSkills] = useState<SkillRecord[]>([]);
+  const [skillsDir, setSkillsDir] = useState("");
+  const [skillSkips, setSkillSkips] = useState<{ dir: string; reason: string }[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
+  const [mcpConfigPath, setMcpConfigPath] = useState("");
+  const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "" });
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [pEditing, setPEditing] = useState(false);
@@ -71,10 +79,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api) { setLoading(false); return; }
     void (async () => {
       try {
-        const [p, pm, pv, ru, dg, ab, mm, pvList, ext] = await Promise.allSettled([
+        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc] = await Promise.allSettled([
           api.settings.getPreferences(), api.settings.getPermissions(), api.settings.getProvider(),
           api.settings.getRules(), api.settings.diagnostics(), api.settings.about(), api.memory.list(),
-          api.settings.listProviders(), api.extensions.list(),
+          api.settings.listProviders(), api.extensions.list(), api.skills.list(), api.mcp.list(),
         ]);
         if (p.status === "fulfilled") { setPrefs(p.value.preferences); setLocations(p.value.locations); }
         if (pm.status === "fulfilled") setPerms(pm.value);
@@ -91,6 +99,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setExtensions(ext.value.extensions);
           setExtensionsDir(ext.value.dir);
           setExtensionSkips(ext.value.skipped);
+        }
+        if (sk.status === "fulfilled") {
+          setSkills(sk.value.skills);
+          setSkillsDir(sk.value.dir);
+          setSkillSkips(sk.value.skipped);
+        }
+        if (mc.status === "fulfilled") {
+          setMcpServers(mc.value.servers);
+          setMcpConfigPath(mc.value.configPath);
         }
       } catch (e) { bad(e); } finally { setLoading(false); }
     })();
@@ -367,7 +384,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     </span>
                     <span style={S.icons}>
                       <label style={S.tag}>
-                        <input type="checkbox" checked={ext.enabled} onChange={(e) => void api.extensions.setEnabled({ id: ext.manifest.id, enabled: e.target.checked }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} /> 启用
+                        <Toggle v={ext.enabled} on={(next) => void api.extensions.setEnabled({ id: ext.manifest.id, enabled: next }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} />
                       </label>
                       <Btn label="卸载" small onClick={() => void api.extensions.remove({ id: ext.manifest.id }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} />
                     </span>
@@ -383,6 +400,113 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               ))
             )}
             <div style={S.note}>安全：扩展只提供清单与入口声明；工具执行仍走沙箱与权限确认，不绕过四要素校验。</div>
+          </div>
+        );
+
+      case "skills":
+        return (
+          <div>
+            <Head t="技能（Skills）" h="独立子系统：SKILL.md 纯文本（frontmatter + 正文），只做提示词注入，不提供任何工具" />
+            <div style={S.note}>技能目录：<code style={S.code}>{skillsDir || "—"}</code></div>
+            <div style={S.btns}>
+              <Btn label="打开技能目录" onClick={() => void api.skills.openDir()} />
+              <Btn label="重新扫描" onClick={() => void api.skills.reload().then((r) => { setSkills(r.skills); setSkillSkips(r.skipped); })} />
+            </div>
+            {skillSkips.length > 0 ? (
+              <div style={S.note}>
+                跳过 {skillSkips.length} 个技能：
+                {skillSkips.map((x) => <div key={x.dir} style={S.errText}>{x.dir}：{x.reason}</div>)}
+              </div>
+            ) : null}
+            {skills.length === 0 ? (
+              <div style={S.dashed}>暂无技能。在技能目录创建 &lt;id&gt;/SKILL.md（--- 包裹 frontmatter）即可被发现。</div>
+            ) : (
+              skills.map((sk) => (
+                <div key={sk.id} style={S.card}>
+                  <div style={S.rowBetween}>
+                    <span style={S.meta}>
+                      <span style={S.metaTitle}>{sk.frontmatter.name}</span>
+                      {sk.frontmatter.version ? <span style={BADGE.neutral}>v{sk.frontmatter.version}</span> : null}
+                      {(sk.frontmatter.tags ?? []).map((tag) => <span key={tag} style={S.tag}>#{tag}</span>)}
+                    </span>
+                    <span style={S.icons}>
+                      <Toggle v={sk.enabled} on={(next) => void api.skills.setEnabled({ id: sk.id, enabled: next }).then(() => void api.skills.list().then((r) => setSkills(r.skills)))} />
+                    </span>
+                  </div>
+                  <div style={S.providerVal}>{sk.frontmatter.description}</div>
+                  <div style={S.providerRows}>
+                    {sk.frontmatter.whenToUse ? <div style={S.providerRow}><span style={S.providerKey}>何时用</span><span style={S.providerVal}>{sk.frontmatter.whenToUse}</span></div> : null}
+                    <div style={S.providerRow}><span style={S.providerKey}>正文</span><span style={S.providerVal}>{sk.bytes} 字节</span></div>
+                  </div>
+                </div>
+              ))
+            )}
+            <div style={S.note}>隔离：技能只影响提示词，不注册工具、不读写文件、不启动进程；与扩展/MCP 互不影响。</div>
+          </div>
+        );
+
+      case "mcp":
+        return (
+          <div>
+            <Head t="MCP 服务" h="独立子系统：通过 stdio JSON-RPC 连接外部工具服务；工具以 mcp__&lt;server&gt;__&lt;tool&gt; 注册进工具表" />
+            <div style={S.note}>配置文件：<code style={S.code}>{mcpConfigPath || "—"}</code></div>
+            <div style={S.card}>
+              <div style={S.formHead}>添加 MCP 服务器</div>
+              <Field l="名称"><In v={mcpForm.name} ph="filesystem / github" on={(x) => setMcpForm({ ...mcpForm, name: x })} /></Field>
+              <Field l="启动命令"><In v={mcpForm.command} ph="npx / node / uvx" on={(x) => setMcpForm({ ...mcpForm, command: x })} /></Field>
+              <Field l="参数" h="空格分隔"><In v={mcpForm.args} ph="-y @modelcontextprotocol/server-filesystem D:/work" on={(x) => setMcpForm({ ...mcpForm, args: x })} /></Field>
+              <div style={S.btns}>
+                <Btn
+                  label="添加"
+                  primary
+                  onClick={() =>
+                    void api.mcp
+                      .add({
+                        name: mcpForm.name.trim() || "mcp",
+                        command: mcpForm.command.trim() || "npx",
+                        args: mcpForm.args.trim() ? (mcpForm.args.match(/"[^"]*"|\S+/g) ?? []).map((x) => x.replace(/^"|"$/g, "")) : [],
+                      })
+                      .then((r) => {
+                        setMcpServers(r.servers);
+                        setMcpForm({ name: "", command: "", args: "" });
+                        ok("MCP 服务器已添加（点击连接）");
+                      })
+                      .catch(bad)
+                  }
+                />
+              </div>
+            </div>
+            {mcpServers.length === 0 ? (
+              <div style={S.dashed}>还没有 MCP 服务器。添加后点击「连接」会做 initialize 握手并注册工具。</div>
+            ) : (
+              mcpServers.map((srv) => (
+                <div key={srv.id} style={S.card}>
+                  <div style={S.rowBetween}>
+                    <span style={S.meta}>
+                      <span style={S.metaTitle}>{srv.name}</span>
+                      <span style={srv.state === "ready" ? BADGE.ok : srv.state === "error" ? BADGE.warn : BADGE.neutral}>
+                        {srv.state === "ready" ? "已连接" : srv.state === "connecting" ? "连接中" : srv.state === "error" ? "错误" : "未连接"}
+                      </span>
+                      <span style={S.tag}>{srv.tools.length} 个工具</span>
+                    </span>
+                    <span style={S.icons}>
+                      {srv.state === "ready" ? (
+                        <Btn label="断开" small onClick={() => void api.mcp.disconnect({ id: srv.id }).then((r) => setMcpServers(r.servers))} />
+                      ) : (
+                        <Btn label="连接" small onClick={() => void api.mcp.connect({ id: srv.id }).then((r) => setMcpServers(r.servers)).catch(bad)} />
+                      )}
+                      <Btn label="删除" small onClick={() => void api.mcp.remove({ id: srv.id }).then((r) => setMcpServers(r.servers))} />
+                    </span>
+                  </div>
+                  <div style={S.providerRows}>
+                    <div style={S.providerRow}><span style={S.providerKey}>命令</span><span style={S.providerVal}>{[srv.command, ...srv.args].join(" ")}</span></div>
+                    {srv.error ? <div style={S.providerRow}><span style={S.providerKey}>错误</span><span style={S.errText}>{srv.error}</span></div> : null}
+                    {srv.tools.length > 0 ? <div style={S.providerRow}><span style={S.providerKey}>工具</span><span style={S.providerVal}>{srv.tools.slice(0, 6).join(" · ")}{srv.tools.length > 6 ? " …" : ""}</span></div> : null}
+                  </div>
+                </div>
+              ))
+            )}
+            <div style={S.note}>隔离：MCP 独立配置（mcp.json）与独立通道；工具调用仍走沙箱与权限确认（声明 network）。</div>
           </div>
         );
 
@@ -418,7 +542,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm]);
 
   return (
     <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -481,7 +605,7 @@ function RuleCard({ d, max, on, onDel }: { d: DraftRule; max: number; on: (p: Pa
   return (<div style={S.card}>
     <div style={S.rowBetween}>
       <span style={S.meta}><span style={BADGE.neutral}>{d.scope === "workspace" ? "项目规则" : "全局规则"}</span><span style={bytes > max ? S.errText : S.tag}>{bytes} / {max} 字节</span></span>
-      <span style={S.icons}><label style={S.tag}><input type="checkbox" checked={d.enabled} onChange={(e) => on({ enabled: e.target.checked })} /> 启用</label><Btn label="删除" small onClick={onDel} /></span>
+      <span style={S.icons}><Toggle v={d.enabled} on={(next) => on({ enabled: next })} /><Btn label="删除" small onClick={onDel} /></span>
     </div>
     <input style={S.ruleName} value={d.name} disabled={d.scope === "workspace"} onChange={(e) => on({ name: e.target.value })} />
     <textarea style={S.rulesArea} rows={4} spellCheck={false} value={d.content} placeholder={"# 规则标题\n\n- 一条约定"} onChange={(e) => on({ content: e.target.value })} />

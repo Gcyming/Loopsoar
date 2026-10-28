@@ -14,6 +14,8 @@ import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
 import { registerWindowDomain } from "../../packages/shell/src/main/domains/window.ts";
 import { registerMemoryDomain } from "../../packages/shell/src/main/domains/memory.ts";
 import { registerExtensionsDomain } from "../../packages/shell/src/main/domains/extensions.ts";
+import { registerSkillsDomain } from "../../packages/shell/src/main/domains/skills.ts";
+import { registerMcpDomain } from "../../packages/shell/src/main/domains/mcp.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -87,6 +89,30 @@ function assemble(): void {
     } as never,
     push: () => {},
     openExtensionsDir: async () => true,
+  });
+  registerSkillsDomain({
+    ...deps,
+    skills: {
+      scan: () => ({ installed: 0, skipped: [] }),
+      list: () => [],
+      setEnabled: () => null,
+      dirPath: () => "C:/tmp/loopsoar-skills-test",
+      promptFor: () => "",
+    } as never,
+    push: () => {},
+    openSkillsDir: async () => true,
+  });
+  registerMcpDomain({
+    ...deps,
+    mcp: {
+      list: () => [],
+      add: (cfg: { name: string; command: string }) => ({ ...cfg, id: cfg.name, args: [], enabled: true, state: "idle", tools: [] }),
+      remove: () => true,
+      connect: async () => null,
+      disconnect: () => true,
+    } as never,
+    push: () => {},
+    mcpConfigPath: "C:/tmp/loopsoar-mcp.json",
   });
   registerWindowDomain({
     ...deps,

@@ -426,6 +426,69 @@
       "method": "openDir",
       "sensitive": true,
       "hasRequest": false
+    },
+    {
+      "channel": "skills:list",
+      "domain": "skills",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "skills:reload",
+      "domain": "skills",
+      "method": "reload",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "skills:setEnabled",
+      "domain": "skills",
+      "method": "setEnabled",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "skills:openDir",
+      "domain": "skills",
+      "method": "openDir",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "mcp:list",
+      "domain": "mcp",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "mcp:add",
+      "domain": "mcp",
+      "method": "add",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "mcp:remove",
+      "domain": "mcp",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "mcp:connect",
+      "domain": "mcp",
+      "method": "connect",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "mcp:disconnect",
+      "domain": "mcp",
+      "method": "disconnect",
+      "sensitive": true,
+      "hasRequest": true
     }
   ],
   "events": [
@@ -441,6 +504,8 @@
     "browser:tabs",
     "browser:downloads",
     "memory:updated",
-    "extensions:updated"
+    "extensions:updated",
+    "skills:updated",
+    "mcp:updated"
   ]
 }

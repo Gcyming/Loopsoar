@@ -50,6 +50,8 @@ export interface ChatServiceOptions {
   getSystemRules?: () => string;
   /** 记忆召回注入（按用户消息取相关记忆，放进 volatile 段）。 */
   getMemoryFor?: (userText: string) => string;
+  /** 技能注入（与扩展/MCP 隔离：仅 SKILL.md 文本，不提供工具）。 */
+  getSkillPrompt?: (userText: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
   permissionPolicy?: () => Permissions;
   /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
@@ -310,9 +312,13 @@ export class ChatService {
     const stableContent = rulesText.trim()
       ? `${segments.stable}\n\n${rulesText}`
       : segments.stable;
+    // 记忆召回 + 技能注入：都放 volatile 段（不进稳定前缀，避免破坏 KV 缓存）
+    const memoryText = this.opts.getMemoryFor?.(input.message) ?? "";
+    const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
+    const volatileContent = [segments.volatile, memoryText, skillText].filter((t) => t.trim()).join("\n\n");
     const messages = [
       { role: "system" as const, content: stableContent },
-      { role: "user" as const, content: `${input.message}\n\n${segments.volatile}` },
+      { role: "user" as const, content: `${input.message}\n\n${volatileContent}` },
     ];
 
     const controller = new AbortController();

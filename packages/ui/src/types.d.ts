@@ -190,6 +190,46 @@ export interface ProviderItem {
   model: string;
 }
 
+export interface SkillRecord {
+  id: string;
+  path: string;
+  frontmatter: { name: string; description: string; whenToUse?: string; version?: string; tags?: string[] };
+  body: string;
+  bytes: number;
+  enabled: boolean;
+}
+
+export interface McpServerInfo {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+  state: "idle" | "connecting" | "ready" | "error";
+  tools: string[];
+  error?: string;
+}
+
+export interface SkillRecord {
+  id: string;
+  path: string;
+  frontmatter: { name: string; description: string; whenToUse?: string; version?: string; tags?: string[] };
+  body: string;
+  bytes: number;
+  enabled: boolean;
+}
+
+export interface McpServerInfo {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+  state: "idle" | "connecting" | "ready" | "error";
+  tools: string[];
+  error?: string;
+}
+
 export interface InstalledExtension {
   manifest: {
     id: string;
@@ -223,6 +263,10 @@ export type LoopsoarEvent =
   | "browser:tabs"
   | "browser:downloads"
   | "extensions:updated"
+  | "skills:updated"
+  | "mcp:updated"
+  | "skills:updated"
+  | "mcp:updated"
   | "memory:updated";
 
 export interface LoopsoarAPI {
@@ -303,6 +347,32 @@ export interface LoopsoarAPI {
     maximize(): Promise<{ ok: boolean; maximized: boolean }>;
     close(): Promise<{ ok: boolean }>;
     state(): Promise<{ maximizeSupported: boolean; maximized: boolean; focused: boolean }>;
+  };
+  skills: LoopsoarDomain & {
+    list(): Promise<{ skills: SkillRecord[]; dir: string; skipped: { dir: string; reason: string }[] }>;
+    reload(): Promise<{ skills: SkillRecord[]; skipped: { dir: string; reason: string }[] }>;
+    setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; skill: SkillRecord | null }>;
+    openDir(): Promise<{ ok: boolean; dir: string }>;
+  };
+  mcp: LoopsoarDomain & {
+    list(): Promise<{ servers: McpServerInfo[]; configPath: string }>;
+    add(payload: { id?: string; name: string; command: string; args?: string[] }): Promise<{ server: McpServerInfo; servers: McpServerInfo[] }>;
+    remove(payload: { id: string }): Promise<{ removed: boolean; servers: McpServerInfo[] }>;
+    connect(payload: { id: string }): Promise<{ server: McpServerInfo | null; servers: McpServerInfo[] }>;
+    disconnect(payload: { id: string }): Promise<{ ok: boolean; servers: McpServerInfo[] }>;
+  };
+  skills: LoopsoarDomain & {
+    list(): Promise<{ skills: SkillRecord[]; dir: string; skipped: { dir: string; reason: string }[] }>;
+    reload(): Promise<{ skills: SkillRecord[]; skipped: { dir: string; reason: string }[] }>;
+    setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; skill: SkillRecord | null }>;
+    openDir(): Promise<{ ok: boolean; dir: string }>;
+  };
+  mcp: LoopsoarDomain & {
+    list(): Promise<{ servers: McpServerInfo[]; configPath: string }>;
+    add(payload: { id?: string; name: string; command: string; args?: string[] }): Promise<{ server: McpServerInfo; servers: McpServerInfo[] }>;
+    remove(payload: { id: string }): Promise<{ removed: boolean; servers: McpServerInfo[] }>;
+    connect(payload: { id: string }): Promise<{ server: McpServerInfo | null; servers: McpServerInfo[] }>;
+    disconnect(payload: { id: string }): Promise<{ ok: boolean; servers: McpServerInfo[] }>;
   };
   extensions: LoopsoarDomain & {
     list(): Promise<{ extensions: InstalledExtension[]; dir: string; skipped: { dir: string; reason: string }[] }>;

@@ -40,7 +40,11 @@ import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
 import { ProviderStore } from "./providerStore.js";
 import { ExtensionHost } from "./extensions.js";
+import { SkillHost } from "./skills.js";
+import { McpHost } from "./mcpHost.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
+import { registerSkillsDomain } from "./domains/skills.js";
+import { registerMcpDomain } from "./domains/mcp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -300,6 +304,10 @@ app.whenReady().then(async () => {
   await memory.load();
   const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
+  const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
+  const mcp = new McpHost(path.join(dirs.dataDir, "mcp.json"), registry, () =>
+    pushToRenderer("mcp:updated", { servers: mcp.list() }),
+  );
 
   // Agent 注册表（真实实现）：内置默认 Agent → 决定身份段与工具白名单
   const agents = new AgentRegistry();
@@ -359,6 +367,8 @@ app.whenReady().then(async () => {
     getSystemRules: () => currentRulesPrompt(settingsDeps),
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     getMemoryFor: (text: string) => memory.recallPrompt(text),
+    // 技能：独立子系统，只注入 SKILL.md 文本（不提供工具）
+    getSkillPrompt: (text: string) => skills.promptFor(text),
     // 权限策略：设置面板保存后即时生效
     permissionPolicy: () => loadPermissions(dirs.configDir),
     // 供应商：设置面板保存后即时生效
@@ -407,6 +417,22 @@ app.whenReady().then(async () => {
     push: pushToRenderer,
     openExtensionsDir: async () => (await shell.openPath(extensions.dirPath())) === "",
   });
+  registerSkillsDomain({
+    ...deps,
+    skills,
+    push: pushToRenderer,
+    openSkillsDir: async () => (await shell.openPath(skills.dirPath())) === "",
+  });
+  registerMcpDomain({
+    ...deps,
+    mcp,
+    push: pushToRenderer,
+    mcpConfigPath: path.join(dirs.dataDir, "mcp.json"),
+  });
+  // 自动连接启用的 MCP（失败不阻断启动；UI 里可重试）
+  for (const srv of mcp.list()) {
+    if (srv.enabled && srv.state === "idle") void mcp.connect(srv.id);
+  }
   registerWindowDomain({
     ...deps,
     windowControls: {

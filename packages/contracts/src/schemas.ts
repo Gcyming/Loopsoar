@@ -35,6 +35,17 @@ export const ProviderItemIdSchema = z.object({ id: z.string().min(1).max(64) });
 export const SessionRefSchema = z.object({ sessionId: z.string().min(1).max(120) });
 export const ExtensionToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
 export const ExtensionIdSchema = z.object({ id: z.string().min(1).max(120) });
+export const SkillIdSchema = z.object({ id: z.string().min(1).max(120) });
+export const SkillToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
+export const McpServerIdSchema = z.object({ id: z.string().min(1).max(120) });
+export const McpServerSchema = z.object({
+  id: z.string().min(1).max(120).optional(),
+  name: z.string().min(1).max(120),
+  command: z.string().min(1).max(500),
+  args: z.array(z.string().max(500)).max(50).optional(),
+  env: z.record(z.string().max(2000)).optional(),
+  enabled: z.boolean().optional(),
+});
 export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
@@ -509,6 +520,60 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "skills:list": {
+    domain: "skills",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "skills:reload": {
+    domain: "skills",
+    method: "reload",
+    request: null,
+    sensitive: true,
+  },
+  "skills:setEnabled": {
+    domain: "skills",
+    method: "setEnabled",
+    request: SkillToggleSchema,
+    sensitive: true,
+  },
+  "skills:openDir": {
+    domain: "skills",
+    method: "openDir",
+    request: null,
+    sensitive: true,
+  },
+  "mcp:list": {
+    domain: "mcp",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "mcp:add": {
+    domain: "mcp",
+    method: "add",
+    request: McpServerSchema,
+    sensitive: true,
+  },
+  "mcp:remove": {
+    domain: "mcp",
+    method: "remove",
+    request: McpServerIdSchema,
+    sensitive: true,
+  },
+  "mcp:connect": {
+    domain: "mcp",
+    method: "connect",
+    request: McpServerIdSchema,
+    sensitive: true,
+  },
+  "mcp:disconnect": {
+    domain: "mcp",
+    method: "disconnect",
+    request: McpServerIdSchema,
+    sensitive: true,
+  },
 };
 
  /**
@@ -529,6 +594,8 @@ export const EVENTS = [
   "browser:downloads",
   "memory:updated",
   "extensions:updated",
+  "skills:updated",
+  "mcp:updated",
 ] as const;
 
 /**
