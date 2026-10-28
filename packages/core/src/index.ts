@@ -21,6 +21,7 @@ export * from "./sandbox.js";
 export * from "./websearch/index.js";
 export * from "./audit.js";
 export * from "./provider.js";
+export * from "./agent.js";
 export * from "./memory/index.js";
 export * from "./plugin/index.js";
 export * from "./loop/index.js";

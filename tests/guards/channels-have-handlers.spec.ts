@@ -10,6 +10,7 @@ import { registerAgentsDomain } from "../../packages/shell/src/main/domains/agen
 import { registerChatDomain } from "../../packages/shell/src/main/domains/chat.ts";
 import { registerBrowserDomain } from "../../packages/shell/src/main/domains/browserAdapter.ts";
 import { registerSettingsDomain } from "../../packages/shell/src/main/domains/settings.ts";
+import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
@@ -29,6 +30,12 @@ function fakeChatService(): never {
   } as never;
 }
 
+function fakeAgentRegistry(): AgentRegistry {
+  const reg = new AgentRegistry();
+  reg.registerBuiltin(BUILTIN_AGENT);
+  return reg;
+}
+
 function assemble(): void {
   const deps = fakeDeps();
   registerRuntimeDomain(deps);
@@ -36,7 +43,7 @@ function assemble(): void {
     ...deps,
     platform: {} as LoopsoarPlatform,
   });
-  registerAgentsDomain(deps);
+  registerAgentsDomain({ ...deps, agents: fakeAgentRegistry() });
   registerChatDomain({ ...deps, chatService: fakeChatService(), push: () => {} });
   registerBrowserDomain(deps);
   registerSettingsDomain({

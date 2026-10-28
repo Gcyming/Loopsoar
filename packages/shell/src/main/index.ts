@@ -13,6 +13,7 @@ import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
 import { ChatService } from "loopsoar-services/chat";
 import { createOpenAiClient } from "loopsoar-core/llm";
+import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
 import { APP_NAME, DATA_DIR_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
@@ -101,11 +102,23 @@ app.whenReady().then(async () => {
           model: providerConfig.model,
         })
       : undefined;
-  const chatService = new ChatService({ platform, registry, sandbox, llm });
+
+  // Agent 注册表（真实实现）：内置默认 Agent → 决定身份段与工具白名单
+  const agents = new AgentRegistry();
+  agents.registerBuiltin(BUILTIN_AGENT);
+  const defaultAgent = agents.defaultAgent();
+  const chatService = new ChatService({
+    platform,
+    registry,
+    sandbox,
+    llm,
+    agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
+    toolAllowlist: defaultAgent?.toolAllowlist,
+  });
 
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({ ...deps, platform });
-  registerAgentsDomain(deps);
+  registerAgentsDomain({ ...deps, agents });
   registerSettingsDomain({ ...deps, platform, configDir: dirs.configDir, env: process.env });
   registerChatDomain({ ...deps, chatService, push: pushToRenderer });
   registerBrowserDomain(deps);

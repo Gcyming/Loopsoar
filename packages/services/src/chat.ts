@@ -39,6 +39,8 @@ export interface ChatServiceOptions {
   platform?: LoopsoarPlatform;
   registry?: ToolRegistry;
   sandbox?: SandboxManager;
+  /** Agent 工具白名单（undefined=全部；[]=全禁；非空=仅名单内；先于沙箱判定）。 */
+  toolAllowlist?: string[];
   agent?: ChatAgent;
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
@@ -128,6 +130,8 @@ export class InternalToolExecutor {
     private opts: {
       registry?: ToolRegistry;
       sandbox?: SandboxManager;
+      /** Agent 工具白名单：执行器第一道闸（fail-closed，先于沙箱）。 */
+      toolAllowlist?: string[];
       permBus: PermRequestBus;
       platform?: LoopsoarPlatform;
       agentId: string;
@@ -136,7 +140,15 @@ export class InternalToolExecutor {
   ) {}
 
   async invoke(toolCall: ToolCall): Promise<{ ok: boolean; content: string; error?: string }> {
-    const { registry, sandbox, permBus } = this.opts;
+    const { registry, sandbox, permBus, toolAllowlist } = this.opts;
+    // Agent 权限先于沙箱判定：不同 Agent 的能力边界在这里收敛（不允许「白名单外的工具先跑到沙箱再被兜底」）
+    if (toolAllowlist !== undefined && !toolAllowlist.includes(toolCall.name)) {
+      return {
+        ok: false,
+        content: `[错误] Agent 权限未包含工具 ${toolCall.name}（白名单拦截）`,
+        error: "agent-tool-denied",
+      };
+    }
     if (!registry || !sandbox) {
       // 装配不完整 → fail-closed（不猜权限）
       return { ok: false, content: "[错误] 工具执行器未装配（registry/sandbox 缺失）", error: "not-assembled" };
@@ -251,6 +263,7 @@ export class ChatService {
     const executor = new InternalToolExecutor({
       registry,
       sandbox,
+      toolAllowlist: this.opts.toolAllowlist,
       permBus: this.permBus,
       platform,
       agentId: agent?.name ?? "loopsoar",
