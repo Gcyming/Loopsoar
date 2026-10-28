@@ -9,16 +9,23 @@ import type {
 } from "./types.js";
 
 /**
- * Loopsoar 主界面（GUI-2）：品牌三色主题 + 自定义标题栏。
+ * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
  * 品牌色（来自官方图标）：深墨 #111318 / 亚麻白 #F4EFE6 / 赭石 #C8763C。
- * 原生标题栏与菜单栏已移除（主进程 titleBarStyle:hidden + Menu.setApplicationMenu(null)），
- * 标题栏的拖动区域、窗口控制按钮都由本文件渲染，经 window:* 受信通道驱动主进程。
+ * 交互范式借鉴 slime 已打磨的实践：
+ *   · 按钮 hover 上浮 1px + 软阴影、active 按下 scale(.97/.88) 回弹；
+ *   · 流式吐字「逐单元渐入」：新字符由右到左滑入 + 由浅到深（260ms cubic-bezier(.22,.61,.36,1)）；
+ *   · 流式光标闪烁、加载 spinner、状态点脉冲、消息行淡入；
+ *   · prefers-reduced-motion 下只保留不透明度渐入（去掉位移，避免"什么都看不到"）。
  */
 
 interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "reasoning" | "tool" | "system";
   text: string;
+  /** 流式尾巴：最近一次增量，用于逐单元渐入动画。 */
+  tail?: string;
+  /** 尾巴序号：变化即重新触发动画（React key）。 */
+  tailSeq?: number;
   status?: "streaming" | "done" | "error";
 }
 
@@ -36,7 +43,6 @@ const BRAND = {
   ochre: "#c8763c",
   ochreHover: "#d98a4f",
   ochreSoft: "rgba(200,118,60,0.16)",
-  danger: "#c2453a",
 } as const;
 
 /** 窗口拖动区域（Electron 非标准 CSS 属性，需断言类型）。 */
@@ -75,6 +81,31 @@ function nextId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/**
+ * 图标：SVG 作为 mask（`--icon` 变量），颜色跟随 currentColor —— 主题/禁用态零成本。
+ * 资产来自本地图标库（已拷入 ui/public/icons，随构建产物分发）。
+ */
+function Icon({
+  name,
+  size = 16,
+  style,
+  className,
+}: {
+  name: string;
+  size?: number;
+  style?: React.CSSProperties;
+  className?: string;
+}): React.JSX.Element {
+  const vars = { "--icon": `url(./icons/${name}.svg)` } as unknown as React.CSSProperties;
+  return (
+    <span
+      aria-hidden="true"
+      className={className ? `icon ${className}` : "icon"}
+      style={{ width: size, height: size, ...vars, ...style }}
+    />
+  );
+}
+
 /* ---------------------------------- 标题栏 ---------------------------------- */
 
 function TitleBar({ maximized }: { maximized: boolean }): React.JSX.Element {
@@ -92,29 +123,41 @@ function TitleBar({ maximized }: { maximized: boolean }): React.JSX.Element {
         <button
           type="button"
           aria-label="最小化"
+          title="最小化"
           className="win-btn"
           style={styles.windowButton}
           onClick={() => void api?.window.minimize()}
         >
-          &#x2500;
+          <Icon name="minimize" size={12} />
         </button>
         <button
           type="button"
           aria-label={maximized ? "还原" : "最大化"}
+          title={maximized ? "还原" : "最大化"}
           className="win-btn"
           style={styles.windowButton}
           onClick={() => void api?.window.maximize()}
         >
-          {maximized ? "\u2750" : "\u25A1"}
+          <span
+            style={{
+              display: "block",
+              width: 10,
+              height: 10,
+              border: `1.2px solid currentColor`,
+              borderRadius: maximized ? 0 : 1,
+              boxShadow: maximized ? "inset 0 -2px 0 -1px currentColor" : "none",
+            }}
+          />
         </button>
         <button
           type="button"
           aria-label="关闭"
+          title="关闭"
           className="win-btn win-close"
           style={styles.windowButton}
           onClick={() => void api?.window.close()}
         >
-          &#x2715;
+          <Icon name="close" size={12} />
         </button>
       </div>
     </div>
@@ -137,6 +180,7 @@ export default function App(): React.JSX.Element {
   const [notice, setNotice] = useState<string>("");
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
+  const tailSeqRef = useRef<number>(0);
 
   // 挂载：拉取状态 + 订阅流式事件（事件名来自契约 EVENTS 白名单）
   useEffect(() => {
@@ -165,14 +209,25 @@ export default function App(): React.JSX.Element {
     };
     window.addEventListener("resize", syncMaximized);
 
-    const upsertAssistant = (text: string, status: ChatMessage["status"] = "streaming"): void => {
+    /** 追加流式增量：text 累积 + tail 标记（触发逐单元渐入动画）。 */
+    const upsertAssistant = (delta: string): void => {
       const id = activeAssistantRef.current ?? nextId("a");
       activeAssistantRef.current = id;
+      tailSeqRef.current += 1;
+      const tailSeq = tailSeqRef.current;
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.id === id);
-        if (idx === -1) return [...prev, { id, role: "assistant", text, status }];
+        if (idx === -1) {
+          return [...prev, { id, role: "assistant", text: delta, tail: delta, tailSeq, status: "streaming" }];
+        }
         const next = [...prev];
-        next[idx] = { ...next[idx], text: next[idx].text + text, status };
+        next[idx] = {
+          ...next[idx],
+          text: next[idx].text + delta,
+          tail: delta,
+          tailSeq,
+          status: "streaming",
+        };
         return next;
       });
     };
@@ -201,6 +256,9 @@ export default function App(): React.JSX.Element {
         const p = payload as { content?: string };
         activeAssistantRef.current = null;
         setBusy(false);
+        setMessages((prev) =>
+          prev.map((m) => (m.status === "streaming" ? { ...m, status: "done", tail: undefined } : m)),
+        );
         try {
           const parsed = JSON.parse(p.content ?? "{}") as { status?: string; reason?: string };
           setNotice(`完成：${parsed.status ?? "done"}${parsed.reason ? ` · ${parsed.reason}` : ""}`);
@@ -212,6 +270,9 @@ export default function App(): React.JSX.Element {
         const p = payload as { content?: string; message?: string };
         activeAssistantRef.current = null;
         setBusy(false);
+        setMessages((prev) =>
+          prev.map((m) => (m.status === "streaming" ? { ...m, status: "error", tail: undefined } : m)),
+        );
         pushTransient("system", `错误：${p.message ?? p.content ?? "未知错误"}`);
       }),
     ];
@@ -240,23 +301,27 @@ export default function App(): React.JSX.Element {
     void api.chat.stop({ sessionId: sessionIdRef.current });
   }, [api]);
 
-  const navigate = useCallback((): void => {
-    if (!api) return;
-    const normalized = normalizeNavigateUrl(address);
-    if (!normalized.ok) {
-      setNotice(`导航被拒绝：${normalized.reason}`);
-      return;
-    }
-    setNotice("导航中…");
-    void api.browser.navigate({ url: normalized.url }).then((result) => {
-      if (result.ok) {
-        setCurrentUrl(result.url ?? normalized.url);
-        setNotice("导航完成");
-      } else {
-        setNotice(`导航失败：${result.error ?? "未知"}`);
+  const navigate = useCallback(
+    (raw?: string): void => {
+      if (!api) return;
+      const normalized = normalizeNavigateUrl(raw ?? address);
+      if (!normalized.ok) {
+        setNotice(`导航被拒绝：${normalized.reason}`);
+        return;
       }
-    });
-  }, [address, api]);
+      setNotice("导航中…");
+      void api.browser.navigate({ url: normalized.url }).then((result) => {
+        if (result.ok) {
+          setCurrentUrl(result.url ?? normalized.url);
+          setAddress(result.url ?? normalized.url);
+          setNotice("导航完成");
+        } else {
+          setNotice(`导航失败：${result.error ?? "未知"}`);
+        }
+      });
+    },
+    [address, api],
+  );
 
   const snapshot = useCallback((): void => {
     if (!api) return;
@@ -278,28 +343,59 @@ export default function App(): React.JSX.Element {
   }, [provider]);
 
   const agentLabel = agents.find((a) => a.isDefault)?.name ?? "—";
+  const canSend = Boolean(api) && !busy && input.trim() !== "";
 
   return (
     <div style={styles.app}>
       <TitleBar maximized={maximized} />
 
       <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
-        <input
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") navigate();
-          }}
-          placeholder="输入地址或搜索内容，回车导航…"
-          style={styles.omnibox}
-          aria-label="地址与搜索"
-        />
-        <div style={styles.topActions}>
-          <button type="button" className="btn-primary" style={styles.primaryButton} onClick={navigate}>
-            导航
+        <div style={styles.navGroup}>
+          <button type="button" className="icon-btn" title="后退（待接历史）" disabled>
+            <Icon name="back" size={16} />
           </button>
-          <button type="button" className="btn-ghost" style={styles.ghostButton} onClick={snapshot}>
-            快照
+          <button type="button" className="icon-btn" title="前进（待接历史）" disabled>
+            <Icon name="forward" size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="刷新"
+            disabled={!currentUrl}
+            onClick={() => navigate(currentUrl)}
+          >
+            <Icon name="reload" size={16} />
+          </button>
+        </div>
+
+        <div style={styles.omniboxWrap}>
+          <Icon name="search" size={14} style={styles.omniboxIcon} />
+          <input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") navigate();
+            }}
+            placeholder="输入地址或搜索内容，回车导航…"
+            style={styles.omnibox}
+            aria-label="地址与搜索"
+          />
+          <button type="button" className="icon-btn" title="收藏（待接）" disabled style={styles.omniboxStar}>
+            <Icon name="star" size={15} />
+          </button>
+        </div>
+
+        <div style={styles.topActions}>
+          <button type="button" className="icon-btn" title="页面快照" onClick={snapshot} disabled={!api}>
+            <Icon name="capture" size={17} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="更多（待接）"
+            disabled
+          >
+            <Icon name="more" size={17} />
           </button>
         </div>
       </header>
@@ -313,9 +409,18 @@ export default function App(): React.JSX.Element {
             <div style={styles.startTitle}>Loopsoar</div>
             <div style={styles.startSubtitle}>浏览器优先的本地 AI Agent</div>
             <div style={styles.startHints}>
-              <div>在顶部输入网址或搜索内容，回车打开页面</div>
-              <div>右侧与 Agent 对话：可在授权范围内读写文件、执行命令、操控网页</div>
-              <div>原生浏览器视图会覆盖此区域（WebContentsView · D0 已验证）</div>
+              <div style={styles.hintRow}>
+                <Icon name="arrow-go" size={14} style={styles.hintIcon} />
+                <span>在顶部输入网址或搜索内容，回车打开页面</span>
+              </div>
+              <div style={styles.hintRow}>
+                <Icon name="agent" size={14} style={styles.hintIcon} />
+                <span>右侧与 Agent 对话：授权范围内读写文件、执行命令、操控网页</span>
+              </div>
+              <div style={styles.hintRow}>
+                <Icon name="capture" size={14} style={styles.hintIcon} />
+                <span>原生浏览器视图会覆盖此区域（WebContentsView · D0 已验证）</span>
+              </div>
             </div>
             <div style={styles.startUrl}>{currentUrl ? `当前页面：${currentUrl}` : "尚未打开网页"}</div>
           </div>
@@ -323,7 +428,10 @@ export default function App(): React.JSX.Element {
 
         <aside style={{ ...styles.sidebar, width: LAYOUT.SIDEBAR_WIDTH }}>
           <div style={styles.sidebarHeader}>
-            <span>Agent 对话</span>
+            <span style={styles.sidebarTitle}>
+              <Icon name="agent" size={14} style={{ marginRight: 6 }} />
+              Agent 对话
+            </span>
             <span style={styles.sidebarAgent}>{agentLabel}</span>
           </div>
           <div style={styles.messageList}>
@@ -331,9 +439,19 @@ export default function App(): React.JSX.Element {
               <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
             ) : (
               messages.map((m) => (
-                <div key={m.id} style={styles.message}>
+                <div key={m.id} className="msg-enter" style={styles.message}>
                   <span style={{ ...styles.roleTag, color: roleColor(m.role) }}>{ROLE_LABEL[m.role]}</span>
-                  <span style={styles.messageText}>{m.text}</span>
+                  <span style={styles.messageText}>
+                    {m.tail && m.status === "streaming"
+                      ? m.text.slice(0, m.text.length - m.tail.length)
+                      : m.text}
+                    {m.tail && m.status === "streaming" ? (
+                      <span key={m.tailSeq} className="stream-tail">
+                        {m.tail}
+                      </span>
+                    ) : null}
+                    {m.status === "streaming" ? <span className="stream-caret" /> : null}
+                  </span>
                 </div>
               ))
             )}
@@ -353,14 +471,17 @@ export default function App(): React.JSX.Element {
               rows={3}
             />
             <div style={styles.composerRow}>
-              <span style={styles.notice}>{notice || (busy ? "生成中…" : "")}</span>
+              {busy ? <Icon name="spinner" size={14} className="spinner" style={styles.spinnerInline} /> : null}
+              <span style={styles.notice}>{busy ? "生成中…" : ""}</span>
               <button
                 type="button"
                 className="btn-primary"
                 style={styles.primaryButton}
                 onClick={send}
-                disabled={!api || busy || input.trim() === ""}
+                disabled={!canSend}
+                title="发送（Enter）"
               >
+                <Icon name="send" size={13} style={{ marginRight: 5, verticalAlign: "-2px" }} />
                 发送
               </button>
               <button
@@ -369,7 +490,9 @@ export default function App(): React.JSX.Element {
                 style={styles.ghostButton}
                 onClick={stop}
                 disabled={!api || !busy}
+                title="停止生成"
               >
+                <Icon name="stop" size={13} style={{ marginRight: 5, verticalAlign: "-2px" }} />
                 停止
               </button>
             </div>
@@ -378,11 +501,21 @@ export default function App(): React.JSX.Element {
       </div>
 
       <footer style={{ ...styles.statusBar, height: LAYOUT.STATUS_BAR_HEIGHT }}>
-        <span style={styles.statusItem}>shell: {boot?.status ?? "—"}</span>
+        <span style={styles.statusItem}>
+          <span className="live-dot" style={styles.liveDot} />
+          shell: {boot?.status ?? "—"}
+        </span>
         <span style={styles.statusItem}>agent: {agentLabel}</span>
         <span style={styles.statusItem}>{providerLabel}</span>
         <span style={{ ...styles.statusItem, ...styles.statusUrl }}>{currentUrl || "about:start"}</span>
       </footer>
+
+      {notice ? (
+        <button type="button" className="toast" style={styles.toast} onClick={() => setNotice("")} title="点击关闭">
+          <Icon name="bolt" size={13} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+          {notice}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -391,6 +524,7 @@ export default function App(): React.JSX.Element {
 
 const styles: Record<string, React.CSSProperties> = {
   app: {
+    position: "relative",
     display: "flex",
     flexDirection: "column",
     height: "100vh",
@@ -421,12 +555,7 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   titleLogo: { borderRadius: 4, display: "block" },
-  titleText: {
-    fontSize: 12,
-    fontWeight: 600,
-    letterSpacing: 0.6,
-    color: BRAND.linenMuted,
-  },
+  titleText: { fontSize: 12, fontWeight: 600, letterSpacing: 0.6, color: BRAND.linenMuted },
   windowControls: { display: "flex", alignItems: "stretch", height: "100%", flexShrink: 0 },
   windowButton: {
     width: 46,
@@ -440,32 +569,45 @@ const styles: Record<string, React.CSSProperties> = {
     display: "grid",
     placeItems: "center",
   },
-  windowClose: { fontSize: 13 },
   // 顶部操作栏
   topBar: {
     display: "flex",
     alignItems: "center",
-    gap: 10,
-    padding: "0 12px",
+    gap: 8,
+    padding: "0 10px",
     background: BRAND.inkRaised,
     borderBottom: `1px solid ${BRAND.border}`,
     flexShrink: 0,
   },
-  omnibox: {
+  navGroup: { display: "flex", gap: 2, flexShrink: 0 },
+  omniboxWrap: {
     flex: 1,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
     height: 30,
-    padding: "0 14px",
+    padding: "0 6px 0 12px",
     borderRadius: 15,
     border: `1px solid ${BRAND.border}`,
     background: BRAND.ink,
+    minWidth: 0,
+  },
+  omniboxIcon: { color: BRAND.linenFaint, flex: "none" },
+  omnibox: {
+    flex: 1,
+    height: "100%",
+    border: "none",
+    outline: "none",
+    background: "transparent",
     color: BRAND.linen,
     fontSize: 13,
-    outline: "none",
+    minWidth: 0,
   },
-  topActions: { display: "flex", gap: 8, flexShrink: 0 },
+  omniboxStar: { width: 24, height: 24, flex: "none" },
+  topActions: { display: "flex", gap: 2, flexShrink: 0 },
   primaryButton: {
     height: 28,
-    padding: "0 14px",
+    padding: "0 12px",
     borderRadius: 7,
     border: "none",
     background: BRAND.ochre,
@@ -473,16 +615,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: 12.5,
     cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
   },
   ghostButton: {
     height: 28,
-    padding: "0 12px",
+    padding: "0 11px",
     borderRadius: 7,
     border: `1px solid ${BRAND.borderStrong}`,
     background: "transparent",
     color: BRAND.linenMuted,
     fontSize: 12.5,
     cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
   },
   body: { display: "flex", flex: 1, minHeight: 0 },
   browserPane: {
@@ -497,14 +643,9 @@ const styles: Record<string, React.CSSProperties> = {
   startMark: { marginBottom: 18, opacity: 0.95 },
   startTitle: { fontSize: 32, fontWeight: 800, letterSpacing: 0.4, color: BRAND.linen },
   startSubtitle: { marginTop: 6, fontSize: 13.5, color: BRAND.ochreHover, letterSpacing: 0.2 },
-  startHints: {
-    marginTop: 20,
-    color: BRAND.linenMuted,
-    fontSize: 12.5,
-    lineHeight: 2,
-    display: "grid",
-    gap: 2,
-  },
+  startHints: { marginTop: 20, display: "grid", gap: 9 },
+  hintRow: { display: "flex", alignItems: "flex-start", gap: 8, color: BRAND.linenMuted, fontSize: 12.5, lineHeight: 1.6 },
+  hintIcon: { marginTop: 3, color: BRAND.ochre, opacity: 0.9 },
   startUrl: { marginTop: 20, fontSize: 11.5, color: BRAND.linenFaint },
   sidebar: {
     display: "flex",
@@ -523,15 +664,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: `1px solid ${BRAND.border}`,
     color: BRAND.linen,
   },
+  sidebarTitle: { display: "inline-flex", alignItems: "center" },
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
-  messageList: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "12px 14px",
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-  },
+  messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
   message: { display: "flex", flexDirection: "column", gap: 4 },
   roleTag: { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6 },
@@ -557,6 +692,7 @@ const styles: Record<string, React.CSSProperties> = {
     outline: "none",
   },
   composerRow: { display: "flex", alignItems: "center", gap: 8, marginTop: 8 },
+  spinnerInline: { color: BRAND.ochre, flex: "none" },
   notice: {
     flex: 1,
     fontSize: 11,
@@ -577,9 +713,26 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   statusItem: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-  statusUrl: {
-    marginLeft: "auto",
-    fontFamily: "ui-monospace, Consolas, monospace",
-    color: BRAND.linenFaint,
+  liveDot: { marginRight: 6, verticalAlign: "1px" },
+  statusUrl: { marginLeft: "auto", fontFamily: "ui-monospace, Consolas, monospace", color: BRAND.linenFaint },
+  toast: {
+    position: "absolute",
+    left: "50%",
+    bottom: 46,
+    transform: "translateX(-50%)",
+    display: "inline-flex",
+    alignItems: "center",
+    maxWidth: "70%",
+    padding: "7px 14px",
+    borderRadius: 8,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    color: BRAND.linen,
+    fontSize: 12,
+    cursor: "pointer",
+    boxShadow: "0 6px 20px rgba(0,0,0,0.45)",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   },
 };

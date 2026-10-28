@@ -4,7 +4,7 @@
  * 只能在构建期扫源码兜底，否则表现为「点了没反应」。
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { EVENTS, CHANNEL_BINDINGS } from "../../packages/contracts/src/schemas.ts";
 import { LAYOUT } from "../../packages/contracts/src/layout.ts";
@@ -66,5 +66,38 @@ describe("守卫：UI ↔ 契约一致", () => {
     const src = readFileSync(path.join(ROOT, "packages/shell/src/main/index.ts"), "utf8");
     expect(src).toContain("CHANNEL_BINDINGS");
     expect(src).toContain("--loopsoar-bindings=");
+  });
+});
+
+describe("守卫：图标与动效资源", () => {
+  const ICONS_DIR = path.join(ROOT, "packages/ui/public/icons");
+  const appSrc = readApp();
+
+  it("UI 引用的每个图标都在 ui/public/icons 中存在", () => {
+    const used = [...appSrc.matchAll(/<Icon\s+name="([a-z0-9-]+)"/g)].map((m) => m[1]);
+    expect(used.length).toBeGreaterThan(8);
+    for (const name of new Set(used)) {
+      expect(existsSync(path.join(ICONS_DIR, `${name}.svg`)), `缺少图标文件 ${name}.svg`).toBe(true);
+    }
+  });
+
+  it("图标资产来自本地图标库（目录非空、数量达标）", () => {
+    const files = readdirSync(ICONS_DIR).filter((f) => f.endsWith(".svg"));
+    expect(files.length).toBeGreaterThanOrEqual(20);
+    for (const required of ["back.svg", "forward.svg", "reload.svg", "search.svg", "send.svg", "stop.svg"]) {
+      expect(files, `缺少核心图标 ${required}`).toContain(required);
+    }
+  });
+
+  it("交互反馈与动画在样式表中定义（含减动效降级）", () => {
+    const html = readFileSync(path.join(ROOT, "packages/ui/index.html"), "utf8");
+    for (const keyframe of ["spin", "blink", "streamUnitIn", "pulseDot", "toastIn"]) {
+      expect(html, `缺少动画 ${keyframe}`).toContain(`@keyframes ${keyframe}`);
+    }
+    // 按下回弹反馈（借鉴 slime：active scale）
+    expect(html).toMatch(/\.icon-btn:active[^{]*\{[^}]*scale\(0\.88\)/);
+    // 减动效必须保留不透明度渐入（去掉位移），而不是整块关掉动画
+    expect(html).toContain("prefers-reduced-motion: reduce");
+    expect(html).toContain("fadeOnly");
   });
 });

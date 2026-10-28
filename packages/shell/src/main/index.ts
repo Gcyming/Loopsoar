@@ -147,6 +147,24 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
   });
 }
 
+/** E2E 演示钩子（仅验收用）：向渲染层注入一段假流式事件，用于截图验证动画/光标。 */
+function scheduleE2EDemoChat(win: BrowserWindow): void {
+  if (!process.env.LOOPSOAR_E2E_DEMO_CHAT) return;
+  win.webContents.once("did-finish-load", () => {
+    setTimeout(() => {
+      const chunks = ["Loopsoar 正在", "以真实引擎", "流式回复：", "这一行演示", "逐单元渐入", "与光标闪烁。"];
+      chunks.forEach((chunk, index) => {
+        setTimeout(() => {
+          pushToRenderer("chat:stream:chunk", { sessionId: "e2e-demo", content: chunk });
+        }, index * 150);
+      });
+      setTimeout(() => {
+        pushToRenderer("chat:stream:heartbeat", { sessionId: "e2e-demo" });
+      }, 1000);
+    }, 250);
+  });
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -192,6 +210,7 @@ function createMainWindow(): void {
   if (devUrl) void mainWindow.loadURL(devUrl);
   else void mainWindow.loadURL(`${PROTOCOL}://app/index.html`);
   scheduleE2EScreenshot(mainWindow);
+  scheduleE2EDemoChat(mainWindow);
 }
 
 /**

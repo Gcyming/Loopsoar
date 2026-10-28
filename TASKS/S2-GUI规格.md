@@ -80,3 +80,30 @@
 - 关闭按钮 hover 为 Windows 红 `#c42b1c`；所有按钮 `no-drag`；
 - 布局联动：原生浏览器视图 y 偏移 = 标题栏 + 顶栏（`computeBrowserViewBounds` 已含 TITLE_BAR_HEIGHT），窗口缩放自动重算。
 
+---
+
+## 7. GUI-3 增补（图标系统 + 交互反馈/动画）
+
+### 7.1 图标（来源：本地图标库 `D:\tool\AI\real-project\Loopsoar\icon`）
+
+- 拷入 `packages/ui/public/icons/`（26 个：back/forward/reload/search/capture/star/star-filled/history/home/
+  plus/minimize/close/stop/send/agent/bolt/bulb/spinner/check/warning/folder/file/terminal/puzzle/more/arrow-go）；
+- 渲染方式：SVG 作为 CSS `mask`（`--icon` 变量）+ `background-color: currentColor` —— 颜色随主题/禁用态自动变化；
+- 用途：标题栏窗口控制、浏览器工具栏、地址栏搜索/收藏、快照/更多、侧栏 Agent 图标、发送/停止、状态点、起始页提示。
+
+### 7.2 交互反馈（借鉴 slime 已打磨实践，实测于其 `gui/src/renderer/index.css`）
+
+| 模式 | 实现 |
+|---|---|
+| 按钮 hover | 上浮 `translateY(-1px)` + 软阴影（ochre 色调），120ms |
+| 按钮按下 | `translateY(0) scale(.97)`；图标按钮 `scale(.88)`，80ms 回弹 |
+| 键盘可达 | `:focus-visible` 2px 焦点环（不打扰鼠标用户） |
+| 流式吐字 | 新增量单元「由右到左 + 由浅到深」：`left: 3px → 0` + `opacity 0 → 1`，260ms `cubic-bezier(.22,.61,.36,1)`（**位移用 left 不用 transform**——内联元素上 transform 会被静默忽略） |
+| 流式光标 | ochre 方块 `blink` 闪烁（1s step-end） |
+| 加载 | `spin` 1s 线性旋转（busy 时显示在输入区） |
+| 状态点 | `pulseDot` 2.4s 呼吸 |
+| 新消息 | 180ms 淡入 + 4px 上移（列表行级，不做浮层进场动画——避免"抽搐"） |
+| 通知 | 底部 toast 180ms 淡入，点击关闭 |
+| 减动效 | `prefers-reduced-motion` 下**去掉位移/缩放、保留不透明度渐入**（slime 教训：整块 `animation:none` 会让用户"什么都看不到"） |
+
+

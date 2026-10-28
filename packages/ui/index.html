@@ -20,39 +20,213 @@
       #root {
         height: 100vh;
       }
-      /* 交互态（内联样式无法表达 hover，这里用类集中管理；颜色仍取自品牌三色） */
+
+      /* ── 图标（mask 染色）：SVG 只作形状，颜色跟随当前文字色，主题切换零成本 ── */
+      .icon {
+        display: inline-block;
+        flex: none;
+        background-color: currentColor;
+        -webkit-mask: var(--icon) center / contain no-repeat;
+        mask: var(--icon) center / contain no-repeat;
+      }
+
+      /* ── 通用交互态（借鉴 slime：hover 上浮 1px + 软阴影，active 按下回弹） ── */
+      .btn-primary {
+        transition: background 120ms, color 120ms, transform 80ms, box-shadow 120ms;
+      }
+      .btn-primary:hover:not(:disabled) {
+        background: #d98a4f;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 10px rgba(200, 118, 60, 0.28);
+      }
+      .btn-primary:active:not(:disabled) {
+        transform: translateY(0) scale(0.97);
+        box-shadow: none;
+      }
+      .btn-primary:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      .btn-ghost {
+        transition: border-color 120ms, color 120ms, background 120ms, transform 80ms;
+      }
+      .btn-ghost:hover:not(:disabled) {
+        border-color: #c8763c;
+        color: #f4efe6;
+        background: rgba(200, 118, 60, 0.1);
+        transform: translateY(-1px);
+      }
+      .btn-ghost:active:not(:disabled) {
+        transform: translateY(0) scale(0.97);
+      }
+      .btn-ghost:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      /* 图标按钮：清脆的按下反馈（scale .88 借鉴 slime 的 titlebar-btn） */
+      .icon-btn {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: #a8a29a;
+        cursor: pointer;
+        transition: background 120ms, color 120ms, transform 80ms;
+      }
+      .icon-btn:hover:not(:disabled) {
+        background: #1e2127;
+        color: #f4efe6;
+      }
+      .icon-btn:active:not(:disabled) {
+        transform: scale(0.88);
+      }
+      .icon-btn:disabled {
+        opacity: 0.32;
+        cursor: default;
+      }
+
+      /* 键盘可达性：焦点环（鼠标点击不触发） */
+      .icon-btn:focus-visible,
+      .btn-primary:focus-visible,
+      .btn-ghost:focus-visible,
+      .win-btn:focus-visible,
+      textarea:focus-visible,
+      input:focus-visible {
+        outline: 2px solid rgba(200, 118, 60, 0.6);
+        outline-offset: 2px;
+      }
+
       .win-btn {
-        transition: background-color 120ms ease, color 120ms ease;
+        transition: background-color 120ms ease, color 120ms ease, transform 80ms;
       }
       .win-btn:hover {
         background: #1e2127;
         color: #f4efe6;
       }
+      .win-btn:active {
+        transform: scale(0.9);
+      }
       .win-close:hover {
         background: #c42b1c;
         color: #ffffff;
       }
-      .btn-primary {
-        transition: background-color 120ms ease;
+
+      /* ── 动画（全部可在 prefers-reduced-motion 下降级） ── */
+      @keyframes spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
       }
-      .btn-primary:hover:not(:disabled) {
-        background: #d98a4f;
+      .spinner {
+        animation: spin 1s linear infinite;
       }
-      .btn-primary:disabled {
-        opacity: 0.45;
-        cursor: default;
+
+      /* 流式光标：闪烁块（blink 借鉴 slime 的思考/吐字光标） */
+      @keyframes blink {
+        0%,
+        49% {
+          opacity: 1;
+        }
+        50%,
+        100% {
+          opacity: 0;
+        }
       }
-      .btn-ghost {
-        transition: border-color 120ms ease, color 120ms ease;
+      .stream-caret {
+        display: inline-block;
+        width: 7px;
+        height: 13px;
+        margin-left: 2px;
+        vertical-align: -2px;
+        border-radius: 1px;
+        background: #c8763c;
+        animation: blink 1s step-end infinite;
       }
-      .btn-ghost:hover:not(:disabled) {
-        border-color: #c8763c;
-        color: #f4efe6;
+
+      /* 流式吐字「逐单元渐入」：由右到左 + 由浅到深。
+         位移用 relative/left 而非 transform —— 内联元素上 transform 会被静默忽略
+         （slime 踩过的坑，这里直接按正确写法实现）。 */
+      @keyframes streamUnitIn {
+        from {
+          opacity: 0;
+          left: 3px;
+        }
+        to {
+          opacity: 1;
+          left: 0;
+        }
       }
-      .btn-ghost:disabled {
-        opacity: 0.4;
-        cursor: default;
+      .stream-tail {
+        position: relative;
+        animation: streamUnitIn 260ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
       }
+
+      /* 新消息行淡入（只做淡入，不做大幅位移：浮层/列表不加"进场"动画避免抽搐） */
+      @keyframes fadeOnly {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .msg-enter {
+        animation: fadeUp 180ms ease-out both;
+      }
+
+      /* 状态点脉冲（在线/思考中） */
+      @keyframes pulseDot {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.45;
+          transform: scale(0.78);
+        }
+      }
+      .live-dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #c8763c;
+        animation: pulseDot 2.4s ease-in-out infinite;
+      }
+
+      @keyframes toastIn {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .toast {
+        animation: toastIn 180ms ease-out both;
+      }
+
       textarea:focus,
       input:focus {
         border-color: #6f6a63;
@@ -65,12 +239,38 @@
         background: #2a2d36;
         border-radius: 6px;
         border: 2px solid #111318;
+        transition: background 120ms;
       }
       ::-webkit-scrollbar-thumb:hover {
         background: #3a3e48;
       }
       ::-webkit-scrollbar-track {
         background: transparent;
+      }
+
+      /* 减动效：去掉一切位移/缩放，但保留不透明度渐入
+         （slime 的教训：整块 animation:none 会让用户"什么都看不到"） */
+      @media (prefers-reduced-motion: reduce) {
+        .icon-btn:active:not(:disabled),
+        .btn-primary:active:not(:disabled),
+        .btn-ghost:active:not(:disabled),
+        .win-btn:active,
+        .btn-primary:hover:not(:disabled),
+        .btn-ghost:hover:not(:disabled) {
+          transform: none;
+        }
+        .msg-enter,
+        .toast {
+          animation: fadeOnly 140ms ease both;
+        }
+        .stream-tail {
+          animation: fadeOnly 140ms ease both;
+        }
+        .spinner,
+        .live-dot,
+        .stream-caret {
+          animation-duration: 2s;
+        }
       }
     </style>
   </head>
