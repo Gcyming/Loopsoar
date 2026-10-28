@@ -248,6 +248,32 @@
         background: transparent;
       }
 
+      /* 设置面板：左侧导航选中态（细条 + 背景） */
+      .settings-nav-item:hover {
+        background: #1e2127;
+        color: #f4efe6;
+      }
+      .settings-nav-item.is-active {
+        box-shadow: inset 2px 0 0 #c8763c;
+      }
+      .settings-seg:hover:not(.is-active) {
+        background: #1e2127;
+        color: #f4efe6;
+      }
+      .settings-toggle:hover {
+        border-color: #c8763c;
+      }
+
+      /* 动效强度偏好（设置 · 通用）：写到 documentElement[data-animations] */
+      html[data-animations="reduced"] * {
+        animation-duration: 120ms !important;
+        transition-duration: 80ms !important;
+      }
+      html[data-animations="off"] * {
+        animation: none !important;
+        transition: none !important;
+      }
+
       /* 减动效：去掉一切位移/缩放，但保留不透明度渐入
          （slime 的教训：整块 animation:none 会让用户"什么都看不到"） */
       @media (prefers-reduced-motion: reduce) {

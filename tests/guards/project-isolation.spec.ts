@@ -109,8 +109,10 @@ describe("守卫：项目隔离（不与被测/旧项目串扰）", () => {
     const offenders: string[] = [];
     for (const f of targets) {
       const src = readFileSync(f, "utf8");
-      // 引号/url() 内出现旧项目名，或出现仓库外绝对盘符路径 → 视为串扰
-      if (/["'(][^"')]*(?:slime|pilot)[^"')]*["')]/i.test(src)) {
+      // 只检查「真实引用」（src/href/url()），避免把注释里的叙述误伤：
+      // ① 资源引用中出现旧项目名；② 出现仓库外绝对盘符路径。
+      const assetRef = /(?:src|href)\s*=\s*["'][^"']*(?:slime|pilot)|url\(\s*["']?[^)]*(?:slime|pilot)/i;
+      if (assetRef.test(src)) {
         offenders.push(`${path.relative(ROOT, f)}（引用旧项目资源）`);
       }
       if (/["'][A-Za-z]:[\\/]/.test(src)) {

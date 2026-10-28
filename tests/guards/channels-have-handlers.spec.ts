@@ -50,8 +50,11 @@ function assemble(): void {
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,
-    configDir: "C:/tmp/loopsoar-config-test",
+    dataDir: "C:/tmp/loopsoar-data-test",
+    configDir: "C:/tmp/loopsoar-data-test/config",
+    workspaceRoot: "C:/tmp/loopsoar-workspace-test",
     env: {},
+    appVersion: "0.0.0-test",
   });
   registerWindowDomain({
     ...deps,

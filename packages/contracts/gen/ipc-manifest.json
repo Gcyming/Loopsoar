@@ -125,6 +125,69 @@
       "method": "state",
       "sensitive": true,
       "hasRequest": false
+    },
+    {
+      "channel": "settings:getPreferences",
+      "domain": "settings",
+      "method": "getPreferences",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:setPreferences",
+      "domain": "settings",
+      "method": "setPreferences",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:getPermissions",
+      "domain": "settings",
+      "method": "getPermissions",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:setPermissions",
+      "domain": "settings",
+      "method": "setPermissions",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:testProvider",
+      "domain": "settings",
+      "method": "testProvider",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:getRules",
+      "domain": "settings",
+      "method": "getRules",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:setRules",
+      "domain": "settings",
+      "method": "setRules",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:diagnostics",
+      "domain": "settings",
+      "method": "diagnostics",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:about",
+      "domain": "settings",
+      "method": "about",
+      "sensitive": true,
+      "hasRequest": false
     }
   ],
   "events": [

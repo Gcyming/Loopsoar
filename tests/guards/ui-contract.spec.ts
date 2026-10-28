@@ -11,9 +11,16 @@ import { LAYOUT } from "../../packages/contracts/src/layout.ts";
 
 const ROOT = process.cwd();
 const APP_TSX = path.join(ROOT, "packages/ui/src/App.tsx");
+const SETTINGS_TSX = path.join(ROOT, "packages/ui/src/Settings.tsx");
 
 function readApp(): string {
   return readFileSync(APP_TSX, "utf8");
+}
+
+/** UI 全部界面源码（主界面 + 设置面板）。 */
+function readAllUi(): string {
+  return `${readApp()}
+${readFileSync(SETTINGS_TSX, "utf8")}`;
 }
 
 describe("守卫：UI ↔ 契约一致", () => {
@@ -27,7 +34,7 @@ describe("守卫：UI ↔ 契约一致", () => {
   });
 
   it("UI 调用的 IPC 域方法在契约通道中存在", () => {
-    const src = readApp();
+    const src = readAllUi();
     // api.<domain>.<method>(  → 映射为 domain:method（runtime.bootStatus 的特例由契约 boot:status 提供）
     const calls = [...src.matchAll(/api\.([a-zA-Z]+)\.([a-zA-Z]+)\(/g)].map((m) => `${m[1]}.${m[2]}`);
     expect(calls.length).toBeGreaterThan(0);
@@ -71,10 +78,12 @@ describe("守卫：UI ↔ 契约一致", () => {
 
 describe("守卫：图标与动效资源", () => {
   const ICONS_DIR = path.join(ROOT, "packages/ui/public/icons");
-  const appSrc = readApp();
+  const appSrc = readAllUi();
 
   it("UI 引用的每个图标都在 ui/public/icons 中存在", () => {
-    const used = [...appSrc.matchAll(/<Icon\s+name="([a-z0-9-]+)"/g)].map((m) => m[1]);
+    const direct = [...appSrc.matchAll(/<Icon\s+name="([a-z0-9-]+)"/g)].map((m) => m[1]);
+    const navIcons = [...appSrc.matchAll(/icon:\s*"([a-z0-9-]+)"/g)].map((m) => m[1]);
+    const used = [...direct, ...navIcons];
     expect(used.length).toBeGreaterThan(8);
     for (const name of new Set(used)) {
       expect(existsSync(path.join(ICONS_DIR, `${name}.svg`)), `缺少图标文件 ${name}.svg`).toBe(true);

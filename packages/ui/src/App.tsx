@@ -5,8 +5,12 @@ import type {
   AgentSummary,
   BootStatus,
   LoopsoarAPI,
+  Preferences,
   ProviderStatus,
 } from "./types.js";
+import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
+import { Icon } from "./Icon.js";
+import Settings from "./Settings.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -29,25 +33,6 @@ interface ChatMessage {
   status?: "streaming" | "done" | "error";
 }
 
-/** 品牌色板（单一来源；界面任何颜色都必须从这里取）。 */
-const BRAND = {
-  ink: "#111318",
-  inkRaised: "#17191e",
-  inkPanel: "#15171c",
-  inkHover: "#1e2127",
-  border: "#262a31",
-  borderStrong: "#333842",
-  linen: "#f4efe6",
-  linenMuted: "#a8a29a",
-  linenFaint: "#6f6a63",
-  ochre: "#c8763c",
-  ochreHover: "#d98a4f",
-  ochreSoft: "rgba(200,118,60,0.16)",
-} as const;
-
-/** 窗口拖动区域（Electron 非标准 CSS 属性，需断言类型）。 */
-const DRAG_REGION = { WebkitAppRegion: "drag" } as unknown as React.CSSProperties;
-const NO_DRAG_REGION = { WebkitAppRegion: "no-drag" } as unknown as React.CSSProperties;
 
 const ROLE_LABEL: Record<ChatMessage["role"], string> = {
   user: "你",
@@ -79,31 +64,6 @@ function useLoopsoarApi(): LoopsoarAPI | null {
 
 function nextId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-/**
- * 图标：SVG 作为 mask（`--icon` 变量），颜色跟随 currentColor —— 主题/禁用态零成本。
- * 资产来自本地图标库（已拷入 ui/public/icons，随构建产物分发）。
- */
-function Icon({
-  name,
-  size = 16,
-  style,
-  className,
-}: {
-  name: string;
-  size?: number;
-  style?: React.CSSProperties;
-  className?: string;
-}): React.JSX.Element {
-  const vars = { "--icon": `url(./icons/${name}.svg)` } as unknown as React.CSSProperties;
-  return (
-    <span
-      aria-hidden="true"
-      className={className ? `icon ${className}` : "icon"}
-      style={{ width: size, height: size, ...vars, ...style }}
-    />
-  );
 }
 
 /* ---------------------------------- 标题栏 ---------------------------------- */
@@ -178,6 +138,11 @@ export default function App(): React.JSX.Element {
   const [currentUrl, setCurrentUrl] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(() => {
+    if (typeof location === "undefined") return false;
+    return new URLSearchParams(location.search).get("e2e") === "settings";
+  });
+  const [preferences, setPreferences] = useState<Preferences | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
@@ -189,12 +154,14 @@ export default function App(): React.JSX.Element {
       return;
     }
     void (async () => {
-      const [bootResult, providerResult, agentsResult, stateResult] = await Promise.allSettled([
+      const [bootResult, providerResult, agentsResult, stateResult, prefsResult] = await Promise.allSettled([
         api.runtime.status(),
         api.settings.getProvider(),
         api.agents.list(),
         api.window.state(),
+        api.settings.getPreferences(),
       ]);
+      if (prefsResult.status === "fulfilled") setPreferences(prefsResult.value.preferences);
       if (bootResult.status === "fulfilled") setBoot(bootResult.value);
       if (providerResult.status === "fulfilled") setProvider(providerResult.value);
       if (agentsResult.status === "fulfilled") setAgents(agentsResult.value.agents);
@@ -334,6 +301,12 @@ export default function App(): React.JSX.Element {
     });
   }, [api]);
 
+  // 动效强度偏好 → 根节点 data 属性（CSS 里统一降级，避免各处手写判断）
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.animations = preferences?.animations ?? "full";
+  }, [preferences]);
+
   const providerLabel = useMemo(() => {
     if (!provider) return "provider: 读取中…";
     if (!provider.configured) return "provider: 未配置";
@@ -389,12 +362,10 @@ export default function App(): React.JSX.Element {
           <button type="button" className="icon-btn" title="页面快照" onClick={snapshot} disabled={!api}>
             <Icon name="capture" size={17} />
           </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="更多（待接）"
-            disabled
-          >
+          <button type="button" className="icon-btn" title="设置" onClick={() => setSettingsOpen(true)}>
+            <Icon name="settings" size={17} />
+          </button>
+          <button type="button" className="icon-btn" title="更多（待接）" disabled>
             <Icon name="more" size={17} />
           </button>
         </div>
@@ -509,6 +480,14 @@ export default function App(): React.JSX.Element {
         <span style={styles.statusItem}>{providerLabel}</span>
         <span style={{ ...styles.statusItem, ...styles.statusUrl }}>{currentUrl || "about:start"}</span>
       </footer>
+
+      {settingsOpen ? (
+        <Settings
+          api={api}
+          onClose={() => setSettingsOpen(false)}
+          onPreferencesSaved={(next) => setPreferences(next)}
+        />
+      ) : null}
 
       {notice ? (
         <button type="button" className="toast" style={styles.toast} onClick={() => setNotice("")} title="点击关闭">

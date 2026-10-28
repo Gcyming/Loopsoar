@@ -24,6 +24,41 @@ export const SettingsProviderSchema = z.object({
   model: z.string().min(1).max(200),
 });
 
+/** 通用偏好（设置 · 通用）。 */
+export const PreferencesSchema = z.object({
+  language: z.enum(["zh-CN", "en-US"]),
+  /** 动效强度：full=全部；reduced=弱化；off=关闭（无障碍）。 */
+  animations: z.enum(["full", "reduced", "off"]),
+  /** 启动时恢复上次会话（当前为占位开关，会话持久化接入后生效）。 */
+  restoreSession: z.boolean(),
+  searchEngine: z.enum(["bing", "google", "duckduckgo"]),
+  /** 下载目录（空 = 用户下载文件夹）。 */
+  downloadDir: z.string().max(1024).optional(),
+});
+
+/** 权限策略（设置 · 权限）：工具类别的默认决策。 */
+export const PermissionsSchema = z.object({
+  read: z.enum(["allow", "confirm", "deny"]),
+  write: z.enum(["allow", "confirm", "deny"]),
+  terminal: z.enum(["allow", "confirm", "deny"]),
+  network: z.enum(["allow", "confirm", "deny"]),
+  /** 额外授权的工作目录（沙箱根之外）。 */
+  workspaceRoots: z.array(z.string().max(1024)).max(20),
+  /** 危险命令/敏感路径始终二次确认（不随 allow 放行）。 */
+  confirmDangerousAlways: z.boolean(),
+});
+
+/** 规则文件（设置 · 规则）：AGENTS.md 约定（项目根逐级向上 + 全局规则）。 */
+export const RulesFileSchema = z.object({
+  enabled: z.boolean(),
+  content: z.string().max(32768),
+});
+
+export const RulesPayloadSchema = z.object({
+  global: RulesFileSchema,
+  workspace: RulesFileSchema,
+});
+
 /**
  * ChannelBinding defines the structure of a communication channel.
  * domain: The domain/category of the channel (e.g., "chat", "perm")
@@ -149,6 +184,60 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
   "window:state": {
     domain: "window",
     method: "state",
+    request: null,
+    sensitive: true,
+  },
+  "settings:getPreferences": {
+    domain: "settings",
+    method: "getPreferences",
+    request: null,
+    sensitive: true,
+  },
+  "settings:setPreferences": {
+    domain: "settings",
+    method: "setPreferences",
+    request: PreferencesSchema,
+    sensitive: true,
+  },
+  "settings:getPermissions": {
+    domain: "settings",
+    method: "getPermissions",
+    request: null,
+    sensitive: true,
+  },
+  "settings:setPermissions": {
+    domain: "settings",
+    method: "setPermissions",
+    request: PermissionsSchema,
+    sensitive: true,
+  },
+  "settings:testProvider": {
+    domain: "settings",
+    method: "testProvider",
+    request: SettingsProviderSchema,
+    sensitive: true,
+  },
+  "settings:getRules": {
+    domain: "settings",
+    method: "getRules",
+    request: null,
+    sensitive: true,
+  },
+  "settings:setRules": {
+    domain: "settings",
+    method: "setRules",
+    request: RulesPayloadSchema,
+    sensitive: true,
+  },
+  "settings:diagnostics": {
+    domain: "settings",
+    method: "diagnostics",
+    request: null,
+    sensitive: true,
+  },
+  "settings:about": {
+    domain: "settings",
+    method: "about",
     request: null,
     sensitive: true,
   },

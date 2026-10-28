@@ -15,6 +15,13 @@ export interface ProviderStatus {
   reason: string | null;
 }
 
+export interface TestProviderResult {
+  ok: boolean;
+  status?: number;
+  latencyMs?: number;
+  message: string;
+}
+
 export interface AgentSummary {
   id: string;
   name: string;
@@ -29,6 +36,72 @@ export interface AgentSummary {
 export interface BootStatus {
   status: string;
   version?: string;
+}
+
+export interface Preferences {
+  language: "zh-CN" | "en-US";
+  animations: "full" | "reduced" | "off";
+  restoreSession: boolean;
+  searchEngine: "bing" | "google" | "duckduckgo";
+  downloadDir?: string;
+}
+
+export interface PermissionCategory {
+  key: "read" | "write" | "terminal" | "network";
+  label: string;
+  description: string;
+}
+
+export interface PermissionsState {
+  permissions: {
+    read: "allow" | "confirm" | "deny";
+    write: "allow" | "confirm" | "deny";
+    terminal: "allow" | "confirm" | "deny";
+    network: "allow" | "confirm" | "deny";
+    workspaceRoots: string[];
+    confirmDangerousAlways: boolean;
+  };
+  categories: PermissionCategory[];
+  workspaceRoot: string;
+}
+
+export interface RuleFile {
+  path: string;
+  exists: boolean;
+  enabled: boolean;
+  content: string;
+  bytes: number;
+}
+
+export interface RulesSnapshot {
+  maxFileBytes: number;
+  global: RuleFile;
+  workspace: RuleFile;
+  merged: {
+    text: string;
+    included: { scope: string; path: string; bytes: number }[];
+    skipped: { path: string; reason: string }[];
+    totalBytes: number;
+  };
+  claudeCompat: boolean;
+  guardrail: string;
+}
+
+export interface DiagnosticsInfo {
+  paths: Record<string, string>;
+  versions: Record<string, string>;
+  extra?: Record<string, unknown>;
+}
+
+export interface AboutInfo {
+  name: string;
+  version: string;
+  appId: string;
+  protocol: string;
+  electron: string;
+  node: string;
+  brandAssetSource: string;
+  license: string;
 }
 
 export type LoopsoarEvent =
@@ -61,7 +134,19 @@ export interface LoopsoarAPI {
   };
   settings: LoopsoarDomain & {
     getProvider(): Promise<ProviderStatus>;
-    setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean }>;
+    setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
+    testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;
+    getPreferences(): Promise<{ preferences: Preferences; defaults: Preferences; searchUrlExample: string }>;
+    setPreferences(payload: Preferences): Promise<{ saved: boolean; preferences: Preferences }>;
+    getPermissions(): Promise<PermissionsState>;
+    setPermissions(payload: PermissionsState["permissions"]): Promise<{ saved: boolean; permissions: PermissionsState["permissions"] }>;
+    getRules(): Promise<RulesSnapshot>;
+    setRules(payload: {
+      global: { enabled: boolean; content: string };
+      workspace: { enabled: boolean; content: string };
+    }): Promise<{ saved: boolean; merged: RulesSnapshot["merged"] }>;
+    diagnostics(): Promise<DiagnosticsInfo>;
+    about(): Promise<AboutInfo>;
   };
   window: LoopsoarDomain & {
     minimize(): Promise<{ ok: boolean }>;

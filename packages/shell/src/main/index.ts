@@ -33,7 +33,7 @@ import { registerAgentsDomain } from "./domains/agents.js";
 import { registerChatDomain } from "./domains/chat.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
-import { loadProviderConfig, registerSettingsDomain } from "./domains/settings.js";
+import { loadProviderConfig, registerSettingsDomain, currentRulesPrompt } from "./domains/settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -207,8 +207,14 @@ function createMainWindow(): void {
   });
 
   const devUrl = process.env.LOOPSOAR_DEV_URL;
-  if (devUrl) void mainWindow.loadURL(devUrl);
-  else void mainWindow.loadURL(`${PROTOCOL}://app/index.html`);
+  if (devUrl) {
+    void mainWindow.loadURL(devUrl);
+  } else {
+    // E2E 直达：LOOPSOAR_E2E_OPEN=settings 时带 query 打开并自动展开设置面板
+    const e2eOpen = process.env.LOOPSOAR_E2E_OPEN;
+    const query = e2eOpen ? `?e2e=${encodeURIComponent(e2eOpen)}` : "";
+    void mainWindow.loadURL(`${PROTOCOL}://app/index.html${query}`);
+  }
   scheduleE2EScreenshot(mainWindow);
   scheduleE2EDemoChat(mainWindow);
 }
@@ -275,6 +281,20 @@ app.whenReady().then(async () => {
   const agents = new AgentRegistry();
   agents.registerBuiltin(BUILTIN_AGENT);
   const defaultAgent = agents.defaultAgent();
+  const settingsDeps = {
+    ...deps,
+    platform,
+    dataDir: dirs.dataDir,
+    configDir: dirs.configDir,
+    workspaceRoot: process.cwd(),
+    env: process.env,
+    appVersion: app.getVersion(),
+    diagnosticsExtra: () => ({
+      auditEntries: auditLog.length,
+      tools: registry.list().length,
+      agents: agents.list().length,
+    }),
+  };
   const chatService = new ChatService({
     platform,
     registry,
@@ -282,6 +302,8 @@ app.whenReady().then(async () => {
     llm,
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
+    // 规则文件（AGENTS.md）：每次 stream 重新读取，设置面板保存后即时生效
+    getSystemRules: () => currentRulesPrompt(settingsDeps),
   });
 
   // 浏览器宿主：WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
@@ -290,7 +312,7 @@ app.whenReady().then(async () => {
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({ ...deps, platform });
   registerAgentsDomain({ ...deps, agents });
-  registerSettingsDomain({ ...deps, platform, configDir: dirs.configDir, env: process.env });
+  registerSettingsDomain(settingsDeps);
   registerChatDomain({ ...deps, chatService, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost });
   registerWindowDomain({

@@ -37,6 +37,11 @@ export type TrustedHandler = (event: unknown, payload: unknown) => Promise<unkno
 
 const registry = new Map<string, { handler: TrustedHandler }>();
 
+/** 仅供测试：清空注册表（模块级单例，多测试文件/用例需要干净起点）。生产代码不得调用。 */
+export function __resetHandlerRegistryForTests(): void {
+  registry.clear();
+}
+
 /** 供守卫测试：manifest 每条通道必有 handler；registry 中通道必在 manifest（无死码）。 */
 export function getHandlerRegistry(): ReadonlyMap<string, { handler: TrustedHandler }> {
   return registry;

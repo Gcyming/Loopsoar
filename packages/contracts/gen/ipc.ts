@@ -28,6 +28,15 @@ export const IPC_CHANNELS = {
   "window:maximize": { domain: "window", method: "maximize", sensitive: true, hasRequest: false },
   "window:close": { domain: "window", method: "close", sensitive: true, hasRequest: false },
   "window:state": { domain: "window", method: "state", sensitive: true, hasRequest: false },
+  "settings:getPreferences": { domain: "settings", method: "getPreferences", sensitive: true, hasRequest: false },
+  "settings:setPreferences": { domain: "settings", method: "setPreferences", sensitive: true, hasRequest: true },
+  "settings:getPermissions": { domain: "settings", method: "getPermissions", sensitive: true, hasRequest: false },
+  "settings:setPermissions": { domain: "settings", method: "setPermissions", sensitive: true, hasRequest: true },
+  "settings:testProvider": { domain: "settings", method: "testProvider", sensitive: true, hasRequest: true },
+  "settings:getRules": { domain: "settings", method: "getRules", sensitive: true, hasRequest: false },
+  "settings:setRules": { domain: "settings", method: "setRules", sensitive: true, hasRequest: true },
+  "settings:diagnostics": { domain: "settings", method: "diagnostics", sensitive: true, hasRequest: false },
+  "settings:about": { domain: "settings", method: "about", sensitive: true, hasRequest: false },
 } as const;
 
 /**
@@ -79,7 +88,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "agents": ["list"],
     "runtime": ["version", "status"],
     "browser": ["navigate", "screenshot", "snapshot"],
-    "settings": ["getProvider", "setProvider"],
+    "settings": ["getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "testProvider", "getRules", "setRules", "diagnostics", "about"],
     "window": ["minimize", "maximize", "close", "state"]
     },
   };

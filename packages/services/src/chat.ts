@@ -41,6 +41,8 @@ export interface ChatServiceOptions {
   sandbox?: SandboxManager;
   /** Agent 工具白名单（undefined=全部；[]=全禁；非空=仅名单内；先于沙箱判定）。 */
   toolAllowlist?: string[];
+  /** 规则文件注入（AGENTS.md 合并文本）；每次 stream 时调用，保存规则后即时生效。 */
+  getSystemRules?: () => string;
   agent?: ChatAgent;
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
@@ -252,8 +254,13 @@ export class ChatService {
       role: agent?.role ?? "本地 AI Agent",
       volatile: "",
     });
+    // 规则文件（AGENTS.md）作为稳定段的补充：每次调用重新取，设置面板保存后即时生效
+    const rulesText = this.opts.getSystemRules?.() ?? "";
+    const stableContent = rulesText.trim()
+      ? `${segments.stable}\n\n${rulesText}`
+      : segments.stable;
     const messages = [
-      { role: "system" as const, content: segments.stable },
+      { role: "system" as const, content: stableContent },
       { role: "user" as const, content: `${input.message}\n\n${segments.volatile}` },
     ];
 
