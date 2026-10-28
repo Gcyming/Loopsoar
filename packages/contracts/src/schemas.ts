@@ -11,6 +11,9 @@ export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enu
 export const FileReadSchema = z.object({ path: z.string(), offset: z.number().int().nonnegative().optional(), limit: z.number().int().positive().optional() });
 export const FileWriteSchema = z.object({ path: z.string(), content: z.string() });
 export const BrowserNavigateSchema = z.object({ url: z.string() });
+export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
+export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
+export const BrowserSetOverlaySchema = z.object({ open: z.boolean() });
 export const BrowserScreenshotSchema = z.object({ selector: z.string().optional() });
 
 /**
@@ -34,6 +37,12 @@ export const PreferencesSchema = z.object({
   searchEngine: z.enum(["bing", "google", "duckduckgo"]),
   /** 下载目录（空 = 用户下载文件夹）。 */
   downloadDir: z.string().max(1024).optional(),
+  /** 工作区根（空 = 启动目录）；影响规则查找与沙箱根。 */
+  workspaceRoot: z.string().max(1024).optional(),
+  /** 记忆库文件路径（空 = 默认数据目录下 memory/memory.json）。 */
+  memoryStorePath: z.string().max(1024).optional(),
+  /** 会话结束时自动从对话抽取记忆。 */
+  memoryAutoCapture: z.boolean(),
 });
 
 /** 权限策略（设置 · 权限）：工具类别的默认决策。 */
@@ -49,15 +58,37 @@ export const PermissionsSchema = z.object({
 });
 
 /** 规则文件（设置 · 规则）：AGENTS.md 约定（项目根逐级向上 + 全局规则）。 */
-export const RulesFileSchema = z.object({
+/** 规则条目（逐条增删，替代原先的「两个大文本框」）。 */
+export const RuleEntrySchema = z.object({
+  /** 全局规则的文件名（AGENTS.md 风格）；项目规则固定名。新建时缺省。 */
+  name: z.string().min(1).max(64).optional(),
+  scope: z.enum(["global", "workspace"]),
   enabled: z.boolean(),
   content: z.string().max(32768),
 });
 
 export const RulesPayloadSchema = z.object({
-  global: RulesFileSchema,
-  workspace: RulesFileSchema,
+  /** 当前全量条目（upsert 语义：按 name+scope 匹配）。 */
+  entries: z.array(RuleEntrySchema).max(30),
+  /** 需要删除的条目键（scope:name）。 */
+  deleted: z.array(z.string().max(80)).max(30).optional(),
 });
+
+/** 记忆条目（设置 · 记忆 / 自动汇总）。 */
+export const MemoryAddSchema = z.object({
+  content: z.string().min(1).max(5000),
+  category: z.string().min(1).max(40),
+  tags: z.array(z.string().max(24)).max(10).optional(),
+  importance: z.number().int().min(1).max(10).optional(),
+});
+export const MemoryUpdateSchema = z.object({
+  id: z.string().min(1),
+  content: z.string().min(1).max(5000).optional(),
+  category: z.string().min(1).max(40).optional(),
+  tags: z.array(z.string().max(24)).max(10).optional(),
+  importance: z.number().int().min(1).max(10).optional(),
+});
+export const MemoryDeleteSchema = z.object({ id: z.string().min(1) });
 
 /**
  * ChannelBinding defines the structure of a communication channel.
@@ -148,6 +179,78 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
   "browser:snapshot": {
     domain: "browser",
     method: "snapshot",
+    request: null,
+    sensitive: true,
+  },
+  "browser:newTab": {
+    domain: "browser",
+    method: "newTab",
+    request: BrowserNewTabSchema,
+    sensitive: true,
+  },
+  "browser:closeTab": {
+    domain: "browser",
+    method: "closeTab",
+    request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:selectTab": {
+    domain: "browser",
+    method: "selectTab",
+    request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:listTabs": {
+    domain: "browser",
+    method: "listTabs",
+    request: null,
+    sensitive: true,
+  },
+  "browser:setOverlay": {
+    domain: "browser",
+    method: "setOverlay",
+    request: BrowserSetOverlaySchema,
+    sensitive: true,
+  },
+  "memory:list": {
+    domain: "memory",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "memory:add": {
+    domain: "memory",
+    method: "add",
+    request: MemoryAddSchema,
+    sensitive: true,
+  },
+  "memory:update": {
+    domain: "memory",
+    method: "update",
+    request: MemoryUpdateSchema,
+    sensitive: true,
+  },
+  "memory:delete": {
+    domain: "memory",
+    method: "delete",
+    request: MemoryDeleteSchema,
+    sensitive: true,
+  },
+  "memory:stats": {
+    domain: "memory",
+    method: "stats",
+    request: null,
+    sensitive: true,
+  },
+  "memory:clear": {
+    domain: "memory",
+    method: "clear",
+    request: null,
+    sensitive: true,
+  },
+  "chat:history": {
+    domain: "chat",
+    method: "history",
     request: null,
     sensitive: true,
   },
@@ -257,6 +360,8 @@ export const EVENTS = [
   "chat:stream:heartbeat",
   "perm:request",
   "boot:ready",
+  "browser:tabs",
+  "memory:updated",
 ] as const;
 
 /**

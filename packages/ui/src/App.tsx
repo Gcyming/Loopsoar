@@ -7,6 +7,7 @@ import type {
   LoopsoarAPI,
   Preferences,
   ProviderStatus,
+  TabState,
 } from "./types.js";
 import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
 import { Icon } from "./Icon.js";
@@ -143,6 +144,7 @@ export default function App(): React.JSX.Element {
     return new URLSearchParams(location.search).get("e2e") === "settings";
   });
   const [preferences, setPreferences] = useState<Preferences | null>(null);
+  const [tabs, setTabs] = useState<TabState[]>([]);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
@@ -161,7 +163,27 @@ export default function App(): React.JSX.Element {
         api.window.state(),
         api.settings.getPreferences(),
       ]);
-      if (prefsResult.status === "fulfilled") setPreferences(prefsResult.value.preferences);
+      if (prefsResult.status === "fulfilled") {
+        const prefs = prefsResult.value.preferences;
+        setPreferences(prefs);
+        // 恢复上次会话（设置 · 通用 · 恢复上次会话）
+        if (prefs.restoreSession) {
+          const history = await api.chat.history().catch(() => null);
+          if (history?.session?.messages?.length) {
+            sessionIdRef.current = history.session.sessionId;
+            setMessages(
+              history.session.messages.map((m) => ({
+                id: nextId(m.role),
+                role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+                text: m.text,
+                status: "done" as const,
+              })),
+            );
+          }
+        }
+      }
+      const tabsResult = await api.browser.listTabs().catch(() => null);
+      if (tabsResult) setTabs(tabsResult.tabs);
       if (bootResult.status === "fulfilled") setBoot(bootResult.value);
       if (providerResult.status === "fulfilled") setProvider(providerResult.value);
       if (agentsResult.status === "fulfilled") setAgents(agentsResult.value.agents);
@@ -219,6 +241,13 @@ export default function App(): React.JSX.Element {
         pushTransient("system", String((payload as { content?: string }).content ?? ""));
       }),
       api.on("chat:stream:heartbeat", () => {}),
+      api.on("browser:tabs", (payload) => {
+        const p = payload as { tabs?: TabState[] };
+        if (Array.isArray(p.tabs)) setTabs(p.tabs);
+      }),
+      api.on("memory:updated", () => {
+        /* 记忆条目在设置面板中查看；主界面保持安静 */
+      }),
       api.on("chat:stream:done", (payload) => {
         const p = payload as { content?: string };
         activeAssistantRef.current = null;
@@ -282,12 +311,48 @@ export default function App(): React.JSX.Element {
           setCurrentUrl(result.url ?? normalized.url);
           setAddress(result.url ?? normalized.url);
           setNotice("导航完成");
+          void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         } else {
           setNotice(`导航失败：${result.error ?? "未知"}`);
         }
       });
     },
     [address, api],
+  );
+
+  const newTab = useCallback((): void => {
+    if (!api) return;
+    void api.browser.newTab({}).then((r) => {
+      if (r.ok) {
+        setNotice("已新建标签页");
+        void api.browser.listTabs().then((t) => setTabs(t.tabs)).catch(() => {});
+      }
+    });
+  }, [api]);
+
+  const selectTab = useCallback(
+    (tabId: string): void => {
+      if (!api) return;
+      void api.browser.selectTab({ tabId }).then(() => {
+        void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
+        const tab = tabs.find((t) => t.id === tabId);
+        if (tab?.url) {
+          setAddress(tab.url);
+          setCurrentUrl(tab.url);
+        }
+      });
+    },
+    [api, tabs],
+  );
+
+  const closeTab = useCallback(
+    (tabId: string): void => {
+      if (!api) return;
+      void api.browser.closeTab({ tabId }).then(() => {
+        void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
+      });
+    },
+    [api],
   );
 
   const snapshot = useCallback((): void => {
@@ -300,6 +365,15 @@ export default function App(): React.JSX.Element {
       );
     });
   }, [api]);
+
+  // 修复遮挡：应用内浮层（设置）打开时隐藏原生 WebContentsView
+  useEffect(() => {
+    if (!api) return;
+    void api.browser.setOverlay({ open: settingsOpen }).catch(() => {});
+    return () => {
+      void api.browser.setOverlay({ open: false }).catch(() => {});
+    };
+  }, [api, settingsOpen]);
 
   // 动效强度偏好 → 根节点 data 属性（CSS 里统一降级，避免各处手写判断）
   useEffect(() => {
@@ -370,6 +444,39 @@ export default function App(): React.JSX.Element {
           </button>
         </div>
       </header>
+
+      <div style={{ ...styles.tabBar, height: LAYOUT.TAB_BAR_HEIGHT }}>
+        {tabs.length === 0 ? (
+          <span style={styles.tabEmpty}>暂无标签 — 输入地址导航，或点 + 新建</span>
+        ) : (
+          tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={`tab-item${tab.active ? " is-active" : ""}`}
+              style={{ ...styles.tab, ...(tab.active ? styles.tabActive : {}) }}
+              onClick={() => selectTab(tab.id)}
+              title={tab.url || tab.title}
+            >
+              <span style={styles.tabTitle}>{tab.title || "新标签页"}</span>
+              <button
+                type="button"
+                className="icon-btn tab-close"
+                title="关闭标签"
+                style={styles.tabClose}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTab(tab.id);
+                }}
+              >
+                <Icon name="close" size={10} />
+              </button>
+            </div>
+          ))
+        )}
+        <button type="button" className="icon-btn" title="新建标签页" style={styles.tabAdd} onClick={newTab}>
+          <Icon name="plus" size={13} />
+        </button>
+      </div>
 
       <div style={styles.body}>
         <section style={styles.browserPane}>
@@ -609,6 +716,42 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
   },
+  tabBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "0 8px",
+    background: BRAND.inkRaised,
+    borderBottom: `1px solid ${BRAND.border}`,
+    flexShrink: 0,
+    overflowX: "auto",
+    overflowY: "hidden",
+  },
+  tabEmpty: { fontSize: 11, color: BRAND.linenFaint, paddingLeft: 4 },
+  tab: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: 220,
+    height: 26,
+    padding: "0 6px 0 10px",
+    borderRadius: 7,
+    border: `1px solid transparent`,
+    color: BRAND.linenMuted,
+    fontSize: 11.5,
+    cursor: "pointer",
+    flex: "0 1 auto",
+    minWidth: 0,
+    transition: "background 120ms, color 120ms, border-color 120ms",
+  },
+  tabActive: {
+    background: BRAND.inkPanel,
+    borderColor: BRAND.borderStrong,
+    color: BRAND.linen,
+  },
+  tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  tabClose: { width: 18, height: 18 },
+  tabAdd: { width: 24, height: 24, flex: "none" },
   body: { display: "flex", flex: 1, minHeight: 0 },
   browserPane: {
     flex: 1,

@@ -12,6 +12,8 @@ import { registerBrowserDomain } from "../../packages/shell/src/main/domains/bro
 import { registerSettingsDomain } from "../../packages/shell/src/main/domains/settings.ts";
 import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
 import { registerWindowDomain } from "../../packages/shell/src/main/domains/window.ts";
+import { registerMemoryDomain } from "../../packages/shell/src/main/domains/memory.ts";
+import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
@@ -55,6 +57,22 @@ function assemble(): void {
     workspaceRoot: "C:/tmp/loopsoar-workspace-test",
     env: {},
     appVersion: "0.0.0-test",
+  });
+  registerMemoryDomain({
+    ...deps,
+    memory: {
+      list: () => [],
+      stats: () => ({ total: 0, active: 0, archived: 0, links: 0, totalAccess: 0, byCategory: {} }),
+      get: () => null,
+      filePath: "C:/tmp/loopsoar-memory.json",
+      add: async () => ({}),
+      update: async () => null,
+      remove: async () => true,
+      clear: async () => {},
+      captureFromTurn: async () => ({ added: 0, merged: 0, deduped: 0 }),
+      recallPrompt: () => "",
+    } as never,
+    push: () => {},
   });
   registerWindowDomain({
     ...deps,

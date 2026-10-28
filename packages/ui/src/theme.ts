@@ -23,3 +23,29 @@ export const BRAND = {
 /** Electron 自定义标题栏拖动区域（非标准 CSS 属性，需断言类型）。 */
 export const DRAG_REGION = { WebkitAppRegion: "drag" } as unknown as React.CSSProperties;
 export const NO_DRAG_REGION = { WebkitAppRegion: "no-drag" } as unknown as React.CSSProperties;
+
+/** 小徽标样式（设置面板等复用）。 */
+export const BADGE: Record<"ok" | "warn" | "neutral", React.CSSProperties> = {
+  ok: {
+    fontSize: 10.5,
+    padding: "2px 7px",
+    borderRadius: 999,
+    background: "rgba(94,234,212,0.14)",
+    color: "#5eead4",
+  },
+  warn: {
+    fontSize: 10.5,
+    padding: "2px 7px",
+    borderRadius: 999,
+    background: "rgba(200,118,60,0.18)",
+    color: "#d98a4f",
+  },
+  neutral: {
+    fontSize: 10,
+    padding: "1px 6px",
+    borderRadius: 999,
+    background: "#111318",
+    border: "1px solid #262a31",
+    color: "#a8a29a",
+  },
+};

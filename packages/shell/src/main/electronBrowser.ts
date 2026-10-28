@@ -1,24 +1,31 @@
 /**
  * Electron 侧 BrowserHost 装配。
- * 允许 import electron 的第二个文件（第一个是 main/index.ts）：理由——
- *   Electron 的 WebContentsView 构造与窗口挂载无法在无 electron 环境表达，
- *   若全部塞进 index.ts 会让入口超过可维护规模；这里只做「electron API → 依赖注入」的薄适配。
+ * 允许 import electron 的文件之一（另一个是 main/index.ts）：只做「electron API → 依赖注入」的薄适配。
+ * 修复 ①：webContents.setWindowOpenHandler 把 target=_blank/window.open 转为应用内新标签，
+ *        不再产生 Electron 独立窗口（旧行为看起来像「弹窗」）。
  */
 import { BrowserWindow, WebContentsView } from "electron";
 import { SESSION_PARTITION } from "../shared/brand.js";
 import { BrowserHost, type HostView } from "./browserHost.js";
 
-export function createElectronBrowserHost(getWindow: () => BrowserWindow | null): BrowserHost {
+export function createElectronBrowserHost(
+  getWindow: () => BrowserWindow | null,
+  openInNewTab: (url: string) => void,
+): BrowserHost {
   return new BrowserHost({
     createView: () => {
       const view = new WebContentsView({
         webPreferences: {
-          // 渲染内容同样走沙箱 + 上下文隔离；浏览器内容不暴露 Node
           sandbox: true,
           contextIsolation: true,
           nodeIntegration: false,
           partition: SESSION_PARTITION,
         },
+      });
+      view.webContents.setWindowOpenHandler(({ url }) => {
+        // 在应用内开新标签，拒绝 Electron 默认新建窗口
+        openInNewTab(url);
+        return { action: "deny" };
       });
       return view as unknown as HostView;
     },
@@ -32,14 +39,19 @@ export function createElectronBrowserHost(getWindow: () => BrowserWindow | null)
       try {
         win.contentView.removeChildView(view as unknown as WebContentsView);
       } catch {
-        // 窗口已销毁时摘除失败可忽略
+        // 窗口已销毁时忽略
       }
     },
     getWindowSize: () => {
       const win = getWindow();
-      if (!win) return { width: 1280, height: 800 };
+      if (!win) return { width: 1360, height: 860 };
       const [width, height] = win.getContentSize();
       return { width, height };
     },
+    onTabsChanged: (tabs) => {
+      const win = getWindow();
+      win?.webContents.send("loopsoar:browser:tabs", { tabs });
+    },
+    openInNewTab,
   });
 }

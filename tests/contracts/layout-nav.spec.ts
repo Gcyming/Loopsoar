@@ -16,16 +16,16 @@ describe("布局契约", () => {
   it("原生浏览器视图避开标题栏/顶栏/侧栏/状态条", () => {
     expect(computeBrowserViewBounds({ width: 1280, height: 800 })).toEqual({
       x: 0,
-      y: 84,
+      y: 118,
       width: 960,
-      height: 684,
+      height: 650,
     });
   });
 
   it("窗口过小时钳制为 0（不产生负尺寸）", () => {
     expect(computeBrowserViewBounds({ width: 100, height: 40 })).toEqual({
       x: 0,
-      y: 84,
+      y: 118,
       width: 0,
       height: 0,
     });

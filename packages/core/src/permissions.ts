@@ -49,3 +49,17 @@ export const PERMISSION_CATEGORIES = [
   { key: "terminal", label: "执行命令", description: "在本机运行命令行程序" },
   { key: "network", label: "网络访问", description: "抓取网页、调用外部服务" },
 ] as const;
+
+/** 工具权限声明 → 权限类别（与 kindOfTool 语义一致：终端/网络优先，写次之，其余读）。 */
+export function categoryForToolPermissions(permissions?: Record<string, unknown>): "read" | "write" | "terminal" | "network" {
+  if (!permissions) return "read";
+  if (permissions.terminal) return "terminal";
+  if (permissions.network) return "network";
+  if (permissions.write) return "write";
+  return "read";
+}
+
+/** 取某类别当前决策（供执行器在沙箱之前先做 Agent 层判定）。 */
+export function decisionFor(permissions: Permissions, category: "read" | "write" | "terminal" | "network"): PermissionDecision {
+  return permissions[category];
+}

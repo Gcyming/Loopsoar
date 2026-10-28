@@ -14,6 +14,11 @@ import { auditClaims, type ClaimFinding } from "loopsoar-core/claims";
 import { SteerBus } from "loopsoar-core/steerBus";
 import type { ToolRegistry } from "loopsoar-core/tools/registry";
 import type { SandboxManager, PermissionKind } from "loopsoar-core/sandbox";
+import {
+  decisionFor,
+  categoryForToolPermissions,
+  type Permissions,
+} from "loopsoar-core/permissions";
 import { StreamChunkBatcher } from "./events.js";
 import type { ChunkBatch, ChunkItem } from "./events.js";
 
@@ -43,6 +48,12 @@ export interface ChatServiceOptions {
   toolAllowlist?: string[];
   /** 规则文件注入（AGENTS.md 合并文本）；每次 stream 时调用，保存规则后即时生效。 */
   getSystemRules?: () => string;
+  /** 记忆召回注入（按用户消息取相关记忆，放进 volatile 段）。 */
+  getMemoryFor?: (userText: string) => string;
+  /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
+  permissionPolicy?: () => Permissions;
+  /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
+  getLlm?: () => LlmClient | undefined;
   agent?: ChatAgent;
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
@@ -134,6 +145,8 @@ export class InternalToolExecutor {
       sandbox?: SandboxManager;
       /** Agent 工具白名单：执行器第一道闸（fail-closed，先于沙箱）。 */
       toolAllowlist?: string[];
+      /** 权限策略（类别默认决策）：第二道闸，先于沙箱。 */
+      permissionPolicy?: () => Permissions;
       permBus: PermRequestBus;
       platform?: LoopsoarPlatform;
       agentId: string;
@@ -157,6 +170,15 @@ export class InternalToolExecutor {
     }
     const tool = registry.get(toolCall.name);
     const kind = kindOfTool(tool?.permissions as Record<string, unknown> | undefined);
+
+    // 第二道闸：用户权限策略（按类别）。allow 直接放行（沙箱硬规则仍会兜底 deny）；
+    // confirm 走确认总线；deny 直接拒绝。
+    const policy = this.opts.permissionPolicy?.();
+    const category = categoryForToolPermissions(tool?.permissions as Record<string, unknown> | undefined);
+    const policyDecision = policy ? decisionFor(policy, category) : null;
+    if (policyDecision === "deny") {
+      return { ok: false, content: `[错误] 权限设置拒绝该类别工具（${category}）`, error: "policy-denied" };
+    }
     const target = typeof (toolCall.args as { path?: unknown })?.path === "string"
       ? String((toolCall.args as { path?: unknown }).path)
       : undefined;
@@ -171,7 +193,8 @@ export class InternalToolExecutor {
     if (decision.action === "deny") {
       return { ok: false, content: `[错误] 权限拒绝：${decision.reason}`, error: decision.reason };
     }
-    if (decision.action === "confirm") {
+    // 沙箱要确认，或策略要求确认 → 统一走一次确认（策略 allow 时跳过沙箱的 confirm）
+    if (decision.action === "confirm" && policyDecision !== "allow") {
       const requestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const result = await permBus.request({ requestId, toolName: toolCall.name, target });
       if (result.choice === "deny") {
@@ -221,7 +244,9 @@ export class ChatService {
 
   /** 主入口：流式对话。 */
   async stream(input: ChatInput, sink?: (item: ChunkItem) => void): Promise<ChatStreamResult> {
-    const { llm, platform, registry, sandbox, agent } = this.opts;
+    const { platform, registry, sandbox, agent } = this.opts;
+    // 惰性 LLM：设置面板保存供应商后可立即生效（无需重启）
+    const llm = this.opts.getLlm?.() ?? this.opts.llm;
     const sessionId = input.sessionId ?? `sess-${Date.now()}`;
     const chunks: ChunkBatch[] = [];
     const batcher = new StreamChunkBatcher((batch) => {
@@ -271,6 +296,7 @@ export class ChatService {
       registry,
       sandbox,
       toolAllowlist: this.opts.toolAllowlist,
+      permissionPolicy: this.opts.permissionPolicy,
       permBus: this.permBus,
       platform,
       agentId: agent?.name ?? "loopsoar",

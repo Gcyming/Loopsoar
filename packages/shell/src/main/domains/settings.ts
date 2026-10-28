@@ -1,13 +1,17 @@
 /**
- * settings 域：设置面板的全部读写（通用 / 权限 / 供应商 / 规则 / 诊断 / 关于）。
+ * settings 域：设置面板的全部读写（通用 / 权限 / 供应商 / 规则 / 记忆路径 / 存储 / 诊断 / 关于）。
+ *
  * 文件布局（%APPDATA%\loopsoar 或 LOOPSOAR_DATA_DIR 覆盖）：
  *   config/provider.json     模型服务商（非机密；apiKey 只走环境变量）
- *   config/preferences.json  通用偏好
+ *   config/preferences.json  通用偏好（含工作区根/记忆库路径/下载目录/自动记忆开关）
  *   config/permissions.json  权限策略
- *   config/rules.json        规则文件启用状态
- *   rules/AGENTS.md          全局规则（用户级，不入 Git）
- *   <workspace>/AGENTS.md    项目规则（随项目仓库共享）
- * 安全纪律：apiKey 永不落盘、永不回传；规则内容注入前经 core/rules 校验与护栏。
+ *   config/rules.json        规则条目启用状态
+ *   rules/*.md               全局规则条目（逐条增删，AGENTS.md 约定）
+ *   <workspace>/AGENTS.md    项目规则（随项目仓库共享；无则兼容 CLAUDE.md）
+ *   memory/memory.json       记忆库（路径可配置）
+ *   sessions/last.json       最近会话
+ *
+ * 安全纪律：apiKey 永不落盘、永不回传；规则注入前经 core/rules 校验与护栏。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -29,6 +33,7 @@ import {
   RULES_FILE_NAME,
   CLAUDE_COMPAT_FILE_NAME,
   RULES_MAX_FILE_BYTES,
+  RULES_MAX_TOTAL_BYTES,
   mergeRules,
   rulesForPrompt,
   validateRuleContent,
@@ -40,13 +45,15 @@ export interface SettingsDeps extends TrustedIpcDeps {
   platform: LoopsoarPlatform;
   dataDir: string;
   configDir: string;
-  /** 工作区根（项目规则的查找起点）。 */
+  /** 工作区根（项目规则的查找起点）；可在设置里改，改后由装配层回调更新。 */
   workspaceRoot: string;
   env: Record<string, string | undefined>;
-  /** 应用版本（由 index.ts 注入，避免本域 import electron）。 */
   appVersion: string;
-  /** 诊断附加信息（由装配层提供，避免设置域反向依赖其它服务）。 */
   diagnosticsExtra?: () => Record<string, unknown>;
+  /** 供应商配置保存后回调（装配层据此重建 LLM 客户端，无需重启）。 */
+  onProviderSaved?: (cfg: ProviderConfig) => void;
+  /** 通用偏好保存后回调（装配层据此切换工作区根/记忆库位置等）。 */
+  onPreferencesSaved?: (prefs: Preferences) => void;
 }
 
 export interface SettingsPaths {
@@ -54,16 +61,24 @@ export interface SettingsPaths {
   preferences: string;
   permissions: string;
   rulesState: string;
-  globalRules: string;
+  globalRulesDir: string;
+  workspaceRules: string;
+  memoryFile: string;
+  sessionsFile: string;
 }
 
-export function settingsPaths(deps: Pick<SettingsDeps, "configDir" | "dataDir">): SettingsPaths {
+export function settingsPaths(
+  deps: Pick<SettingsDeps, "configDir" | "dataDir" | "workspaceRoot">,
+): SettingsPaths {
   return {
     provider: path.join(deps.configDir, "provider.json"),
     preferences: path.join(deps.configDir, "preferences.json"),
     permissions: path.join(deps.configDir, "permissions.json"),
     rulesState: path.join(deps.configDir, "rules.json"),
-    globalRules: path.join(deps.dataDir, "rules", RULES_FILE_NAME),
+    globalRulesDir: path.join(deps.dataDir, "rules"),
+    workspaceRules: path.join(deps.workspaceRoot, RULES_FILE_NAME),
+    memoryFile: path.join(deps.dataDir, "memory", "memory.json"),
+    sessionsFile: path.join(deps.dataDir, "sessions", "last.json"),
   };
 }
 
@@ -81,7 +96,10 @@ function writeJsonFile(file: string, value: unknown): void {
   fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
 }
 
-/** 读取 provider 配置；不存在/损坏 → null（首启即正常态）。 */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 export async function loadProviderConfig(
   _platform: LoopsoarPlatform,
   configDir: string,
@@ -95,83 +113,119 @@ export async function loadProviderConfig(
   }
 }
 
-/** 读取偏好（缺省补默认）。 */
 export function loadPreferences(configDir: string): Preferences {
   return mergePreferences(readJsonFile(path.join(configDir, "preferences.json")) ?? {});
 }
 
-/** 读取权限策略（缺省补默认）。 */
 export function loadPermissions(configDir: string): Permissions {
   return mergePermissions(readJsonFile(path.join(configDir, "permissions.json")) ?? {});
 }
 
-interface RulesState {
-  globalEnabled: boolean;
-  workspaceEnabled: boolean;
+/* ───────────────────────── 规则条目（逐条增删） ───────────────────────── */
+
+export interface RuleEntryState {
+  id: string;
+  name: string;
+  scope: "global" | "workspace";
+  enabled: boolean;
+  path: string;
+  bytes: number;
+  content: string;
 }
 
-function loadRulesState(configDir: string): RulesState {
-  const raw = readJsonFile(path.join(configDir, "rules.json")) as Partial<RulesState> | null;
-  return { globalEnabled: raw?.globalEnabled ?? true, workspaceEnabled: raw?.workspaceEnabled ?? true };
+interface RulesStateFile {
+  disabled: string[];
 }
 
-function readTextIfExists(file: string): { exists: boolean; content: string } {
-  try {
-    if (!fs.existsSync(file)) return { exists: false, content: "" };
-    return { exists: true, content: fs.readFileSync(file, "utf8") };
-  } catch {
-    return { exists: false, content: "" };
-  }
+function loadRulesState(configDir: string): RulesStateFile {
+  const raw = readJsonFile(path.join(configDir, "rules.json")) as Partial<RulesStateFile> | null;
+  return { disabled: Array.isArray(raw?.disabled) ? raw!.disabled : [] };
 }
 
-/** 规则文件现场：全局（数据目录）+ 项目（工作区根，缺失时兼容 CLAUDE.md）。 */
-export function readRulesSnapshot(deps: SettingsDeps): {
-  global: { path: string; exists: boolean; enabled: boolean; content: string; bytes: number };
-  workspace: { path: string; exists: boolean; enabled: boolean; content: string; bytes: number };
-  merged: ReturnType<typeof mergeRules>;
-} {
+/** 全局规则文件名安全校验（防路径穿越；允许中文名）。 */
+export const RULE_FILE_RE = /^[A-Za-z0-9\u4e00-\u9fa5._-]{1,56}\.md$/;
+
+export function readRuleEntries(deps: SettingsDeps): RuleEntryState[] {
   const paths = settingsPaths(deps);
   const state = loadRulesState(deps.configDir);
+  const entries: RuleEntryState[] = [];
 
-  const globalFile = readTextIfExists(paths.globalRules);
-  const workspaceAgents = path.join(deps.workspaceRoot, RULES_FILE_NAME);
-  const workspaceClaude = path.join(deps.workspaceRoot, CLAUDE_COMPAT_FILE_NAME);
-  const workspaceFile = fs.existsSync(workspaceAgents)
-    ? { path: workspaceAgents, ...readTextIfExists(workspaceAgents) }
-    : { path: workspaceClaude, ...readTextIfExists(workspaceClaude) };
+  // 全局规则目录：每个 *.md 一条
+  try {
+    if (fs.existsSync(paths.globalRulesDir)) {
+      const files = fs
+        .readdirSync(paths.globalRulesDir)
+        .filter((f) => f.endsWith(".md"))
+        .sort();
+      for (const file of files.slice(0, 30)) {
+        const full = path.join(paths.globalRulesDir, file);
+        let content = "";
+        try {
+          content = fs.readFileSync(full, "utf8");
+        } catch {
+          content = "";
+        }
+        const id = `global:${file}`;
+        entries.push({
+          id,
+          name: file,
+          scope: "global",
+          enabled: !state.disabled.includes(id),
+          path: full,
+          bytes: byteLength(content),
+          content,
+        });
+      }
+    }
+  } catch {
+    // 目录不可读时返回空列表（UI 可新建）
+  }
 
-  const sources: RuleSource[] = [
-    { scope: "global", path: paths.globalRules, enabled: state.globalEnabled, content: globalFile.content },
-    { scope: "workspace", path: workspaceFile.path, enabled: state.workspaceEnabled, content: workspaceFile.content },
-  ];
-  const merged = mergeRules(sources);
+  // 项目规则：AGENTS.md（无则 CLAUDE.md 兼容）
+  const agents = paths.workspaceRules;
+  const claude = path.join(deps.workspaceRoot, CLAUDE_COMPAT_FILE_NAME);
+  const wsFile = fs.existsSync(agents) ? agents : fs.existsSync(claude) ? claude : agents;
+  let wsContent = "";
+  try {
+    if (fs.existsSync(wsFile)) wsContent = fs.readFileSync(wsFile, "utf8");
+  } catch {
+    wsContent = "";
+  }
+  const wsId = `workspace:${RULES_FILE_NAME}`;
+  entries.push({
+    id: wsId,
+    name:
+      fs.existsSync(wsFile) && wsFile.endsWith(CLAUDE_COMPAT_FILE_NAME)
+        ? CLAUDE_COMPAT_FILE_NAME
+        : RULES_FILE_NAME,
+    scope: "workspace",
+    enabled: !state.disabled.includes(wsId),
+    path: wsFile,
+    bytes: byteLength(wsContent),
+    content: wsContent,
+  });
 
-  const bytes = (s: string): number => new TextEncoder().encode(s).length;
-  return {
-    global: {
-      path: paths.globalRules,
-      exists: globalFile.exists,
-      enabled: state.globalEnabled,
-      content: globalFile.content,
-      bytes: bytes(globalFile.content),
-    },
-    workspace: {
-      path: workspaceFile.path,
-      exists: workspaceFile.exists,
-      enabled: state.workspaceEnabled,
-      content: workspaceFile.content,
-      bytes: bytes(workspaceFile.content),
-    },
-    merged,
-  };
+  return entries;
 }
 
-/** 供 ChatService 注入的规则文本（装配层启动/保存后调用）。 */
+/** 规则条目 → mergeRules 输入（全局在前，项目在后）。 */
+export function ruleSourcesFromEntries(entries: RuleEntryState[]): RuleSource[] {
+  return entries
+    .map((entry) => ({
+      scope: entry.scope,
+      path: entry.path,
+      enabled: entry.enabled,
+      content: entry.content,
+    }))
+    .sort((a, b) => (a.scope === b.scope ? 0 : a.scope === "global" ? -1 : 1));
+}
+
 export function currentRulesPrompt(deps: SettingsDeps): string {
-  return rulesForPrompt(readRulesSnapshot(deps).merged);
+  return rulesForPrompt(mergeRules(ruleSourcesFromEntries(readRuleEntries(deps))));
 }
 
-/** 供应商连通性测试：最小请求（1 token），8s 超时；不打印/不回传密钥。 */
+/* ───────────────────────── 供应商连通性测试 ───────────────────────── */
+
 async function testProvider(
   deps: SettingsDeps,
   cfg: ProviderConfig,
@@ -220,10 +274,12 @@ async function testProvider(
   }
 }
 
+/* ───────────────────────────────── 注册 ───────────────────────────────── */
+
 export function registerSettingsDomain(deps: SettingsDeps): void {
   const paths = settingsPaths(deps);
 
-  // ── 供应商 ────────────────────────────────────────────────
+  // ── 供应商 ──
   handleTrusted(deps, "settings:getProvider", async () => {
     const cfg = await loadProviderConfig(deps.platform, deps.configDir);
     const apiKey = resolveApiKeyFromEnv(deps.env);
@@ -242,6 +298,8 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:setProvider", async (payload) => {
     const cfg = validateProviderConfig(payload);
     writeJsonFile(paths.provider, cfg);
+    // 立即重建 LLM 客户端（无需重启即可对话）
+    deps.onProviderSaved?.(cfg);
     const apiKey = resolveApiKeyFromEnv(deps.env);
     const usability = providerUsability(cfg, apiKey);
     return { saved: true, config: cfg, usable: usability.usable, reason: usability.reason ?? null };
@@ -252,20 +310,29 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     return testProvider(deps, cfg);
   });
 
-  // ── 通用偏好 ─────────────────────────────────────────────
+  // ── 通用偏好 / 存储位置 ──
   handleTrusted(deps, "settings:getPreferences", () => ({
     preferences: loadPreferences(deps.configDir),
     defaults: DEFAULT_PREFERENCES,
     searchUrlExample: searchUrlFor("bing", "loopsoar"),
+    locations: {
+      dataDir: deps.dataDir,
+      configDir: deps.configDir,
+      rulesDir: paths.globalRulesDir,
+      sessionsFile: paths.sessionsFile,
+      defaultMemoryFile: paths.memoryFile,
+      workspaceRoot: deps.workspaceRoot,
+    },
   }));
 
   handleTrusted(deps, "settings:setPreferences", (payload) => {
     const preferences = mergePreferences(payload);
     writeJsonFile(paths.preferences, preferences);
+    deps.onPreferencesSaved?.(preferences);
     return { saved: true, preferences };
   });
 
-  // ── 权限 ─────────────────────────────────────────────────
+  // ── 权限 ──
   handleTrusted(deps, "settings:getPermissions", () => ({
     permissions: loadPermissions(deps.configDir),
     categories: PERMISSION_CATEGORIES,
@@ -278,14 +345,14 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     return { saved: true, permissions };
   });
 
-  // ── 规则（AGENTS.md） ────────────────────────────────────
+  // ── 规则（逐条增删） ──
   handleTrusted(deps, "settings:getRules", () => {
-    const snapshot = readRulesSnapshot(deps);
+    const entries = readRuleEntries(deps);
     return {
       maxFileBytes: RULES_MAX_FILE_BYTES,
-      global: snapshot.global,
-      workspace: snapshot.workspace,
-      merged: snapshot.merged,
+      maxTotalBytes: RULES_MAX_TOTAL_BYTES,
+      entries,
+      merged: mergeRules(ruleSourcesFromEntries(entries)),
       claudeCompat: fs.existsSync(path.join(deps.workspaceRoot, CLAUDE_COMPAT_FILE_NAME)),
       guardrail: rulesForPrompt({ text: "…", included: [], skipped: [], totalBytes: 0 }).split("\n")[0],
     };
@@ -293,45 +360,99 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
 
   handleTrusted(deps, "settings:setRules", (payload) => {
     const data = payload as {
-      global: { enabled: boolean; content: string };
-      workspace: { enabled: boolean; content: string };
+      entries: { name?: string; scope: "global" | "workspace"; enabled: boolean; content: string }[];
+      deleted?: string[];
     };
-    // 逐文件校验（大小/二进制），任一非法整体拒绝（不写入半截规则）
-    const errors = [
-      ...validateRuleContent(data.global.content).map((e) => `全局规则：${e}`),
-      ...validateRuleContent(data.workspace.content).map((e) => `项目规则：${e}`),
-    ];
+    const state = loadRulesState(deps.configDir);
+    const disabled = new Set(state.disabled);
+    const errors: string[] = [];
+    let totalBytes = 0;
+    const pendingWrites: { file: string; content: string }[] = [];
+
+    for (const entry of data.entries ?? []) {
+      const content = entry.content ?? "";
+      const entryErrors = validateRuleContent(content).map(
+        (e) => `${entry.scope === "global" ? "全局规则" : "项目规则"}「${entry.name ?? RULES_FILE_NAME}」：${e}`,
+      );
+      errors.push(...entryErrors);
+      totalBytes += byteLength(content);
+
+      let file: string;
+      let name: string;
+      if (entry.scope === "global") {
+        name = (entry.name ?? "").trim();
+        if (!RULE_FILE_RE.test(name)) {
+          errors.push(`全局规则文件名「${name || "(空)"}」不合法（仅字母数字中文 . _ -，需 .md 结尾）`);
+          continue;
+        }
+        file = path.join(paths.globalRulesDir, name);
+      } else {
+        name = RULES_FILE_NAME;
+        file = paths.workspaceRules;
+      }
+      const id = `${entry.scope}:${name}`;
+      if (entry.enabled) disabled.delete(id);
+      else disabled.add(id);
+      pendingWrites.push({ file, content });
+    }
+
+    // 删除条目（workspace 的删除 = 清空内容，保留文件；global 直接删文件）
+    for (const key of data.deleted ?? []) {
+      const [scope, ...rest] = key.split(":");
+      const name = rest.join(":");
+      if (scope === "global" && RULE_FILE_RE.test(name)) {
+        const file = path.join(paths.globalRulesDir, name);
+        try {
+          if (fs.existsSync(file)) fs.unlinkSync(file);
+        } catch {
+          errors.push(`删除全局规则「${name}」失败`);
+        }
+      } else if (scope === "workspace") {
+        pendingWrites.push({ file: paths.workspaceRules, content: "" });
+      }
+      disabled.delete(key);
+    }
+
+    if (totalBytes > RULES_MAX_TOTAL_BYTES) {
+      errors.push(`规则总量超限：${totalBytes} 字节（上限 ${RULES_MAX_TOTAL_BYTES} 字节）`);
+    }
     if (errors.length > 0) {
       throw new Error(`规则保存被拒绝：${errors.join("；")}`);
     }
-    fs.mkdirSync(path.dirname(paths.globalRules), { recursive: true });
-    fs.writeFileSync(paths.globalRules, data.global.content, "utf8");
-    const workspaceFile = path.join(deps.workspaceRoot, RULES_FILE_NAME);
-    fs.writeFileSync(workspaceFile, data.workspace.content, "utf8");
-    writeJsonFile(paths.rulesState, {
-      globalEnabled: data.global.enabled,
-      workspaceEnabled: data.workspace.enabled,
-    });
-    const snapshot = readRulesSnapshot(deps);
-    return { saved: true, merged: snapshot.merged };
+
+    fs.mkdirSync(paths.globalRulesDir, { recursive: true });
+    for (const write of pendingWrites) {
+      fs.mkdirSync(path.dirname(write.file), { recursive: true });
+      fs.writeFileSync(write.file, write.content, "utf8");
+    }
+    writeJsonFile(paths.rulesState, { disabled: [...disabled] });
+
+    const entries = readRuleEntries(deps);
+    return { saved: true, entries, merged: mergeRules(ruleSourcesFromEntries(entries)) };
   });
 
-  // ── 诊断 / 关于 ──────────────────────────────────────────
-  handleTrusted(deps, "settings:diagnostics", () => ({
-    paths: {
-      dataDir: deps.dataDir,
-      configDir: deps.configDir,
-      rulesDir: path.dirname(paths.globalRules),
-      workspaceRoot: deps.workspaceRoot,
-    },
-    versions: {
-      app: deps.appVersion,
-      electron: process.versions.electron ?? "—",
-      chrome: process.versions.chrome ?? "—",
-      node: process.versions.node,
-    },
-    extra: deps.diagnosticsExtra?.() ?? {},
-  }));
+  // ── 诊断 / 关于 ──
+  handleTrusted(deps, "settings:diagnostics", () => {
+    const prefs = loadPreferences(deps.configDir);
+    return {
+      paths: {
+        dataDir: deps.dataDir,
+        configDir: deps.configDir,
+        rulesDir: paths.globalRulesDir,
+        workspaceRoot: prefs.workspaceRoot || deps.workspaceRoot,
+        downloadDir: prefs.downloadDir || "(系统下载文件夹)",
+        memoryFile: prefs.memoryStorePath || paths.memoryFile,
+        sessionsFile: paths.sessionsFile,
+      },
+      versions: {
+        app: deps.appVersion,
+        electron: process.versions.electron ?? "—",
+        chrome: process.versions.chrome ?? "—",
+        node: process.versions.node,
+      },
+      extra: deps.diagnosticsExtra?.() ?? {},
+    };
+  });
 
   handleTrusted(deps, "settings:about", () => ({
     name: "Loopsoar",

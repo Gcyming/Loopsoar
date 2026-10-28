@@ -14,6 +14,9 @@ export const PreferencesSchema = z.object({
   restoreSession: z.boolean(),
   searchEngine: z.enum(["bing", "google", "duckduckgo"]),
   downloadDir: z.string().max(1024).optional(),
+  workspaceRoot: z.string().max(1024).optional(),
+  memoryStorePath: z.string().max(1024).optional(),
+  memoryAutoCapture: z.boolean(),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -24,6 +27,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   restoreSession: true,
   searchEngine: "bing",
   downloadDir: "",
+  workspaceRoot: "",
+  memoryStorePath: "",
+  memoryAutoCapture: true,
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
@@ -34,7 +40,12 @@ export function mergePreferences(raw: unknown): Preferences {
     const detail = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("；");
     throw new Error(`偏好配置非法：${detail}`);
   }
-  return { ...parsed.data, downloadDir: parsed.data.downloadDir ?? "" };
+  return {
+    ...parsed.data,
+    downloadDir: parsed.data.downloadDir ?? "",
+    workspaceRoot: parsed.data.workspaceRoot ?? "",
+    memoryStorePath: parsed.data.memoryStorePath ?? "",
+  };
 }
 
 /** 搜索引擎 → omnibox 搜索 URL 模板（非 URL 输入时使用）。 */

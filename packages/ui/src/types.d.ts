@@ -44,6 +44,9 @@ export interface Preferences {
   restoreSession: boolean;
   searchEngine: "bing" | "google" | "duckduckgo";
   downloadDir?: string;
+  workspaceRoot?: string;
+  memoryStorePath?: string;
+  memoryAutoCapture: boolean;
 }
 
 export interface PermissionCategory {
@@ -65,18 +68,20 @@ export interface PermissionsState {
   workspaceRoot: string;
 }
 
-export interface RuleFile {
-  path: string;
-  exists: boolean;
+export interface RuleEntry {
+  id: string;
+  name: string;
+  scope: "global" | "workspace";
   enabled: boolean;
-  content: string;
+  path: string;
   bytes: number;
+  content: string;
 }
 
 export interface RulesSnapshot {
   maxFileBytes: number;
-  global: RuleFile;
-  workspace: RuleFile;
+  maxTotalBytes: number;
+  entries: RuleEntry[];
   merged: {
     text: string;
     included: { scope: string; path: string; bytes: number }[];
@@ -85,6 +90,45 @@ export interface RulesSnapshot {
   };
   claudeCompat: boolean;
   guardrail: string;
+}
+
+export interface MemoryFactView {
+  id: string;
+  content: string;
+  category: string;
+  tags: string[];
+  importance: number;
+  source: string;
+  layer: string;
+  repeated: number;
+  confidence: number;
+  links: string[];
+  updatedAt: number;
+}
+
+export interface MemoryStats {
+  total: number;
+  active: number;
+  archived: number;
+  links: number;
+  totalAccess: number;
+  byCategory: Record<string, number>;
+}
+
+export interface MemoryListResult {
+  facts: MemoryFactView[];
+  archivedCount: number;
+  stats: MemoryStats;
+  filePath: string;
+}
+
+export interface LocationsInfo {
+  dataDir: string;
+  configDir: string;
+  rulesDir: string;
+  sessionsFile: string;
+  defaultMemoryFile: string;
+  workspaceRoot: string;
 }
 
 export interface DiagnosticsInfo {
@@ -104,6 +148,19 @@ export interface AboutInfo {
   license: string;
 }
 
+export interface TabState {
+  id: string;
+  url: string;
+  title: string;
+  active: boolean;
+}
+
+export interface ChatHistoryMessage {
+  role: "user" | "assistant";
+  text: string;
+  ts: number;
+}
+
 export type LoopsoarEvent =
   | "chat:stream:chunk"
   | "chat:stream:reasoning"
@@ -113,12 +170,15 @@ export type LoopsoarEvent =
   | "chat:stream:error"
   | "chat:stream:heartbeat"
   | "perm:request"
-  | "boot:ready";
+  | "boot:ready"
+  | "browser:tabs"
+  | "memory:updated";
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
     stream(payload: { message: string; sessionId?: string }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId: string }): Promise<{ stopped: boolean }>;
+    history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
   };
   perm: LoopsoarDomain;
   file: LoopsoarDomain;
@@ -128,23 +188,42 @@ export interface LoopsoarAPI {
     version(): Promise<{ app: string; id: string; version: string }>;
   };
   browser: LoopsoarDomain & {
-    navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
+    navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; tabId?: string; error?: string }>;
+    newTab(payload?: { url?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
+    closeTab(payload: { tabId: string }): Promise<{ closed: boolean }>;
+    selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
+    listTabs(): Promise<{ tabs: TabState[] }>;
+    setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
     snapshot(): Promise<{ ok: boolean; url?: string; title?: string; text?: string; error?: string }>;
     screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
+  };
+  memory: LoopsoarDomain & {
+    list(): Promise<MemoryListResult>;
+    stats(): Promise<MemoryStats>;
+    add(payload: { content: string; category: string; tags?: string[]; importance?: number }): Promise<{ added: boolean; id: string }>;
+    update(payload: {
+      id: string;
+      content?: string;
+      category?: string;
+      tags?: string[];
+      importance?: number;
+    }): Promise<{ updated: boolean }>;
+    delete(payload: { id: string }): Promise<{ deleted: boolean }>;
+    clear(): Promise<{ cleared: boolean }>;
   };
   settings: LoopsoarDomain & {
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
     testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;
-    getPreferences(): Promise<{ preferences: Preferences; defaults: Preferences; searchUrlExample: string }>;
+    getPreferences(): Promise<{ preferences: Preferences; defaults: Preferences; searchUrlExample: string; locations: LocationsInfo }>;
     setPreferences(payload: Preferences): Promise<{ saved: boolean; preferences: Preferences }>;
     getPermissions(): Promise<PermissionsState>;
     setPermissions(payload: PermissionsState["permissions"]): Promise<{ saved: boolean; permissions: PermissionsState["permissions"] }>;
     getRules(): Promise<RulesSnapshot>;
     setRules(payload: {
-      global: { enabled: boolean; content: string };
-      workspace: { enabled: boolean; content: string };
-    }): Promise<{ saved: boolean; merged: RulesSnapshot["merged"] }>;
+      entries: { name?: string; scope: "global" | "workspace"; enabled: boolean; content: string }[];
+      deleted?: string[];
+    }): Promise<{ saved: boolean; entries: RuleEntry[]; merged: RulesSnapshot["merged"] }>;
     diagnostics(): Promise<DiagnosticsInfo>;
     about(): Promise<AboutInfo>;
   };

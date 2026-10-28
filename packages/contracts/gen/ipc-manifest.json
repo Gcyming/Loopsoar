@@ -85,6 +85,90 @@
       "hasRequest": false
     },
     {
+      "channel": "browser:newTab",
+      "domain": "browser",
+      "method": "newTab",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:closeTab",
+      "domain": "browser",
+      "method": "closeTab",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:selectTab",
+      "domain": "browser",
+      "method": "selectTab",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:listTabs",
+      "domain": "browser",
+      "method": "listTabs",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "browser:setOverlay",
+      "domain": "browser",
+      "method": "setOverlay",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "memory:list",
+      "domain": "memory",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "memory:add",
+      "domain": "memory",
+      "method": "add",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "memory:update",
+      "domain": "memory",
+      "method": "update",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "memory:delete",
+      "domain": "memory",
+      "method": "delete",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "memory:stats",
+      "domain": "memory",
+      "method": "stats",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "memory:clear",
+      "domain": "memory",
+      "method": "clear",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "chat:history",
+      "domain": "chat",
+      "method": "history",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "settings:getProvider",
       "domain": "settings",
       "method": "getProvider",
@@ -199,6 +283,8 @@
     "chat:stream:error",
     "chat:stream:heartbeat",
     "perm:request",
-    "boot:ready"
+    "boot:ready",
+    "browser:tabs",
+    "memory:updated"
   ]
 }

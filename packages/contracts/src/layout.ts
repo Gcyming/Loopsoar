@@ -8,6 +8,8 @@ import { z } from "zod";
 export const LAYOUT = {
   /** 自定义标题栏高度（品牌 + 窗口控制；原生 frame 已隐藏）。 */
   TITLE_BAR_HEIGHT: 36,
+  /** 标签栏高度（多标签页；原生视图需让出该高度）。 */
+  TAB_BAR_HEIGHT: 34,
   /** 顶部栏高度（omnibox + 操作按钮）。 */
   TOP_BAR_HEIGHT: 48,
   /** 右侧 Agent 面板宽度。 */
@@ -43,8 +45,9 @@ export function computeBrowserViewBounds(
     0,
     size.height -
       layout.TITLE_BAR_HEIGHT -
+      layout.TAB_BAR_HEIGHT -
       layout.TOP_BAR_HEIGHT -
       layout.STATUS_BAR_HEIGHT,
   );
-  return { x: 0, y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT, width, height };
+  return { x: 0, y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + layout.TAB_BAR_HEIGHT, width, height };
 }

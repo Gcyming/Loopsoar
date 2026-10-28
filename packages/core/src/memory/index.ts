@@ -7,3 +7,5 @@
 export * from "./fact.js";
 export * from "./fiveGate.js";
 export * from "./recallGate.js";
+export * from "./store.js";
+export * from "./extract.js";

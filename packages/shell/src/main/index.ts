@@ -14,9 +14,10 @@ import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
 import { ChatService } from "loopsoar-services/chat";
-import { createOpenAiClient } from "loopsoar-core/llm";
+import { createOpenAiClient, type LlmClient } from "loopsoar-core/llm";
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
+import { loadPreferences, loadPermissions } from "./domains/settings.js";
 import { APP_NAME, DATA_DIR_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import {
@@ -34,6 +35,9 @@ import { registerChatDomain } from "./domains/chat.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
 import { loadProviderConfig, registerSettingsDomain, currentRulesPrompt } from "./domains/settings.js";
+import { registerMemoryDomain } from "./domains/memory.js";
+import { MemoryService } from "./memoryService.js";
+import { SessionStore } from "./sessionStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -212,7 +216,7 @@ function createMainWindow(): void {
   } else {
     // E2E 直达：LOOPSOAR_E2E_OPEN=settings 时带 query 打开并自动展开设置面板
     const e2eOpen = process.env.LOOPSOAR_E2E_OPEN;
-    const query = e2eOpen ? `?e2e=${encodeURIComponent(e2eOpen)}` : "";
+    const query = e2eOpen ? `?e2e=${e2eOpen}` : "";
     void mainWindow.loadURL(`${PROTOCOL}://app/index.html${query}`);
   }
   scheduleE2EScreenshot(mainWindow);
@@ -265,17 +269,27 @@ app.whenReady().then(async () => {
   sandbox.setWorkspaceRoot(process.cwd());
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
+  // 偏好（工作区根 / 记忆库位置 / 自动记忆开关）→ 决定后续装配
+  const initialPrefs = loadPreferences(dirs.configDir);
+  let workspaceRoot = initialPrefs.workspaceRoot?.trim() || process.cwd();
+  sandbox.setWorkspaceRoot(workspaceRoot);
+
   const providerConfig = await loadProviderConfig(platform, dirs.configDir);
   const apiKey = resolveApiKeyFromEnv(process.env);
   const llmUsability = providerUsability(providerConfig, apiKey);
-  const llm =
-    providerConfig && llmUsability.usable
-      ? createOpenAiClient({
-          baseUrl: providerConfig.baseUrl,
-          apiKey,
-          model: providerConfig.model,
-        })
+  const buildLlm = (cfg: typeof providerConfig): LlmClient | undefined =>
+    cfg && (cfg.baseUrl ? true : false) && apiKey
+      ? createOpenAiClient({ baseUrl: cfg.baseUrl, apiKey, model: cfg.model })
       : undefined;
+  // 惰性引用：供应商在设置里保存后立即生效（无需重启）
+  let llmRef: LlmClient | undefined =
+    providerConfig && llmUsability.usable ? buildLlm(providerConfig) : undefined;
+
+  // 记忆库（路径可在设置里改）+ 会话持久化
+  const memoryFile = initialPrefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
+  const memory = new MemoryService({ platform, filePath: memoryFile });
+  await memory.load();
+  const sessions = new SessionStore(path.join(dirs.dataDir, "sessions", "last.json"));
 
   // Agent 注册表（真实实现）：内置默认 Agent → 决定身份段与工具白名单
   const agents = new AgentRegistry();
@@ -286,34 +300,69 @@ app.whenReady().then(async () => {
     platform,
     dataDir: dirs.dataDir,
     configDir: dirs.configDir,
-    workspaceRoot: process.cwd(),
+    workspaceRoot,
     env: process.env,
     appVersion: app.getVersion(),
     diagnosticsExtra: () => ({
       auditEntries: auditLog.length,
       tools: registry.list().length,
       agents: agents.list().length,
+      memoryEntries: memory.stats().total,
     }),
+    // 供应商保存 → 重建 LLM（立即可对话）
+    onProviderSaved: () => {
+      const key = resolveApiKeyFromEnv(process.env);
+      llmRef = undefined;
+      void loadProviderConfig(platform, dirs.configDir).then((cfg) => {
+        llmRef = cfg && key ? createOpenAiClient({ baseUrl: cfg.baseUrl, apiKey: key, model: cfg.model }) : undefined;
+      });
+    },
+    // 偏好保存 → 应用工作区根 / 记忆库位置
+    onPreferencesSaved: (prefs: { workspaceRoot?: string; memoryStorePath?: string }) => {
+      const nextRoot = prefs.workspaceRoot?.trim() || process.cwd();
+      if (nextRoot !== workspaceRoot) {
+        workspaceRoot = nextRoot;
+        settingsDeps.workspaceRoot = nextRoot;
+        sandbox.setWorkspaceRoot(nextRoot);
+      }
+      const nextMemory = prefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
+      if (nextMemory !== memory.filePath) void memory.relocate(nextMemory);
+    },
   };
   const chatService = new ChatService({
     platform,
     registry,
     sandbox,
-    llm,
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
     // 规则文件（AGENTS.md）：每次 stream 重新读取，设置面板保存后即时生效
     getSystemRules: () => currentRulesPrompt(settingsDeps),
+    // 记忆召回：按当前消息取相关条目，注入 volatile 段
+    getMemoryFor: (text: string) => memory.recallPrompt(text),
+    // 权限策略：设置面板保存后即时生效
+    permissionPolicy: () => loadPermissions(dirs.configDir),
+    // 供应商：设置面板保存后即时生效
+    getLlm: () => llmRef,
   });
 
   // 浏览器宿主：WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
-  browserHost = createElectronBrowserHost(() => mainWindow);
+  browserHost = createElectronBrowserHost(() => mainWindow, (url) => {
+    void browserHost?.newTab(url);
+  });
 
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({ ...deps, platform });
   registerAgentsDomain({ ...deps, agents });
   registerSettingsDomain(settingsDeps);
-  registerChatDomain({ ...deps, chatService, push: pushToRenderer });
+  registerChatDomain({
+    ...deps,
+    chatService,
+    push: pushToRenderer,
+    memory,
+    sessions,
+    shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
+  });
+  registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost });
   registerWindowDomain({
     ...deps,

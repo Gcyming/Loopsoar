@@ -1,21 +1,45 @@
 /**
- * browser 域：真实 BrowserHost 接线（D0 已通过，ADR-0003 接口冻结）。
- * 错误一律结构化返回（{ok:false,error}），不向渲染进程抛裸异常。
+ * browser 域：多标签控制 + 浮层遮挡修复（setOverlay）。
+ * 原则：标签状态由浏览器宿主推送事件（browser:tabs），渲染层只做展示与操作转发。
  */
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { BrowserHost } from "../browserHost.js";
 
 export interface BrowserDeps extends TrustedIpcDeps {
   browser?: BrowserHost;
-  /** 布局变化（窗口缩放）时让原生视图重新对齐。 */
-  syncBrowserBounds?: () => void;
 }
 
 export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:navigate", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    const result = await deps.browser.navigate((payload as { url: string }).url);
-    return result;
+    return deps.browser.navigate((payload as { url: string }).url);
+  });
+
+  handleTrusted(deps, "browser:newTab", async (payload) => {
+    if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
+    const p = (payload ?? {}) as { url?: string };
+    return deps.browser.newTab(p.url);
+  });
+
+  handleTrusted(deps, "browser:closeTab", async (payload) => {
+    if (!deps.browser) return { closed: false };
+    return { closed: await deps.browser.closeTab((payload as { tabId: string }).tabId) };
+  });
+
+  handleTrusted(deps, "browser:selectTab", (payload) => {
+    if (!deps.browser) return { selected: false };
+    return { selected: deps.browser.selectTab((payload as { tabId: string }).tabId) };
+  });
+
+  handleTrusted(deps, "browser:listTabs", () => ({
+    tabs: deps.browser?.listTabs() ?? [],
+  }));
+
+  // 修复遮挡：设置等应用内浮层打开时隐藏原生浏览器视图
+  handleTrusted(deps, "browser:setOverlay", (payload) => {
+    const open = (payload as { open: boolean }).open;
+    deps.browser?.setOverlayOpen(open);
+    return { open };
   });
 
   handleTrusted(deps, "browser:snapshot", async () => {

@@ -1,8 +1,8 @@
 /**
- * settings 域：偏好/权限/规则/供应商测试 的落盘与读取（真实临时目录，不启 electron）。
+ * settings 域：偏好/权限/规则条目/诊断/供应商测试 的落盘与读取（真实临时目录，不启 electron）。
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { __resetHandlerRegistryForTests } from "../../packages/shell/src/main/trustedIpc.ts";
@@ -10,28 +10,24 @@ import {
   currentRulesPrompt,
   loadPermissions,
   loadPreferences,
-  readRulesSnapshot,
+  readRuleEntries,
   registerSettingsDomain,
   settingsPaths,
   type SettingsDeps,
 } from "../../packages/shell/src/main/domains/settings.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
-interface Captured {
-  handlers: Map<string, (event: unknown, payload: unknown) => Promise<unknown>>;
-}
-
-function makeEnv(root: string, env: Record<string, string | undefined> = {}): { deps: SettingsDeps; captured: Captured } {
+function makeEnv(root: string, env: Record<string, string | undefined> = {}) {
   const dataDir = path.join(root, "data");
   const configDir = path.join(dataDir, "config");
   const workspaceRoot = path.join(root, "workspace");
   mkdirSync(configDir, { recursive: true });
   mkdirSync(workspaceRoot, { recursive: true });
-  const captured: Captured = { handlers: new Map() };
+  const handlers = new Map<string, (e: unknown, p: unknown) => Promise<unknown>>();
   const deps: SettingsDeps = {
     ipc: {
       handle: (channel: string, fn: unknown) => {
-        captured.handlers.set(channel.replace(/^loopsoar:/, ""), fn as never);
+        handlers.set(channel.replace(/^loopsoar:/, ""), fn as never);
       },
     },
     audit: () => {},
@@ -43,16 +39,31 @@ function makeEnv(root: string, env: Record<string, string | undefined> = {}): { 
     appVersion: "9.9.9-test",
   };
   registerSettingsDomain(deps);
-  return { deps, captured };
+  return { deps, handlers };
 }
 
-const TRUSTED_EVENT = { senderFrame: { url: "loopsoar://app/index.html" } };
+const TRUSTED = { senderFrame: { url: "loopsoar://app/index.html" } };
 
-async function invoke(captured: Captured, channel: string, payload?: unknown): Promise<unknown> {
-  const handler = captured.handlers.get(channel);
+async function invoke(
+  handlers: Map<string, (e: unknown, p: unknown) => Promise<unknown>>,
+  channel: string,
+  payload?: unknown,
+): Promise<unknown> {
+  const handler = handlers.get(channel);
   if (!handler) throw new Error(`未注册 handler：${channel}`);
-  return handler(TRUSTED_EVENT, payload);
+  return handler(TRUSTED, payload);
 }
+
+const FULL_PREFS = {
+  language: "zh-CN" as const,
+  animations: "full" as const,
+  restoreSession: true,
+  searchEngine: "bing" as const,
+  downloadDir: "",
+  workspaceRoot: "",
+  memoryStorePath: "",
+  memoryAutoCapture: true,
+};
 
 let root: string;
 
@@ -66,55 +77,44 @@ afterEach(() => {
 });
 
 describe("settings 域：通用偏好", () => {
-  it("默认值 → 保存 → 落盘 → 再读取一致", async () => {
-    const { captured } = makeEnv(root);
-    const before = (await invoke(captured, "settings:getPreferences")) as {
-      preferences: { animations: string };
+  it("默认值（含记忆开关）→ 保存 → 落盘读取一致", async () => {
+    const { handlers } = makeEnv(root);
+    const before = (await invoke(handlers, "settings:getPreferences")) as {
+      preferences: { animations: string; memoryAutoCapture: boolean };
+      locations: { dataDir: string; defaultMemoryFile: string };
     };
     expect(before.preferences.animations).toBe("full");
+    expect(before.preferences.memoryAutoCapture).toBe(true);
+    expect(before.locations.dataDir).toContain(root);
 
-    await invoke(captured, "settings:setPreferences", {
-      language: "en-US",
+    await invoke(handlers, "settings:setPreferences", {
+      ...FULL_PREFS,
       animations: "reduced",
-      restoreSession: false,
-      searchEngine: "duckduckgo",
-      downloadDir: "D:/dl",
+      memoryAutoCapture: false,
     });
-
     const file = path.join(root, "data", "config", "preferences.json");
-    expect(existsSync(file)).toBe(true);
-    expect(JSON.parse(readFileSync(file, "utf8")).searchEngine).toBe("duckduckgo");
-
-    const after = (await invoke(captured, "settings:getPreferences")) as {
-      preferences: { language: string; animations: string };
-    };
-    expect(after.preferences.language).toBe("en-US");
-    expect(after.preferences.animations).toBe("reduced");
+    expect(JSON.parse(readFileSync(file, "utf8")).animations).toBe("reduced");
+    expect(loadPreferences(path.join(root, "data", "config")).memoryAutoCapture).toBe(false);
   });
 
-  it("非法偏好被契约校验拒绝（渲染层不能写坏配置）", async () => {
-    const { captured } = makeEnv(root);
+  it("非法偏好被契约校验拒绝", async () => {
+    const { handlers } = makeEnv(root);
     await expect(
-      invoke(captured, "settings:setPreferences", {
-        language: "zh-CN",
-        animations: "warp-speed",
-        restoreSession: true,
-        searchEngine: "bing",
-      }),
+      invoke(handlers, "settings:setPreferences", { ...FULL_PREFS, animations: "warp" }),
     ).rejects.toThrow(/参数校验失败/);
   });
 });
 
 describe("settings 域：权限", () => {
   it("默认 fail-closed → 保存 → 读取", async () => {
-    const { captured } = makeEnv(root);
-    const before = (await invoke(captured, "settings:getPermissions")) as {
-      permissions: { write: string; confirmDangerousAlways: boolean };
+    const { handlers } = makeEnv(root);
+    const before = (await invoke(handlers, "settings:getPermissions")) as {
+      permissions: { write: string; terminal: string };
     };
     expect(before.permissions.write).toBe("confirm");
-    expect(before.permissions.confirmDangerousAlways).toBe(true);
+    expect(before.permissions.terminal).toBe("confirm");
 
-    await invoke(captured, "settings:setPermissions", {
+    await invoke(handlers, "settings:setPermissions", {
       read: "allow",
       write: "confirm",
       terminal: "deny",
@@ -126,80 +126,99 @@ describe("settings 域：权限", () => {
   });
 });
 
-describe("settings 域：规则（AGENTS.md）", () => {
-  it("读取项目 AGENTS.md 并合并进注入文本", async () => {
-    const { deps, captured } = makeEnv(root);
-    const workspaceAgents = path.join(deps.workspaceRoot, "AGENTS.md");
-    writeFileSync(workspaceAgents, "# 项目规则\n- 构建：pnpm build", "utf8");
+describe("settings 域：规则条目（逐条增删）", () => {
+  it("项目 AGENTS.md → 生成 workspace 条目并合并进注入文本", async () => {
+    const { deps, handlers } = makeEnv(root);
+    writeFileSync(path.join(deps.workspaceRoot, "AGENTS.md"), "# 项目规则\n- 构建：pnpm build", "utf8");
 
-    const snapshot = readRulesSnapshot(deps);
-    expect(snapshot.workspace.exists).toBe(true);
-    expect(snapshot.merged.included.length).toBe(1);
+    const entries = readRuleEntries(deps);
+    const ws = entries.find((e) => e.scope === "workspace")!;
+    expect(ws.content).toContain("pnpm build");
     expect(currentRulesPrompt(deps)).toContain("pnpm build");
 
-    const viaIpc = (await invoke(captured, "settings:getRules")) as {
-      workspace: { content: string; exists: boolean };
+    const viaIpc = (await invoke(handlers, "settings:getRules")) as {
+      entries: { scope: string; content: string }[];
       merged: { text: string };
     };
-    expect(viaIpc.workspace.exists).toBe(true);
+    expect(viaIpc.entries.some((e) => e.scope === "workspace" && e.content.includes("pnpm build"))).toBe(true);
     expect(viaIpc.merged.text).toContain("pnpm build");
   });
 
-  it("CLAUDE.md 兼容回退（无 AGENTS.md 时）", async () => {
-    const { deps, captured } = makeEnv(root);
-    writeFileSync(path.join(deps.workspaceRoot, "CLAUDE.md"), "claude 规则", "utf8");
-    const viaIpc = (await invoke(captured, "settings:getRules")) as {
-      workspace: { path: string; content: string };
-      claudeCompat: boolean;
-    };
-    expect(viaIpc.claudeCompat).toBe(true);
-    expect(viaIpc.workspace.path.endsWith("CLAUDE.md")).toBe(true);
-    expect(viaIpc.workspace.content).toContain("claude 规则");
-  });
-
-  it("保存规则：双文件落盘 + 启用状态 + 合并结果", async () => {
-    const { deps, captured } = makeEnv(root);
-    const result = (await invoke(captured, "settings:setRules", {
-      global: { enabled: true, content: "全局：回答用中文" },
-      workspace: { enabled: false, content: "项目：只改 src/ 下文件" },
-    })) as { merged: { included: { scope: string }[]; skipped: { reason: string }[] } };
+  it("新建全局规则 + 项目规则 → 双文件落盘 + 合并顺序（全局在前）", async () => {
+    const { deps, handlers } = makeEnv(root);
+    const result = (await invoke(handlers, "settings:setRules", {
+      entries: [
+        { name: "风格.md", scope: "global", enabled: true, content: "全局：用中文回答" },
+        { scope: "workspace", enabled: true, content: "项目：只改 src/ 下文件" },
+      ],
+    })) as { entries: { scope: string; name: string; enabled: boolean }[]; merged: { included: { scope: string }[] } };
 
     const paths = settingsPaths(deps);
-    expect(existsSync(paths.globalRules)).toBe(true);
-    expect(readFileSync(paths.globalRules, "utf8")).toContain("回答用中文");
+    expect(existsSync(path.join(paths.globalRulesDir, "风格.md"))).toBe(true);
     expect(readFileSync(path.join(deps.workspaceRoot, "AGENTS.md"), "utf8")).toContain("只改 src/");
-    expect(result.merged.included.map((i) => i.scope)).toEqual(["global"]);
-    expect(result.merged.skipped[0].reason).toBe("已停用");
+    expect(result.merged.included.map((i) => i.scope)).toEqual(["global", "workspace"]);
+    expect(result.entries.filter((e) => e.enabled).length).toBeGreaterThanOrEqual(2);
   });
 
-  it("规则过大 → 整体拒绝（不写入半截）", async () => {
-    const { deps, captured } = makeEnv(root);
-    const huge = "x".repeat(40 * 1024);
+  it("停用条目 → 不进入合并，但保留内容", async () => {
+    const { deps, handlers } = makeEnv(root);
+    await invoke(handlers, "settings:setRules", {
+      entries: [{ name: "off.md", scope: "global", enabled: false, content: "不要注入" }],
+    });
+    const prompt = currentRulesPrompt(deps);
+    expect(prompt).not.toContain("不要注入");
+    const entries = readRuleEntries(deps);
+    expect(entries.find((e) => e.name === "off.md")?.enabled).toBe(false);
+  });
+
+  it("删除全局条目 → 文件被移除", async () => {
+    const { deps, handlers } = makeEnv(root);
+    await invoke(handlers, "settings:setRules", {
+      entries: [{ name: "temp.md", scope: "global", enabled: true, content: "临时" }],
+    });
+    const file = path.join(settingsPaths(deps).globalRulesDir, "temp.md");
+    expect(existsSync(file)).toBe(true);
+    await invoke(handlers, "settings:setRules", { entries: [], deleted: ["global:temp.md"] });
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("非法文件名 → 拒绝整体保存（不写半截）", async () => {
+    const { deps, handlers } = makeEnv(root);
     await expect(
-      invoke(captured, "settings:setRules", {
-        global: { enabled: true, content: huge },
-        workspace: { enabled: true, content: "" },
+      invoke(handlers, "settings:setRules", {
+        entries: [{ name: "../escape.md", scope: "global", enabled: true, content: "x" }],
+      }),
+    ).rejects.toThrow(/规则保存被拒绝/);
+    const dir = settingsPaths(deps).globalRulesDir;
+    expect(existsSync(dir) ? readdirSync(dir).length : 0).toBe(0);
+  });
+
+  it("规则超大 → 拒绝（契约层 32768 上限）", async () => {
+    const { handlers } = makeEnv(root);
+    await expect(
+      invoke(handlers, "settings:setRules", {
+        entries: [{ name: "big.md", scope: "global", enabled: true, content: "x".repeat(40 * 1024) }],
       }),
     ).rejects.toThrow(/规则保存被拒绝|参数校验失败/);
-    expect(existsSync(settingsPaths(deps).globalRules)).toBe(false);
   });
 });
 
-describe("settings 域：诊断 / 关于 / 供应商测试", () => {
-  it("诊断与关于返回稳定结构", async () => {
-    const { captured } = makeEnv(root, { LOOPSOAR_API_KEY: "sk-secret" });
-    const diag = (await invoke(captured, "settings:diagnostics")) as {
+describe("settings 域：诊断 / 关于 / 供应商", () => {
+  it("诊断与关于结构稳定（路径与实际数据目录一致）", async () => {
+    const { handlers } = makeEnv(root, { LOOPSOAR_API_KEY: "sk-secret" });
+    const diag = (await invoke(handlers, "settings:diagnostics")) as {
       paths: Record<string, string>;
       versions: Record<string, string>;
     };
     expect(diag.paths.dataDir).toContain(root);
+    expect(diag.paths.memoryFile).toContain("memory.json");
     expect(diag.versions.app).toBe("9.9.9-test");
 
-    const about = (await invoke(captured, "settings:about")) as { name: string; appId: string };
+    const about = (await invoke(handlers, "settings:about")) as { name: string; appId: string };
     expect(about.name).toBe("Loopsoar");
     expect(about.appId).toBe("com.loopsoar.app");
 
-    const provider = (await invoke(captured, "settings:getProvider")) as {
+    const provider = (await invoke(handlers, "settings:getProvider")) as {
       hasApiKey: boolean;
       configured: boolean;
     };
@@ -207,29 +226,27 @@ describe("settings 域：诊断 / 关于 / 供应商测试", () => {
     expect(provider.configured).toBe(false);
   });
 
-  it("testProvider：成功/失败均返回可读结果（不回传密钥）", async () => {
-    const { captured } = makeEnv(root, { LOOPSOAR_API_KEY: "sk-secret" });
+  it("testProvider：成功/失败返回可读结果（不回传密钥）", async () => {
+    const { handlers } = makeEnv(root, { LOOPSOAR_API_KEY: "sk-secret" });
     const realFetch = globalThis.fetch;
     try {
-      globalThis.fetch = (async () =>
-        new Response(JSON.stringify({ choices: [] }), { status: 200 })) as typeof fetch;
-      const ok = (await invoke(captured, "settings:testProvider", {
+      globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+      const okRes = (await invoke(handlers, "settings:testProvider", {
         provider: "p",
         baseUrl: "https://api.example.com/v1",
         model: "m",
       })) as { ok: boolean; message: string };
-      expect(ok.ok).toBe(true);
-      expect(ok.message).not.toContain("sk-secret");
+      expect(okRes.ok).toBe(true);
+      expect(okRes.message).not.toContain("sk-secret");
 
-      globalThis.fetch = (async () =>
-        new Response("bad key", { status: 401 })) as typeof fetch;
-      const bad = (await invoke(captured, "settings:testProvider", {
+      globalThis.fetch = (async () => new Response("bad", { status: 401 })) as typeof fetch;
+      const badRes = (await invoke(handlers, "settings:testProvider", {
         provider: "p",
         baseUrl: "https://api.example.com/v1",
         model: "m",
       })) as { ok: boolean; status?: number };
-      expect(bad.ok).toBe(false);
-      expect(bad.status).toBe(401);
+      expect(badRes.ok).toBe(false);
+      expect(badRes.status).toBe(401);
     } finally {
       globalThis.fetch = realFetch;
     }

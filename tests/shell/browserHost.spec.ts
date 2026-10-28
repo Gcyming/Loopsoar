@@ -1,5 +1,5 @@
 /**
- * BrowserHost：懒创建 / URL 白名单 / 布局同步（假 View，无 electron）。
+ * BrowserHost（多标签）：懒创建 / URL 白名单 / 标签切换 / 浮层遮挡 / 布局同步（假 View，无 electron）。
  */
 import { describe, expect, it } from "vitest";
 import { BrowserHost, type HostView } from "../../packages/shell/src/main/browserHost.ts";
@@ -7,18 +7,24 @@ import { BrowserHost, type HostView } from "../../packages/shell/src/main/browse
 interface FakeView extends HostView {
   bounds: { x: number; y: number; width: number; height: number } | null;
   navigated: string[];
+  visible: boolean;
+  closed: boolean;
 }
 
-function makeHost(options: { size?: { width: number; height: number } } = {}) {
+function makeHost(size = { width: 1360, height: 860 }) {
   const created: FakeView[] = [];
-  const size = options.size ?? { width: 1360, height: 860 };
   const host = new BrowserHost({
     createView: (): HostView => {
       const view: FakeView = {
         bounds: null,
         navigated: [],
+        visible: true,
+        closed: false,
         setBounds(b) {
           view.bounds = b;
+        },
+        setVisible(v) {
+          view.visible = v;
         },
         webContents: {
           async loadURL(url: string) {
@@ -29,11 +35,11 @@ function makeHost(options: { size?: { width: number; height: number } } = {}) {
             return { toPNG: () => Buffer.from("png") };
           },
           async executeJavaScript(code: string) {
-            if (code.includes("querySelectorAll")) return 3;
+            if (code.includes("document.title")) return "示例页面";
             if (code.includes("location.href")) {
               return { url: "https://example.com/", title: "Example", text: "hi", elements: [] };
             }
-            return true;
+            return 3;
           },
           on() {},
         },
@@ -42,41 +48,84 @@ function makeHost(options: { size?: { width: number; height: number } } = {}) {
       return view;
     },
     attachView: () => {},
-    detachView: () => {},
+    detachView: (view) => {
+      (view as FakeView).closed = true;
+    },
     getWindowSize: () => size,
   });
-  return { host, created, size };
+  return { host, created };
 }
 
-describe("BrowserHost", () => {
-  it("懒创建：未导航前不建视图", async () => {
+describe("BrowserHost（多标签）", () => {
+  it("懒创建：未导航前没有标签", async () => {
     const { host, created } = makeHost();
-    expect(host.hasView()).toBe(false);
+    expect(host.hasAnyTab()).toBe(false);
     expect(created.length).toBe(0);
     expect(await host.snapshot()).toBeNull();
     expect(await host.screenshot()).toBeNull();
   });
 
-  it("导航后创建视图并对齐布局区域", async () => {
+  it("导航创建首个标签，并对齐布局区域（含标签栏偏移）", async () => {
     const { host, created } = makeHost();
     const result = await host.navigate("example.com");
     expect(result.ok).toBe(true);
-    expect(host.hasView()).toBe(true);
-    expect(created.length).toBe(1);
+    expect(host.hasAnyTab()).toBe(true);
+    expect(host.listTabs().length).toBe(1);
+    expect(host.listTabs()[0].active).toBe(true);
     expect(created[0].navigated[0]).toBe("https://example.com/");
-    expect(created[0].bounds).toEqual({ x: 0, y: 84, width: 1040, height: 744 });
+    // 1360x860：y = 36+48+34 = 118，height = 860-36-34-48-32 = 710
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 1040, height: 710 });
   });
 
-  it("危险协议导航被拒绝，且不创建视图", async () => {
+  it("新建标签并切换：同一时刻只有一个活动标签可见", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://a.example");
+    const id2 = (await host.newTab("https://b.example")).tabId;
+    expect(host.listTabs().length).toBe(2);
+    expect(host.listTabs().find((t) => t.active)?.id).toBe(id2);
+    expect(created.filter((v) => v.visible).length).toBe(1);
+    const first = host.listTabs().find((t) => t.id !== id2)!.id;
+    expect(host.selectTab(first)).toBe(true);
+    expect(host.listTabs().find((t) => t.active)?.id).toBe(first);
+    expect(created.filter((v) => v.visible).length).toBe(1);
+  });
+
+  it("危险协议导航被拒绝，且不创建标签", async () => {
     const { host, created } = makeHost();
     const result = await host.navigate("javascript:alert(1)");
     expect(result.ok).toBe(false);
     expect(created.length).toBe(0);
   });
 
+  it("浮层打开时隐藏原生视图（修复网页遮挡应用弹窗）", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://example.com");
+    host.setOverlayOpen(true);
+    expect(created[0].visible).toBe(false);
+    host.setOverlayOpen(false);
+    expect(created[0].visible).toBe(true);
+  });
+
+  it("关闭标签：视图被销毁，活动标签回落到剩余标签", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://a.example");
+    const id2 = (await host.newTab("https://b.example")).tabId;
+    expect(await host.closeTab(id2)).toBe(true);
+    expect(host.listTabs().length).toBe(1);
+    expect(created.some((v) => v.closed)).toBe(true);
+    expect(host.listTabs()[0].active).toBe(true);
+  });
+
+  it("快照/截图在有活动标签后可用", async () => {
+    const { host } = makeHost();
+    await host.navigate("https://example.com");
+    expect(await host.snapshot()).not.toBeNull();
+    expect(await host.screenshot()).toBeTruthy();
+  });
+
   it("窗口缩放 → syncBounds 重新对齐", async () => {
     const state = { width: 1360, height: 860 };
-    const created: HostView[] = [];
+    const created: FakeView[] = [];
     const host = new BrowserHost({
       createView: () => {
         const view = {
@@ -84,6 +133,7 @@ describe("BrowserHost", () => {
           setBounds(b: { x: number; y: number; width: number; height: number }) {
             view.bounds = b;
           },
+          setVisible() {},
           webContents: {
             async loadURL() {},
             getURL: () => "",
@@ -96,8 +146,7 @@ describe("BrowserHost", () => {
             on() {},
           },
         };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        created.push(view as any);
+        created.push(view as unknown as FakeView);
         return view as unknown as HostView;
       },
       attachView: () => {},
@@ -108,17 +157,6 @@ describe("BrowserHost", () => {
     state.width = 1000;
     state.height = 700;
     host.syncBounds();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((created[0] as any).bounds).toEqual({ x: 0, y: 84, width: 680, height: 584 });
-  });
-
-  it("快照/截图在有视图后可用；close 后不可用", async () => {
-    const { host } = makeHost();
-    await host.navigate("https://example.com");
-    expect(await host.snapshot()).not.toBeNull();
-    expect(await host.screenshot()).toBeTruthy();
-    await host.close();
-    expect(host.hasView()).toBe(false);
-    expect(await host.snapshot()).toBeNull();
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 680, height: 550 });
   });
 });
