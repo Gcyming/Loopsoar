@@ -101,6 +101,9 @@
   ],
   "events": [
     "chat:stream:chunk",
+    "chat:stream:reasoning",
+    "chat:stream:tool",
+    "chat:stream:progress",
     "chat:stream:done",
     "chat:stream:error",
     "chat:stream:heartbeat",

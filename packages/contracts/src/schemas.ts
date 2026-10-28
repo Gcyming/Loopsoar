@@ -136,6 +136,9 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
   */
 export const EVENTS = [
   "chat:stream:chunk",
+  "chat:stream:reasoning",
+  "chat:stream:tool",
+  "chat:stream:progress",
   "chat:stream:done",
   "chat:stream:error",
   "chat:stream:heartbeat",

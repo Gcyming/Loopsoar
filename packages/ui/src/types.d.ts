@@ -1,29 +1,71 @@
-// window.loopsoarAPI 声明文件。
-// 结构对齐 shell 预加载白名单（packages/shell/src/preload/index.ts 由 S6 产出）：
-// 域 chat/perm/file/agents/runtime/browser，各自暴露 <method> 调用；
-// on(event, cb) 返回退订函数。
-// ui 包只消费运行时声明，不依赖 shell 源码，故在此本地声明并与 preload 白名单对齐。
+// window.loopsoarAPI 声明文件（与 shell preload 白名单对齐）。
+// 只声明 UI 真正消费的域方法；事件白名单与 contracts 的 EVENTS 保持一致。
 
-// 单个域下的方法映射：<domain>.<method>(...args) => Promise<any>
 export interface LoopsoarDomain {
   [method: string]: (...args: unknown[]) => Promise<unknown>;
 }
 
-// 整个 loopsoarAPI 形状，与 preload 白名单生成的 <domain>.<method> + on 保持一致。
-export interface LoopsoarAPI {
-  chat: LoopsoarDomain;
-  perm: LoopsoarDomain;
-  file: LoopsoarDomain;
-  agents: LoopsoarDomain;
-  runtime: LoopsoarDomain & {
-    bootStatus(): Promise<{ status: string; version?: string }>;
-  };
-  browser: LoopsoarDomain;
-  // 订阅主进程事件，返回退订函数。
-  on(event: string, cb: (...args: unknown[]) => void): () => void;
+export interface ProviderStatus {
+  configured: boolean;
+  provider: string | null;
+  baseUrl: string | null;
+  model: string | null;
+  hasApiKey: boolean;
+  usable: boolean;
+  reason: string | null;
 }
 
-// 扩充全局 Window，使 App.tsx 等源码可直接使用 window.loopsoarAPI。
+export interface AgentSummary {
+  id: string;
+  name: string;
+  role: string;
+  description: string | null;
+  builtin: boolean;
+  loopId: string | null;
+  toolCount: number | null;
+  isDefault: boolean;
+}
+
+export interface BootStatus {
+  status: string;
+  version?: string;
+}
+
+export type LoopsoarEvent =
+  | "chat:stream:chunk"
+  | "chat:stream:reasoning"
+  | "chat:stream:tool"
+  | "chat:stream:progress"
+  | "chat:stream:done"
+  | "chat:stream:error"
+  | "chat:stream:heartbeat"
+  | "perm:request"
+  | "boot:ready";
+
+export interface LoopsoarAPI {
+  chat: LoopsoarDomain & {
+    stream(payload: { message: string; sessionId?: string }): Promise<{ accepted: boolean; sessionId: string }>;
+    stop(payload: { sessionId: string }): Promise<{ stopped: boolean }>;
+  };
+  perm: LoopsoarDomain;
+  file: LoopsoarDomain;
+  agents: LoopsoarDomain & { list(): Promise<{ agents: AgentSummary[] }> };
+  runtime: LoopsoarDomain & {
+    status(): Promise<BootStatus>;
+    version(): Promise<{ app: string; id: string; version: string }>;
+  };
+  browser: LoopsoarDomain & {
+    navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
+    snapshot(): Promise<{ ok: boolean; url?: string; title?: string; text?: string; error?: string }>;
+    screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
+  };
+  settings: LoopsoarDomain & {
+    getProvider(): Promise<ProviderStatus>;
+    setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean }>;
+  };
+  on(event: LoopsoarEvent, cb: (payload: unknown) => void): () => void;
+}
+
 declare global {
   interface Window {
     loopsoarAPI?: LoopsoarAPI;

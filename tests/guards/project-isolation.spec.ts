@@ -3,7 +3,7 @@
  * 为什么用代码守卫：隔离靠人记不住——端口、路径、跨仓 import 任何一项串了都会在并行开发时静默互相污染。
  */
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = process.cwd();
@@ -82,5 +82,41 @@ describe("守卫：项目隔离（不与被测/旧项目串扰）", () => {
     expect(idx).toContain('setPath("userData"');
     expect(idx).toContain("DATA_DIR_NAME");
     expect(idx).toContain("appData");
+  });
+
+  it("品牌资产为仓库内自持的官方资产（shell/resources + ui/public）", () => {
+    // 为什么断言存在 + 自持：旧项目串扰的直接表现就是「图标被换成了另一个项目的」，
+    // 只允许品牌资产从本仓库的固定路径加载；且必须注明来源（README），资源缺失即红。
+    const icon = path.join(ROOT, "packages/shell/resources/icon.png");
+    const ico = path.join(ROOT, "packages/shell/resources/icon.ico");
+    const logo = path.join(ROOT, "packages/ui/public/logo.png");
+    const provenance = path.join(ROOT, "packages/shell/resources/README.md");
+    expect(existsSync(icon), "缺少窗口图标（shell/resources/icon.png）").toBe(true);
+    expect(existsSync(ico), "缺少多档图标（shell/resources/icon.ico）").toBe(true);
+    expect(existsSync(logo), "缺少界面 logo（ui/public/logo.png）").toBe(true);
+    expect(existsSync(provenance), "缺少品牌资产来源说明（shell/resources/README.md）").toBe(true);
+    // 来源必须指向官方品牌目录，且明确禁止旧项目图标
+    const note = readFileSync(provenance, "utf8");
+    expect(note).toContain("quilt-inf");
+    expect(note).toContain("_old-slime-icons");
+  });
+
+  it("UI/shell 不引用仓库外资产或旧项目资源路径", () => {
+    const targets = [
+      ...allSourceFiles().filter((f) => f.includes("packages/ui") || f.includes("packages/shell")),
+      path.join(ROOT, "packages/ui/index.html"),
+    ];
+    const offenders: string[] = [];
+    for (const f of targets) {
+      const src = readFileSync(f, "utf8");
+      // 引号/url() 内出现旧项目名，或出现仓库外绝对盘符路径 → 视为串扰
+      if (/["'(][^"')]*(?:slime|pilot)[^"')]*["')]/i.test(src)) {
+        offenders.push(`${path.relative(ROOT, f)}（引用旧项目资源）`);
+      }
+      if (/["'][A-Za-z]:[\\/]/.test(src)) {
+        offenders.push(`${path.relative(ROOT, f)}（硬编码仓库外绝对路径）`);
+      }
+    }
+    expect(offenders, `串扰风险：\n${offenders.join("\n")}`).toEqual([]);
   });
 });

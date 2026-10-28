@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Loopsoar — Agent 浏览器壳（ui 占位）</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+    />
+    <link rel="icon" type="image/png" href="./logo.png" />
+    <title>Loopsoar</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0b1021;
+        color: #e8eaed;
+      }
+      #root {
+        height: 100vh;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

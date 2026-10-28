@@ -7,6 +7,8 @@
   "exports": {
     "./ipc": "./gen/ipc.ts",
     "./schemas": "./src/schemas.ts",
+    "./layout": "./src/layout.ts",
+    "./navigation": "./src/navigation.ts",
     "./security-policy": "./src/security-policy.ts"
   },
   "scripts": {
