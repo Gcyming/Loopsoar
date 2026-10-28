@@ -427,6 +427,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     <span style={S.meta}>
                       <span style={S.metaTitle}>{sk.frontmatter.name}</span>
                       {sk.frontmatter.version ? <span style={BADGE.neutral}>v{sk.frontmatter.version}</span> : null}
+                      {sk.warnings && sk.warnings.length > 0 ? <span style={BADGE.warn} title={sk.warnings.join("；")}>容错</span> : null}
                       {(sk.frontmatter.tags ?? []).map((tag) => <span key={tag} style={S.tag}>#{tag}</span>)}
                     </span>
                     <span style={S.icons}>
@@ -488,6 +489,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                         {srv.state === "ready" ? "已连接" : srv.state === "connecting" ? "连接中" : srv.state === "error" ? "错误" : "未连接"}
                       </span>
                       <span style={S.tag}>{srv.tools.length} 个工具</span>
+                      {srv.capabilities.length > 0 ? <span style={S.tag}>能力 {srv.capabilities.join("/")}</span> : null}
                     </span>
                     <span style={S.icons}>
                       {srv.state === "ready" ? (
@@ -502,6 +504,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     <div style={S.providerRow}><span style={S.providerKey}>命令</span><span style={S.providerVal}>{[srv.command, ...srv.args].join(" ")}</span></div>
                     {srv.error ? <div style={S.providerRow}><span style={S.providerKey}>错误</span><span style={S.errText}>{srv.error}</span></div> : null}
                     {srv.tools.length > 0 ? <div style={S.providerRow}><span style={S.providerKey}>工具</span><span style={S.providerVal}>{srv.tools.slice(0, 6).join(" · ")}{srv.tools.length > 6 ? " …" : ""}</span></div> : null}
+                    {srv.stderr.length > 0 ? (
+                      <div style={S.providerRow}><span style={S.providerKey}>诊断</span><span style={S.providerVal} title={srv.stderr.slice(-5).join("\\n")}>{srv.stderr.slice(-3).join(" | ").slice(0, 200)}</span></div>
+                    ) : null}
                   </div>
                 </div>
               ))

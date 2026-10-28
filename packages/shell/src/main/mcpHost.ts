@@ -1,27 +1,35 @@
 /**
  * MCP 客户端宿主（壳层，stdio 传输）：与扩展、技能完全隔离。
  *
- * 流程：spawn 子进程 → initialize 握手 → notifications/initialized → tools/list
- *      → 每个工具按 `mcp__<server>__<tool>` 注册进 ToolRegistry（执行时 tools/call）。
- * 配置：<dataDir>/mcp.json，[{ id, name, command, args, env, enabled }]
+ * 生命周期（见 docs/architecture/lifecycle.md）：
+ *   握手：spawn → initialize(5s，换行帧；超时切 Content-Length 帧重试一次) → notifications/initialized
+ *   注册：能力门控（仅 capabilities 声明的能力才请求）→ tools/list → 工具名 mcp__srv__tool
+ *        → 冲突确定性加 _N → 原子替换旧工具集 → tools/list_changed 通知触发刷新
+ *   调用：单次 8s 超时（只 reject 该请求，不断连接）→ 错误分为 RPC/传输/超时
+ *   清理：注销工具（含后缀变体）→ Windows taskkill /T /F 杀进程树 → resolve pending → 回 idle
+ *   自愈：非预期退出 → 1s/2s/4s 退避重连，最多 3 次 → error 等人工
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { ToolRegistry } from "loopsoar-core/tools/registry";
+import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import {
   MCP_PROTOCOL_VERSION,
-  JsonRpcLineDecoder,
+  McpFrameDecoder,
   McpServerConfigSchema,
   bindMcpTools,
-  encodeRpc,
-  type JsonRpcResponse,
+  describeMcpError,
+  encodeHeaderFrame,
+  hasCapability,
+  mcpToolName,
+  sanitizeMcpEnv,
+  uniqueToolName,
+  type JsonRpcMessage,
   type McpServerConfig,
   type McpServerState,
   type McpToolBinding,
 } from "loopsoar-core/mcp";
-import type { ToolResult } from "loopsoar-core/tools/registry";
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -35,9 +43,17 @@ interface Connection {
   error?: string;
   tools: McpToolBinding[];
   child?: ChildProcessWithoutNullStreams;
-  decoder: JsonRpcLineDecoder;
+  decoder: McpFrameDecoder;
+  framing: "newline" | "header";
   nextId: number;
   pending: Map<number, PendingCall>;
+  stderrRing: string[];
+  capabilities: unknown;
+  refreshing?: Promise<void>;
+  refreshQueued?: boolean;
+  reconnectTimer?: NodeJS.Timeout;
+  reconnectAttempts: number;
+  manualClose: boolean;
 }
 
 export interface McpServerInfo {
@@ -48,10 +64,15 @@ export interface McpServerInfo {
   enabled: boolean;
   state: McpServerState;
   tools: string[];
+  capabilities: string[];
+  stderr: string[];
   error?: string;
 }
 
+const CONNECT_TIMEOUT_MS = 5000;
 const CALL_TIMEOUT_MS = 8000;
+const STDERR_RING = 20;
+const RECONNECT_MAX = 3;
 
 export class McpHost {
   private connections = new Map<string, Connection>();
@@ -61,6 +82,8 @@ export class McpHost {
     private registry: ToolRegistry,
     private onUpdate: () => void,
   ) {}
+
+  /* ─────────────────────────── 配置 ─────────────────────────── */
 
   private readConfig(): McpServerConfig[] {
     try {
@@ -94,9 +117,10 @@ export class McpHost {
     return `${base}-${n}`;
   }
 
+  /* ─────────────────────────── 查询 ─────────────────────────── */
+
   list(): McpServerInfo[] {
-    const configs = this.readConfig();
-    return configs.map((cfg) => {
+    return this.readConfig().map((cfg) => {
       const id = cfg.id ?? cfg.name;
       const conn = this.connections.get(id);
       return {
@@ -107,6 +131,8 @@ export class McpHost {
         enabled: cfg.enabled ?? true,
         state: conn?.state ?? "idle",
         tools: conn?.tools.map((t) => t.registryName) ?? [],
+        capabilities: capabilityList(conn?.capabilities),
+        stderr: conn ? [...conn.stderrRing] : [],
         error: conn?.error,
       };
     });
@@ -135,160 +161,354 @@ export class McpHost {
     return true;
   }
 
-  private send(conn: Connection, method: string, params?: unknown): Promise<unknown> {
+  /* ─────────────────────────── 工具注册 ─────────────────────────── */
+
+  private dropTools(serverId: string): void {
+    const prefix = `mcp__${serverId.replace(/[^a-zA-Z0-9_]/g, "_")}__`;
+    for (const tool of this.registry.list()) {
+      if (tool.name.startsWith(prefix)) this.registry.unregister(tool.name);
+    }
+  }
+
+  private registerTools(serverId: string, bindings: McpToolBinding[]): void {
+    const registered: string[] = [];
+    try {
+      for (const binding of bindings) {
+        const finalName = uniqueToolName(binding.registryName, (name) => this.registry.has(name));
+        this.registry.register({
+          name: finalName,
+          description: binding.description,
+          // 权限 fail-closed：只读工具按 read，其余按 network（仍走沙箱与确认）
+          permissions: binding.readOnly ? { read: true } : { network: true },
+          schema: z.record(z.unknown()),
+          execute: async (ctx): Promise<ToolResult> => this.executeTool(serverId, binding.toolName, ctx.params),
+        });
+        registered.push(finalName);
+      }
+    } catch (err) {
+      // 注册失败回滚，保持旧工具集不变（原子性）
+      for (const name of registered) this.registry.unregister(name);
+      throw err;
+    }
+  }
+
+  private async executeTool(serverId: string, toolName: string, args: unknown): Promise<ToolResult> {
+    try {
+      const result = (await this.callTool(serverId, toolName, args ?? {})) as {
+        content?: { type?: string; text?: string }[];
+        isError?: boolean;
+      };
+      const texts = (result?.content ?? [])
+        .filter((c) => c?.type === "text" && typeof c.text === "string")
+        .map((c) => c.text as string);
+      return { ok: !result?.isError, content: texts.length > 0 ? texts.join("\n") : JSON.stringify(result ?? {}) };
+    } catch (err) {
+      return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  /** 拉取 tools/list 并原子替换工具集（能力门控 + 并发去重）。 */
+  private refreshTools(serverId: string, conn: Connection): Promise<void> {
+    // 刷新进行中又收到 list_changed：排队，待本次结束后再刷一次（不能丢通知）
+    if (conn.refreshing) {
+      conn.refreshQueued = true;
+      return conn.refreshing;
+    }
+    conn.refreshing = (async () => {
+      if (!hasCapability(conn.capabilities, "tools")) {
+        this.dropTools(serverId);
+        conn.tools = [];
+        return;
+      }
+      const listed = await this.request(conn, "tools/list", {});
+      const bindings = bindMcpTools(serverId, listed);
+      this.dropTools(serverId);
+      this.registerTools(serverId, bindings);
+      conn.tools = bindings;
+    })().finally(() => {
+      conn.refreshing = undefined;
+      this.onUpdate();
+      if (conn.refreshQueued) {
+        conn.refreshQueued = false;
+        void this.refreshTools(serverId, conn).catch((err) => {
+          conn.stderrRing.push(`刷新工具失败：${err instanceof Error ? err.message : String(err)}`);
+          this.onUpdate();
+        });
+      }
+    });
+    return conn.refreshing;
+  }
+
+  /* ─────────────────────────── 传输 ─────────────────────────── */
+
+  private sendRaw(conn: Connection, payload: unknown): void {
+    if (!conn.child) throw new Error("MCP 进程未启动");
+    const text = conn.framing === "header" ? encodeHeaderFrame(payload) : `${JSON.stringify(payload)}\n`;
+    conn.child.stdin.write(text);
+  }
+
+  private request(conn: Connection, method: string, params?: unknown, timeoutMs = CALL_TIMEOUT_MS): Promise<unknown> {
+    if (!conn.child) return Promise.reject(new Error(describeMcpError("transport", "进程未启动")));
     const id = ++conn.nextId;
-    if (!conn.child) return Promise.reject(new Error("MCP 进程未启动"));
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         conn.pending.delete(id);
-        reject(new Error(`MCP 请求超时（${method}）`));
-      }, CALL_TIMEOUT_MS);
+        reject(new Error(describeMcpError("timeout", method)));
+      }, timeoutMs);
       conn.pending.set(id, { resolve, reject, timer });
-      conn.child!.stdin.write(encodeRpc({ jsonrpc: "2.0", id, method, params }));
+      try {
+        this.sendRaw(conn, { jsonrpc: "2.0", id, method, params });
+      } catch (err) {
+        conn.pending.delete(id);
+        clearTimeout(timer);
+        reject(new Error(describeMcpError("transport", err instanceof Error ? err.message : String(err))));
+      }
     });
   }
 
-  async connect(id: string): Promise<McpServerInfo | null> {
+  private notify(conn: Connection, method: string, params?: unknown): void {
+    try {
+      this.sendRaw(conn, { jsonrpc: "2.0", method, params });
+    } catch {
+      // 通知失败不影响调用
+    }
+  }
+
+  private handleMessage(serverId: string, conn: Connection, msg: JsonRpcMessage): void {
+    if (typeof msg.id === "number" && conn.pending.has(msg.id)) {
+      const pending = conn.pending.get(msg.id)!;
+      conn.pending.delete(msg.id);
+      clearTimeout(pending.timer);
+      if (msg.error) pending.reject(new Error(describeMcpError("rpc", `${msg.error.code} ${msg.error.message}`)));
+      else pending.resolve(msg.result);
+      return;
+    }
+    if (typeof msg.id === "number" && msg.method) {
+      if (msg.method === "ping") {
+        try {
+          this.sendRaw(conn, { jsonrpc: "2.0", id: msg.id, result: {} });
+        } catch {
+          // 忽略
+        }
+      } else {
+        try {
+          this.sendRaw(conn, {
+            jsonrpc: "2.0",
+            id: msg.id,
+            error: { code: -32601, message: `method not found: ${msg.method}` },
+          });
+        } catch {
+          // 忽略
+        }
+      }
+      return;
+    }
+    if (msg.method === "notifications/tools/list_changed") {
+      void this.refreshTools(serverId, conn).catch((err) => {
+        conn.stderrRing.push(`刷新工具失败：${err instanceof Error ? err.message : String(err)}`);
+        this.onUpdate();
+      });
+      return;
+    }
+    if (msg.method?.startsWith("notifications/")) {
+      const text = JSON.stringify(msg.params ?? {}).slice(0, 200);
+      conn.stderrRing.push(`通知 ${msg.method}：${text}`);
+      if (conn.stderrRing.length > STDERR_RING) conn.stderrRing.shift();
+    }
+  }
+
+  /* ─────────────────────────── 生命周期 ─────────────────────────── */
+
+  async connect(id: string, opts: { auto?: boolean } = {}): Promise<McpServerInfo | null> {
     const cfg = this.readConfig().find((c) => (c.id ?? c.name) === id);
     if (!cfg) return null;
-    this.disconnect(id);
+    const existing = this.connections.get(id);
+    if (existing?.state === "ready" || existing?.state === "connecting") {
+      return this.list().find((s) => s.id === id) ?? null;
+    }
+
+    this.teardown(id);
     const conn: Connection = {
       config: cfg,
       state: "connecting",
       tools: [],
-      decoder: new JsonRpcLineDecoder(),
+      decoder: new McpFrameDecoder(),
+      framing: "newline",
       nextId: 0,
       pending: new Map(),
+      stderrRing: [],
+      capabilities: null,
+      reconnectAttempts: opts.auto ? (existing?.reconnectAttempts ?? 0) : 0,
+      manualClose: false,
     };
     this.connections.set(id, conn);
     this.onUpdate();
-    try {
-      // Windows：npx/npm 等 .cmd 包装器需要 shell；node/绝对路径直接 spawn（避免空格被 shell 拆坏）
-      const needsShell =
-        process.platform === "win32" && /^(npx|npm|pnpm|yarn|bun|uvx|uv|cmd|powershell)$/i.test(cfg.command);
-      const child = spawn(cfg.command, cfg.args ?? [], {
-        env: { ...process.env, ...(cfg.env ?? {}) },
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: needsShell,
-      }) as ChildProcessWithoutNullStreams;
-      conn.child = child;
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        for (const msg of conn.decoder.push(chunk)) this.handleMessage(id, conn, msg);
-      });
-      child.stderr.on("data", (chunk: string) => {
-        const text = String(chunk).trim();
-        if (text) console.warn(`[MCP:${id}] ${text.slice(0, 300)}`);
-      });
-      child.on("exit", (code) => {
-        conn.state = "error";
-        conn.error = `MCP 进程退出（code=${code ?? "?"}）`;
-        this.dropTools(id);
-        this.onUpdate();
-      });
 
-      await this.send(conn, "initialize", {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: "loopsoar", version: "0.0.0" },
-      });
-      conn.child!.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-      const listed = await this.send(conn, "tools/list", {});
-      const bindings = bindMcpTools(id, listed);
-      this.dropTools(id);
-      for (const binding of bindings) this.registerTool(id, binding);
-      conn.tools = bindings;
+    try {
+      this.spawnProcess(id, conn);
+      try {
+        const init = (await this.request(conn, "initialize", this.initParams(), CONNECT_TIMEOUT_MS)) as {
+          capabilities?: unknown;
+        };
+        conn.capabilities = init.capabilities ?? null;
+      } catch (firstErr) {
+        // 帧格式探测失败：切 Content-Length 帧重试一次（slime "flip framing" 教训）
+        conn.framing = "header";
+        conn.decoder = new McpFrameDecoder();
+        this.killProcess(conn);
+        this.spawnProcess(id, conn);
+        const init = (await this.request(conn, "initialize", this.initParams(), CONNECT_TIMEOUT_MS)) as {
+          capabilities?: unknown;
+        };
+        conn.capabilities = init.capabilities ?? null;
+        conn.stderrRing.push(
+          `握手已切换 Content-Length 帧重试成功（${firstErr instanceof Error ? firstErr.message : String(firstErr)}）`,
+        );
+      }
+      this.notify(conn, "notifications/initialized", {});
+      await this.refreshTools(id, conn);
       conn.state = "ready";
       conn.error = undefined;
       this.onUpdate();
-      return this.list().find((s) => s.id === id)!;
     } catch (err) {
       conn.state = "error";
       conn.error = err instanceof Error ? err.message : String(err);
+      conn.stderrRing.push(conn.error);
       this.dropTools(id);
+      this.killProcess(conn);
       this.onUpdate();
-      return this.list().find((s) => s.id === id)!;
     }
+    return this.list().find((s) => s.id === id) ?? null;
   }
 
-  private handleMessage(serverId: string, conn: Connection, msg: JsonRpcResponse): void {
-    if (msg.id !== null && conn.pending.has(msg.id)) {
-      const pending = conn.pending.get(msg.id)!;
-      conn.pending.delete(msg.id);
-      clearTimeout(pending.timer);
-      if (msg.error) pending.reject(new Error(`${msg.error.code}: ${msg.error.message}`));
-      else pending.resolve(msg.result);
-      return;
-    }
-    // 服务器 → 客户端请求：只支持 ping，其余忽略
-    const req = msg as unknown as { method?: string; id?: number | null };
-    if (req.method === "ping" && req.id !== null && conn.child) {
-      conn.child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: {} }) + "\n");
-    }
-    void serverId;
+  private initParams(): Record<string, unknown> {
+    return {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "loopsoar", version: "0.0.0" },
+    };
   }
 
-  private dropTools(serverId: string): void {
-    for (const tool of this.registry.list()) {
-      if (tool.name.startsWith(`mcp__${serverId.replace(/[^a-zA-Z0-9_]/g, "_")}__`)) {
-        this.registry.unregister(tool.name);
+  private spawnProcess(serverId: string, conn: Connection): void {
+    const cfg = conn.config;
+    const needsShell =
+      process.platform === "win32" && /^(npx|npm|pnpm|yarn|bun|uvx|uv|cmd|powershell)$/i.test(cfg.command);
+    const child = spawn(cfg.command, cfg.args ?? [], {
+      env: sanitizeMcpEnv(process.env, cfg.env),
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: needsShell,
+    }) as ChildProcessWithoutNullStreams;
+    conn.child = child;
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      for (const msg of conn.decoder.push(chunk)) this.handleMessage(serverId, conn, msg);
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      for (const line of String(chunk).split(/\r?\n/)) {
+        const text = line.trim();
+        if (!text) continue;
+        conn.stderrRing.push(text.slice(0, 300));
+        if (conn.stderrRing.length > STDERR_RING) conn.stderrRing.shift();
       }
-    }
-  }
-
-  private registerTool(serverId: string, binding: McpToolBinding): void {
-    this.registry.register({
-      name: binding.registryName,
-      description: binding.description,
-      // MCP 工具默认按网络能力处理（可能访问外部服务）；沙箱/确认流程照常生效
-      permissions: { network: true },
-      schema: z.record(z.unknown()),
-      execute: async (ctx): Promise<ToolResult> => {
-        try {
-          const result = (await this.callTool(serverId, binding.toolName, ctx.params ?? {})) as {
-            content?: { type?: string; text?: string }[];
-            isError?: boolean;
-          };
-          const texts = (result?.content ?? [])
-            .filter((c) => c?.type === "text" && typeof c.text === "string")
-            .map((c) => c.text as string);
-          return {
-            ok: !result?.isError,
-            content: texts.length > 0 ? texts.join("\n") : JSON.stringify(result ?? {}),
-          };
-        } catch (err) {
-          return { ok: false, content: `[错误] MCP 调用失败：${err instanceof Error ? err.message : String(err)}` };
-        }
-      },
+      this.onUpdate();
+    });
+    child.on("error", (err) => {
+      conn.state = "error";
+      conn.error = describeMcpError("transport", err.message);
+      this.onUpdate();
+    });
+    child.on("exit", (code) => {
+      if (conn.manualClose) return;
+      const wasReady = conn.state === "ready";
+      conn.state = "error";
+      conn.error = describeMcpError("transport", `进程退出（code=${code ?? "?"}）`);
+      this.dropTools(serverId);
+      this.onUpdate();
+      if (wasReady) this.scheduleReconnect(serverId, conn);
     });
   }
 
-  private async callTool(serverId: string, toolName: string, args: unknown): Promise<unknown> {
-    const conn = this.connections.get(serverId) ?? (await this.connect(serverId), this.connections.get(serverId));
-    if (!conn || conn.state !== "ready") throw new Error(`MCP 服务器不可用：${serverId}`);
-    return this.send(conn, "tools/call", { name: toolName, arguments: args ?? {} });
+  private scheduleReconnect(serverId: string, conn: Connection): void {
+    if (conn.reconnectTimer) return;
+    if (conn.reconnectAttempts >= RECONNECT_MAX) {
+      conn.error = `${conn.error ?? "连接失败"}；已重试 ${RECONNECT_MAX} 次，请手动重连`;
+      this.onUpdate();
+      return;
+    }
+    const delay = 1000 * 2 ** conn.reconnectAttempts;
+    conn.reconnectAttempts += 1;
+    conn.reconnectTimer = setTimeout(() => {
+      conn.reconnectTimer = undefined;
+      void this.connect(serverId, { auto: true });
+    }, delay);
+    conn.reconnectTimer.unref?.();
+    this.onUpdate();
   }
 
-  disconnect(id: string): boolean {
-    const conn = this.connections.get(id);
-    if (!conn) return false;
-    this.dropTools(id);
+  private killProcess(conn: Connection): void {
+    const child = conn.child;
+    conn.child = undefined;
+    if (!child) return;
+    if (process.platform === "win32" && child.pid) {
+      // 关键：npx/uvx 的孙进程会持有管道 → 必须杀进程树（slime 的孤儿进程教训）
+      try {
+        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { timeout: 5000, windowsHide: true });
+      } catch {
+        // 回退 kill
+      }
+    }
     try {
-      conn.child?.kill();
+      child.kill();
     } catch {
       // 已退出
     }
     for (const pending of conn.pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(new Error("MCP 连接已断开"));
+      pending.reject(new Error(describeMcpError("transport", "连接已关闭")));
     }
     conn.pending.clear();
+  }
+
+  private teardown(id: string): void {
+    const conn = this.connections.get(id);
+    if (!conn) return;
+    conn.manualClose = true;
+    if (conn.reconnectTimer) {
+      clearTimeout(conn.reconnectTimer);
+      conn.reconnectTimer = undefined;
+    }
+    this.dropTools(id);
+    this.killProcess(conn);
     this.connections.delete(id);
+  }
+
+  private async callTool(serverId: string, toolName: string, args: unknown): Promise<unknown> {
+    let conn = this.connections.get(serverId);
+    if (!conn || conn.state !== "ready") {
+      await this.connect(serverId);
+      conn = this.connections.get(serverId);
+    }
+    if (!conn || conn.state !== "ready") throw new Error(conn?.error ?? `MCP 服务器不可用：${serverId}`);
+    return this.request(conn, "tools/call", { name: toolName, arguments: args ?? {} });
+  }
+
+  disconnect(id: string): boolean {
+    if (!this.connections.has(id)) return false;
+    this.teardown(id);
     this.onUpdate();
     return true;
   }
 
   shutdown(): void {
-    for (const id of [...this.connections.keys()]) this.disconnect(id);
+    for (const id of [...this.connections.keys()]) this.teardown(id);
+    this.onUpdate();
   }
+}
+
+function capabilityList(capabilities: unknown): string[] {
+  const caps = capabilities as Record<string, unknown> | null | undefined;
+  if (!caps || typeof caps !== "object") return [];
+  return Object.keys(caps);
 }

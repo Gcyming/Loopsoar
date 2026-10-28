@@ -57,8 +57,8 @@ export class SkillHost {
             skipped.push({ dir: full, reason: `SKILL.md 超过 ${SKILL_MAX_BYTES} 字节` });
             continue;
           }
-          const parsed = SkillRegistry.parseMarkdown(raw);
-          this.registry.install(name, file, parsed.frontmatter, parsed.body, state.enabled[name] ?? true);
+          const parsed = SkillRegistry.parseMarkdown(raw, name);
+          this.registry.install(name, file, parsed, undefined, state.enabled[name] ?? true);
           if (!(name in state.enabled)) {
             state.enabled[name] = true;
           }

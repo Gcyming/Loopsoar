@@ -197,6 +197,7 @@ export interface SkillRecord {
   body: string;
   bytes: number;
   enabled: boolean;
+  warnings?: string[];
 }
 
 export interface McpServerInfo {
@@ -207,6 +208,8 @@ export interface McpServerInfo {
   enabled: boolean;
   state: "idle" | "connecting" | "ready" | "error";
   tools: string[];
+  capabilities: string[];
+  stderr: string[];
   error?: string;
 }
 
@@ -217,6 +220,7 @@ export interface SkillRecord {
   body: string;
   bytes: number;
   enabled: boolean;
+  warnings?: string[];
 }
 
 export interface McpServerInfo {
@@ -227,6 +231,8 @@ export interface McpServerInfo {
   enabled: boolean;
   state: "idle" | "connecting" | "ready" | "error";
   tools: string[];
+  capabilities: string[];
+  stderr: string[];
   error?: string;
 }
 

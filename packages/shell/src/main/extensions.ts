@@ -50,6 +50,7 @@ export class ExtensionHost {
     const skipped: { dir: string; reason: string }[] = [];
     const state = this.readState();
     this.registry.clear();
+    const seen = new Set<string>();
     let installed = 0;
     try {
       fs.mkdirSync(this.dir, { recursive: true });
@@ -61,6 +62,11 @@ export class ExtensionHost {
           if (!fs.existsSync(manifestPath)) continue;
           const raw = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as unknown;
           const manifest = ExtensionRegistry.parseManifest(raw);
+          if (seen.has(manifest.id)) {
+            skipped.push({ dir: full, reason: `扩展 id 重复（${manifest.id}），已忽略` });
+            continue;
+          }
+          seen.add(manifest.id);
           const enabled = state.enabled[manifest.id] ?? false;
           const installedAt = state.installedAt[manifest.id] ?? Date.now();
           this.registry.install(manifest, full, enabled, installedAt);
