@@ -14,6 +14,17 @@ export const BrowserNavigateSchema = z.object({ url: z.string() });
 export const BrowserScreenshotSchema = z.object({ selector: z.string().optional() });
 
 /**
+ * Provider（模型服务商）配置：只包含非机密字段。
+ * 为什么 apiKey 不在此 schema：密钥不落盘（前期准备 §4 安全门：apiKey 加密存储前先走环境变量），
+ * 配置通道只负责 baseUrl/model/provider 三个可公开字段。
+ */
+export const SettingsProviderSchema = z.object({
+  provider: z.string().min(1).max(64),
+  baseUrl: z.string().url(),
+  model: z.string().min(1).max(200),
+});
+
+/**
  * ChannelBinding defines the structure of a communication channel.
  * domain: The domain/category of the channel (e.g., "chat", "perm")
  * method: The method/action name (e.g., "stream", "read")
@@ -103,6 +114,18 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "snapshot",
     request: null,
+    sensitive: true,
+  },
+  "settings:getProvider": {
+    domain: "settings",
+    method: "getProvider",
+    request: null,
+    sensitive: true,
+  },
+  "settings:setProvider": {
+    domain: "settings",
+    method: "setProvider",
+    request: SettingsProviderSchema,
     sensitive: true,
   },
 };

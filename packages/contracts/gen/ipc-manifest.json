@@ -83,6 +83,20 @@
       "method": "snapshot",
       "sensitive": true,
       "hasRequest": false
+    },
+    {
+      "channel": "settings:getProvider",
+      "domain": "settings",
+      "method": "getProvider",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:setProvider",
+      "domain": "settings",
+      "method": "setProvider",
+      "sensitive": true,
+      "hasRequest": true
     }
   ],
   "events": [

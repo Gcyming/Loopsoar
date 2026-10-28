@@ -9,6 +9,7 @@ import { registerWorkspaceDomain } from "../../packages/shell/src/main/domains/w
 import { registerAgentsDomain } from "../../packages/shell/src/main/domains/agents.ts";
 import { registerChatDomain } from "../../packages/shell/src/main/domains/chat.ts";
 import { registerBrowserDomain } from "../../packages/shell/src/main/domains/browserAdapter.ts";
+import { registerSettingsDomain } from "../../packages/shell/src/main/domains/settings.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
@@ -19,6 +20,15 @@ function fakeDeps(): TrustedIpcDeps {
   };
 }
 
+/** 假 ChatService：本守卫只验证「通道有 handler」，不触发流式逻辑。 */
+function fakeChatService(): never {
+  return {
+    stream: async () => ({}),
+    stop: () => false,
+    resolvePermission: () => false,
+  } as never;
+}
+
 function assemble(): void {
   const deps = fakeDeps();
   registerRuntimeDomain(deps);
@@ -27,8 +37,14 @@ function assemble(): void {
     platform: {} as LoopsoarPlatform,
   });
   registerAgentsDomain(deps);
-  registerChatDomain({ ...deps, push: () => {} });
+  registerChatDomain({ ...deps, chatService: fakeChatService(), push: () => {} });
   registerBrowserDomain(deps);
+  registerSettingsDomain({
+    ...deps,
+    platform: {} as LoopsoarPlatform,
+    configDir: "C:/tmp/loopsoar-config-test",
+    env: {},
+  });
 }
 
 describe("守卫：IPC 通道与 handler 双向一致（无死码）", () => {

@@ -22,6 +22,7 @@
     "./sandbox": "./src/sandbox.js",
     "./websearch": "./src/websearch/index.js",
     "./audit": "./src/audit.js",
+    "./provider": "./src/provider.js",
     "./tool_loop": "./src/tool_loop.js",
     "./memory": "./src/memory/index.js",
     "./plugin": "./src/plugin/index.js",

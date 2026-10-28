@@ -22,6 +22,8 @@ export const IPC_CHANNELS = {
   "browser:navigate": { domain: "browser", method: "navigate", sensitive: true, hasRequest: true },
   "browser:screenshot": { domain: "browser", method: "screenshot", sensitive: true, hasRequest: true },
   "browser:snapshot": { domain: "browser", method: "snapshot", sensitive: true, hasRequest: false },
+  "settings:getProvider": { domain: "settings", method: "getProvider", sensitive: true, hasRequest: false },
+  "settings:setProvider": { domain: "settings", method: "setProvider", sensitive: true, hasRequest: true },
 } as const;
 
 /**
@@ -72,7 +74,8 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "workspace": ["read", "write"],
     "agents": ["list"],
     "runtime": ["version", "status"],
-    "browser": ["navigate", "screenshot", "snapshot"]
+    "browser": ["navigate", "screenshot", "snapshot"],
+    "settings": ["getProvider", "setProvider"]
     },
   };
 }

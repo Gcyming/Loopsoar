@@ -12,6 +12,8 @@ import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
 import { ChatService } from "loopsoar-services/chat";
+import { createOpenAiClient } from "loopsoar-core/llm";
+import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
 import { APP_NAME, DATA_DIR_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import { ensureLoopsoarDirs, makeProtocolHandler } from "./boot.js";
@@ -20,6 +22,7 @@ import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
 import { registerChatDomain } from "./domains/chat.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
+import { loadProviderConfig, registerSettingsDomain } from "./domains/settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,22 +78,35 @@ function createMainWindow(): void {
   else void mainWindow.loadURL(`${PROTOCOL}://app/index.html`);
 }
 
-app.whenReady().then(() => {
-  ensureLoopsoarDirs(app.getPath("userData"));
+app.whenReady().then(async () => {
+  const dirs = ensureLoopsoarDirs(app.getPath("userData"));
   protocol.handle(PROTOCOL, makeProtocolHandler((u) => net.fetch(u)));
 
-  // 装配：platform / 工具注册表 / 沙箱 / ChatService（P1 真接线）
+  // 装配：platform / 工具注册表 / 沙箱 / Provider 配置 → ChatService（真 LLM 闭环）
   const platform = createNodePlatform();
   const registry = new ToolRegistry();
   registerBuiltinMinimal(registry, platform);
   const sandbox = new SandboxManager();
   sandbox.setWorkspaceRoot(process.cwd());
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
-  const chatService = new ChatService({ platform, registry, sandbox });
+
+  const providerConfig = await loadProviderConfig(platform, dirs.configDir);
+  const apiKey = resolveApiKeyFromEnv(process.env);
+  const llmUsability = providerUsability(providerConfig, apiKey);
+  const llm =
+    providerConfig && llmUsability.usable
+      ? createOpenAiClient({
+          baseUrl: providerConfig.baseUrl,
+          apiKey,
+          model: providerConfig.model,
+        })
+      : undefined;
+  const chatService = new ChatService({ platform, registry, sandbox, llm });
 
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({ ...deps, platform });
   registerAgentsDomain(deps);
+  registerSettingsDomain({ ...deps, platform, configDir: dirs.configDir, env: process.env });
   registerChatDomain({ ...deps, chatService, push: pushToRenderer });
   registerBrowserDomain(deps);
 
