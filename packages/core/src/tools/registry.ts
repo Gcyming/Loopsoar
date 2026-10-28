@@ -55,6 +55,11 @@ export class ToolRegistry {
     return this.store.has(name);
   }
 
+  /** 精确撤销单个工具（插件卸载 / 桥接 dispose 用）；返回是否真的删除了。 */
+  unregister(name: string): boolean {
+    return this.store.delete(name);
+  }
+
   clear(): void {
     this.store.clear();
   }

@@ -16,6 +16,7 @@ export * from "./tools/builtin.js";
 export * from "./tools/hard_rules.js";
 export * from "./tools/policy.js";
 export * from "./tools/classifier.js";
+export * from "./tools/pluginBridge.js";
 export * from "./sandbox.js";
 export * from "./websearch/index.js";
 export * from "./audit.js";

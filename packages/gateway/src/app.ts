@@ -91,7 +91,8 @@ export async function buildApp(options: GatewayOptions = {}): Promise<FastifyIns
 export async function startServer(
   options: GatewayOptions = {},
 ): Promise<{ app: FastifyInstance; url: string }> {
-  const port = options.port ?? Number(process.env.LOOPSOAR_GATEWAY_PORT || "19110");
+  // 项目隔离：默认端口与 slime（19000/19110）错开，避免同机并行运行时互相串扰
+  const port = options.port ?? Number(process.env.LOOPSOAR_GATEWAY_PORT || "19210");
   const tokenEnv = process.env.LOOPSOAR_GATEWAY_TOKEN || "";
   const requireToken = options.requireToken ?? tokenEnv.length > 0;
   const gatewayToken = options.gatewayToken || tokenEnv;

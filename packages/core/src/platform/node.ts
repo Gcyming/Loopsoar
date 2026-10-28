@@ -246,7 +246,8 @@ class NodeNetAdapter implements NetAdapter {
 class NodeEmbedAdapter implements EmbedAdapter {
   private baseUrl: string;
   constructor(opts?: { baseUrl?: string }) {
-    this.baseUrl = opts?.baseUrl ?? "http://127.0.0.1:8999";
+    // 项目隔离：Loopsoar 使用独立嵌入端口（slime 用 8999，避免共享同一 llama-server 实例互相串扰）
+    this.baseUrl = opts?.baseUrl ?? "http://127.0.0.1:8991";
   }
 
   async embed(texts: string[]): Promise<number[][]> {

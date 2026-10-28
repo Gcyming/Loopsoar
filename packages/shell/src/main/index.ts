@@ -12,7 +12,7 @@ import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
 import { ChatService } from "loopsoar-services/chat";
-import { APP_NAME, PROTOCOL } from "../shared/brand.js";
+import { APP_NAME, DATA_DIR_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import { ensureLoopsoarDirs, makeProtocolHandler } from "./boot.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
@@ -22,6 +22,12 @@ import { registerChatDomain } from "./domains/chat.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 项目隔离：Electron 默认 userData 是 %APPDATA%\<package name>；这里显式落到品牌目录
+// （%APPDATA%\loopsoar），确保与 slime / 其他 Electron 应用的数据、缓存、登录态完全分开。
+app.setName(APP_NAME);
+app.setPath("userData", path.join(app.getPath("appData"), DATA_DIR_NAME));
+
 const auditLog: AuditEntry[] = [];
 const deps: TrustedIpcDeps = {
   ipc: ipcMain,
