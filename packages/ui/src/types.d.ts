@@ -176,7 +176,7 @@ export type LoopsoarEvent =
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
-    stream(payload: { message: string; sessionId?: string }): Promise<{ accepted: boolean; sessionId: string }>;
+    stream(payload: { message: string; sessionId?: string; mode?: "build" | "plan" }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId: string }): Promise<{ stopped: boolean }>;
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
   };
@@ -215,6 +215,7 @@ export interface LoopsoarAPI {
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
     testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;
+    clearProvider(): Promise<{ cleared: boolean }>;
     getPreferences(): Promise<{ preferences: Preferences; defaults: Preferences; searchUrlExample: string; locations: LocationsInfo }>;
     setPreferences(payload: Preferences): Promise<{ saved: boolean; preferences: Preferences }>;
     getPermissions(): Promise<PermissionsState>;

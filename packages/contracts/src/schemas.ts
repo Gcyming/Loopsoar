@@ -4,7 +4,13 @@ import { z } from "zod";
  * Named Zod schemas for each channel request payload.
  * Used by gen/ipc.ts for z.infer mapping.
  */
-export const ChatStreamSchema = z.object({ message: z.string(), sessionId: z.string().optional() });
+export const AgentModeSchema = z.enum(["build", "plan"]);
+export const ChatStreamSchema = z.object({
+  message: z.string(),
+  sessionId: z.string().optional(),
+  /** build=允许执行工具；plan=只读规划（仅放行只读工具）。 */
+  mode: AgentModeSchema.optional(),
+});
 export const ChatStopSchema = z.object({ sessionId: z.string() });
 export const ChatSendSchema = z.object({ message: z.string(), sessionId: z.string().optional() });
 export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enum(["allow-once", "allow-session", "deny"]) });
@@ -312,6 +318,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "settings",
     method: "setPermissions",
     request: PermissionsSchema,
+    sensitive: true,
+  },
+  "settings:clearProvider": {
+    domain: "settings",
+    method: "clearProvider",
+    request: null,
     sensitive: true,
   },
   "settings:testProvider": {

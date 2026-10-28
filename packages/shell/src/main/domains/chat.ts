@@ -19,13 +19,13 @@ export interface ChatDeps extends TrustedIpcDeps {
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
 function startStream(
   deps: ChatDeps,
-  payload: { message: string; sessionId?: string },
+  payload: { message: string; sessionId?: string; mode?: "build" | "plan" },
 ): { accepted: boolean; sessionId: string } {
   const sessionId = payload.sessionId ?? `sess-${Date.now()}`;
   let assistantText = "";
 
   void deps.chatService
-    .stream({ message: payload.message, sessionId }, (item) => {
+    .stream({ message: payload.message, sessionId, mode: payload.mode }, (item) => {
       const type = String(item.meta?.type ?? "chunk");
       if (type === "chunk") assistantText += item.content;
       deps.push(`chat:stream:${type}`, {
@@ -68,11 +68,11 @@ function startStream(
 
 export function registerChatDomain(deps: ChatDeps): void {
   handleTrusted(deps, "chat:stream", (payload) =>
-    startStream(deps, payload as { message: string; sessionId?: string }),
+    startStream(deps, payload as { message: string; sessionId?: string; mode?: "build" | "plan" }),
   );
 
   handleTrusted(deps, "chat:send", (payload) =>
-    startStream(deps, payload as { message: string; sessionId?: string }),
+    startStream(deps, payload as { message: string; sessionId?: string; mode?: "build" | "plan" }),
   );
 
   handleTrusted(deps, "chat:stop", (payload) => {

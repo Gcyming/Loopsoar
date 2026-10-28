@@ -310,6 +310,9 @@ app.whenReady().then(async () => {
       memoryEntries: memory.stats().total,
     }),
     // 供应商保存 → 重建 LLM（立即可对话）
+    onProviderCleared: () => {
+      llmRef = undefined;
+    },
     onProviderSaved: () => {
       const key = resolveApiKeyFromEnv(process.env);
       llmRef = undefined;
@@ -343,6 +346,18 @@ app.whenReady().then(async () => {
     permissionPolicy: () => loadPermissions(dirs.configDir),
     // 供应商：设置面板保存后即时生效
     getLlm: () => llmRef,
+    // 模式：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单
+    getToolAllowlist: (mode?: "build" | "plan") => {
+      if (mode === "plan") {
+        return registry
+          .list()
+          .filter((t) => t.permissions.read && !t.permissions.write && !t.permissions.terminal && !t.permissions.network)
+          .map((t) => t.name);
+      }
+      return defaultAgent?.toolAllowlist;
+    },
+    // 权限确认 → 推送到渲染层弹窗（perm:request 事件）
+    onPermissionRequest: (request) => pushToRenderer("perm:request", request),
   });
 
   // 浏览器宿主：WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）

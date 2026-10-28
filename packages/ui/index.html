@@ -263,6 +263,34 @@
       .settings-toggle:hover {
         border-color: #c8763c;
       }
+      /* 输入区能力条（Loopsoar 自有风格：Claude 式圆角容器 + 品牌赭石强调） */
+      .chip {
+        transition: border-color 120ms, color 120ms, background 120ms, transform 80ms;
+      }
+      .chip:hover {
+        border-color: #c8763c;
+        color: #f4efe6;
+      }
+      .chip:active {
+        transform: scale(0.97);
+      }
+      .send-btn {
+        transition: transform 80ms, background 120ms;
+      }
+      .send-btn:hover:not(:disabled) {
+        background: #d98a4f;
+        transform: scale(1.06);
+      }
+      .send-btn:active:not(:disabled) {
+        transform: scale(0.92);
+      }
+      .send-btn:disabled {
+        cursor: default;
+      }
+      /* 输入框聚焦时容器描边（容器状态由 :focus-within 表达） */
+      div:has(> textarea:focus) {
+        border-color: #6f6a63;
+      }
 
       /* 动效强度偏好（设置 · 通用）：写到 documentElement[data-animations] */
       html[data-animations="reduced"] * {

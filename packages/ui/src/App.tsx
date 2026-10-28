@@ -5,6 +5,7 @@ import type {
   AgentSummary,
   BootStatus,
   LoopsoarAPI,
+  PermissionsState,
   Preferences,
   ProviderStatus,
   TabState,
@@ -145,6 +146,10 @@ export default function App(): React.JSX.Element {
   });
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [tabs, setTabs] = useState<TabState[]>([]);
+  const [mode, setMode] = useState<"build" | "plan">("build");
+  const [permReq, setPermReq] = useState<{ requestId: string; toolName: string; target?: string; kind?: string } | null>(null);
+  const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
+  const [settingsSection, setSettingsSection] = useState<string>("general");
   const sessionIdRef = useRef<string>(nextId("sess"));
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
@@ -182,6 +187,8 @@ export default function App(): React.JSX.Element {
           }
         }
       }
+      const permResult = await api.settings.getPermissions().catch(() => null);
+      if (permResult) setPermSummary(permResult);
       const tabsResult = await api.browser.listTabs().catch(() => null);
       if (tabsResult) setTabs(tabsResult.tabs);
       if (bootResult.status === "fulfilled") setBoot(bootResult.value);
@@ -241,6 +248,12 @@ export default function App(): React.JSX.Element {
         pushTransient("system", String((payload as { content?: string }).content ?? ""));
       }),
       api.on("chat:stream:heartbeat", () => {}),
+      api.on("perm:request", (payload) => {
+        const req = payload as { requestId?: string; toolName?: string; target?: string; kind?: string };
+        if (req?.requestId) {
+          setPermReq({ requestId: req.requestId, toolName: req.toolName ?? "工具", target: req.target, kind: req.kind });
+        }
+      }),
       api.on("browser:tabs", (payload) => {
         const p = payload as { tabs?: TabState[] };
         if (Array.isArray(p.tabs)) setTabs(p.tabs);
@@ -278,6 +291,17 @@ export default function App(): React.JSX.Element {
     };
   }, [api]);
 
+  const openSettings = useCallback((section?: string): void => {
+    setSettingsSection(section ?? "general");
+    setSettingsOpen(true);
+  }, []);
+
+  const respondPermission = useCallback((choice: "allow-once" | "allow-session" | "deny"): void => {
+    if (!api || !permReq) return;
+    void api.perm.respond({ requestId: permReq.requestId, choice });
+    setPermReq(null);
+  }, [api, permReq]);
+
   const send = useCallback((): void => {
     const text = input.trim();
     if (!text || !api) return;
@@ -286,7 +310,7 @@ export default function App(): React.JSX.Element {
     setNotice("");
     setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text, status: "done" }]);
     activeAssistantRef.current = null;
-    void api.chat.stream({ message: text, sessionId: sessionIdRef.current }).catch((err: unknown) => {
+    void api.chat.stream({ message: text, sessionId: sessionIdRef.current, mode }).catch((err: unknown) => {
       setBusy(false);
       setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
     });
@@ -366,6 +390,21 @@ export default function App(): React.JSX.Element {
     });
   }, [api]);
 
+  // E2E：?e2e=chat 时自动发一条消息（配合 scripts/mock-openai-server.mjs 验证真流式链路）
+  useEffect(() => {
+    if (!api || typeof location === "undefined") return;
+    if (new URLSearchParams(location.search).get("e2e") !== "chat") return;
+    const message = "你好，请简单介绍一下你自己";
+    const timer = setTimeout(() => {
+      setBusy(true);
+      setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text: message, status: "done" }]);
+      void api.chat
+        .stream({ message, sessionId: sessionIdRef.current, mode: "build" })
+        .catch(() => setBusy(false));
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [api]);
+
   // 修复遮挡：应用内浮层（设置）打开时隐藏原生 WebContentsView
   useEffect(() => {
     if (!api) return;
@@ -390,6 +429,13 @@ export default function App(): React.JSX.Element {
   }, [provider]);
 
   const agentLabel = agents.find((a) => a.isDefault)?.name ?? "—";
+  const permissionLabel = (state: PermissionsState): string => {
+    const p = state.permissions;
+    const risky = [p.write, p.terminal, p.network];
+    if (risky.every((x) => x === "deny")) return "只读会话";
+    if (risky.some((x) => x === "confirm")) return "权限：询问";
+    return "权限：放行";
+  };
   const canSend = Boolean(api) && !busy && input.trim() !== "";
 
   return (
@@ -535,44 +581,83 @@ export default function App(): React.JSX.Element {
             )}
           </div>
           <div style={styles.composer}>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-              style={styles.textarea}
-              rows={3}
-            />
-            <div style={styles.composerRow}>
-              {busy ? <Icon name="spinner" size={14} className="spinner" style={styles.spinnerInline} /> : null}
-              <span style={styles.notice}>{busy ? "生成中…" : ""}</span>
-              <button
-                type="button"
-                className="btn-primary"
-                style={styles.primaryButton}
-                onClick={send}
-                disabled={!canSend}
-                title="发送（Enter）"
-              >
-                <Icon name="send" size={13} style={{ marginRight: 5, verticalAlign: "-2px" }} />
-                发送
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                style={styles.ghostButton}
-                onClick={stop}
-                disabled={!api || !busy}
-                title="停止生成"
-              >
-                <Icon name="stop" size={13} style={{ marginRight: 5, verticalAlign: "-2px" }} />
-                停止
-              </button>
+            <div style={styles.composerBox}>
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                placeholder="输入消息（Enter 发送，Shift+Enter 换行）"
+                style={styles.textarea}
+                rows={3}
+              />
+              <div style={styles.chipRow}>
+                <button
+                  type="button"
+                  className="chip"
+                  style={{ ...styles.chip, ...(mode === "build" ? styles.chipActive : {}) }}
+                  title="模式：Build 可执行工具 / Plan 只读规划"
+                  onClick={() => setMode(mode === "build" ? "plan" : "build")}
+                >
+                  <Icon name="bolt" size={12} style={{ marginRight: 4 }} />
+                  {mode === "build" ? "Build" : "Plan"}
+                </button>
+                <button
+                  type="button"
+                  className="chip"
+                  style={styles.chip}
+                  title="当前会话权限（点击修改）"
+                  onClick={() => openSettings("permissions")}
+                >
+                  <Icon name="check" size={12} style={{ marginRight: 4 }} />
+                  {permSummary ? permissionLabel(permSummary) : "权限"}
+                </button>
+                <button
+                  type="button"
+                  className="chip"
+                  style={styles.chip}
+                  title="选择模型 / 供应商（点击配置）"
+                  onClick={() => openSettings("providers")}
+                >
+                  <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
+                  {provider?.configured ? provider.model : "未配置模型"}
+                </button>
+                <span style={styles.spacer} />
+                {busy ? (
+                  <>
+                    <Icon name="spinner" size={14} className="spinner" style={styles.spinnerInline} />
+                    <button type="button" className="chip" style={styles.chip} onClick={stop} title="停止生成">
+                      <Icon name="stop" size={12} style={{ marginRight: 4 }} />
+                      停止
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="send-btn"
+                    style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
+                    onClick={send}
+                    disabled={!canSend}
+                    title="发送（Enter）"
+                  >
+                    <Icon name="send" size={15} />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div style={styles.composerFoot}>
+              <span style={styles.notice}>
+                {notice ||
+                  (busy
+                    ? "生成中…"
+                    : mode === "plan"
+                      ? "Plan 模式：只读规划，不执行写操作"
+                      : "Build 模式：可在权限范围内执行工具")}
+              </span>
             </div>
           </div>
         </aside>
@@ -591,9 +676,38 @@ export default function App(): React.JSX.Element {
       {settingsOpen ? (
         <Settings
           api={api}
-          onClose={() => setSettingsOpen(false)}
+          initialSection={settingsSection as never}
+          onClose={() => {
+            setSettingsOpen(false);
+            void api?.settings.getPermissions().then(setPermSummary).catch(() => {});
+          }}
           onPreferencesSaved={(next) => setPreferences(next)}
         />
+      ) : null}
+
+      {permReq ? (
+        <div style={styles.permOverlay}>
+          <div style={styles.permCard}>
+            <div style={styles.permTitle}>Agent 请求执行工具</div>
+            <div style={styles.permTool}>
+              <Icon name="bolt" size={14} style={{ marginRight: 6, color: BRAND.ochreHover }} />
+              {permReq.toolName}
+              {permReq.target ? <span style={styles.permTarget}> → {permReq.target}</span> : null}
+            </div>
+            <div style={styles.permHint}>本次操作需要你的确认（权限设置：询问）。</div>
+            <div style={styles.permBtns}>
+              <button type="button" className="btn-ghost" style={styles.ghostButton} onClick={() => respondPermission("deny")}>
+                拒绝
+              </button>
+              <button type="button" className="btn-ghost" style={styles.ghostButton} onClick={() => respondPermission("allow-session")}>
+                本会话允许
+              </button>
+              <button type="button" className="btn-primary" style={styles.primaryButton} onClick={() => respondPermission("allow-once")}>
+                允许一次
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {notice ? (
@@ -800,6 +914,67 @@ const styles: Record<string, React.CSSProperties> = {
     wordBreak: "break-word",
   },
   composer: { borderTop: `1px solid ${BRAND.border}`, padding: 10 },
+  composerBox: {
+    borderRadius: 12,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.ink,
+    padding: "8px 8px 6px",
+  },
+  chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" },
+  chip: {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 24,
+    padding: "0 9px",
+    borderRadius: 999,
+    border: `1px solid ${BRAND.border}`,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    fontSize: 11,
+    cursor: "pointer",
+    maxWidth: 170,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: BRAND.ochreSoft },
+  spacer: { flex: 1 },
+  sendBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    border: "none",
+    background: BRAND.ochre,
+    color: BRAND.ink,
+    display: "grid",
+    placeItems: "center",
+    cursor: "pointer",
+    flex: "none",
+    transition: "transform 80ms, background 120ms",
+  },
+  composerFoot: { marginTop: 6, padding: "0 2px" },
+  permOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(8,9,12,0.5)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 60,
+  },
+  permCard: {
+    width: 420,
+    borderRadius: 12,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    padding: 16,
+    boxShadow: "0 24px 60px rgba(0,0,0,0.55)",
+  },
+  permTitle: { fontSize: 13, fontWeight: 700, marginBottom: 10 },
+  permTool: { display: "flex", alignItems: "center", fontSize: 13, color: BRAND.linen },
+  permTarget: { color: BRAND.linenMuted, fontSize: 11.5, marginLeft: 4, wordBreak: "break-all" },
+  permHint: { marginTop: 8, fontSize: 11, color: BRAND.linenFaint, lineHeight: 1.6 },
+  permBtns: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 },
   textarea: {
     width: "100%",
     boxSizing: "border-box",

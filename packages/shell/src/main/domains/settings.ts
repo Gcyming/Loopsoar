@@ -52,6 +52,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   diagnosticsExtra?: () => Record<string, unknown>;
   /** 供应商配置保存后回调（装配层据此重建 LLM 客户端，无需重启）。 */
   onProviderSaved?: (cfg: ProviderConfig) => void;
+  /** 供应商配置被清除后回调（装配层销毁 LLM 客户端）。 */
+  onProviderCleared?: () => void;
   /** 通用偏好保存后回调（装配层据此切换工作区根/记忆库位置等）。 */
   onPreferencesSaved?: (prefs: Preferences) => void;
 }
@@ -303,6 +305,16 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     const apiKey = resolveApiKeyFromEnv(deps.env);
     const usability = providerUsability(cfg, apiKey);
     return { saved: true, config: cfg, usable: usability.usable, reason: usability.reason ?? null };
+  });
+
+  handleTrusted(deps, "settings:clearProvider", () => {
+    try {
+      if (fs.existsSync(paths.provider)) fs.unlinkSync(paths.provider);
+    } catch {
+      throw new Error("删除供应商配置失败");
+    }
+    deps.onProviderCleared?.();
+    return { cleared: true };
   });
 
   handleTrusted(deps, "settings:testProvider", async (payload) => {

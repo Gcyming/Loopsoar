@@ -44,6 +44,7 @@ export const IPC_CHANNELS = {
   "settings:setPreferences": { domain: "settings", method: "setPreferences", sensitive: true, hasRequest: true },
   "settings:getPermissions": { domain: "settings", method: "getPermissions", sensitive: true, hasRequest: false },
   "settings:setPermissions": { domain: "settings", method: "setPermissions", sensitive: true, hasRequest: true },
+  "settings:clearProvider": { domain: "settings", method: "clearProvider", sensitive: true, hasRequest: false },
   "settings:testProvider": { domain: "settings", method: "testProvider", sensitive: true, hasRequest: true },
   "settings:getRules": { domain: "settings", method: "getRules", sensitive: true, hasRequest: false },
   "settings:setRules": { domain: "settings", method: "setRules", sensitive: true, hasRequest: true },
@@ -101,7 +102,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "runtime": ["version", "status"],
     "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay"],
     "memory": ["list", "add", "update", "delete", "stats", "clear"],
-    "settings": ["getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "testProvider", "getRules", "setRules", "diagnostics", "about"],
+    "settings": ["getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "diagnostics", "about"],
     "window": ["minimize", "maximize", "close", "state"]
     },
   };

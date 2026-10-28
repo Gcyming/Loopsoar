@@ -54,6 +54,10 @@ export interface ChatServiceOptions {
   permissionPolicy?: () => Permissions;
   /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
   getLlm?: () => LlmClient | undefined;
+  /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
+  getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
+  /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
+  onPermissionRequest?: (request: PermissionRequestEvent) => void;
   agent?: ChatAgent;
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
@@ -62,6 +66,16 @@ export interface ChatServiceOptions {
 export interface ChatInput {
   message: string;
   sessionId?: string;
+  /** build=允许执行工具；plan=只读规划。 */
+  mode?: "build" | "plan";
+}
+
+/** 权限确认请求（浮层 UI 据此弹窗；requestId 用于 resolvePermission 结算）。 */
+export interface PermissionRequestEvent {
+  requestId: string;
+  toolName: string;
+  target?: string;
+  kind?: string;
 }
 
 export interface ChatStreamResult {
@@ -147,6 +161,8 @@ export class InternalToolExecutor {
       toolAllowlist?: string[];
       /** 权限策略（类别默认决策）：第二道闸，先于沙箱。 */
       permissionPolicy?: () => Permissions;
+      /** 确认请求回调（弹窗 UI）。 */
+      onPermissionRequest?: (request: PermissionRequestEvent) => void;
       permBus: PermRequestBus;
       platform?: LoopsoarPlatform;
       agentId: string;
@@ -196,6 +212,8 @@ export class InternalToolExecutor {
     // 沙箱要确认，或策略要求确认 → 统一走一次确认（策略 allow 时跳过沙箱的 confirm）
     if (decision.action === "confirm" && policyDecision !== "allow") {
       const requestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // 推送到渲染层弹窗（用户点允许/拒绝 → perm:respond → resolvePermission）
+      this.opts.onPermissionRequest?.({ requestId, toolName: toolCall.name, target, kind });
       const result = await permBus.request({ requestId, toolName: toolCall.name, target });
       if (result.choice === "deny") {
         return { ok: false, content: `[错误] 确认被拒绝：${result.customReason ?? "用户拒绝"}`, error: "denied" };
@@ -255,7 +273,15 @@ export class ChatService {
     });
 
     const emit = (type: ChatEventType, data: unknown): void => {
-      batcher.push({ content: typeof data === "string" ? data : JSON.stringify(data), meta: { type } });
+      // chunk/reasoning 的 LoopEvent.data 形如 { text }：取纯文本推出（否则 UI 会显示 JSON 片段）
+      let content: string;
+      if (type === "chunk" || type === "reasoning") {
+        const text = (data as { text?: unknown } | null)?.text;
+        content = typeof text === "string" ? text : typeof data === "string" ? data : JSON.stringify(data);
+      } else {
+        content = typeof data === "string" ? data : JSON.stringify(data);
+      }
+      batcher.push({ content, meta: { type } });
     };
 
     if (!llm) {
@@ -292,10 +318,12 @@ export class ChatService {
     const controller = new AbortController();
     this.aborts.set(sessionId, controller);
 
+    const resolvedAllowlist = this.opts.getToolAllowlist?.(input.mode) ?? this.opts.toolAllowlist;
     const executor = new InternalToolExecutor({
       registry,
       sandbox,
-      toolAllowlist: this.opts.toolAllowlist,
+      toolAllowlist: resolvedAllowlist,
+      onPermissionRequest: this.opts.onPermissionRequest,
       permissionPolicy: this.opts.permissionPolicy,
       permBus: this.permBus,
       platform,

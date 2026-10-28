@@ -239,6 +239,13 @@
       "hasRequest": true
     },
     {
+      "channel": "settings:clearProvider",
+      "domain": "settings",
+      "method": "clearProvider",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "settings:testProvider",
       "domain": "settings",
       "method": "testProvider",
