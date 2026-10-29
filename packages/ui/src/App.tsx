@@ -591,6 +591,18 @@ export default function App(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [api]);
 
+  // E2E：?e2e=model-menu / perm-menu 自动展开输入区弹层（验证锚定与不被裁切）
+  useEffect(() => {
+    if (!api || typeof location === "undefined") return;
+    const mode = new URLSearchParams(location.search).get("e2e");
+    if (mode !== "model-menu" && mode !== "perm-menu") return;
+    const timer = setTimeout(() => {
+      if (mode === "model-menu") openModelMenu();
+      else void api.settings.getPermissions().then((r) => { setPermSummary(r); setPermMenuOpen(true); }).catch(() => {});
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [api, openModelMenu]);
+
   // E2E 深链：?e2e=settings&section=xxx 直接打开对应设置分区
   useEffect(() => {
     if (typeof location === "undefined") return;
@@ -636,7 +648,7 @@ export default function App(): React.JSX.Element {
 
   // 历史 / 下载面板（以点击的按钮为基点展开）
   const renderHistoryPanel = (): React.JSX.Element => (
-    <div style={styles.popover}>
+    <div className="pop-in" style={styles.popover}>
       <div style={styles.dropTitle}>历史记录（本标签）</div>
       {historyEntries.length === 0 ? (
         <div style={styles.dropEmpty}>暂无历史</div>
@@ -666,7 +678,7 @@ export default function App(): React.JSX.Element {
   );
 
   const renderDownloadsPanel = (): React.JSX.Element => (
-    <div style={{ ...styles.popover, right: 0, left: "auto", width: 400 }}>
+    <div className="pop-in" style={{ ...styles.popover, right: 0, left: "auto", width: 400 }}>
       <div style={styles.dropTitle}>下载</div>
       {downloads.length === 0 ? (
         <div style={styles.dropEmpty}>暂无下载</div>
@@ -956,13 +968,19 @@ export default function App(): React.JSX.Element {
                     className="chip"
                     style={styles.chip}
                     title="当前会话权限"
-                    onClick={() => setPermMenuOpen((v) => !v)}
+                    onClick={() => {
+                      if (!permSummary) {
+                        void api?.settings.getPermissions().then((r) => { setPermSummary(r); setPermMenuOpen(true); }).catch(() => {});
+                        return;
+                      }
+                      setPermMenuOpen((v) => !v);
+                    }}
                   >
                     <Icon name="check" size={12} style={{ marginRight: 4 }} />
                     {permSummary ? permissionLabel(permSummary) : "权限"}
                   </button>
                   {permMenuOpen && permSummary ? (
-                    <div style={{ ...styles.popover, ...styles.chipPopover }}>
+                    <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover }}>
                       <div style={styles.modelMenuHead}>本会话工具权限</div>
                       {[
                         { key: "read", label: "读取文件" },
@@ -1023,7 +1041,7 @@ export default function App(): React.JSX.Element {
                     {provider?.configured ? provider.model : "未配置模型"}
                   </button>
                   {modelMenuOpen ? (
-                    <div style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
+                    <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
                       <div style={styles.modelMenuHead}>{provider?.provider ?? "未配置"} · 选择模型</div>
                       {modelList === null ? (
                         <div style={styles.modelMenuItem}>加载中…</div>
@@ -1147,7 +1165,8 @@ export default function App(): React.JSX.Element {
       {notice ? (
         <button type="button" className="toast" style={styles.toast} onClick={() => setNotice("")} title="点击关闭">
           <Icon name="bolt" size={13} style={{ marginRight: 6, verticalAlign: "-2px" }} />
-          {notice}
+          {notice.slice(0, 260)}
+          {notice.length > 260 ? "…" : ""}
         </button>
       ) : null}
     </div>
@@ -1538,7 +1557,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: BRAND.ink,
     padding: "8px 8px 6px",
   },
-  chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "nowrap", overflow: "hidden" },
+  chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "nowrap" },
   chip: {
     display: "inline-flex",
     alignItems: "center",

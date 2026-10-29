@@ -54,6 +54,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mcpConfigPath, setMcpConfigPath] = useState("");
   const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "" });
   const [keyInput, setKeyInput] = useState("");
+  const [pModels, setPModels] = useState<string[] | null>(null);
+  const [pModelsError, setPModelsError] = useState<string | null>(null);
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [pEditing, setPEditing] = useState(false);
@@ -230,6 +232,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             setPForm({ provider: "", baseUrl: "", model: "" });
           }
           setTestRes(null);
+          setPModels(null);
+          setPModelsError(null);
         };
         const commit = async (): Promise<void> => {
           try {
@@ -252,8 +256,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         return (
           <div>
             <Head t="供应商" h="可添加多条配置，选一条设为活跃。API Key 在输入框填写 → 系统密钥库加密保存，界面只显示掩码" />
+            <div style={S.grid}>
             {providerItems.map((item) => (
-              <div key={item.id} style={S.card}>
+              <div key={item.id} className="panel-card" style={S.card}>
                 <div style={S.rowBetween}>
                   <span style={S.meta}>
                     <button
@@ -291,11 +296,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 </div>
               </div>
             ))}
+            {providerItems.length > 0 ? (
+              <button type="button" className="panel-card add-card" style={S.addCard} onClick={() => startEdit()}>
+                <Icon name="plus" size={16} style={{ marginRight: 6 }} />
+                添加供应商
+              </button>
+            ) : null}
+            </div>
             {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
-            {editingProviderId === null && providerItems.length > 0 ? (
-              <div style={S.btns}><Btn label="添加供应商" primary onClick={() => startEdit()} /></div>
-            ) : (
-              <div style={S.card}>
+            {editingProviderId === null && providerItems.length === 0 ? null : (
+              <div className="panel-card" style={S.card}>
                 <div style={S.formHead}>{editingProviderId === "new" ? "添加供应商" : "编辑供应商"}</div>
                 <div style={S.presetRow}>
                   <span style={S.tag}>快速填充</span>
@@ -310,7 +320,44 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 </div>
                 <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
                 <Field l="接口地址"><In v={pForm.baseUrl} ph="https://api.deepseek.com/v1" on={(x) => setPForm({ ...pForm, baseUrl: x })} /></Field>
-                <Field l="模型"><In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} /></Field>
+                <Field l="模型">
+                  <div style={S.col}>
+                    <div style={S.rowEnd}>
+                      <In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} />
+                      <Btn
+                        label="获取模型列表"
+                        small
+                        onClick={() =>
+                          void api.settings
+                            .listModels(pForm)
+                            .then((r) => {
+                              setPModels(r.models);
+                              setPModelsError(r.error);
+                              if (!pForm.model && r.models[0]) setPForm({ ...pForm, model: r.models[0] });
+                            })
+                            .catch((e) => setPModelsError(e instanceof Error ? e.message : String(e)))
+                        }
+                      />
+                    </div>
+                    {pModelsError ? <div style={S.errText}>{pModelsError}</div> : null}
+                    {pModels && pModels.length > 0 ? (
+                      <div style={S.modelChips}>
+                        {pModels.slice(0, 30).map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            className="chip"
+                            style={{ ...S.chip, ...(pForm.model === m ? S.chipOn : {}) }}
+                            onClick={() => setPForm({ ...pForm, model: m })}
+                            title={m}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </Field>
                 <Field l="API 密钥" h="保存时加密写入系统密钥库；不落日志、不回传、只显示掩码。留空则沿用已有密钥">
                   <In v={keyInput} ph="sk-…（粘贴后点保存）" type="password" on={setKeyInput} />
                 </Field>
@@ -365,7 +412,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             </div>
           </div></Field>
           {mem.facts.length === 0 ? <div style={S.dashed}>还没有记忆。对话后自动积累，也可手动添加。</div> : mem.facts.map((f) => (
-            <div key={f.id} style={S.card}>
+            <div key={f.id} className="panel-card" style={S.card}>
               <div style={S.rowBetween}>
                 <span style={S.meta}><span style={BADGE.neutral}>{f.category}</span><span style={S.tag}>重要度 {f.importance}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
                 <span style={S.icons}>
@@ -402,7 +449,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <div style={S.dashed}>暂无扩展。扩展目录为空，或尚未放入合法的 loopsoar.extension.json。</div>
             ) : (
               extensions.map((ext) => (
-                <div key={ext.manifest.id} style={S.card}>
+                <div key={ext.manifest.id} className="panel-card" style={S.card}>
                   <div style={S.rowBetween}>
                     <span style={S.meta}>
                       <span style={S.metaTitle}>{ext.manifest.name}</span>
@@ -449,7 +496,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <div style={S.dashed}>暂无技能。在技能目录创建 &lt;id&gt;/SKILL.md（--- 包裹 frontmatter）即可被发现。</div>
             ) : (
               skills.map((sk) => (
-                <div key={sk.id} style={S.card}>
+                <div key={sk.id} className="panel-card" style={S.card}>
                   <div style={S.rowBetween}>
                     <span style={S.meta}>
                       <span style={S.metaTitle}>{sk.frontmatter.name}</span>
@@ -478,7 +525,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div>
             <Head t="MCP 服务" h="独立子系统：通过 stdio JSON-RPC 连接外部工具服务；工具以 mcp__&lt;server&gt;__&lt;tool&gt; 注册进工具表" />
             <div style={S.note}>配置文件：<code style={S.code}>{mcpConfigPath || "—"}</code></div>
-            <div style={S.card}>
+            <div className="panel-card" style={S.card}>
               <div style={S.formHead}>添加 MCP 服务器</div>
               <Field l="名称"><In v={mcpForm.name} ph="filesystem / github" on={(x) => setMcpForm({ ...mcpForm, name: x })} /></Field>
               <Field l="启动命令"><In v={mcpForm.command} ph="npx / node / uvx" on={(x) => setMcpForm({ ...mcpForm, command: x })} /></Field>
@@ -508,7 +555,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <div style={S.dashed}>还没有 MCP 服务器。添加后点击「连接」会做 initialize 握手并注册工具。</div>
             ) : (
               mcpServers.map((srv) => (
-                <div key={srv.id} style={S.card}>
+                <div key={srv.id} className="panel-card" style={S.card}>
                   <div style={S.rowBetween}>
                     <span style={S.meta}>
                       <span style={S.metaTitle}>{srv.name}</span>
@@ -574,7 +621,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError]);
 
   return (
     <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -595,7 +642,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               </React.Fragment>
             ))}
           </nav>
-          <div style={S.content}>
+          <div className="settings-section" key={section} style={S.content}>
             {body}
             {notice ? <div style={notice.kind === "ok" ? S.noticeOk : S.noticeErr}>{notice.text}</div> : null}
           </div>
@@ -634,7 +681,7 @@ function SaveBtn({ onClick, label }: { onClick: () => void; label: string }) {
 }
 function RuleCard({ d, max, on, onDel }: { d: DraftRule; max: number; on: (p: Partial<DraftRule>) => void; onDel: () => void }) {
   const bytes = new TextEncoder().encode(d.content).length;
-  return (<div style={S.card}>
+  return (<div className="panel-card" style={S.card}>
     <div style={S.rowBetween}>
       <span style={S.meta}><span style={BADGE.neutral}>{d.scope === "workspace" ? "项目规则" : "全局规则"}</span><span style={bytes > max ? S.errText : S.tag}>{bytes} / {max} 字节</span></span>
       <span style={S.icons}><Toggle v={d.enabled} on={(next) => on({ enabled: next })} /><Btn label="删除" small onClick={onDel} /></span>
@@ -686,6 +733,35 @@ const S: Record<string, React.CSSProperties> = {
   small: { padding: "3px 8px", fontSize: 11 },
   btns: { display: "flex", alignItems: "center", gap: 10, paddingTop: 12, flexWrap: "wrap" },
   card: { border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 12, marginBottom: 10, background: BRAND.inkPanel },
+  grid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 10 },
+  addCard: {
+    minHeight: 84,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: `1px dashed ${BRAND.borderStrong}`,
+    borderRadius: 10,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    fontSize: 12.5,
+    cursor: "pointer",
+  },
+  modelChips: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, maxHeight: 120, overflowY: "auto" },
+  chip: {
+    height: 23,
+    padding: "0 9px",
+    borderRadius: 999,
+    border: `1px solid ${BRAND.border}`,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    fontSize: 10.5,
+    cursor: "pointer",
+    maxWidth: 220,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  chipOn: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: BRAND.ochreSoft },
   metaTitle: { fontSize: 13.5, fontWeight: 700, color: BRAND.linen },
   providerIcon: {
     width: 26,

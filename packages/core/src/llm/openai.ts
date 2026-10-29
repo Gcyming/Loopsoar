@@ -28,6 +28,19 @@ export interface NormalizedUsage {
 }
 
 /** usage 归一：OpenAI 的 prompt_tokens_details.cached_tokens 与 deepseek 的 prompt_cache_hit_tokens 都映射到 cacheRead。 */
+/** 把服务端的原始错误体变成可读一句话（优先 error.message；截断 300 字）。 */
+function friendlyHttpError(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: unknown } | unknown; message?: unknown };
+    const nested = typeof parsed?.error === "object" && parsed.error ? (parsed.error as { message?: unknown }).message : undefined;
+    const raw = typeof nested === "string" ? nested : typeof parsed?.message === "string" ? parsed.message : undefined;
+    if (raw) return raw.slice(0, 300);
+  } catch {
+    // 非 JSON
+  }
+  return body.slice(0, 300);
+}
+
 export function normalizeUsage(raw: {
   prompt_tokens?: number;
   completion_tokens?: number;
@@ -100,9 +113,9 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
         const bodyText = (await res.text()).slice(0, 300);
         if (RETRYABLE_STATUS.has(res.status)) {
           const retryAfter = Number(res.headers.get("retry-after")) * 1000;
-          throw new RetryableError(`HTTP ${res.status}: ${bodyText}`, Math.min(isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 1000, 60_000));
+          throw new RetryableError(`HTTP ${res.status}: ${friendlyHttpError(bodyText)}`, Math.min(isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 1000, 60_000));
         }
-        yield { kind: "error", message: `HTTP ${res.status}: ${bodyText}` };
+        yield { kind: "error", message: `HTTP ${res.status}: ${friendlyHttpError(bodyText)}` };
         return;
       }
 
