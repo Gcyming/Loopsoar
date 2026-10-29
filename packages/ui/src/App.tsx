@@ -182,6 +182,11 @@ export default function App(): React.JSX.Element {
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
+  /** 挤压检测：可用宽度 / 内容自然宽度；低于阈值时按钮收缩为圆形图标 */
+  const [squeezeRatio, setSqueezeRatio] = useState(1);
+  const [compactUi, setCompactUi] = useState(false);
+  const composerBoxRef = useRef<HTMLDivElement | null>(null);
+  const measureRowRef = useRef<HTMLDivElement | null>(null);
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
 
@@ -393,6 +398,26 @@ export default function App(): React.JSX.Element {
     setSettingsSection(section ?? "general");
     setSettingsOpen(true);
   }, []);
+
+  // 挤压检测：内容自然宽度 vs 可用宽度；<92% 触发图标化（阈值可调）
+  useEffect(() => {
+    const box = composerBoxRef.current;
+    const ghost = measureRowRef.current;
+    if (!box || !ghost) return;
+    const measure = (): void => {
+      const needed = ghost.scrollWidth;
+      const available = box.clientWidth - 16; // 左右内边距
+      if (needed <= 0 || available <= 0) return;
+      const ratio = Math.max(0, Math.min(1, available / needed));
+      setSqueezeRatio(ratio);
+      setCompactUi(ratio < 0.92);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    observer.observe(ghost);
+    return () => observer.disconnect();
+  }, [provider, permSummary, mode, reasoningEffort, sidebarWidth, modelList]);
 
   // 新消息/流式增量时自动滚到底部
   useEffect(() => {
@@ -989,9 +1014,16 @@ export default function App(): React.JSX.Element {
           </div>
           <div style={styles.sessionBar}>
             <span style={styles.anchor}>
-              <button type="button" className="chip" style={{ ...styles.chip, maxWidth: 220 }} onClick={() => { refreshSessions(); setSessionOpen((v) => !v); }} title="切换会话">
-                <Icon name="notes" size={12} style={{ marginRight: 4 }} />
-                {sessions.find((x) => x.id === currentSession)?.title ?? "新会话"}
+              <button
+                type="button"
+                className="chip"
+                style={{ ...styles.chip, maxWidth: 220, ...(compactUi ? styles.chipCompact : {}) }}
+                onClick={() => { refreshSessions(); setSessionOpen((v) => !v); }}
+                title={`切换会话：${sessions.find((x) => x.id === currentSession)?.title ?? "新会话"}${compactUi ? "（空间不足，已折叠）" : ""}`}
+                aria-label="切换会话"
+              >
+                <Icon name="notes" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
+                {compactUi ? null : sessions.find((x) => x.id === currentSession)?.title ?? "新会话"}
               </button>
             </span>
             <button type="button" className="icon-btn" title="新建会话" onClick={newSession}>
@@ -1121,7 +1153,23 @@ export default function App(): React.JSX.Element {
             )}
           </div>
           <div style={styles.composer}>
-            <div style={styles.composerBox}>
+            <div ref={composerBoxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
+              {/* 隐藏测量行：始终保持完整文案，用于计算自然宽度 */}
+              <div ref={measureRowRef} aria-hidden style={styles.measureRow}>
+                <span style={styles.measureChip}>
+                  <Icon name="bolt" size={12} style={{ marginRight: 4 }} />Build
+                </span>
+                <span style={styles.measureChip}>
+                  <Icon name="check" size={12} style={{ marginRight: 4 }} />
+                  {permSummary ? permissionLabel(permSummary) : "权限"}
+                </span>
+                <span style={styles.measureChip}>
+                  <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
+                  {provider?.configured ? provider.model : "未配置模型"}
+                </span>
+                <span style={styles.measureChip}>停止</span>
+                <span style={styles.measureChip}>发送</span>
+              </div>
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -1139,19 +1187,25 @@ export default function App(): React.JSX.Element {
                 <button
                   type="button"
                   className="chip"
-                  style={{ ...styles.chip, ...(mode === "build" ? styles.chipActive : {}) }}
-                  title="模式：Build 可执行工具 / Plan 只读规划"
+                  style={{
+                    ...styles.chip,
+                    ...(compactUi ? styles.chipCompact : {}),
+                    ...(mode === "build" ? styles.chipActive : {}),
+                  }}
+                  title={`模式：${mode === "build" ? "Build 可执行工具" : "Plan 只读规划"}${compactUi ? "（空间不足，已折叠）" : ""}`}
+                  aria-label={mode === "build" ? "Build 模式" : "Plan 模式"}
                   onClick={() => setMode(mode === "build" ? "plan" : "build")}
                 >
-                  <Icon name="bolt" size={12} style={{ marginRight: 4 }} />
-                  {mode === "build" ? "Build" : "Plan"}
+                  <Icon name="bolt" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
+                  {compactUi ? null : mode === "build" ? "Build" : "Plan"}
                 </button>
                 <span style={styles.anchor}>
                   <button
                     type="button"
                     className="chip"
-                    style={styles.chip}
-                    title="当前会话权限"
+                    style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
+                    title={`当前会话权限${compactUi ? "（空间不足，已折叠）" : ""}`}
+                    aria-label="当前会话权限"
                     onClick={() => {
                       if (!permSummary) {
                         void api?.settings.getPermissions().then((r) => { setPermSummary(r); setPermMenuOpen(true); }).catch(() => {});
@@ -1160,8 +1214,8 @@ export default function App(): React.JSX.Element {
                       setPermMenuOpen((v) => !v);
                     }}
                   >
-                    <Icon name="check" size={12} style={{ marginRight: 4 }} />
-                    {permSummary ? permissionLabel(permSummary) : "权限"}
+                    <Icon name="check" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
+                    {compactUi ? null : permSummary ? permissionLabel(permSummary) : "权限"}
                   </button>
                   {permMenuOpen && permSummary ? (
                     <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover }}>
@@ -1217,12 +1271,13 @@ export default function App(): React.JSX.Element {
                   <button
                     type="button"
                     className="chip"
-                    style={styles.chip}
-                    title="选择模型"
+                    style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
+                    title={`选择模型：${provider?.configured ? provider.model : "未配置"}${compactUi ? "（空间不足，已折叠）" : ""}`}
+                    aria-label="选择模型"
                     onClick={openModelMenu}
                   >
-                    <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
-                    {provider?.configured ? provider.model : "未配置模型"}
+                    <Icon name="cloud-upload" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
+                    {compactUi ? null : provider?.configured ? provider.model : "未配置模型"}
                   </button>
                   {modelMenuOpen ? (
                     <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
@@ -1288,9 +1343,16 @@ export default function App(): React.JSX.Element {
                 {busy ? (
                   <>
                     <Icon name="spinner" size={14} className="spinner" style={styles.spinnerInline} />
-                    <button type="button" className="chip" style={styles.chip} onClick={stop} title="停止生成">
-                      <Icon name="stop" size={12} style={{ marginRight: 4 }} />
-                      停止
+                    <button
+                      type="button"
+                      className="chip"
+                      style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
+                      onClick={stop}
+                      title={`停止生成${compactUi ? "（空间不足，已折叠）" : ""}`}
+                      aria-label="停止生成"
+                    >
+                      <Icon name="stop" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
+                      {compactUi ? null : "停止"}
                     </button>
                   </>
                 ) : (
@@ -1897,6 +1959,34 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: BRAND.ochreSoft },
+  chipCompact: {
+    width: 28,
+    height: 28,
+    padding: 0,
+    justifyContent: "center",
+    borderRadius: 999,
+    flexShrink: 0,
+    transition: "width 140ms ease, border-radius 140ms ease",
+  },
+  measureRow: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    display: "flex",
+    gap: 6,
+    visibility: "hidden",
+    pointerEvents: "none",
+    whiteSpace: "nowrap",
+  },
+  measureChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 24,
+    padding: "0 9px",
+    borderRadius: 999,
+    border: `1px solid ${BRAND.border}`,
+    fontSize: 11,
+  },
   spacer: { flex: 1 },
   effortSection: { borderTop: `1px solid ${BRAND.border}`, padding: "6px 4px 2px" },
   effortRow: { display: "flex", flexWrap: "wrap", gap: 4 },
