@@ -18,6 +18,8 @@ export interface LlmRequest {
   messages: LlmMessage[];
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   maxTokens?: number;
+  /** 推理等级（low/medium/high 或厂商自定义）；不支持的模型应忽略。 */
+  reasoningEffort?: string;
   signal?: AbortSignal;
 }
 

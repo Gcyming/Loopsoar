@@ -70,6 +70,8 @@ export interface ChatInput {
   sessionId?: string;
   /** build=允许执行工具；plan=只读规划。 */
   mode?: "build" | "plan";
+  /** 推理等级（模型声明支持时透传给厂商）。 */
+  reasoningEffort?: string;
 }
 
 /** 权限确认请求（浮层 UI 据此弹窗；requestId 用于 resolvePermission 结算）。 */
@@ -362,6 +364,8 @@ export class ChatService {
           // LoopEvent → ChatEventType（type 同名，data 原样传递）
           emit(event.type as ChatEventType, event.data);
         },
+        messages,
+        reasoningEffort: input.reasoningEffort,
         steers: new SteerBus(),
         signal: controller.signal,
       });

@@ -3,7 +3,7 @@ import { BRAND, BADGE } from "./theme.js";
 import { Icon } from "./Icon.js";
 import type {
   AboutInfo, DiagnosticsInfo, InstalledExtension, LocationsInfo, LoopsoarAPI, McpServerInfo, MemoryListResult,
-  PermissionsState, Preferences, ProviderItem, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
+  PermissionsState, Preferences, ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
 /**
@@ -54,8 +54,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mcpConfigPath, setMcpConfigPath] = useState("");
   const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "" });
   const [keyInput, setKeyInput] = useState("");
-  const [pModels, setPModels] = useState<string[] | null>(null);
+  const [pModels, setPModels] = useState<ProviderModel[]>([]);
   const [pModelsError, setPModelsError] = useState<string | null>(null);
+  const [pFetching, setPFetching] = useState(false);
+  const [pFormat, setPFormat] = useState<"auto" | "openai" | "anthropic">("auto");
+  const [pRpm, setPRpm] = useState("");
+  const [pModelDraft, setPModelDraft] = useState("");
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [pEditing, setPEditing] = useState(false);
@@ -214,32 +218,84 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         </div>) : <div style={S.muted}>读取失败</div>;
 
       case "providers": {
-        const ensureForm = (): void => {
-          if (providerItems.length === 0 && editingProviderId === null) setEditingProviderId("new");
-        };
-        ensureForm();
         const refreshProviders = async (): Promise<void> => {
           const list = await api.settings.listProviders();
           setProviderItems(list.items);
           setActiveProviderId(list.activeId);
         };
+        const resetModels = (): void => {
+          setPModels([]);
+          setPModelsError(null);
+          setPModelDraft("");
+        };
         const startEdit = (item?: ProviderItem): void => {
           if (item) {
             setEditingProviderId(item.id);
             setPForm({ provider: item.provider, baseUrl: item.baseUrl, model: item.model });
+            setPFormat(item.apiFormat ?? "auto");
+            setPRpm(item.rpm ? String(item.rpm) : "");
+            setPModels(item.models ?? [{ id: item.model, selected: true }]);
           } else {
             setEditingProviderId("new");
             setPForm({ provider: "", baseUrl: "", model: "" });
+            setPFormat("auto");
+            setPRpm("");
+            resetModels();
           }
           setTestRes(null);
-          setPModels(null);
+          setKeyInput("");
+        };
+        const fetchModels = async (): Promise<void> => {
+          setPFetching(true);
           setPModelsError(null);
+          try {
+            const r = await api.settings.listModels({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model });
+            const existing = new Map(pModels.map((m) => [m.id, m]));
+            const merged = (r.models as ProviderModel[]).map((m) => ({ ...m, ...existing.get(m.id), selected: existing.get(m.id)?.selected ?? m.selected ?? true }));
+            setPModels(merged);
+            setPModelsError(r.error);
+            if (!merged.some((m) => m.id === pForm.model)) {
+              const first = merged.find((m) => m.selected !== false)?.id ?? merged[0]?.id ?? "";
+              if (first) setPForm({ ...pForm, model: first });
+            }
+          } catch (e) {
+            setPModelsError(e instanceof Error ? e.message : String(e));
+          } finally {
+            setPFetching(false);
+          }
+        };
+        const addModelsFromDraft = (): void => {
+          const ids = pModelDraft
+            .split(/[\n,，]/)
+            .map((x) => x.trim())
+            .filter(Boolean);
+          if (ids.length === 0) return;
+          const next = [...pModels];
+          for (const id of ids) if (!next.some((m) => m.id === id)) next.push({ id, selected: true });
+          setPModels(next);
+          setPModelDraft("");
+          if (!pForm.model) setPForm({ ...pForm, model: ids[0] });
+        };
+        const updateModel = (idx: number, patch: Partial<ProviderModel>): void => {
+          setPModels((prev) => prev.map((m, i) => (i === idx ? { ...m, ...patch } : m)));
+        };
+        const removeModel = (idx: number): void => {
+          setPModels((prev) => prev.filter((_, i) => i !== idx));
         };
         const commit = async (): Promise<void> => {
           try {
-            const r = await api.settings.upsertProvider(
-              editingProviderId && editingProviderId !== "new" ? { id: editingProviderId, ...pForm } : pForm,
-            );
+            const models = pModels.filter((m) => m.id.trim());
+            const defaultModel = pForm.model.trim() || models.find((m) => m.selected !== false)?.id || models[0]?.id || "";
+            if (!defaultModel) throw new Error("请至少配置一个模型（或点击「获取模型列表」）");
+            const r = await api.settings.upsertProvider({
+              ...(editingProviderId && editingProviderId !== "new" ? { id: editingProviderId } : {}),
+              provider: pForm.provider,
+              baseUrl: pForm.baseUrl,
+              model: defaultModel,
+              apiFormat: pFormat,
+              rpm: pRpm.trim() ? Number(pRpm) : undefined,
+              models,
+            });
             await api.settings.setActiveProvider({ id: r.item.id });
             if (keyInput.trim()) {
               await api.settings.setApiKey({ providerId: r.item.id, apiKey: keyInput.trim() });
@@ -248,63 +304,65 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             await refreshProviders();
             setEditingProviderId(null);
             await api.settings.getProvider().then(setProvider).catch(() => {});
-            ok("供应商已保存并设为活跃（密钥已加密存储）");
+            ok("供应商已保存并设为活跃（含模型参数）");
           } catch (e) {
             bad(e);
           }
         };
+        const protoLabel = (f?: string): string => (f === "anthropic" ? "Anthropic" : f === "openai" ? "OpenAI" : "自动");
         return (
           <div>
-            <Head t="供应商" h="可添加多条配置，选一条设为活跃。API Key 在输入框填写 → 系统密钥库加密保存，界面只显示掩码" />
-            <div style={S.grid}>
-            {providerItems.map((item) => (
-              <div key={item.id} className="panel-card" style={S.card}>
-                <div style={S.rowBetween}>
-                  <span style={S.meta}>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      title={item.id === activeProviderId ? "当前活跃" : "设为活跃"}
-                      onClick={() => void api.settings.setActiveProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); })}
-                      style={{ width: 20, height: 20 }}
-                    >
-                      <Icon name={item.id === activeProviderId ? "check" : "cloud-upload"} size={13} />
-                    </button>
-                    <span style={S.metaTitle}>{item.provider}</span>
-                    <span style={item.id === activeProviderId ? BADGE.ok : BADGE.neutral}>{item.id === activeProviderId ? "活跃" : "备用"}</span>
-                  </span>
-                  <span style={S.icons}>
-                    <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model }).then(setTestRes).catch(bad)} />
-                    <Btn label="编辑" small onClick={() => startEdit(item)} />
-                    <Btn label="删除" small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); }).catch(bad)} />
-                  </span>
-                </div>
-                <div style={S.providerRows}>
-                  <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{item.baseUrl}</span></div>
-                  <div style={S.providerRow}><span style={S.providerKey}>模型</span><span style={S.providerVal}>{item.model}</span></div>
-                  <div style={S.providerRow}>
-                    <span style={S.providerKey}>密钥</span>
-                    <span style={S.providerVal}>
-                      {item.hasKey
-                        ? `已加密保存 ${item.keyHint ?? ""}（${item.keySource === "env" ? "环境变量" : "密钥库"}）`
-                        : "未配置"}
+            <Head t="供应商" h="OpenAI 兼容 / Anthropic 端点；API Key 加密保存只显示掩码；模型参数（上下文/输出/视觉/推理等级）随配置保存" />
+            {providerItems.map((item) => {
+              const spec = item.models?.find((m) => m.id === item.model);
+              return (
+                <div key={item.id} className="panel-card" style={S.card}>
+                  <div style={S.rowBetween}>
+                    <span style={S.meta}>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title={item.id === activeProviderId ? "当前活跃" : "设为活跃"}
+                        onClick={() => void api.settings.setActiveProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); })}
+                        style={{ width: 20, height: 20 }}
+                      >
+                        <Icon name={item.id === activeProviderId ? "check" : "cloud-upload"} size={13} />
+                      </button>
+                      <span style={S.metaTitle}>{item.provider}</span>
+                      <span style={item.id === activeProviderId ? BADGE.ok : BADGE.neutral}>{item.id === activeProviderId ? "活跃" : "备用"}</span>
+                      <span style={BADGE.neutral}>{protoLabel(item.apiFormat)}</span>
+                      <span style={S.tag}>{item.models?.length ?? 1} 个模型</span>
+                      {item.rpm ? <span style={S.tag}>RPM {item.rpm}</span> : null}
                     </span>
-                    {item.hasKey ? (
-                      <Btn label="清除" small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); ok("已清除该供应商的密钥"); }).catch(bad)} />
-                    ) : null}
+                    <span style={S.icons}>
+                      <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model }).then(setTestRes).catch(bad)} />
+                      <Btn label="编辑" small onClick={() => startEdit(item)} />
+                      <Btn label="删除" small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); }).catch(bad)} />
+                    </span>
+                  </div>
+                  <div style={S.providerRows}>
+                    <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{item.baseUrl}</span></div>
+                    <div style={S.providerRow}>
+                      <span style={S.providerKey}>默认模型</span>
+                      <span style={S.providerVal}>
+                        {item.model}
+                        {spec ? `（上下文 ${spec.contextWindow ? Math.round(spec.contextWindow / 1000) + "K" : "—"} · 输出 ${spec.maxOutput ? Math.round(spec.maxOutput / 1000) + "K" : "—"}${spec.vision ? " · 视觉" : ""}${spec.thinking ? " · 推理" : ""}）` : ""}
+                      </span>
+                    </div>
+                    <div style={S.providerRow}>
+                      <span style={S.providerKey}>密钥</span>
+                      <span style={S.providerVal}>{item.hasKey ? `已加密保存 ${item.keyHint ?? ""}（${item.keySource === "env" ? "环境变量" : "密钥库"}）` : "未配置"}</span>
+                      {item.hasKey ? (
+                        <Btn label="清除" small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); ok("已清除该供应商的密钥"); }).catch(bad)} />
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-            {providerItems.length > 0 ? (
-              <button type="button" className="panel-card add-card" style={S.addCard} onClick={() => startEdit()}>
-                <Icon name="plus" size={16} style={{ marginRight: 6 }} />
-                添加供应商
-              </button>
-            ) : null}
-            </div>
-            {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
-            {editingProviderId === null && providerItems.length === 0 ? null : (
+              );
+            })}
+            {editingProviderId === null ? (
+              <div style={S.btns}><Btn label="添加供应商" primary onClick={() => startEdit()} /></div>
+            ) : (
               <div className="panel-card" style={S.card}>
                 <div style={S.formHead}>{editingProviderId === "new" ? "添加供应商" : "编辑供应商"}</div>
                 <div style={S.presetRow}>
@@ -313,65 +371,129 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     { name: "DeepSeek", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
                     { name: "OpenAI", provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
                     { name: "OpenRouter", provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-chat" },
+                    { name: "Agnes", provider: "agnes", baseUrl: "https://api.agnes-ai.cn/v1", model: "agnes-3.0-flash" },
                     { name: "本地", provider: "local", baseUrl: "http://127.0.0.1:8080/v1", model: "local-model" },
                   ].map((preset) => (
                     <Btn key={preset.name} label={preset.name} small onClick={() => setPForm({ provider: preset.provider, baseUrl: preset.baseUrl, model: preset.model })} />
                   ))}
                 </div>
-                <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
+                <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / agnes / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
                 <Field l="接口地址"><In v={pForm.baseUrl} ph="https://api.deepseek.com/v1" on={(x) => setPForm({ ...pForm, baseUrl: x })} /></Field>
-                <Field l="模型">
+                <Field l="端点协议" h="自动：按接口地址推断；显式指定则强制对应格式">
+                  <Seg v={pFormat} opts={[["auto", "自动"], ["openai", "OpenAI 兼容"]]} on={(x) => setPFormat(x as "auto" | "openai")} />
+                </Field>
+                <Field l="API 密钥" h="保存时加密写入系统密钥库；不落日志、不回传、只显示掩码">
                   <div style={S.col}>
                     <div style={S.rowEnd}>
-                      <In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} />
-                      <Btn
-                        label="获取模型列表"
-                        small
-                        onClick={() =>
-                          void api.settings
-                            .listModels(pForm)
-                            .then((r) => {
-                              setPModels(r.models);
-                              setPModelsError(r.error);
-                              if (!pForm.model && r.models[0]) setPForm({ ...pForm, model: r.models[0] });
-                            })
-                            .catch((e) => setPModelsError(e instanceof Error ? e.message : String(e)))
-                        }
-                      />
+                      <In v={keyInput} ph="sk-…（粘贴后点保存并启用）" type="password" on={setKeyInput} />
+                      <Btn label={pFetching ? "获取中…" : "获取模型列表"} small onClick={() => void fetchModels()} />
                     </div>
                     {pModelsError ? <div style={S.errText}>{pModelsError}</div> : null}
-                    {pModels && pModels.length > 0 ? (
-                      <div style={S.modelChips}>
-                        {pModels.slice(0, 30).map((m) => (
-                          <button
-                            key={m}
-                            type="button"
-                            className="chip"
-                            style={{ ...S.chip, ...(pForm.model === m ? S.chipOn : {}) }}
-                            onClick={() => setPForm({ ...pForm, model: m })}
-                            title={m}
-                          >
-                            {m}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
                   </div>
                 </Field>
-                <Field l="API 密钥" h="保存时加密写入系统密钥库；不落日志、不回传、只显示掩码。留空则沿用已有密钥">
-                  <In v={keyInput} ph="sk-…（粘贴后点保存）" type="password" on={setKeyInput} />
+                <Field l="RPM 兜底" h="每分钟请求上限（留空 = 不主动限制）">
+                  <In v={pRpm} ph="留空 = 不限制" on={setPRpm} />
                 </Field>
+                <div style={S.modelSection}>
+                  <div style={S.modelSectionHead}>
+                    模型调试（勾选可用 · 上下文/输出/视觉/推理等级 · 保存后聊天界面可选）
+                  </div>
+                  <div style={S.modelAddRow}>
+                    <In v={pModelDraft} ph="手动添加模型 ID（逗号或换行分隔）" on={setPModelDraft} />
+                    <Btn label="添加" small onClick={addModelsFromDraft} />
+                  </div>
+                  {pModels.length === 0 ? (
+                    <div style={S.dashed}>未获取模型列表 — 填好接口地址与密钥后点「获取模型列表」，或手动添加模型 ID。</div>
+                  ) : (
+                    <div style={S.tableWrap}>
+                      <table style={S.table}>
+                        <thead>
+                          <tr>
+                            <th style={S.th}>启用</th>
+                            <th style={S.th}>模型 ID</th>
+                            <th style={S.thNarrow}>上下文K</th>
+                            <th style={S.thNarrow}>输出K</th>
+                            <th style={S.thTiny}>图片</th>
+                            <th style={S.thTiny}>推理</th>
+                            <th style={S.th}>推理等级</th>
+                            <th style={S.thTiny}>默认</th>
+                            <th style={S.thTiny}></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pModels.map((m, idx) => (
+                            <tr key={m.id + idx}>
+                              <td style={S.td}>
+                                <Toggle v={m.selected !== false} on={(next) => updateModel(idx, { selected: next })} />
+                              </td>
+                              <td style={S.td}>
+                                <input style={S.tblInput} value={m.id} onChange={(e) => updateModel(idx, { id: e.target.value })} />
+                              </td>
+                              <td style={S.td}>
+                                <input
+                                  style={S.tblInput}
+                                  value={m.contextWindow ? String(Math.round(m.contextWindow / 1000)) : ""}
+                                  placeholder="—"
+                                  onChange={(e) => updateModel(idx, { contextWindow: e.target.value ? Number(e.target.value) * 1000 : undefined })}
+                                />
+                              </td>
+                              <td style={S.td}>
+                                <input
+                                  style={S.tblInput}
+                                  value={m.maxOutput ? String(Math.round(m.maxOutput / 1000)) : ""}
+                                  placeholder="—"
+                                  onChange={(e) => updateModel(idx, { maxOutput: e.target.value ? Number(e.target.value) * 1000 : undefined })}
+                                />
+                              </td>
+                              <td style={S.tdCenter}>
+                                <input type="checkbox" checked={m.vision === true} onChange={(e) => updateModel(idx, { vision: e.target.checked })} />
+                              </td>
+                              <td style={S.tdCenter}>
+                                <input type="checkbox" checked={m.thinking === true} onChange={(e) => updateModel(idx, { thinking: e.target.checked })} />
+                              </td>
+                              <td style={S.td}>
+                                <input
+                                  style={S.tblInput}
+                                  value={(m.thinkingEfforts ?? []).join(",")}
+                                  placeholder="low,medium,high"
+                                  onChange={(e) =>
+                                    updateModel(idx, {
+                                      thinkingEfforts: e.target.value.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 10),
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td style={S.tdCenter}>
+                                <input
+                                  type="radio"
+                                  name="default-model"
+                                  checked={pForm.model === m.id}
+                                  onChange={() => setPForm({ ...pForm, model: m.id })}
+                                />
+                              </td>
+                              <td style={S.tdCenter}>
+                                <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} title="删除模型" onClick={() => removeModel(idx)}>
+                                  <Icon name="close" size={11} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
                 <div style={S.btns}>
-                  <Btn label="测试连接" onClick={() => void api.settings.testProvider(pForm).then(setTestRes).catch(bad)} />
+                  <Btn label="测试连接" onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default" }).then(setTestRes).catch(bad)} />
                   <Btn label="保存并启用" primary onClick={() => void commit()} />
                   <Btn label="取消" onClick={() => setEditingProviderId(null)} />
+                  {testRes ? <span style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</span> : null}
                 </div>
               </div>
             )}
             <div style={S.note}>
-              安全：密钥经 Electron safeStorage（Windows DPAPI / macOS Keychain）加密落盘，渲染层只拿到掩码；
-              系统密钥库不可用时降级为 AES-256-GCM（本地密钥文件 0600）并在诊断页标注。
-              也支持环境变量兜底：<code style={S.code}>LOOPSOAR_API_KEY</code>（优先级低于已保存密钥）。
+              安全：密钥经 Electron safeStorage 加密落盘（渲染层只见掩码）；端点协议与模型参数随供应商保存；
+              当前默认模型可在输入区「模型」chip 切换，推理等级在模型声明支持时出现在输入区「推理」chip。
             </div>
           </div>
         );
@@ -621,7 +743,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft]);
 
   return (
     <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -734,6 +856,17 @@ const S: Record<string, React.CSSProperties> = {
   btns: { display: "flex", alignItems: "center", gap: 10, paddingTop: 12, flexWrap: "wrap" },
   card: { border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 12, marginBottom: 10, background: BRAND.inkPanel },
   grid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 10 },
+  modelSection: { borderTop: `1px solid ${BRAND.border}`, paddingTop: 10, marginTop: 6 },
+  modelSectionHead: { fontSize: 12.5, fontWeight: 700, marginBottom: 8 },
+  modelAddRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8, justifyContent: "flex-end" },
+  tableWrap: { maxHeight: 320, overflow: "auto", border: `1px solid ${BRAND.border}`, borderRadius: 8 },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 11.5 },
+  th: { textAlign: "left", padding: "6px 6px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, whiteSpace: "nowrap" },
+  thNarrow: { textAlign: "left", padding: "6px 4px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, width: 62, whiteSpace: "nowrap" },
+  thTiny: { textAlign: "center", padding: "6px 3px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, width: 38 },
+  td: { padding: "3px 4px", borderBottom: `1px solid ${BRAND.border}` },
+  tdCenter: { padding: "3px 3px", borderBottom: `1px solid ${BRAND.border}`, textAlign: "center" },
+  tblInput: { width: "100%", height: 24, padding: "0 5px", borderRadius: 5, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 11, outline: "none", boxSizing: "border-box" },
   addCard: {
     minHeight: 84,
     display: "flex",

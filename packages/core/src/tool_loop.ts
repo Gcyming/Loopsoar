@@ -10,7 +10,7 @@
 import { BudgetUsage, budgetReason, clampLimits } from "./budget.js";
 import { LoopEvent, EventSink } from "./events.js";
 import { LOOP_HEALTH, HEARTBEAT_MS } from "loopsoar-contracts/security-policy";
-import { LlmClient, LlmRequest, LlmChunk } from "./llm/index.js";
+import { LlmClient, LlmRequest, LlmChunk, type LlmMessage } from "./llm/index.js";
 import { SteerBus } from "./steerBus.js";
 import type { ToolResult } from "./tools/registry.js";
 export type { ToolResult } from "./tools/registry.js";
@@ -40,6 +40,10 @@ export interface ToolLoopOpts {
   steers: SteerBus;                                  // 转向总线
   signal?: AbortSignal;                              // 外部中止信号
   noProgressRounds?: number;                         // 无进度检测阈值（默认 5 轮）
+  /** 调用方已组装好的消息（系统提示/记忆/技能/历史）；不传则用默认执行提示。 */
+  messages?: LlmMessage[];
+  /** 推理等级（透传厂商；不支持则忽略）。 */
+  reasoningEffort?: string;
 }
 
 // 工具循环产出：包含最终状态、归因文案、累积文本、最终预算使用量。
@@ -139,13 +143,17 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       let roundHadToolProgress = false;
 
       // 构造 LLM 流式请求
+      const baseMessages: LlmMessage[] = opts.messages
+        ? [...opts.messages]
+        : [
+            { role: "system", content: "你是 Loopsoar 平台的执行引擎，按诚实协议执行任务，必要时调用工具。" },
+            { role: "user", content: "继续执行任务。如有需要调用工具，请直接给出工具调用指令；如已完成，请说明并总结结果。" },
+          ];
       const request: LlmRequest = {
-        messages: [
-          { role: "system", content: steerPrompt || "你是 Loopsoar 平台的执行引擎，按诚实协议执行任务，必要时调用工具。" },
-          { role: "user", content: "继续执行任务。如有需要调用工具，请直接给出工具调用指令；如已完成，请说明并总结结果。" },
-        ],
+        messages: steerPrompt ? [...baseMessages, { role: "user", content: `【转向提示】${steerPrompt}` }] : baseMessages,
         tools: tools(),
         maxTokens: undefined,
+        reasoningEffort: opts.reasoningEffort,
         signal: abortController.signal,
       };
 

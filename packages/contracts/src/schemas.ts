@@ -10,6 +10,8 @@ export const ChatStreamSchema = z.object({
   sessionId: z.string().optional(),
   /** build=允许执行工具；plan=只读规划（仅放行只读工具）。 */
   mode: AgentModeSchema.optional(),
+  /** 推理等级（如 low/medium/high）；由模型参数声明支持值。 */
+  reasoningEffort: z.string().max(30).optional(),
 });
 export const ChatStopSchema = z.object({ sessionId: z.string() });
 export const ChatSendSchema = z.object({ message: z.string(), sessionId: z.string().optional() });
@@ -25,11 +27,23 @@ export const BrowserDownloadActionSchema = z.object({
   id: z.string().min(1),
   action: z.enum(["cancel", "open", "showInFolder", "remove"]),
 });
+export const ProviderModelSchema = z.object({
+  id: z.string().min(1).max(200),
+  selected: z.boolean().optional(),
+  contextWindow: z.number().int().min(0).max(10_000_000).optional(),
+  maxOutput: z.number().int().min(0).max(1_000_000).optional(),
+  vision: z.boolean().optional(),
+  thinking: z.boolean().optional(),
+  thinkingEfforts: z.array(z.string().max(30)).max(10).optional(),
+});
 export const ProviderItemSchema = z.object({
   id: z.string().min(1).max(64).optional(),
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),
   model: z.string().min(1).max(200),
+  apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
+  rpm: z.number().int().min(1).max(1_000_000).optional(),
+  models: z.array(ProviderModelSchema).max(500).optional(),
 });
 export const ProviderItemIdSchema = z.object({ id: z.string().min(1).max(64) });
 export const SessionRefSchema = z.object({ sessionId: z.string().min(1).max(120) });
@@ -55,7 +69,8 @@ export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),
-  model: z.string().min(1).max(200),
+  model: z.string().max(200),
+  apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
 });
 export const PickPathSchema = z.object({
   kind: z.enum(["file", "directory"]),

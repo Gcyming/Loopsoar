@@ -9,6 +9,7 @@ import type {
   HistoryEntry,
   PermissionsState,
   Preferences,
+  ProviderModel,
   ProviderStatus,
   SessionMeta,
   TabState,
@@ -150,6 +151,7 @@ export default function App(): React.JSX.Element {
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [mode, setMode] = useState<"build" | "plan">("build");
+  const [reasoningEffort, setReasoningEffort] = useState<string>("");
   const [permReq, setPermReq] = useState<{ requestId: string; toolName: string; target?: string; kind?: string } | null>(null);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
@@ -163,7 +165,7 @@ export default function App(): React.JSX.Element {
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
-  const [modelList, setModelList] = useState<{ models: string[]; error: string | null } | null>(null);
+  const [modelList, setModelList] = useState<{ models: ProviderModel[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const activeAssistantRef = useRef<string | null>(null);
@@ -361,12 +363,34 @@ export default function App(): React.JSX.Element {
       return;
     }
     setModelMenuOpen((v) => !v);
-    setModelList(null);
+    // 先用已保存的模型清单秒开（离线可用），再异步拉取最新列表
+    const cached = provider.models ?? [];
+    setModelList({ models: cached.length > 0 ? cached : [{ id: provider.model ?? "" }], error: null });
     void api.settings
       .listModels({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" })
-      .then(setModelList)
-      .catch(() => setModelList({ models: [provider.model ?? ""], error: "获取失败" }));
+      .then((r) => {
+        if (r.models.length > 0 || r.error) setModelList({ models: r.models.length > 0 ? r.models : cached, error: r.error });
+      })
+      .catch(() => {});
   }, [api, provider, openSettings]);
+
+  // 当前模型声明的推理等级；为空则不显示「推理」chip
+  const effortOptions = useMemo(() => {
+    const spec = provider?.models?.find((m) => m.id === provider.model);
+    return spec?.thinkingEfforts ?? [];
+  }, [provider]);
+
+  const effortLabel = useCallback((value: string): string => {
+    if (!value) return "推理：关";
+    const map: Record<string, string> = { minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "最高" };
+    return `推理：${map[value] ?? value}`;
+  }, []);
+
+  const cycleEffort = useCallback((): void => {
+    const options = ["", ...effortOptions];
+    const idx = options.indexOf(reasoningEffort);
+    setReasoningEffort(options[(idx + 1) % options.length]);
+  }, [effortOptions, reasoningEffort]);
 
   const chooseModel = useCallback(
     (model: string): void => {
@@ -397,7 +421,7 @@ export default function App(): React.JSX.Element {
     setNotice("");
     setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text, status: "done" }]);
     activeAssistantRef.current = null;
-    void api.chat.stream({ message: text, sessionId: sessionIdRef.current, mode }).catch((err: unknown) => {
+    void api.chat.stream({ message: text, sessionId: sessionIdRef.current, mode, reasoningEffort: reasoningEffort || undefined }).catch((err: unknown) => {
       setBusy(false);
       setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
     });
@@ -1049,15 +1073,19 @@ export default function App(): React.JSX.Element {
                         <>
                           {modelList.models.map((m) => (
                             <button
-                              key={m}
+                              key={m.id}
                               type="button"
                               className="model-item"
-                              style={{ ...styles.modelMenuItem, ...(m === provider?.model ? styles.modelMenuItemActive : {}) }}
-                              onClick={() => chooseModel(m)}
-                              title={m}
+                              style={{ ...styles.modelMenuItem, ...(m.id === provider?.model ? styles.modelMenuItemActive : {}) }}
+                              onClick={() => chooseModel(m.id)}
+                              title={`${m.id}${m.contextWindow ? ` · 上下文 ${Math.round(m.contextWindow / 1000)}K` : ""}${m.thinkingEfforts?.length ? ` · 推理 ${m.thinkingEfforts.join("/")}` : ""}`}
                             >
-                              <span style={styles.modelItemName}>{m}</span>
-                              {m === provider?.model ? <Icon name="check" size={12} /> : null}
+                              <span style={styles.modelItemName}>
+                                {m.id}
+                                {m.thinking ? <span style={styles.modelBadge}>推理</span> : null}
+                                {m.vision ? <span style={styles.modelBadge}>视觉</span> : null}
+                              </span>
+                              {m.id === provider?.model ? <Icon name="check" size={12} /> : null}
                             </button>
                           ))}
                           {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
@@ -1077,6 +1105,18 @@ export default function App(): React.JSX.Element {
                     </div>
                   ) : null}
                 </span>
+                {effortOptions.length > 0 ? (
+                  <button
+                    type="button"
+                    className="chip"
+                    style={{ ...styles.chip, ...(reasoningEffort ? styles.chipActive : {}) }}
+                    title="推理等级（当前模型支持）"
+                    onClick={cycleEffort}
+                  >
+                    <Icon name="bulb" size={12} style={{ marginRight: 4 }} />
+                    {effortLabel(reasoningEffort)}
+                  </button>
+                ) : null}
                 <span style={styles.spacer} />
                 {busy ? (
                   <>
@@ -1319,7 +1359,7 @@ const styles: Record<string, React.CSSProperties> = {
   tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   tabClose: { width: 18, height: 18 },
   tabAdd: { width: 24, height: 24, flex: "none" },
-  body: { display: "flex", flex: 1, minHeight: 0 },
+  body: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden" },
   browserPane: {
     flex: 1,
     minWidth: 0,
@@ -1522,9 +1562,10 @@ const styles: Record<string, React.CSSProperties> = {
   sidebar: {
     display: "flex",
     flexDirection: "column",
+    minWidth: 280,
+    flexShrink: 0,
     borderLeft: `1px solid ${BRAND.border}`,
     background: BRAND.inkPanel,
-    flexShrink: 0,
   },
   sidebarHeader: {
     display: "flex",
@@ -1552,6 +1593,9 @@ const styles: Record<string, React.CSSProperties> = {
   composer: { borderTop: `1px solid ${BRAND.border}`, padding: 10 },
   composerBox: {
     position: "relative",
+    minWidth: 0,
+    maxWidth: "100%",
+    boxSizing: "border-box",
     borderRadius: 12,
     border: `1px solid ${BRAND.border}`,
     background: BRAND.ink,
@@ -1559,6 +1603,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "nowrap" },
   chip: {
+    flexShrink: 1,
+    minWidth: 0,
     display: "inline-flex",
     alignItems: "center",
     height: 24,
@@ -1576,6 +1622,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: BRAND.ochreSoft },
   spacer: { flex: 1 },
+  modelBadge: {
+    marginLeft: 6,
+    fontSize: 9,
+    padding: "0 4px",
+    borderRadius: 4,
+    border: `1px solid ${BRAND.border}`,
+    color: BRAND.linenFaint,
+    verticalAlign: "1px",
+  },
   sendBtn: {
     width: 28,
     height: 28,

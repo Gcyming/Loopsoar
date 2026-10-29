@@ -17,6 +17,9 @@ export interface ProviderStatus {
   keyHint?: string | null;
   keySource?: "stored" | "env" | null;
   storageMode?: "os" | "degraded" | "unavailable";
+  apiFormat?: "auto" | "openai" | "anthropic";
+  rpm?: number | null;
+  models?: ProviderModel[];
 }
 
 export interface TestProviderResult {
@@ -186,11 +189,24 @@ export interface SessionMeta {
   messageCount: number;
 }
 
+export interface ProviderModel {
+  id: string;
+  selected?: boolean;
+  contextWindow?: number;
+  maxOutput?: number;
+  vision?: boolean;
+  thinking?: boolean;
+  thinkingEfforts?: string[];
+}
+
 export interface ProviderItem {
   id: string;
   provider: string;
   baseUrl: string;
   model: string;
+  apiFormat?: "auto" | "openai" | "anthropic";
+  rpm?: number;
+  models?: ProviderModel[];
   hasKey?: boolean;
   keyHint?: string | null;
   keySource?: "stored" | "env" | null;
@@ -283,7 +299,12 @@ export type LoopsoarEvent =
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
-    stream(payload: { message: string; sessionId?: string; mode?: "build" | "plan" }): Promise<{ accepted: boolean; sessionId: string }>;
+    stream(payload: {
+      message: string;
+      sessionId?: string;
+      mode?: "build" | "plan";
+      reasoningEffort?: string;
+    }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId: string }): Promise<{ stopped: boolean }>;
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
     sessions(): Promise<{ sessions: SessionMeta[]; currentId: string | null }>;
@@ -333,9 +354,17 @@ export interface LoopsoarAPI {
     pickPath(payload: { kind: "file" | "directory"; title?: string }): Promise<{ canceled: boolean; path: string | null }>;
   };
   settings: LoopsoarDomain & {
-    listModels(payload: { provider: string; baseUrl: string; model: string }): Promise<{ models: string[]; error: string | null }>;
+    listModels(payload: { provider: string; baseUrl: string; model?: string }): Promise<{ models: ProviderModel[]; error: string | null }>;
     listProviders(): Promise<{ items: ProviderItem[]; activeId: string | null }>;
-    upsertProvider(payload: { id?: string; provider: string; baseUrl: string; model: string }): Promise<{ item: ProviderItem; items: ProviderItem[]; activeId: string | null }>;
+    upsertProvider(payload: {
+      id?: string;
+      provider: string;
+      baseUrl: string;
+      model: string;
+      apiFormat?: "auto" | "openai" | "anthropic";
+      rpm?: number;
+      models?: ProviderModel[];
+    }): Promise<{ item: ProviderItem; items: ProviderItem[]; activeId: string | null }>;
     removeProvider(payload: { id: string }): Promise<{ removed: boolean; items: ProviderItem[]; activeId: string | null }>;
     setActiveProvider(payload: { id: string }): Promise<{ ok: boolean; activeId: string | null }>;
     setApiKey(payload: { apiKey: string; providerId?: string }): Promise<{ saved: boolean; hint: string; storageMode: string }>;

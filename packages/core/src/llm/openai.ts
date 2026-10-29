@@ -104,6 +104,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
           stream: true,
           ...(req.tools && req.tools.length > 0 ? { tools: req.tools } : {}),
           ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
+          ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
         }),
         signal: controller.signal,
       });

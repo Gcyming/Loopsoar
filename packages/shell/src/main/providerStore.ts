@@ -9,11 +9,28 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export interface ProviderModel {
+  id: string;
+  selected?: boolean;
+  contextWindow?: number;
+  maxOutput?: number;
+  vision?: boolean;
+  thinking?: boolean;
+  thinkingEfforts?: string[];
+}
+
 export interface ProviderItem {
   id: string;
   provider: string;
   baseUrl: string;
+  /** 默认模型（聊天输入区默认使用）。 */
   model: string;
+  /** 端点协议：auto=按 baseUrl 推断，openai=/chat/completions，anthropic=/messages。 */
+  apiFormat?: "auto" | "openai" | "anthropic";
+  /** 上游 RPM 兜底（留空 = 不主动限制）。 */
+  rpm?: number;
+  /** 已探测/手工维护的模型清单（含上下文、输出、视觉、思考与推理等级）。 */
+  models?: ProviderModel[];
 }
 
 export interface ProvidersFile {
@@ -87,10 +104,26 @@ export class ProviderStore {
     return file.items.find((i) => i.id === file.activeId) ?? file.items[0] ?? null;
   }
 
-  upsert(input: { id?: string; provider: string; baseUrl: string; model: string }): ProviderItem {
+  upsert(input: {
+    id?: string;
+    provider: string;
+    baseUrl: string;
+    model: string;
+    apiFormat?: "auto" | "openai" | "anthropic";
+    rpm?: number;
+    models?: ProviderModel[];
+  }): ProviderItem {
     const file = this.load();
     const id = input.id || this.slug(input.provider, file.items.map((i) => i.id));
-    const item: ProviderItem = { id, provider: input.provider, baseUrl: input.baseUrl.replace(/\/+$/, ""), model: input.model };
+    const item: ProviderItem = {
+      id,
+      provider: input.provider,
+      baseUrl: input.baseUrl.replace(/\/+$/, ""),
+      model: input.model,
+      apiFormat: input.apiFormat ?? "auto",
+      rpm: input.rpm,
+      models: input.models ?? file.items.find((i) => i.id === id)?.models,
+    };
     const idx = file.items.findIndex((i) => i.id === id);
     if (idx >= 0) file.items[idx] = item;
     else file.items.push(item);
