@@ -99,11 +99,22 @@ export class SecretStore {
     this.mode = backend.available ? "os" : "unavailable";
   }
 
-  /** 显式启用降级加密（OS 密钥库不可用时由装配层注入）。 */
+  /** 显式启用降级加密：OS 密钥库不可用，或**已有文件是 degraded 模式**（必须沿用同一后端才能解密）。 */
   useDegradedBackend(keyFile: string): void {
-    if (this.mode !== "unavailable") return;
+    if (this.mode === "degraded") return;
     this.backend = createDegradedBackend(keyFile);
     this.mode = "degraded";
+  }
+
+  /** 已落盘文件记录的加密模式（不存在/损坏返回 null）；装配层据此选择与历史数据兼容的后端。 */
+  fileMode(): "os" | "degraded" | null {
+    try {
+      if (!fs.existsSync(this.file)) return null;
+      const raw = JSON.parse(fs.readFileSync(this.file, "utf8")) as { mode?: unknown };
+      return raw.mode === "os" || raw.mode === "degraded" ? raw.mode : null;
+    } catch {
+      return null;
+    }
   }
 
   storageMode(): SecretStorageMode {

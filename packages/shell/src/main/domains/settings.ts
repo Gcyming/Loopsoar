@@ -674,7 +674,13 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         chrome: process.versions.chrome ?? "—",
         node: process.versions.node,
       },
-      extra: deps.diagnosticsExtra?.() ?? {},
+      extra: {
+        secretStorageMode: deps.secrets?.storageMode() ?? "unavailable",
+        secretFileMode: deps.secrets?.fileMode() ?? null,
+        activeProvider: deps.providers?.active()?.id ?? null,
+        activeHasKey: deps.providers?.active() ? (deps.secrets?.has(deps.providers.active()!.id) ?? false) : false,
+        ...(deps.diagnosticsExtra?.() ?? {}),
+      },
     };
   });
 

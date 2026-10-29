@@ -265,7 +265,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             const existing = new Map(pModels.filter((m) => typeof m.id === "string" && m.id.trim()).map((m) => [m.id, m]));
             const merged = (r.models as ProviderModel[])
               .filter((m) => typeof m.id === "string" && m.id.trim())
-              .map((m) => ({ ...m, ...existing.get(m.id), selected: existing.get(m.id)?.selected ?? m.selected ?? true }));
+              .map((m) => ({
+                ...m,
+                ...existing.get(m.id),
+                // 新拉取的模型默认只启用当前默认模型，其余保持停用（用户可手动勾选）
+                selected: existing.get(m.id)?.selected ?? m.selected ?? m.id === pForm.model,
+              }));
             if (merged.length > 0) setPModels(merged);
             setPModelsError(r.error);
             if (!merged.some((m) => m.id === pForm.model)) {
@@ -761,8 +766,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft]);
 
   return (
-    <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={S.panel}>
+    <div className="settings-overlay" style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="settings-panel" style={S.panel}>
         <div style={S.header}><span style={S.title}>设置</span><button type="button" className="icon-btn" onClick={onClose} title="关闭（Esc）"><Icon name="close" size={14} /></button></div>
         <div style={S.bodyRow}>
           <nav style={S.nav}>

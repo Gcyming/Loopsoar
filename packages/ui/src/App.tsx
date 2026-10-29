@@ -487,12 +487,19 @@ export default function App(): React.JSX.Element {
     }
     setModelMenuOpen((v) => !v);
     // 先用已保存的模型清单秒开（离线可用），再异步拉取最新列表
-    const cached = provider.models ?? [];
+    // 只展示在供应商设置里「启用」的模型；默认模型始终保留
+    const cached = (provider.models ?? []).filter((m) => m.selected !== false || m.id === provider.model);
     setModelList({ models: cached.length > 0 ? cached : [{ id: provider.model ?? "" }], error: null });
     void api.settings
       .listModels({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" })
       .then((r) => {
-        if (r.models.length > 0 || r.error) setModelList({ models: r.models.length > 0 ? r.models : cached, error: r.error });
+        if (r.models.length > 0 || r.error) {
+          const enabled = new Map(cached.map((m) => [m.id, m]));
+          const fetched = r.models
+            .filter((m) => enabled.size === 0 || enabled.has(m.id) || m.id === provider.model)
+            .map((m) => ({ ...m, selected: enabled.get(m.id)?.selected ?? m.selected }));
+          setModelList({ models: fetched.length > 0 ? fetched : cached, error: r.error });
+        }
       })
       .catch(() => {});
   }, [api, provider, openSettings]);
@@ -1070,81 +1077,113 @@ export default function App(): React.JSX.Element {
             ) : (
               messages.map((m) => {
                 const mine = m.role === "user";
+                const hasTimeline = Boolean(m.reasoning) || (m.tools?.length ?? 0) > 0;
+                const showThinking = m.status === "streaming" && !m.text && !hasTimeline;
+                const timeText = new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                if (mine) {
+                  return (
+                    <div key={m.id} className="msg-row" style={styles.msgRowUser}>
+                      <div className="msg-user-bubble" style={styles.userBubble}>
+                        {m.text}
+                      </div>
+                      <div className="msg-hover" style={styles.msgHover}>
+                        <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
+                        <span>· {timeText}</span>
+                        <button
+                          type="button"
+                          className="msg-action"
+                          title="复制消息"
+                          onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
+                        >
+                          <Icon name="file" size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
                 return (
-                  <div key={m.id} className="msg-enter" style={{ ...styles.msgRow, justifyContent: mine ? "flex-end" : "flex-start" }}>
-                    <div
-                      style={{
-                        ...styles.bubble,
-                        ...(mine ? styles.bubbleUser : styles.bubbleAssistant),
-                        ...(m.status === "error" ? styles.bubbleError : {}),
-                      }}
-                    >
-                      <div style={styles.bubbleHead}>
-                        <span style={{ ...styles.roleTag, color: roleColor(m.role) }}>{ROLE_LABEL[m.role]}</span>
-                        <span style={styles.bubbleTime}>
-                          {new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                        <span style={{ flex: 1 }} />
-                        {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
-                        {m.text ? (
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            style={styles.copyBtn}
-                            title="复制"
-                            onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
-                          >
-                            <Icon name="file" size={11} />
-                          </button>
+                  <div key={m.id} className="msg-row" style={styles.msgRowAssistant}>
+                    {hasTimeline ? (
+                      <div className="think-timeline is-live" style={styles.timeline}>
+                        {m.reasoning ? (
+                          <div className="think-step">
+                            <span className="think-step-mark" />
+                            <button
+                              type="button"
+                              className="think-step-toggle"
+                              onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
+                              title={expandedReasoning[m.id] ? "收起思考过程" : "展开思考过程"}
+                            >
+                              {expandedReasoning[m.id] ? "收起思考过程" : "思考过程"}
+                              {expandedReasoning[m.id] ? null : (
+                                <span className="think-step-preview">
+                                  {m.reasoning.replace(/\s+/g, " ").slice(0, 90)}
+                                </span>
+                              )}
+                            </button>
+                            {expandedReasoning[m.id] ? (
+                              <div className="think-step-text">{m.reasoning}</div>
+                            ) : null}
+                          </div>
                         ) : null}
-                      </div>
-                      {m.reasoning ? (
-                        <div style={styles.reasoningBlock}>
-                          <button
-                            type="button"
-                            style={styles.reasoningToggle}
-                            onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
-                          >
-                            <Icon name="bulb" size={11} style={{ marginRight: 4 }} />
-                            思考过程 {expandedReasoning[m.id] ? "收起" : "展开"}
-                          </button>
-                          {expandedReasoning[m.id] ? <div style={styles.reasoningText}>{m.reasoning}</div> : null}
-                        </div>
-                      ) : null}
-                      {m.tools && m.tools.length > 0 ? (
-                        <div style={styles.toolList}>
-                          {m.tools.map((t) => (
-                            <div key={t.id} style={styles.toolRow}>
-                              <Icon
-                                name={t.state === "error" ? "warning" : t.state === "done" ? "check" : "spinner"}
-                                size={10}
-                                className={t.state === "running" ? "spinner" : undefined}
-                                style={{ marginRight: 5 }}
-                              />
+                        {(m.tools ?? []).map((t) => (
+                          <div key={t.id} className="think-step">
+                            <span className="think-step-mark" data-state={t.state} />
+                            <span className="think-step-text" style={styles.toolStepText}>
                               {t.label}
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      <div style={styles.bubbleText}>
-                        {m.tail && m.status === "streaming"
-                          ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
-                          : renderRich(m.text)}
-                        {m.tail && m.status === "streaming" ? (
-                          <span key={m.tailSeq} className="stream-tail">
-                            {m.tail}
-                          </span>
-                        ) : null}
-                        {m.status === "streaming" ? <span className="stream-caret" /> : null}
+                              <span className="think-step-state">
+                                {t.state === "running" ? "进行中" : t.state === "error" ? "失败" : "完成"}
+                              </span>
+                            </span>
+                          </div>
+                        ))}
                       </div>
-                      {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
+                    ) : null}
+                    {showThinking ? (
+                      <div style={styles.thinkingRow}>
+                        <span className="text-scan-light">正在思考</span>
+                        <span className="stream-dot-row">
+                          <span className="stream-dot" />
+                          <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
+                          <span className="stream-dot" style={{ animationDelay: "0.4s" }} />
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="msg-body-text" style={styles.assistantBody}>
+                      {m.tail && m.status === "streaming"
+                        ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
+                        : renderRich(m.text)}
+                      {m.tail && m.status === "streaming" ? (
+                        <span key={m.tailSeq} className="stream-tail">
+                          {m.tail}
+                        </span>
+                      ) : null}
+                      {m.status === "streaming" && m.text ? <span className="stream-caret" /> : null}
+                    </div>
+                    {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
+                    <div className="msg-hover" style={styles.msgHover}>
+                      <span style={styles.msgHoverTag}>Loopsoar</span>
+                      {provider?.model ? <span>· {provider.model}</span> : null}
+                      <span>· {timeText}</span>
+                      {m.text ? (
+                        <button
+                          type="button"
+                          className="msg-action"
+                          title="复制回复"
+                          onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
+                        >
+                          <Icon name="file" size={12} />
+                        </button>
+                      ) : null}
                       {m.timing ? (
-                        <div style={styles.bubbleFoot}>
-                          {m.timing.firstTokenMs ? `首字 ${fmtMs(m.timing.firstTokenMs)} · ` : ""}
-                          总耗时 {fmtMs(m.timing.totalMs ?? 0)}
+                        <span style={styles.msgTiming}>
+                          首字 {fmtMs(m.timing.firstTokenMs ?? 0)} · 总耗时 {fmtMs(m.timing.totalMs ?? 0)}
                           {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
                           {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
-                        </div>
+                        </span>
                       ) : null}
                     </div>
                   </div>
@@ -1695,9 +1734,12 @@ const styles: Record<string, React.CSSProperties> = {
   chipPopover: {
     top: "auto",
     bottom: "100%",
+    left: "auto",
+    right: 0,
     marginTop: 0,
     marginBottom: 6,
     width: 300,
+    maxWidth: "calc(100vw - 24px)",
     maxHeight: 320,
     overflowY: "auto",
   },
@@ -1847,6 +1889,41 @@ const styles: Record<string, React.CSSProperties> = {
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
   messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
+  msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
+  msgRowAssistant: { display: "flex", flexDirection: "column", alignItems: "stretch", marginBottom: 16 },
+  userBubble: {
+    maxWidth: "78%",
+    padding: "10px 14px",
+    borderRadius: "16px 16px 4px 16px",
+    background: BRAND.ochre,
+    color: "#ffffff",
+    lineHeight: 1.65,
+    fontSize: 13.5,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    userSelect: "text",
+  },
+  msgHover: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 4,
+    fontSize: 10.5,
+    color: BRAND.linenFaint,
+    minHeight: 18,
+  },
+  msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
+  msgTiming: { marginLeft: "auto" },
+  assistantBody: { fontSize: 13.5, lineHeight: 1.8, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  thinkingRow: { display: "inline-flex", alignItems: "center", gap: 7, color: BRAND.linenMuted, fontSize: 13 },
+  timeline: {
+    position: "relative",
+    borderLeft: `2px solid ${BRAND.border}`,
+    paddingLeft: 14,
+    marginLeft: 2,
+    marginBottom: 10,
+  },
+  toolStepText: { display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: BRAND.linenMuted },
   msgRow: { display: "flex", width: "100%" },
   bubble: {
     display: "flex",

@@ -1,7 +1,8 @@
 /** 密钥库：加密落盘（磁盘无明文）/ 掩码 / 读取 / 清除 / 降级后端。 */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { SecretStore, maskSecret } from "../../packages/shell/src/main/secretStore.ts";
@@ -62,5 +63,48 @@ describe("SecretStore", () => {
     const raw = readFileSync(path.join(root, "secrets.enc.json"), "utf8");
     expect(raw).not.toContain("degraded-test");
     expect(crypto.randomBytes).toBeTruthy();
+  });
+});
+
+describe("SecretStore：跨重启加密模式兼容", () => {
+  it("degraded 文件在下次启动（safeStorage 可用）时仍能解密 → 密钥不丢", () => {
+    const dir = path.join(os.tmpdir(), `loopsoar-secret-mode-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const keyFile = path.join(dir, ".secret.key");
+
+    // 第一次启动：系统密钥库不可用 → 降级写盘
+    const first = new SecretStore(dir, {
+      available: false,
+      encrypt: () => Buffer.alloc(0),
+      decrypt: () => "",
+    });
+    first.useDegradedBackend(keyFile);
+    first.set("agnes", "sk-restart-persist-1234");
+
+    // 第二次启动：safeStorage 可用（os 后端），但文件是 degraded → 装配层按 fileMode 切回降级后端
+    const second = new SecretStore(dir, {
+      available: true,
+      encrypt: (plain) => Buffer.from(plain, "utf8"),
+      decrypt: (buf) => buf.toString("utf8"),
+    });
+    expect(second.fileMode()).toBe("degraded");
+    second.useDegradedBackend(keyFile);
+    expect(second.get("agnes")).toBe("sk-restart-persist-1234");
+    expect(second.storageMode()).toBe("degraded");
+  });
+
+  it("os 模式写入后重启仍可读（模拟同一后端）", () => {
+    const dir = path.join(os.tmpdir(), `loopsoar-secret-os-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const backend = {
+      available: true,
+      encrypt: (plain: string) => Buffer.from(`os:${plain}`, "utf8"),
+      decrypt: (buf: Buffer) => buf.toString("utf8").replace(/^os:/, ""),
+    };
+    const first = new SecretStore(dir, backend);
+    first.set("mock", "sk-os-mode-5678");
+    const second = new SecretStore(dir, backend);
+    expect(second.fileMode()).toBe("os");
+    expect(second.get("mock")).toBe("sk-os-mode-5678");
   });
 });

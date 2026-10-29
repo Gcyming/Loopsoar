@@ -295,8 +295,13 @@ app.whenReady().then(async () => {
     encrypt: (plain: string) => safeStorage.encryptString(plain),
     decrypt: (buf: Buffer) => safeStorage.decryptString(buf),
   });
-  if (!safeStorage.isEncryptionAvailable()) {
+  const secretFileMode = secrets.fileMode();
+  if (!safeStorage.isEncryptionAvailable() || secretFileMode === "degraded") {
+    // 历史文件是降级加密 → 必须继续用降级后端，否则重启后读不出（表现为「每次都要重新填密钥」）
     secrets.useDegradedBackend(path.join(dirs.configDir, ".secret.key"));
+  }
+  if (secretFileMode === "os" && !safeStorage.isEncryptionAvailable()) {
+    console.warn("[Loopsoar] 系统密钥库当前不可用，已有加密密钥可能无法读取（可重填一次）");
   }
   const resolveProviderKey = (providerId?: string): string => {
     const stored = providerId ? (secrets.get(providerId) ?? "") : "";
