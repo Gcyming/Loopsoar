@@ -14,7 +14,7 @@ import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
 import { ChatService } from "loopsoar-services/chat";
-import { createOpenAiClient, type LlmClient } from "loopsoar-core/llm";
+import { createAnthropicClient, createOpenAiClient, inferApiFormat, type LlmClient } from "loopsoar-core/llm";
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
 import { loadPreferences, loadPermissions } from "./domains/settings.js";
@@ -306,6 +306,11 @@ app.whenReady().then(async () => {
     const active = providers.active();
     const key = resolveProviderKey(active?.id);
     if (!active || !key) return undefined;
+    // 端点协议：显式指定优先，auto 按 baseUrl 推断（OpenAI 兼容 / Anthropic Messages）
+    const format = active.apiFormat && active.apiFormat !== "auto" ? active.apiFormat : inferApiFormat(active.baseUrl);
+    if (format === "anthropic") {
+      return createAnthropicClient({ baseUrl: active.baseUrl.replace(/\/v1$/, ""), apiKey: key, model: active.model });
+    }
     return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model });
   };
   // 惰性引用：供应商增删改/切换活跃后立即生效（无需重启）

@@ -101,6 +101,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         if (pvList.status === "fulfilled") {
           setProviderItems(pvList.value.items);
           setActiveProviderId(pvList.value.activeId);
+          // 首次使用（无供应商）：直接展开添加表单，少一次点击
+          if (pvList.value.items.length === 0) setEditingProviderId("new");
         }
         if (ext.status === "fulfilled") {
           setExtensions(ext.value.extensions);
@@ -249,10 +251,18 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setPFetching(true);
           setPModelsError(null);
           try {
-            const r = await api.settings.listModels({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model });
-            const existing = new Map(pModels.map((m) => [m.id, m]));
-            const merged = (r.models as ProviderModel[]).map((m) => ({ ...m, ...existing.get(m.id), selected: existing.get(m.id)?.selected ?? m.selected ?? true }));
-            setPModels(merged);
+            const r = await api.settings.listModels({
+              provider: pForm.provider,
+              baseUrl: pForm.baseUrl,
+              model: pForm.model,
+              apiFormat: pFormat,
+              apiKey: keyInput.trim() || undefined,
+            });
+            const existing = new Map(pModels.filter((m) => m.id.trim()).map((m) => [m.id, m]));
+            const merged = (r.models as ProviderModel[])
+              .filter((m) => m.id.trim())
+              .map((m) => ({ ...m, ...existing.get(m.id), selected: existing.get(m.id)?.selected ?? m.selected ?? true }));
+            if (merged.length > 0) setPModels(merged);
             setPModelsError(r.error);
             if (!merged.some((m) => m.id === pForm.model)) {
               const first = merged.find((m) => m.selected !== false)?.id ?? merged[0]?.id ?? "";
@@ -379,8 +389,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 </div>
                 <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / agnes / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
                 <Field l="接口地址"><In v={pForm.baseUrl} ph="https://api.deepseek.com/v1" on={(x) => setPForm({ ...pForm, baseUrl: x })} /></Field>
-                <Field l="端点协议" h="自动：按接口地址推断；显式指定则强制对应格式">
-                  <Seg v={pFormat} opts={[["auto", "自动"], ["openai", "OpenAI 兼容"]]} on={(x) => setPFormat(x as "auto" | "openai")} />
+                <Field l="端点协议" h="自动：按接口地址推断（含 anthropic/claude → Anthropic Messages）；也可强制指定">
+                  <Seg v={pFormat} opts={[["auto", "自动"], ["openai", "OpenAI 兼容"], ["anthropic", "Anthropic"]]} on={(x) => setPFormat(x as "auto" | "openai" | "anthropic")} />
                 </Field>
                 <Field l="API 密钥" h="保存时加密写入系统密钥库；不落日志、不回传、只显示掩码">
                   <div style={S.col}>

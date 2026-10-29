@@ -1,0 +1,236 @@
+/**
+ * Anthropic Messages API 客户端（/v1/messages，SSE 流式）。
+ *
+ * 平台适配目标（对齐 slime 的多端点设计）：
+ *   - OpenAI 兼容：/chat/completions（openai.ts）
+ *   - Anthropic：/messages（本文件，x-api-key + anthropic-version）
+ *   - 自动推断：baseUrl 含 anthropic/claude → Anthropic，否则 OpenAI
+ *
+ * 限制说明：LlmMessage 没有 tool_call_id，因此工具结果以文本块回填（降级但可用）；
+ * 纯文本对话、系统提示、工具调用声明、推理（thinking）均完整支持。
+ */
+import type { LlmChunk, LlmClient, LlmMessage, LlmRequest } from "./index.js";
+
+export interface AnthropicClientOptions {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+}
+
+function effortToBudget(effort: string): number {
+  const map: Record<string, number> = { minimal: 1024, low: 2048, medium: 4096, high: 8192, xhigh: 16384 };
+  return map[effort.toLowerCase()] ?? 4096;
+}
+
+function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages: { role: "user" | "assistant"; content: unknown[] }[] } {
+  const systemParts: string[] = [];
+  const out: { role: "user" | "assistant"; content: unknown[] }[] = [];
+  for (const msg of messages) {
+    if (msg.role === "system") {
+      systemParts.push(msg.content);
+      continue;
+    }
+    if (msg.role === "tool") {
+      // 降级：无 tool_use_id，用文本回填
+      out.push({ role: "user", content: [{ type: "text", text: `[工具结果]\n${msg.content}` }] });
+      continue;
+    }
+    out.push({ role: msg.role, content: [{ type: "text", text: msg.content }] });
+  }
+  return { system: systemParts.join("\n\n"), messages: out };
+}
+
+export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
+  const endpoint = `${opts.baseUrl.replace(/\/+$/, "")}/messages`;
+  const timeoutMs = opts.timeoutMs ?? 300_000;
+  const maxRetries = opts.maxRetries ?? 2;
+
+  async function* invokeOnce(req: LlmRequest): AsyncGenerator<LlmChunk> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const { system, messages } = toAnthropicMessages(req.messages);
+      const body: Record<string, unknown> = {
+        model: opts.model,
+        max_tokens: req.maxTokens ?? 4096,
+        messages,
+        stream: true,
+        ...(system ? { system } : {}),
+        ...(req.tools && req.tools.length > 0
+          ? {
+              tools: req.tools.map((t) => ({
+                name: t.name,
+                description: t.description,
+                input_schema: t.parameters ?? { type: "object", properties: {} },
+              })),
+            }
+          : {}),
+        ...(req.reasoningEffort
+          ? { thinking: { type: "enabled", budget_tokens: effortToBudget(req.reasoningEffort) } }
+          : {}),
+      };
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": opts.apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const text = (await res.text()).slice(0, 400);
+        let friendly = text;
+        try {
+          const parsed = JSON.parse(text) as { error?: { message?: string }; message?: string };
+          friendly = parsed.error?.message ?? parsed.message ?? text;
+        } catch {
+          // 保留原文
+        }
+        yield { kind: "error", message: `HTTP ${res.status}: ${friendly.slice(0, 300)}` };
+        yield { kind: "done" };
+        return;
+      }
+
+      const contentType = res.headers.get("content-type") ?? "";
+      // 非流式兜底
+      if (!res.body || contentType.includes("application/json")) {
+        const data = (await res.json()) as {
+          content?: { type?: string; text?: string; id?: string; name?: string; input?: unknown }[];
+          usage?: { input_tokens?: number; output_tokens?: number };
+          stop_reason?: string;
+        };
+        for (const block of data.content ?? []) {
+          if (block.type === "text" && block.text) yield { kind: "text", text: block.text };
+          else if (block.type === "tool_use")
+            yield { kind: "tool_call", toolCall: { id: block.id ?? `call-${Date.now()}`, name: block.name ?? "", args: block.input ?? {} } };
+        }
+        const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
+        if (tokens) yield { kind: "usage", tokens };
+        yield { kind: "done" };
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let done = false;
+      let outputTokens = 0;
+      const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
+
+      const handleEvent = function* (data: string): Generator<LlmChunk> {
+        let evt: {
+          type?: string;
+          index?: number;
+          content_block?: { type?: string; id?: string; name?: string };
+          delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
+          usage?: { output_tokens?: number };
+          error?: { message?: string };
+        };
+        try {
+          evt = JSON.parse(data);
+        } catch {
+          return;
+        }
+        switch (evt.type) {
+          case "content_block_start":
+            if (evt.content_block?.type === "tool_use" && typeof evt.index === "number") {
+              toolBlocks.set(evt.index, { id: evt.content_block.id ?? `call-${evt.index}`, name: evt.content_block.name ?? "", json: "" });
+            }
+            break;
+          case "content_block_delta":
+            if (evt.delta?.type === "text_delta" && evt.delta.text) yield { kind: "text", text: evt.delta.text };
+            else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) yield { kind: "reasoning", text: evt.delta.thinking };
+            else if (evt.delta?.type === "input_json_delta" && typeof evt.index === "number") {
+              const block = toolBlocks.get(evt.index);
+              if (block) block.json += evt.delta.partial_json ?? "";
+            }
+            break;
+          case "content_block_stop":
+            if (typeof evt.index === "number" && toolBlocks.has(evt.index)) {
+              const block = toolBlocks.get(evt.index)!;
+              toolBlocks.delete(evt.index);
+              let args: unknown = {};
+              try {
+                args = block.json ? JSON.parse(block.json) : {};
+              } catch {
+                args = { _raw: block.json };
+              }
+              yield { kind: "tool_call", toolCall: { id: block.id, name: block.name, args } };
+            }
+            break;
+          case "message_delta":
+            outputTokens += evt.usage?.output_tokens ?? 0;
+            break;
+          case "message_stop":
+            done = true;
+            break;
+          case "error":
+            yield { kind: "error", message: `Anthropic 错误：${evt.error?.message ?? "未知"}` };
+            done = true;
+            break;
+          default:
+            break;
+        }
+      };
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        if (readerDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep = buffer.indexOf("\n\n");
+        while (sep >= 0) {
+          const rawEvent = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          for (const line of rawEvent.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]") continue;
+            for (const chunk of handleEvent(data)) yield chunk;
+            if (done) break;
+          }
+          if (done) break;
+          sep = buffer.indexOf("\n\n");
+        }
+      }
+      if (outputTokens > 0) yield { kind: "usage", tokens: outputTokens };
+      yield { kind: "done" };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      yield { kind: "error", message: message.includes("abort") ? "请求超时" : message };
+      yield { kind: "done" };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {
+    invoke(req: LlmRequest): AsyncIterable<LlmChunk> {
+      const self = {
+        async *[Symbol.asyncIterator](): AsyncGenerator<LlmChunk> {
+          for (let attempt = 0; ; attempt += 1) {
+            let retryable = false;
+            for await (const chunk of invokeOnce(req)) {
+              if (chunk.kind === "error" && /HTTP (429|5\d\d)/.test(chunk.message) && attempt < maxRetries) {
+                retryable = true;
+                break;
+              }
+              yield chunk;
+            }
+            if (!retryable) return;
+            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          }
+        },
+      };
+      return self;
+    },
+  };
+}
+
+/** 根据 baseUrl 推断端点协议（auto 模式）。 */
+export function inferApiFormat(baseUrl: string): "openai" | "anthropic" {
+  return /anthropic|claude/i.test(baseUrl) ? "anthropic" : "openai";
+}

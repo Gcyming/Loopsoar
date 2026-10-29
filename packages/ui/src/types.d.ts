@@ -354,7 +354,13 @@ export interface LoopsoarAPI {
     pickPath(payload: { kind: "file" | "directory"; title?: string }): Promise<{ canceled: boolean; path: string | null }>;
   };
   settings: LoopsoarDomain & {
-    listModels(payload: { provider: string; baseUrl: string; model?: string }): Promise<{ models: ProviderModel[]; error: string | null }>;
+    listModels(payload: {
+      provider: string;
+      baseUrl: string;
+      model?: string;
+      apiFormat?: "auto" | "openai" | "anthropic";
+      apiKey?: string;
+    }): Promise<{ models: ProviderModel[]; error: string | null }>;
     listProviders(): Promise<{ items: ProviderItem[]; activeId: string | null }>;
     upsertProvider(payload: {
       id?: string;

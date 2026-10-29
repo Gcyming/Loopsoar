@@ -328,20 +328,32 @@ export default function App(): React.JSX.Element {
     setSettingsOpen(true);
   }, []);
 
+  // 侧栏最小宽度硬约束：窗口变窄时自动夹紧，避免输入区被挤压变形
+  useEffect(() => {
+    const clamp = (): void => {
+      const max = Math.max(320, Math.min(720, window.innerWidth - 640));
+      setSidebarWidth((w) => Math.min(Math.max(320, w), max));
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, []);
+
   // 侧栏拖拽：mousemove 实时改 DOM 宽度，松开时持久化 + 同步原生视图
   const startResize = useCallback(
     (event: React.MouseEvent<HTMLDivElement>): void => {
       event.preventDefault();
       const startX = event.clientX;
       const startWidth = sidebarWidth;
+      const maxForWindow = (): number => Math.max(320, Math.min(720, window.innerWidth - 640));
       const onMove = (e: MouseEvent): void => {
-        const next = Math.max(280, Math.min(720, startWidth - (e.clientX - startX)));
+        const next = Math.max(320, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
         setSidebarWidth(next);
       };
       const onUp = (e: MouseEvent): void => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
-        const next = Math.max(280, Math.min(720, startWidth - (e.clientX - startX)));
+        const next = Math.max(320, Math.min(Math.max(320, Math.min(720, window.innerWidth - 640)), startWidth - (e.clientX - startX)));
         setSidebarWidth(next);
         void api?.browser.setSidebarWidth({ width: next }).catch(() => {});
         if (api && preferences) {

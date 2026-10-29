@@ -71,6 +71,8 @@ export const SettingsListModelsSchema = z.object({
   baseUrl: z.string().url(),
   model: z.string().max(200),
   apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
+  /** 表单里刚输入、尚未保存的密钥（仅本次探测使用，不落盘不回显）。 */
+  apiKey: z.string().max(500).optional(),
 });
 export const PickPathSchema = z.object({
   kind: z.enum(["file", "directory"]),

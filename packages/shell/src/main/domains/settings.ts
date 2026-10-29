@@ -622,7 +622,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         .map((m) => enrichModelSpec(m))
         .filter((m) => typeof m.id === "string" && m.id.length > 0)
         .slice(0, 200);
-      return { models: models.length > 0 ? models : [{ id: cfg.model }], error: null };
+      return { models, error: null };
     } catch (err) {
       return {
         models: [cfg.model],
