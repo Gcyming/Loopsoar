@@ -377,15 +377,22 @@ export default function App(): React.JSX.Element {
       }),
       api.on("chat:stream:error", (payload) => {
         const p = payload as { content?: string; message?: string };
+        const text = p.message ?? p.content ?? "未知错误";
         activeAssistantRef.current = null;
         setBusy(false);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.status === "streaming"
-              ? { ...m, status: "error", tail: undefined, errorText: p.message ?? p.content ?? "未知错误" }
-              : m,
-          ),
-        );
+        setNotice("回复失败");
+        setMessages((prev) => {
+          if (prev.some((m) => m.status === "streaming")) {
+            return prev.map((m) =>
+              m.status === "streaming" ? { ...m, status: "error", tail: undefined, errorText: text } : m,
+            );
+          }
+          // 首字之前就失败：没有流式气泡 → 补一条错误消息，否则错误被吞掉
+          return [
+            ...prev,
+            { id: nextId("assistant"), role: "assistant" as const, text: "", status: "error" as const, errorText: text, createdAt: Date.now() },
+          ];
+        });
       }),
     ];
     return () => {
@@ -442,8 +449,8 @@ export default function App(): React.JSX.Element {
   // 侧栏最小宽度硬约束：窗口变窄时自动夹紧，避免输入区被挤压变形
   useEffect(() => {
     const clamp = (): void => {
-      const max = Math.max(320, Math.min(720, window.innerWidth - 640));
-      setSidebarWidth((w) => Math.min(Math.max(320, w), max));
+      const max = Math.max(320, Math.min(720, window.innerWidth - 320));
+      setSidebarWidth((w) => Math.min(Math.max(280, w), max));
     };
     clamp();
     window.addEventListener("resize", clamp);
@@ -456,16 +463,21 @@ export default function App(): React.JSX.Element {
       event.preventDefault();
       const startX = event.clientX;
       const startWidth = sidebarWidth;
-      const maxForWindow = (): number => Math.max(320, Math.min(720, window.innerWidth - 640));
+      // 可调范围：侧栏 280~720，且浏览器区至少保留 320 → 任意宽度下都能拖出比例
+      const minWidth = 280;
+      const maxForWindow = (): number => Math.max(minWidth + 40, Math.min(720, window.innerWidth - 320));
+      // 拖拽期间隐藏原生 WebContentsView，否则鼠标移入浏览器区后 mousemove 会被它吞掉
+      void api?.browser.setOverlay({ open: true }).catch(() => {});
       const onMove = (e: MouseEvent): void => {
-        const next = Math.max(320, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
+        const next = Math.max(minWidth, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
         setSidebarWidth(next);
       };
       const onUp = (e: MouseEvent): void => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
-        const next = Math.max(320, Math.min(Math.max(320, Math.min(720, window.innerWidth - 640)), startWidth - (e.clientX - startX)));
+        const next = Math.max(minWidth, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
         setSidebarWidth(next);
+        void api?.browser.setOverlay({ open: false }).catch(() => {});
         void api?.browser.setSidebarWidth({ width: next }).catch(() => {});
         if (api && preferences) {
           void api.settings
@@ -1682,7 +1694,7 @@ const styles: Record<string, React.CSSProperties> = {
   hintIcon: { marginTop: 3, color: BRAND.ochre, opacity: 0.9 },
   startUrl: { marginTop: 20, fontSize: 11.5, color: BRAND.linenFaint },
   splitter: {
-    width: 5,
+    width: 6,
     flexShrink: 0,
     cursor: "col-resize",
     background: "transparent",

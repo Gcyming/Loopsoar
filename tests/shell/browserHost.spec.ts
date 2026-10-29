@@ -90,6 +90,17 @@ describe("BrowserHost（多标签）", () => {
     expect(created.filter((v) => v.visible).length).toBe(1);
   });
 
+  it("空白新标签不显示原生视图（避免透明视图吞掉新建页鼠标事件）", async () => {
+    const { host, created } = makeHost();
+    const r = await host.newTab();
+    expect(r.ok).toBe(true);
+    expect(host.listTabs().length).toBe(1);
+    const first = created[0];
+    expect(first.visible).toBe(false);
+    await host.navigate("https://example.com", r.tabId);
+    expect(created[0].visible).toBe(true);
+  });
+
   it("危险协议导航被拒绝，且不创建标签", async () => {
     const { host, created } = makeHost();
     const result = await host.navigate("javascript:alert(1)");

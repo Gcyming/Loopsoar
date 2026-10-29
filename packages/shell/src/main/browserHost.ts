@@ -78,7 +78,9 @@ export class BrowserHost {
     const id = this.nextId();
     const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1 };
     this.tabs.set(id, entry);
-    if (!this.activeId) this.activeId = id;
+    // 新标签必须立即成为活动标签；否则 newTab 里 `id = activeId` 会拿到旧标签，
+    // 导致「新建标签」实际在旧标签里导航、新标签永远空白（也吞掉新建页上的鼠标事件）。
+    this.activeId = id;
     return entry;
   }
 
@@ -100,7 +102,8 @@ export class BrowserHost {
     } as unknown as typeof LAYOUT);
     for (const [id, entry] of this.tabs) {
       entry.view.setBounds(bounds);
-      const visible = id === this.activeId && !this.overlayOpen;
+      // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
+      const visible = id === this.activeId && !this.overlayOpen && Boolean(entry.url);
       entry.view.setVisible?.(visible);
     }
   }
