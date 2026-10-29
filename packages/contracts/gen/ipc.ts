@@ -11,6 +11,7 @@ import { CHANNEL_BINDINGS } from "../src/schemas.js";
  */
 export const IPC_CHANNELS = {
   "chat:stream": { domain: "chat", method: "stream", sensitive: true, hasRequest: true },
+  "chat:rollback": { domain: "chat", method: "rollback", sensitive: true, hasRequest: true },
   "chat:stop": { domain: "chat", method: "stop", sensitive: true, hasRequest: true },
   "chat:send": { domain: "chat", method: "send", sensitive: true, hasRequest: true },
   "perm:respond": { domain: "perm", method: "respond", sensitive: true, hasRequest: true },
@@ -127,7 +128,7 @@ export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEn
 export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
-    "chat": ["stream", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
+    "chat": ["stream", "rollback", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
     "perm": ["respond"],
     "workspace": ["read", "write"],
     "agents": ["list"],

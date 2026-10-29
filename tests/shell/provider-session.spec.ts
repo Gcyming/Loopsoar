@@ -54,6 +54,16 @@ describe("SessionStore 多会话", () => {
     expect(store.list().length).toBe(1);
   });
 
+  it("truncate：回滚截断消息并同步元信息", () => {
+    const store = new SessionStore(path.join(root, "sessions-trunc"));
+    const s1 = store.newSession().sessionId;
+    store.append(s1, "第一问", "第一答");
+    store.append(s1, "第二问", "第二答");
+    const truncated = store.truncate(s1, 2);
+    expect(truncated?.messages.length).toBe(2);
+    expect(store.load()?.messages.map((m) => m.text)).toEqual(["第一问", "第一答"]);
+  });
+
   it("旧版 last.json 自动迁移", () => {
     const dir = path.join(root, "sessions2");
     mkdirSync(dir, { recursive: true });

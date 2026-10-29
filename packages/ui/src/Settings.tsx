@@ -411,6 +411,42 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     {pModelsError ? <div style={S.errText}>{pModelsError}</div> : null}
                   </div>
                 </Field>
+                <Field l="密钥状态" h="加密落盘后跨重启自动沿用；可单独保存，不必改动供应商配置">
+                  <div style={S.rowBetween}>
+                    <span style={S.tag}>
+                      {(() => {
+                        const saved = providerItems.find((i) => i.id === editingProviderId);
+                        if (!saved) return "供应商尚未保存";
+                        return saved.hasKey ? `已保存 ${saved.keyHint ?? ""}（${saved.keySource === "env" ? "环境变量" : "密钥库"}）` : "尚未保存密钥";
+                      })()}
+                    </span>
+                    <Btn
+                      label="保存密钥"
+                      small
+                      onClick={() => {
+                        if (!keyInput.trim()) {
+                          bad("请先在「API 密钥」里粘贴密钥");
+                          return;
+                        }
+                        const saved = providerItems.find((i) => i.id === editingProviderId);
+                        if (!saved) {
+                          bad("请先点「保存并启用」创建供应商，再单独保存密钥");
+                          return;
+                        }
+                        void api.settings
+                          .setApiKey({ providerId: saved.id, apiKey: keyInput.trim() })
+                          .then(async (r) => {
+                            setKeyInput("");
+                            await refreshProviders();
+                            await api.settings.getProvider().then(setProvider).catch(() => {});
+                            notifyProviders();
+                            ok(`密钥已加密保存（${r.storageMode === "os" ? "系统密钥库" : "降级 AES"}），跨重启自动沿用`);
+                          })
+                          .catch(bad);
+                      }}
+                    />
+                  </div>
+                </Field>
                 <Field l="RPM 兜底" h="每分钟请求上限（留空 = 不主动限制）">
                   <In v={pRpm} ph="留空 = 不限制" on={setPRpm} />
                 </Field>

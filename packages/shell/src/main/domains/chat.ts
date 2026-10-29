@@ -115,6 +115,12 @@ export function registerChatDomain(deps: ChatDeps): void {
     startStream(deps, payload as { message: string; sessionId?: string; mode?: "build" | "plan" }),
   );
 
+  handleTrusted(deps, "chat:rollback", (payload) => {
+    const p = payload as { keepCount: number; sessionId?: string };
+    const session = deps.sessions?.truncate(p.sessionId ?? null, p.keepCount) ?? null;
+    return { ok: session !== null, session };
+  });
+
   handleTrusted(deps, "chat:stop", (payload) => {
     const p = payload as { sessionId: string };
     const stopped = deps.chatService.stop(p.sessionId);

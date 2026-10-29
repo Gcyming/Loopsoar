@@ -8,6 +8,13 @@
       "hasRequest": true
     },
     {
+      "channel": "chat:rollback",
+      "domain": "chat",
+      "method": "rollback",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "chat:stop",
       "domain": "chat",
       "method": "stop",

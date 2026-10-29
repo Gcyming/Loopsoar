@@ -112,6 +112,29 @@ export class SessionStore {
     };
   }
 
+  /** 截断到第 keepCount 条消息（保留 [0, keepCount)），用于消息回滚；返回截断后的会话。 */
+  truncate(sessionId: string | null, keepCount: number): PersistedSession | null {
+    const id = sessionId ?? this.currentId();
+    if (!id) return null;
+    const file = path.join(this.dir, `${id}.json`);
+    const data = this.readJson<PersistedSession>(file);
+    if (!data) return null;
+    const keep = Math.max(0, Math.min(Math.floor(keepCount), data.messages.length));
+    data.messages = data.messages.slice(0, keep);
+    data.updatedAt = Date.now();
+    this.writeJson(file, data);
+    const index = this.index();
+    const meta = index.items.find((i) => i.id === id);
+    if (meta) {
+      const last = data.messages[data.messages.length - 1];
+      meta.messageCount = data.messages.length;
+      meta.preview = last ? last.text.slice(0, 80) : "";
+      meta.updatedAt = data.updatedAt;
+      this.saveIndex(index);
+    }
+    return data;
+  }
+
   list(): SessionMeta[] {
     return this.index().items.slice().sort((a, b) => b.updatedAt - a.updatedAt);
   }

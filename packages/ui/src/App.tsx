@@ -182,6 +182,8 @@ export default function App(): React.JSX.Element {
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
   /** 挤压检测：可用宽度 / 内容自然宽度；低于阈值时按钮收缩为圆形图标 */
   const [squeezeRatio, setSqueezeRatio] = useState(1);
   const [compactUi, setCompactUi] = useState(false);
@@ -426,11 +428,27 @@ export default function App(): React.JSX.Element {
     return () => observer.disconnect();
   }, [provider, permSummary, mode, reasoningEffort, sidebarWidth, modelList]);
 
+  const updateScrollInfo = useCallback((): void => {
+    const el = messageListRef.current;
+    if (!el) return;
+    setCanScrollUp(el.scrollTop > 4);
+    setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 4);
+  }, []);
+
   // 新消息/流式增量时自动滚到底部
   useEffect(() => {
     const el = messageListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    updateScrollInfo();
+  }, [messages, updateScrollInfo]);
+
+  /** 卷轴按钮：按半屏滚动（平滑）。 */
+  const scrollPage = useCallback((direction: -1 | 1): void => {
+    const el = messageListRef.current;
+    if (!el) return;
+    el.scrollBy({ top: direction * Math.max(140, Math.round(el.clientHeight * 0.7)), behavior: "smooth" });
+    window.setTimeout(updateScrollInfo, 260);
+  }, [updateScrollInfo]);
 
   // 供应商/模型变更同步：设置页保存后刷新模型 chip 与模型列表
   useEffect(() => {
@@ -519,7 +537,8 @@ export default function App(): React.JSX.Element {
   // 当前模型声明的推理等级；为空则不显示「推理」chip
   const effortOptions = useMemo(() => {
     const spec = provider?.models?.find((m) => m.id === provider.model);
-    return spec?.thinkingEfforts ?? [];
+    // 模型未声明 reasoning levels 时给默认三档（关=不发参数，安全），保证「推理强度」始终可用
+    return spec?.thinkingEfforts && spec.thinkingEfforts.length > 0 ? spec.thinkingEfforts : ["low", "medium", "high"];
   }, [provider]);
 
   const effortLabel = useCallback((value: string): string => {
@@ -564,6 +583,24 @@ export default function App(): React.JSX.Element {
       setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
     });
   }, [api, input]);
+
+  /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
+  const rollbackTo = useCallback(
+    (targetId: string): void => {
+      const idx = messages.findIndex((m) => m.id === targetId);
+      if (idx < 0) return;
+      const target = messages[idx];
+      if (target.role !== "user") return;
+      const keepCount = messages
+        .slice(0, idx)
+        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
+      setMessages((prev) => prev.slice(0, idx));
+      setInput(target.text);
+      setNotice("已回滚到该消息，内容已放回输入框");
+      void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
+    },
+    [api, messages],
+  );
 
   const stop = useCallback((): void => {
     if (!api) return;
@@ -1083,7 +1120,8 @@ export default function App(): React.JSX.Element {
               </div>
             ) : null}
           </div>
-          <div ref={messageListRef} style={styles.messageList}>
+          <div style={styles.messageArea}>
+            <div ref={messageListRef} style={styles.messageList} onScroll={updateScrollInfo}>
             {messages.length === 0 ? (
               <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
             ) : (
@@ -1104,6 +1142,14 @@ export default function App(): React.JSX.Element {
                       <div className="msg-hover" style={styles.msgHover}>
                         <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
                         <span>· {timeText}</span>
+                        <button
+                          type="button"
+                          className="msg-action"
+                          title="回滚：撤销此消息及之后的对话（内容放回输入框）"
+                          onClick={() => rollbackTo(m.id)}
+                        >
+                          <Icon name="reload" size={12} />
+                        </button>
                         <button
                           type="button"
                           className="msg-action"
@@ -1202,6 +1248,32 @@ export default function App(): React.JSX.Element {
                 );
               })
             )}
+            </div>
+            {canScrollUp || canScrollDown ? (
+            <div style={styles.scrollRail} className="scroll-rail">
+              <button
+                type="button"
+                className="scroll-btn"
+                title="向上滚动"
+                disabled={!canScrollUp}
+                onClick={() => scrollPage(-1)}
+                style={{ ...styles.scrollBtn, opacity: canScrollUp ? 1 : 0.25 }}
+              >
+                <Icon name="back" size={12} style={{ transform: "rotate(90deg)" }} />
+              </button>
+              <div style={styles.scrollRailLine} />
+              <button
+                type="button"
+                className="scroll-btn"
+                title="向下滚动"
+                disabled={!canScrollDown}
+                onClick={() => scrollPage(1)}
+                style={{ ...styles.scrollBtn, opacity: canScrollDown ? 1 : 0.25 }}
+              >
+                <Icon name="forward" size={12} style={{ transform: "rotate(90deg)" }} />
+              </button>
+            </div>
+            ) : null}
           </div>
           <div style={styles.composer}>
             <div ref={composerBoxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
@@ -1899,7 +1971,38 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sidebarTitle: { display: "inline-flex", alignItems: "center" },
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
+  messageArea: { position: "relative", flex: 1, minHeight: 0, display: "flex" },
   messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
+  scrollRail: {
+    position: "absolute",
+    right: 8,
+    bottom: 14,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 2,
+    padding: "3px 2px",
+    borderRadius: 999,
+    background: "rgba(17,19,24,0.82)",
+    border: `1px solid ${BRAND.border}`,
+    boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+    backdropFilter: "blur(6px)",
+  },
+  scrollBtn: {
+    width: 24,
+    height: 24,
+    padding: 0,
+    border: "none",
+    borderRadius: 999,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "background 120ms, color 120ms, opacity 160ms",
+  },
+  scrollRailLine: { width: 14, height: 1, background: BRAND.border },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
   msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
   msgRowAssistant: { display: "flex", flexDirection: "column", alignItems: "stretch", marginBottom: 16 },

@@ -13,6 +13,11 @@ export const ChatStreamSchema = z.object({
   /** 推理等级（如 low/medium/high）；由模型参数声明支持值。 */
   reasoningEffort: z.string().max(30).optional(),
 });
+export const ChatRollbackSchema = z.object({
+  /** 截断到第 N 条持久化消息（保留 [0, keepCount)），用于消息回滚。 */
+  keepCount: z.number().int().min(0).max(10_000),
+  sessionId: z.string().max(64).optional(),
+});
 export const ChatStopSchema = z.object({ sessionId: z.string() });
 export const ChatSendSchema = z.object({ message: z.string(), sessionId: z.string().optional() });
 export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enum(["allow-once", "allow-session", "deny"]) });
@@ -180,6 +185,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "stream",
     request: ChatStreamSchema,
+    sensitive: true,
+  },
+  "chat:rollback": {
+    domain: "chat",
+    method: "rollback",
+    request: ChatRollbackSchema,
     sensitive: true,
   },
   "chat:stop": {

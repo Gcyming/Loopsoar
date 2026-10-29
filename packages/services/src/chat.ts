@@ -58,6 +58,8 @@ export interface ChatServiceOptions {
   getLlm?: () => LlmClient | undefined;
   /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
   getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
+  /** 会话历史（持久化消息，按时间正序）；缺省则单轮对话。 */
+  getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string }[];
   /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
   onPermissionRequest?: (request: PermissionRequestEvent) => void;
   agent?: ChatAgent;
@@ -72,6 +74,8 @@ export interface ChatInput {
   mode?: "build" | "plan";
   /** 推理等级（模型声明支持时透传给厂商）。 */
   reasoningEffort?: string;
+  /** 会话历史（持久化消息）；缺省则退化为单轮。 */
+  getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string }[];
 }
 
 /** 权限确认请求（浮层 UI 据此弹窗；requestId 用于 resolvePermission 结算）。 */
@@ -318,8 +322,13 @@ export class ChatService {
     const memoryText = this.opts.getMemoryFor?.(input.message) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
     const volatileContent = [segments.volatile, memoryText, skillText].filter((t) => t.trim()).join("\n\n");
+    const history = (this.opts.getHistory?.(sessionId) ?? []).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
     const messages = [
       { role: "system" as const, content: stableContent },
+      ...history,
       { role: "user" as const, content: `${input.message}\n\n${volatileContent}` },
     ];
 

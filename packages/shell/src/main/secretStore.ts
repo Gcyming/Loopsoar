@@ -38,7 +38,13 @@ interface SecretsFile {
   items: Record<string, SecretRecord>;
 }
 
+interface StoredSecret extends SecretRecord {
+  /** 降级后端（AES + .secret.key）备份密文：OS 密钥库不可用/变化时兜底解密。 */
+  cipherFallback?: string;
+}
+
 const KEY_LENGTH = 32;
+const SECRETS_VERSION = 1;
 
 /** 掩码：保留前 3 位与后 4 位；太短的密钥全掩码。 */
 export function maskSecret(secret: string): string {
@@ -92,6 +98,8 @@ export class SecretStore {
   private mode: SecretStorageMode;
   /** 进程内明文缓存：只在 shell 内使用，绝不跨 IPC。 */
   private cache = new Map<string, string>();
+  /** 降级备用后端：始终双写，避免 OS 密钥库可用性变化导致旧密文读不出。 */
+  private fallback: SecretCryptoBackend | null = null;
 
   constructor(configDir: string, backend: SecretCryptoBackend) {
     this.file = path.join(configDir, "secrets.enc.json");
@@ -104,6 +112,11 @@ export class SecretStore {
     if (this.mode === "degraded") return;
     this.backend = createDegradedBackend(keyFile);
     this.mode = "degraded";
+  }
+
+  /** 启用降级备用后端（总是双写；主后端不可解时回落）。 */
+  setFallbackBackend(keyFile: string): void {
+    this.fallback = createDegradedBackend(keyFile);
   }
 
   /** 已落盘文件记录的加密模式（不存在/损坏返回 null）；装配层据此选择与历史数据兼容的后端。 */
@@ -144,42 +157,54 @@ export class SecretStore {
   }
 
   has(providerId: string): boolean {
-    const item = this.read().items[providerId];
-    return Boolean(item?.cipher);
+    const item = this.read().items[providerId] as StoredSecret | undefined;
+    return Boolean(item?.cipher || item?.cipherFallback);
   }
 
   hint(providerId: string): string | null {
     return this.read().items[providerId]?.hint ?? null;
   }
 
-  /** 取明文密钥（仅 shell 内使用；未配置返回 null）。 */
+  /** 取明文密钥（仅 shell 内使用；未配置返回 null）。主后端失败时自动尝试降级备份。 */
   get(providerId: string): string | null {
     const cached = this.cache.get(providerId);
     if (cached) return cached;
-    const item = this.read().items[providerId];
-    if (!item?.cipher) return null;
-    if (this.mode === "unavailable") return null;
-    try {
-      const plain = this.backend.decrypt(Buffer.from(item.cipher, "base64"));
-      this.cache.set(providerId, plain);
-      return plain;
-    } catch {
-      return null;
-    }
+    const item = this.read().items[providerId] as StoredSecret | undefined;
+    if (!item) return null;
+    const debug = Boolean(process.env.LOOPSOAR_SECRET_DEBUG);
+    const tryDecrypt = (cipher: string | undefined, backend: SecretCryptoBackend | null, tag: string): string | null => {
+      if (!cipher || !backend) return null;
+      try {
+        return backend.decrypt(Buffer.from(cipher, "base64"));
+      } catch (err) {
+        if (debug) console.log(`[Loopsoar] secret decrypt failed (${tag}): ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      }
+    };
+    // OS 主密文 → 降级备份密文；两边都失败才算"丢失"
+    const plain =
+      (this.mode !== "unavailable" ? tryDecrypt(item.cipher, this.backend, "primary") : null) ??
+      tryDecrypt(item.cipherFallback, this.fallback, "fallback");
+    if (plain === null) return null;
+    this.cache.set(providerId, plain);
+    return plain;
   }
 
   set(providerId: string, apiKey: string): SecretRecord {
-    if (this.mode === "unavailable") throw new Error("系统密钥库不可用，无法安全保存密钥（可改用环境变量）");
+    if (this.mode === "unavailable" && !this.fallback) {
+      throw new Error("系统密钥库不可用，无法安全保存密钥（可改用环境变量）");
+    }
     const value = apiKey.trim();
     if (value.length < 8) throw new Error("密钥格式不合法（至少 8 位）");
-    const cipher = this.backend.encrypt(value).toString("base64");
-    const record: SecretRecord = { cipher, hint: maskSecret(value), updatedAt: Date.now() };
+    const cipher = this.mode === "unavailable" ? "" : this.backend.encrypt(value).toString("base64");
+    const cipherFallback = this.fallback ? this.fallback.encrypt(value).toString("base64") : undefined;
+    const record: StoredSecret = { cipher, cipherFallback, hint: maskSecret(value), updatedAt: Date.now() };
     const data = this.read();
-    data.mode = this.mode === "os" ? "os" : "degraded";
+    data.mode = this.mode === "degraded" || this.mode === "unavailable" ? "degraded" : "os";
     data.items[providerId] = record;
     this.write(data);
     this.cache.set(providerId, value);
-    return record;
+    return { cipher, hint: record.hint, updatedAt: record.updatedAt };
   }
 
   clear(providerId: string): boolean {

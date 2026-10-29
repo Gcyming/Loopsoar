@@ -250,6 +250,9 @@ function ensureWritableDataDirs(): ReturnType<typeof ensureLoopsoarDirs> {
       app.setPath("userData", root);
       return dirs;
     } catch (err) {
+      if (process.env.LOOPSOAR_E2E_SECRET_DUMP) {
+        console.log(`[E2E] dataDir candidate failed: ${root} → ${err instanceof Error ? err.message : String(err)}`);
+      }
       lastErr = err;
     }
   }
@@ -295,13 +298,39 @@ app.whenReady().then(async () => {
     encrypt: (plain: string) => safeStorage.encryptString(plain),
     decrypt: (buf: Buffer) => safeStorage.decryptString(buf),
   });
+  // 降级备用后端：总是启用并与 OS 密文双写 —— 无论下次启动 safeStorage 是否可用都能解密
+  // （此前单后端方案在「os 写入 → 下次不可用」或反方向切换时会读不出，表现为重启后要重填密钥）。
+  secrets.setFallbackBackend(path.join(dirs.configDir, ".secret.key"));
   const secretFileMode = secrets.fileMode();
   if (!safeStorage.isEncryptionAvailable() || secretFileMode === "degraded") {
-    // 历史文件是降级加密 → 必须继续用降级后端，否则重启后读不出（表现为「每次都要重新填密钥」）
     secrets.useDegradedBackend(path.join(dirs.configDir, ".secret.key"));
   }
-  if (secretFileMode === "os" && !safeStorage.isEncryptionAvailable()) {
-    console.warn("[Loopsoar] 系统密钥库当前不可用，已有加密密钥可能无法读取（可重填一次）");
+  console.log(
+    `[Loopsoar] dataDir=${dirs.dataDir} secrets=${secrets.storageMode()} fileMode=${secretFileMode ?? "none"} osAvailable=${safeStorage.isEncryptionAvailable()}`,
+  );
+  // 开发/E2E 密钥持久化验证钩子（仅显式环境变量启用；不打印明文）
+  if (process.env.LOOPSOAR_E2E_SECRET_SET) {
+    const [pidRaw, key] = process.env.LOOPSOAR_E2E_SECRET_SET.split("|");
+    const pid = pidRaw && pidRaw !== "active" ? pidRaw : (providers.active()?.id ?? "e2e");
+    try {
+      secrets.set(pid, key ?? "");
+      console.log(`[E2E] SECRET_SET ok provider=${pid} mode=${secrets.storageMode()}`);
+    } catch (err) {
+      console.log(`[E2E] SECRET_SET failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (process.env.LOOPSOAR_E2E_SECRET_DUMP) {
+    const active = providers.active();
+    console.log(
+      `[E2E] SECRET_DUMP ${JSON.stringify({
+        dataDir: dirs.dataDir,
+        storageMode: secrets.storageMode(),
+        fileMode: secrets.fileMode(),
+        active: active?.id ?? null,
+        has: active ? secrets.has(active.id) : false,
+        decrypt: active ? (secrets.get(active.id) ? "ok" : "fail") : null,
+      })}`,
+    );
   }
   const resolveProviderKey = (providerId?: string): string => {
     const stored = providerId ? (secrets.get(providerId) ?? "") : "";
@@ -398,6 +427,12 @@ app.whenReady().then(async () => {
     permissionPolicy: () => loadPermissions(dirs.configDir),
     // 供应商：设置面板保存后即时生效
     getLlm: () => llmRef,
+    // 会话历史：每次 stream 读取持久化消息，让模型具备多轮上下文（回滚后同样生效）
+    getHistory: () =>
+      (sessions.load()?.messages ?? []).slice(-40).map((m) => ({
+        role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+        content: m.text,
+      })),
     // 模式：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单
     getToolAllowlist: (mode?: "build" | "plan") => {
       if (mode === "plan") {
