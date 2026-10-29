@@ -74,6 +74,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [about, setAbout] = useState<AboutInfo | null>(null);
 
   const ok = useCallback((text: string) => setNotice({ kind: "ok", text }), []);
+  /** 供应商变更广播：主界面据此刷新模型 chip / 模型列表 */
+  const notifyProviders = useCallback(() => {
+    window.dispatchEvent(new Event("loopsoar:providers-changed"));
+  }, []);
   const bad = useCallback((e: unknown) => setNotice({ kind: "error", text: e instanceof Error ? e.message : String(e) }), []);
 
   const applyRules = useCallback((r: RulesSnapshot) => {
@@ -314,6 +318,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             await refreshProviders();
             setEditingProviderId(null);
             await api.settings.getProvider().then(setProvider).catch(() => {});
+            notifyProviders();
             ok("供应商已保存并设为活跃（含模型参数）");
           } catch (e) {
             bad(e);
@@ -333,7 +338,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                         type="button"
                         className="icon-btn"
                         title={item.id === activeProviderId ? "当前活跃" : "设为活跃"}
-                        onClick={() => void api.settings.setActiveProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); })}
+                        onClick={() => void api.settings.setActiveProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); })}
                         style={{ width: 20, height: 20 }}
                       >
                         <Icon name={item.id === activeProviderId ? "check" : "cloud-upload"} size={13} />
@@ -347,7 +352,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     <span style={S.icons}>
                       <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model }).then(setTestRes).catch(bad)} />
                       <Btn label="编辑" small onClick={() => startEdit(item)} />
-                      <Btn label="删除" small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); }).catch(bad)} />
+                      <Btn label="删除" small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); }).catch(bad)} />
                     </span>
                   </div>
                   <div style={S.providerRows}>
@@ -363,7 +368,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       <span style={S.providerKey}>密钥</span>
                       <span style={S.providerVal}>{item.hasKey ? `已加密保存 ${item.keyHint ?? ""}（${item.keySource === "env" ? "环境变量" : "密钥库"}）` : "未配置"}</span>
                       {item.hasKey ? (
-                        <Btn label="清除" small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); ok("已清除该供应商的密钥"); }).catch(bad)} />
+                        <Btn label="清除" small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); ok("已清除该供应商的密钥"); }).catch(bad)} />
                       ) : null}
                     </div>
                   </div>

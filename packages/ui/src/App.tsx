@@ -328,6 +328,20 @@ export default function App(): React.JSX.Element {
     setSettingsOpen(true);
   }, []);
 
+  // 供应商/模型变更同步：设置页保存后刷新模型 chip 与模型列表
+  useEffect(() => {
+    if (!api) return;
+    const refresh = (): void => {
+      void api.settings.getProvider().then(setProvider).catch(() => {});
+    };
+    window.addEventListener("loopsoar:providers-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("loopsoar:providers-changed", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [api]);
+
   // 侧栏最小宽度硬约束：窗口变窄时自动夹紧，避免输入区被挤压变形
   useEffect(() => {
     const clamp = (): void => {
@@ -1183,7 +1197,9 @@ export default function App(): React.JSX.Element {
           initialSection={(settingsSection || undefined) as never}
           onClose={() => {
             setSettingsOpen(false);
+            // 关闭设置后同步权限与供应商（模型 chip / 模型列表可能已变更）
             void api?.settings.getPermissions().then(setPermSummary).catch(() => {});
+            void api?.settings.getProvider().then(setProvider).catch(() => {});
           }}
           onPreferencesSaved={(next) => setPreferences(next)}
         />

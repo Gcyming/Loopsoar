@@ -16,6 +16,42 @@ export interface ChatDeps extends TrustedIpcDeps {
   shouldAutoCapture?: () => boolean;
 }
 
+/** 错误清洗：解开多层 JSON 转义，提取 error.message，去控制字符并截断。 */
+export function sanitizeErrorMessage(raw: string): string {
+  let text = String(raw ?? "");
+  for (let i = 0; i < 3; i += 1) {
+    if (!text.includes('\\"') && !text.includes("\\n")) break;
+    text = text
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, " ")
+      .replace(/\\t/g, " ")
+      .replace(/\\\\/g, "\\");
+  }
+  const tryExtract = (obj: unknown): string | null => {
+    if (!obj || typeof obj !== "object") return null;
+    const o = obj as Record<string, unknown>;
+    const direct = o.message ?? o.error;
+    if (typeof direct === "string") return direct;
+    if (direct && typeof direct === "object") {
+      const nested = (direct as Record<string, unknown>).message;
+      if (typeof nested === "string") return nested;
+    }
+    return null;
+  };
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const extracted = tryExtract(JSON.parse(text.slice(start, end + 1)));
+      if (extracted) text = extracted;
+    } catch {
+      // 保留原文
+    }
+  }
+  text = text.replace(/\s+/g, " ").trim();
+  return text.length > 320 ? `${text.slice(0, 320)}…` : text;
+}
+
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
 function startStream(
   deps: ChatDeps,
@@ -33,9 +69,10 @@ function startStream(
     .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort }, (item) => {
       const type = String(item.meta?.type ?? "chunk");
       if (type === "chunk") assistantText += item.content;
+      const content = type === "error" ? sanitizeErrorMessage(item.content) : item.content;
       deps.push(`chat:stream:${type}`, {
         sessionId,
-        content: item.content,
+        content,
         meta: item.meta,
       });
     })
@@ -63,10 +100,8 @@ function startStream(
       }
     })
     .catch((err: unknown) => {
-      deps.push("chat:stream:error", {
-        sessionId,
-        message: err instanceof Error ? err.message : String(err),
-      });
+      const cleaned = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
+      deps.push("chat:stream:error", { sessionId, content: cleaned, message: cleaned });
     });
   return { accepted: true, sessionId };
 }

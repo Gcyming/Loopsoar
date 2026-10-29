@@ -102,7 +102,14 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
           model: opts.model,
           messages: req.messages,
           stream: true,
-          ...(req.tools && req.tools.length > 0 ? { tools: req.tools } : {}),
+          ...(req.tools && req.tools.length > 0
+            ? {
+                tools: req.tools.map((t) => ({
+                  type: "function" as const,
+                  function: { name: t.name, description: t.description, parameters: t.parameters },
+                })),
+              }
+            : {}),
           ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
           ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
         }),
