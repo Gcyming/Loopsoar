@@ -3,7 +3,7 @@
  * 允许 import electron 的文件只有两个：本文件与 main/electronBrowser.ts（薄适配层）。
  * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +39,7 @@ import { registerMemoryDomain } from "./domains/memory.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
 import { ProviderStore } from "./providerStore.js";
+import { SecretStore } from "./secretStore.js";
 import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
@@ -288,10 +289,22 @@ app.whenReady().then(async () => {
     const item = providers.upsert(legacyProvider);
     providers.setActive(item.id);
   }
-  const apiKey = resolveApiKeyFromEnv(process.env);
+  // 加密密钥库：OS 密钥库优先；不可用时降级 AES（.secret.key 0600）
+  const secrets = new SecretStore(dirs.configDir, {
+    available: safeStorage.isEncryptionAvailable(),
+    encrypt: (plain: string) => safeStorage.encryptString(plain),
+    decrypt: (buf: Buffer) => safeStorage.decryptString(buf),
+  });
+  if (!safeStorage.isEncryptionAvailable()) {
+    secrets.useDegradedBackend(path.join(dirs.configDir, ".secret.key"));
+  }
+  const resolveProviderKey = (providerId?: string): string => {
+    const stored = providerId ? (secrets.get(providerId) ?? "") : "";
+    return stored || resolveApiKeyFromEnv(process.env);
+  };
   const buildLlmFromActive = (): LlmClient | undefined => {
     const active = providers.active();
-    const key = resolveApiKeyFromEnv(process.env);
+    const key = resolveProviderKey(active?.id);
     if (!active || !key) return undefined;
     return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model });
   };
@@ -333,9 +346,11 @@ app.whenReady().then(async () => {
       tools: registry.list().length,
       agents: agents.list().length,
       memoryEntries: memory.stats().total,
+      secretStorageMode: secrets.storageMode(),
     }),
     // 供应商增删改/切换 → 重建 LLM（立即可对话）
     providers,
+    secrets,
     onProvidersChanged: () => {
       llmRef = buildLlmFromActive();
     },
@@ -389,6 +404,8 @@ app.whenReady().then(async () => {
 
   // 浏览器宿主：WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
   browserHost = createElectronBrowserHost(() => mainWindow, (url) => {
+    // 只把真实网页转为新标签：about:blank/空地址等（弹窗占位）直接忽略，避免凭空多出「新标签页」
+    if (!/^https?:\/\//i.test(url)) return;
     void browserHost?.newTab(url);
   });
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI

@@ -53,6 +53,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
   const [mcpConfigPath, setMcpConfigPath] = useState("");
   const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "" });
+  const [keyInput, setKeyInput] = useState("");
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [pEditing, setPEditing] = useState(false);
@@ -211,6 +212,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         </div>) : <div style={S.muted}>读取失败</div>;
 
       case "providers": {
+        const ensureForm = (): void => {
+          if (providerItems.length === 0 && editingProviderId === null) setEditingProviderId("new");
+        };
+        ensureForm();
         const refreshProviders = async (): Promise<void> => {
           const list = await api.settings.listProviders();
           setProviderItems(list.items);
@@ -232,17 +237,21 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               editingProviderId && editingProviderId !== "new" ? { id: editingProviderId, ...pForm } : pForm,
             );
             await api.settings.setActiveProvider({ id: r.item.id });
+            if (keyInput.trim()) {
+              await api.settings.setApiKey({ providerId: r.item.id, apiKey: keyInput.trim() });
+              setKeyInput("");
+            }
             await refreshProviders();
             setEditingProviderId(null);
             await api.settings.getProvider().then(setProvider).catch(() => {});
-            ok("供应商已保存并设为活跃");
+            ok("供应商已保存并设为活跃（密钥已加密存储）");
           } catch (e) {
             bad(e);
           }
         };
         return (
           <div>
-            <Head t="供应商" h="可添加多条配置，选一条设为活跃；API Key 只读环境变量（不落盘不回传）" />
+            <Head t="供应商" h="可添加多条配置，选一条设为活跃。API Key 在输入框填写 → 系统密钥库加密保存，界面只显示掩码" />
             {providerItems.map((item) => (
               <div key={item.id} style={S.card}>
                 <div style={S.rowBetween}>
@@ -268,11 +277,22 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 <div style={S.providerRows}>
                   <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{item.baseUrl}</span></div>
                   <div style={S.providerRow}><span style={S.providerKey}>模型</span><span style={S.providerVal}>{item.model}</span></div>
+                  <div style={S.providerRow}>
+                    <span style={S.providerKey}>密钥</span>
+                    <span style={S.providerVal}>
+                      {item.hasKey
+                        ? `已加密保存 ${item.keyHint ?? ""}（${item.keySource === "env" ? "环境变量" : "密钥库"}）`
+                        : "未配置"}
+                    </span>
+                    {item.hasKey ? (
+                      <Btn label="清除" small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); ok("已清除该供应商的密钥"); }).catch(bad)} />
+                    ) : null}
+                  </div>
                 </div>
               </div>
             ))}
             {testRes ? <div style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</div> : null}
-            {editingProviderId === null ? (
+            {editingProviderId === null && providerItems.length > 0 ? (
               <div style={S.btns}><Btn label="添加供应商" primary onClick={() => startEdit()} /></div>
             ) : (
               <div style={S.card}>
@@ -291,6 +311,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
                 <Field l="接口地址"><In v={pForm.baseUrl} ph="https://api.deepseek.com/v1" on={(x) => setPForm({ ...pForm, baseUrl: x })} /></Field>
                 <Field l="模型"><In v={pForm.model} ph="deepseek-chat" on={(x) => setPForm({ ...pForm, model: x })} /></Field>
+                <Field l="API 密钥" h="保存时加密写入系统密钥库；不落日志、不回传、只显示掩码。留空则沿用已有密钥">
+                  <In v={keyInput} ph="sk-…（粘贴后点保存）" type="password" on={setKeyInput} />
+                </Field>
                 <div style={S.btns}>
                   <Btn label="测试连接" onClick={() => void api.settings.testProvider(pForm).then(setTestRes).catch(bad)} />
                   <Btn label="保存并启用" primary onClick={() => void commit()} />
@@ -298,7 +321,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 </div>
               </div>
             )}
-            <div style={S.note}>密钥走环境变量（重启生效）：<code style={S.code}>LOOPSOAR_API_KEY=&lt;密钥&gt;</code></div>
+            <div style={S.note}>
+              安全：密钥经 Electron safeStorage（Windows DPAPI / macOS Keychain）加密落盘，渲染层只拿到掩码；
+              系统密钥库不可用时降级为 AES-256-GCM（本地密钥文件 0600）并在诊断页标注。
+              也支持环境变量兜底：<code style={S.code}>LOOPSOAR_API_KEY</code>（优先级低于已保存密钥）。
+            </div>
           </div>
         );
       }
@@ -547,7 +574,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput]);
 
   return (
     <div style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -593,8 +620,8 @@ function Seg({ v, opts, on }: { v: string; opts: [string, string][]; on: (x: str
 function Toggle({ v, on }: { v: boolean; on: (x: boolean) => void }) {
   return <button type="button" className="settings-toggle" style={{ ...S.toggle, ...(v ? S.toggleOn : {}) }} onClick={() => on(!v)} aria-pressed={v}><span style={{ ...S.knob, ...(v ? S.knobOn : {}) }} /></button>;
 }
-function In({ v, ph, on }: { v: string; ph?: string; on: (x: string) => void }) {
-  return <input style={S.input} value={v} placeholder={ph} onChange={(e) => on(e.target.value)} />;
+function In({ v, ph, on, type }: { v: string; ph?: string; on: (x: string) => void; type?: string }) {
+  return <input style={S.input} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
 }
 function Area({ v, rows, on }: { v: string; rows: number; on: (x: string) => void }) {
   return <textarea style={S.area} rows={rows} value={v} onChange={(e) => on(e.target.value)} spellCheck={false} />;

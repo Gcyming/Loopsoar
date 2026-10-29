@@ -227,8 +227,21 @@ export class BrowserHost {
     }
   }
 
-  /** 新建标签（可带初始 URL）并切为活动标签。 */
+  /** 新建标签（可带初始 URL）并切为活动标签；同 URL 已存在时复用（防重复标签）。 */
   async newTab(rawUrl?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+    if (rawUrl) {
+      const normalized = normalizeNavigateUrl(rawUrl);
+      if (normalized.ok) {
+        for (const [id, tab] of this.tabs) {
+          if (tab.url === normalized.url) {
+            this.activeId = id;
+            this.applyLayout();
+            this.emitTabs();
+            return { tabId: id, ok: true, url: tab.url };
+          }
+        }
+      }
+    }
     const entry = this.createTab();
     const id = this.activeId!;
     this.activeId = id;

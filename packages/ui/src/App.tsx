@@ -165,6 +165,7 @@ export default function App(): React.JSX.Element {
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [modelList, setModelList] = useState<{ models: string[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
+  const omniboxRef = useRef<HTMLInputElement | null>(null);
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
 
@@ -432,13 +433,21 @@ export default function App(): React.JSX.Element {
 
   const newTab = useCallback((): void => {
     if (!api) return;
+    // 已是空白新建页：不再叠一个空标签，聚焦地址栏即可
+    const active = tabs.find((x) => x.active);
+    if (active && !active.url) {
+      setNotice("当前就是新建标签页，输入地址即可");
+      omniboxRef.current?.focus();
+      return;
+    }
     void api.browser.newTab({}).then((r) => {
       if (r.ok) {
-        setNotice("已新建标签页");
+        setNotice("");
         void api.browser.listTabs().then((t) => setTabs(t.tabs)).catch(() => {});
+        setTimeout(() => omniboxRef.current?.focus(), 50);
       }
     });
-  }, [api]);
+  }, [api, tabs]);
 
   const selectTab = useCallback(
     (tabId: string): void => {
@@ -625,6 +634,81 @@ export default function App(): React.JSX.Element {
   };
   const canSend = Boolean(api) && !busy && input.trim() !== "";
 
+  // 历史 / 下载面板（以点击的按钮为基点展开）
+  const renderHistoryPanel = (): React.JSX.Element => (
+    <div style={styles.popover}>
+      <div style={styles.dropTitle}>历史记录（本标签）</div>
+      {historyEntries.length === 0 ? (
+        <div style={styles.dropEmpty}>暂无历史</div>
+      ) : (
+        historyEntries.map((h) => (
+          <button
+            key={`${h.index}-${h.url}`}
+            type="button"
+            className="model-item"
+            style={{ ...styles.dropItem, ...(h.current ? styles.dropItemActive : {}) }}
+            onClick={() => {
+              setHistoryOpen(false);
+              void api?.browser.navigate({ url: h.url }).then((r) => {
+                if (r.ok) {
+                  setCurrentUrl(r.url ?? h.url);
+                  setAddress(r.url ?? h.url);
+                }
+              });
+            }}
+            title={h.url}
+          >
+            {h.url}
+          </button>
+        ))
+      )}
+    </div>
+  );
+
+  const renderDownloadsPanel = (): React.JSX.Element => (
+    <div style={{ ...styles.popover, right: 0, left: "auto", width: 400 }}>
+      <div style={styles.dropTitle}>下载</div>
+      {downloads.length === 0 ? (
+        <div style={styles.dropEmpty}>暂无下载</div>
+      ) : (
+        downloads.map((d) => (
+          <div key={d.id} style={styles.dlRow}>
+            <div style={styles.dlMeta}>
+              <span style={styles.dlName} title={d.savePath}>{d.filename}</span>
+              <span style={styles.dlState}>
+                {d.state === "completed"
+                  ? "已完成"
+                  : d.state === "progressing"
+                    ? `${Math.round((d.received / Math.max(1, d.total)) * 100)}%`
+                    : d.state === "cancelled"
+                      ? "已取消"
+                      : "失败"}
+              </span>
+            </div>
+            <div style={styles.dlActions}>
+              {d.state === "progressing" ? (
+                <button type="button" className="icon-btn" title="取消" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "cancel" })}>
+                  <Icon name="close" size={12} />
+                </button>
+              ) : null}
+              {d.state === "completed" ? (
+                <button type="button" className="icon-btn" title="打开" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" })}>
+                  <Icon name="arrow-go" size={12} />
+                </button>
+              ) : null}
+              <button type="button" className="icon-btn" title="打开所在文件夹" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
+                <Icon name="folder" size={12} />
+              </button>
+              <button type="button" className="icon-btn" title="移除记录" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "remove" }).then(() => void api.browser.downloads().then((r) => setDownloads(r.downloads)))}>
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
   return (
     <div style={styles.app}>
       <TitleBar maximized={maximized} />
@@ -658,9 +742,12 @@ export default function App(): React.JSX.Element {
           >
             <Icon name="reload" size={16} />
           </button>
-          <button type="button" className="icon-btn" title="历史记录" onClick={toggleHistory}>
-            <Icon name="history" size={16} />
-          </button>
+          <span style={styles.anchor}>
+            <button type="button" className="icon-btn" title="历史记录" onClick={toggleHistory}>
+              <Icon name="history" size={16} />
+            </button>
+            {historyOpen ? renderHistoryPanel() : null}
+          </span>
         </div>
 
         <div style={styles.omniboxWrap}>
@@ -671,6 +758,7 @@ export default function App(): React.JSX.Element {
             onKeyDown={(e) => {
               if (e.key === "Enter") navigate();
             }}
+            ref={omniboxRef}
             placeholder="输入地址或搜索内容，回车导航…"
             style={styles.omnibox}
             aria-label="地址与搜索"
@@ -681,11 +769,14 @@ export default function App(): React.JSX.Element {
         </div>
 
         <div style={styles.topActions}>
-          <button type="button" className="icon-btn" title="下载" onClick={toggleDownloads} style={{ position: "relative" }}>
-            <Icon name="download" size={17} />
-            {downloads.some((d) => d.state === "progressing") ? <span style={styles.dlDot} /> : null}
-          </button>
-          <button type="button" className="icon-btn" title="页面快照" onClick={snapshot} disabled={!api}>
+          <span style={styles.anchor}>
+            <button type="button" className="icon-btn" title="下载" onClick={toggleDownloads} style={{ position: "relative" }}>
+              <Icon name="download" size={17} />
+              {downloads.some((d) => d.state === "progressing") ? <span style={styles.dlDot} /> : null}
+            </button>
+            {downloadsOpen ? renderDownloadsPanel() : null}
+          </span>
+          <button type="button" className="icon-btn" title={currentUrl ? "页面快照" : "先打开一个网页"} onClick={snapshot} disabled={!api || !currentUrl}>
             <Icon name="capture" size={17} />
           </button>
           <button type="button" className="icon-btn" title="设置" onClick={() => setSettingsOpen(true)}>
@@ -697,87 +788,10 @@ export default function App(): React.JSX.Element {
         </div>
       </header>
 
-      {historyOpen || downloadsOpen ? (
-        <div style={styles.dropPanel}>
-          {historyOpen ? (
-            <>
-              <div style={styles.dropTitle}>历史记录（本标签）</div>
-              {historyEntries.length === 0 ? (
-                <div style={styles.dropEmpty}>暂无历史</div>
-              ) : (
-                historyEntries.map((h) => (
-                  <button
-                    key={`${h.index}-${h.url}`}
-                    type="button"
-                    className="model-item"
-                    style={{ ...styles.dropItem, ...(h.current ? styles.dropItemActive : {}) }}
-                    onClick={() => {
-                      setHistoryOpen(false);
-                      void api?.browser.navigate({ url: h.url }).then((r) => {
-                        if (r.ok) {
-                          setCurrentUrl(r.url ?? h.url);
-                          setAddress(r.url ?? h.url);
-                        }
-                      });
-                    }}
-                    title={h.url}
-                  >
-                    {h.url}
-                  </button>
-                ))
-              )}
-            </>
-          ) : (
-            <>
-              <div style={styles.dropTitle}>下载</div>
-              {downloads.length === 0 ? (
-                <div style={styles.dropEmpty}>暂无下载</div>
-              ) : (
-                downloads.map((d) => (
-                  <div key={d.id} style={styles.dlRow}>
-                    <div style={styles.dlMeta}>
-                      <span style={styles.dlName} title={d.savePath}>{d.filename}</span>
-                      <span style={styles.dlState}>
-                        {d.state === "completed"
-                          ? "已完成"
-                          : d.state === "progressing"
-                            ? `${Math.round((d.received / Math.max(1, d.total)) * 100)}%`
-                            : d.state === "cancelled"
-                              ? "已取消"
-                              : "失败"}
-                      </span>
-                    </div>
-                    <div style={styles.dlActions}>
-                      {d.state === "progressing" ? (
-                        <button type="button" className="icon-btn" title="取消" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "cancel" })}>
-                          <Icon name="close" size={12} />
-                        </button>
-                      ) : null}
-                      {d.state === "completed" ? (
-                        <button type="button" className="icon-btn" title="打开" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" })}>
-                          <Icon name="arrow-go" size={12} />
-                        </button>
-                      ) : null}
-                      <button type="button" className="icon-btn" title="打开所在文件夹" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
-                        <Icon name="folder" size={12} />
-                      </button>
-                      <button type="button" className="icon-btn" title="移除记录" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "remove" }).then(() => void api.browser.downloads().then((r) => setDownloads(r.downloads)))}>
-                        <Icon name="close" size={12} />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </>
-          )}
-        </div>
-      ) : null}
 
       <div style={{ ...styles.tabBar, height: LAYOUT.TAB_BAR_HEIGHT }}>
-        {tabs.length === 0 ? (
-          <span style={styles.tabEmpty}>暂无标签 — 输入地址导航，或点 + 新建</span>
-        ) : (
-          tabs.map((tab) => (
+        {tabs.length > 0
+          ? tabs.map((tab) => (
             <div
               key={tab.id}
               className={`tab-item${tab.active ? " is-active" : ""}`}
@@ -785,7 +799,7 @@ export default function App(): React.JSX.Element {
               onClick={() => selectTab(tab.id)}
               title={tab.url || tab.title}
             >
-              <span style={styles.tabTitle}>{tab.title || "新标签页"}</span>
+              <span style={styles.tabTitle}>{tab.title || "新建标签页"}</span>
               <button
                 type="button"
                 className="icon-btn tab-close"
@@ -799,8 +813,8 @@ export default function App(): React.JSX.Element {
                 <Icon name="close" size={10} />
               </button>
             </div>
-          ))
-        )}
+            ))
+          : null}
         <button type="button" className="icon-btn" title="新建标签页" style={styles.tabAdd} onClick={newTab}>
           <Icon name="plus" size={13} />
         </button>
@@ -812,8 +826,10 @@ export default function App(): React.JSX.Element {
             <div style={styles.startMark}>
               <img src="./logo.png" alt="Loopsoar" width={64} height={64} />
             </div>
-            <div style={styles.startTitle}>Loopsoar</div>
-            <div style={styles.startSubtitle}>浏览器优先的本地 AI Agent</div>
+            <div style={styles.startTitle}>{currentUrl ? "Loopsoar" : "新建标签页"}</div>
+            <div style={styles.startSubtitle}>
+              {currentUrl ? "浏览器优先的本地 AI Agent" : "在顶部输入网址或搜索内容，回车开始"}
+            </div>
             <div style={styles.startHints}>
               <div style={styles.hintRow}>
                 <Icon name="arrow-go" size={14} style={styles.hintIcon} />
@@ -842,10 +858,12 @@ export default function App(): React.JSX.Element {
             <span style={styles.sidebarAgent}>{agentLabel}</span>
           </div>
           <div style={styles.sessionBar}>
-            <button type="button" className="chip" style={{ ...styles.chip, maxWidth: 220 }} onClick={() => { refreshSessions(); setSessionOpen((v) => !v); }} title="切换会话">
-              <Icon name="notes" size={12} style={{ marginRight: 4 }} />
-              {sessions.find((x) => x.id === currentSession)?.title ?? "新会话"}
-            </button>
+            <span style={styles.anchor}>
+              <button type="button" className="chip" style={{ ...styles.chip, maxWidth: 220 }} onClick={() => { refreshSessions(); setSessionOpen((v) => !v); }} title="切换会话">
+                <Icon name="notes" size={12} style={{ marginRight: 4 }} />
+                {sessions.find((x) => x.id === currentSession)?.title ?? "新会话"}
+              </button>
+            </span>
             <button type="button" className="icon-btn" title="新建会话" onClick={newSession}>
               <Icon name="plus" size={13} />
             </button>
@@ -921,93 +939,6 @@ export default function App(): React.JSX.Element {
                 style={styles.textarea}
                 rows={3}
               />
-              {permMenuOpen && permSummary ? (
-                <div style={styles.modelMenu}>
-                  <div style={styles.modelMenuHead}>本会话工具权限</div>
-                  {[
-                    { key: "read", label: "读取文件" },
-                    { key: "write", label: "写入文件" },
-                    { key: "terminal", label: "执行命令" },
-                    { key: "network", label: "网络访问" },
-                  ].map((cat) => (
-                    <div key={cat.key} style={styles.permRow}>
-                      <span style={styles.permCat}>{cat.label}</span>
-                      <span style={styles.permSeg}>
-                        {(["allow", "confirm", "deny"] as const).map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            className="perm-seg"
-                            style={{
-                              ...styles.permSegBtn,
-                              ...(permSummary.permissions[cat.key as "read"] === v ? styles.permSegBtnOn : {}),
-                            }}
-                            onClick={() => {
-                              const next = {
-                                ...permSummary,
-                                permissions: { ...permSummary.permissions, [cat.key]: v },
-                              };
-                              setPermSummary(next);
-                              void api?.settings.setPermissions(next.permissions).catch(() => {});
-                            }}
-                          >
-                            {v === "allow" ? "允许" : v === "confirm" ? "询问" : "拒绝"}
-                          </button>
-                        ))}
-                      </span>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="model-item"
-                    style={styles.modelMenuFoot}
-                    onClick={() => {
-                      setPermMenuOpen(false);
-                      openSettings("permissions");
-                    }}
-                  >
-                    打开完整权限设置…
-                  </button>
-                </div>
-              ) : null}
-              {modelMenuOpen ? (
-                <div style={styles.modelMenu}>
-                  <div style={styles.modelMenuHead}>
-                    {provider?.provider ?? "未配置"} · 选择模型
-                  </div>
-                  {modelList === null ? (
-                    <div style={styles.modelMenuItem}>加载中…</div>
-                  ) : (
-                    <>
-                      {modelList.models.map((m) => (
-                        <button
-                          key={m}
-                          type="button"
-                          className="model-item"
-                          style={{ ...styles.modelMenuItem, ...(m === provider?.model ? styles.modelMenuItemActive : {}) }}
-                          onClick={() => chooseModel(m)}
-                          title={m}
-                        >
-                          <span style={styles.modelItemName}>{m}</span>
-                          {m === provider?.model ? <Icon name="check" size={12} /> : null}
-                        </button>
-                      ))}
-                      {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="model-item"
-                    style={styles.modelMenuFoot}
-                    onClick={() => {
-                      setModelMenuOpen(false);
-                      openSettings("providers");
-                    }}
-                  >
-                    管理供应商 / 添加模型…
-                  </button>
-                </div>
-              ) : null}
               <div style={styles.chipRow}>
                 <button
                   type="button"
@@ -1019,26 +950,115 @@ export default function App(): React.JSX.Element {
                   <Icon name="bolt" size={12} style={{ marginRight: 4 }} />
                   {mode === "build" ? "Build" : "Plan"}
                 </button>
-                <button
-                  type="button"
-                  className="chip"
-                  style={styles.chip}
-                  title="当前会话权限"
-                  onClick={() => setPermMenuOpen((v) => !v)}
-                >
-                  <Icon name="check" size={12} style={{ marginRight: 4 }} />
-                  {permSummary ? permissionLabel(permSummary) : "权限"}
-                </button>
-                <button
-                  type="button"
-                  className="chip"
-                  style={styles.chip}
-                  title="选择模型"
-                  onClick={openModelMenu}
-                >
-                  <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
-                  {provider?.configured ? provider.model : "未配置模型"}
-                </button>
+                <span style={styles.anchor}>
+                  <button
+                    type="button"
+                    className="chip"
+                    style={styles.chip}
+                    title="当前会话权限"
+                    onClick={() => setPermMenuOpen((v) => !v)}
+                  >
+                    <Icon name="check" size={12} style={{ marginRight: 4 }} />
+                    {permSummary ? permissionLabel(permSummary) : "权限"}
+                  </button>
+                  {permMenuOpen && permSummary ? (
+                    <div style={{ ...styles.popover, ...styles.chipPopover }}>
+                      <div style={styles.modelMenuHead}>本会话工具权限</div>
+                      {[
+                        { key: "read", label: "读取文件" },
+                        { key: "write", label: "写入文件" },
+                        { key: "terminal", label: "执行命令" },
+                        { key: "network", label: "网络访问" },
+                      ].map((cat) => (
+                        <div key={cat.key} style={styles.permRow}>
+                          <span style={styles.permCat}>{cat.label}</span>
+                          <span style={styles.permSeg}>
+                            {(["allow", "confirm", "deny"] as const).map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                className="perm-seg"
+                                style={{
+                                  ...styles.permSegBtn,
+                                  ...(permSummary.permissions[cat.key as "read"] === v ? styles.permSegBtnOn : {}),
+                                }}
+                                onClick={() => {
+                                  const next = {
+                                    ...permSummary,
+                                    permissions: { ...permSummary.permissions, [cat.key]: v },
+                                  };
+                                  setPermSummary(next);
+                                  void api?.settings.setPermissions(next.permissions).catch(() => {});
+                                }}
+                              >
+                                {v === "allow" ? "允许" : v === "confirm" ? "询问" : "拒绝"}
+                              </button>
+                            ))}
+                          </span>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="model-item"
+                        style={styles.modelMenuFoot}
+                        onClick={() => {
+                          setPermMenuOpen(false);
+                          openSettings("permissions");
+                        }}
+                      >
+                        打开完整权限设置…
+                      </button>
+                    </div>
+                  ) : null}
+                </span>
+                <span style={styles.anchor}>
+                  <button
+                    type="button"
+                    className="chip"
+                    style={styles.chip}
+                    title="选择模型"
+                    onClick={openModelMenu}
+                  >
+                    <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
+                    {provider?.configured ? provider.model : "未配置模型"}
+                  </button>
+                  {modelMenuOpen ? (
+                    <div style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
+                      <div style={styles.modelMenuHead}>{provider?.provider ?? "未配置"} · 选择模型</div>
+                      {modelList === null ? (
+                        <div style={styles.modelMenuItem}>加载中…</div>
+                      ) : (
+                        <>
+                          {modelList.models.map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              className="model-item"
+                              style={{ ...styles.modelMenuItem, ...(m === provider?.model ? styles.modelMenuItemActive : {}) }}
+                              onClick={() => chooseModel(m)}
+                              title={m}
+                            >
+                              <span style={styles.modelItemName}>{m}</span>
+                              {m === provider?.model ? <Icon name="check" size={12} /> : null}
+                            </button>
+                          ))}
+                          {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="model-item"
+                        style={styles.modelMenuFoot}
+                        onClick={() => {
+                          setModelMenuOpen(false);
+                          openSettings("providers");
+                        }}
+                      >
+                        管理供应商 / 添加模型…
+                      </button>
+                    </div>
+                  ) : null}
+                </span>
                 <span style={styles.spacer} />
                 {busy ? (
                   <>
@@ -1330,6 +1350,31 @@ const styles: Record<string, React.CSSProperties> = {
     height: 6,
     borderRadius: 999,
     background: BRAND.ochre,
+  },
+  anchor: { position: "relative", display: "inline-flex" },
+  popover: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    marginTop: 6,
+    width: 360,
+    maxHeight: 360,
+    overflowY: "auto",
+    borderRadius: 10,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+    padding: 8,
+    zIndex: 45,
+  },
+  chipPopover: {
+    top: "auto",
+    bottom: "100%",
+    marginTop: 0,
+    marginBottom: 6,
+    width: 300,
+    maxHeight: 320,
+    overflowY: "auto",
   },
   dropPanel: {
     position: "absolute",

@@ -14,6 +14,9 @@ export interface ProviderStatus {
   hasApiKey: boolean;
   usable: boolean;
   reason: string | null;
+  keyHint?: string | null;
+  keySource?: "stored" | "env" | null;
+  storageMode?: "os" | "degraded" | "unavailable";
 }
 
 export interface TestProviderResult {
@@ -188,6 +191,9 @@ export interface ProviderItem {
   provider: string;
   baseUrl: string;
   model: string;
+  hasKey?: boolean;
+  keyHint?: string | null;
+  keySource?: "stored" | "env" | null;
 }
 
 export interface SkillRecord {
@@ -332,6 +338,8 @@ export interface LoopsoarAPI {
     upsertProvider(payload: { id?: string; provider: string; baseUrl: string; model: string }): Promise<{ item: ProviderItem; items: ProviderItem[]; activeId: string | null }>;
     removeProvider(payload: { id: string }): Promise<{ removed: boolean; items: ProviderItem[]; activeId: string | null }>;
     setActiveProvider(payload: { id: string }): Promise<{ ok: boolean; activeId: string | null }>;
+    setApiKey(payload: { apiKey: string; providerId?: string }): Promise<{ saved: boolean; hint: string; storageMode: string }>;
+    clearApiKey(payload: { providerId?: string }): Promise<{ cleared: boolean }>;
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
     testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;

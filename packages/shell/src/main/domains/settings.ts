@@ -41,6 +41,7 @@ import {
 } from "loopsoar-core/rules";
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { ProviderStore } from "../providerStore.js";
+import type { SecretStore } from "../secretStore.js";
 
 export interface SettingsDeps extends TrustedIpcDeps {
   platform: LoopsoarPlatform;
@@ -63,6 +64,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   providers?: ProviderStore;
   /** 供应商增删改/切换活跃后回调（装配层重建 LLM 客户端）。 */
   onProvidersChanged?: () => void;
+  /** 加密密钥库（API Key 输入与隔离存储；永不回传明文）。 */
+  secrets?: SecretStore;
 }
 
 export interface SettingsPaths {
@@ -239,7 +242,9 @@ async function testProvider(
   deps: SettingsDeps,
   cfg: ProviderConfig,
 ): Promise<{ ok: boolean; status?: number; latencyMs?: number; message: string }> {
-  const apiKey = resolveApiKeyFromEnv(deps.env);
+  // 密钥解析：加密库（活跃供应商）优先，环境变量兜底；测试任意配置时复用该密钥
+  const activeId = deps.providers?.active()?.id;
+  const apiKey = (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
   const url = `${cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -290,8 +295,26 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
 
   // ── 供应商（多配置列表） ──
   const activeProvider = () => deps.providers?.active() ?? null;
+  /** 解析某供应商密钥：加密库优先，环境变量兜底。 */
+  const resolveKey = (providerId?: string): { key: string; source: "stored" | "env" | null } => {
+    const stored = providerId ? (deps.secrets?.get(providerId) ?? "") : "";
+    if (stored) return { key: stored, source: "stored" };
+    const envKey = resolveApiKeyFromEnv(deps.env);
+    return { key: envKey, source: envKey ? "env" : null };
+  };
+  const keyStatus = (providerId: string) => {
+    const stored = deps.secrets?.has(providerId) ?? false;
+    const resolved = resolveKey(providerId);
+    return {
+      hasKey: resolved.key.length > 0,
+      keyHint: stored ? (deps.secrets?.hint(providerId) ?? null) : null,
+      keySource: resolved.source,
+      storageMode: deps.secrets?.storageMode() ?? "unavailable",
+    };
+  };
+
   handleTrusted(deps, "settings:listProviders", () => ({
-    items: deps.providers?.list() ?? [],
+    items: (deps.providers?.list() ?? []).map((item) => ({ ...item, ...keyStatus(item.id) })),
     activeId: activeProvider()?.id ?? null,
   }));
 
@@ -310,6 +333,26 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     return { removed, items: deps.providers?.list() ?? [], activeId: deps.providers?.active()?.id ?? null };
   });
 
+  // ── API Key（加密保存；不回传明文） ──
+  handleTrusted(deps, "settings:setApiKey", (payload) => {
+    const p = payload as { apiKey: string; providerId?: string };
+    if (!deps.secrets) throw new Error("密钥库未装配");
+    const providerId = p.providerId ?? activeProvider()?.id;
+    if (!providerId) throw new Error("请先保存供应商配置，再设置 API Key");
+    const record = deps.secrets.set(providerId, p.apiKey);
+    deps.onProvidersChanged?.();
+    return { saved: true, hint: record.hint, storageMode: deps.secrets.storageMode() };
+  });
+
+  handleTrusted(deps, "settings:clearApiKey", (payload) => {
+    const p = payload as { providerId?: string };
+    const providerId = p.providerId ?? activeProvider()?.id;
+    if (!providerId) return { cleared: false };
+    const cleared = deps.secrets?.clear(providerId) ?? false;
+    deps.onProvidersChanged?.();
+    return { cleared };
+  });
+
   handleTrusted(deps, "settings:setActiveProvider", (payload) => {
     const p = payload as { id: string };
     const ok = deps.providers?.setActive(p.id) ?? false;
@@ -320,13 +363,18 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:getProvider", async () => {
     const active = activeProvider();
     if (active) {
-      const apiKey = resolveApiKeyFromEnv(deps.env);
       const cfg: ProviderConfig = { provider: active.provider, baseUrl: active.baseUrl, model: active.model };
-      const usability = providerUsability(cfg, apiKey);
+      const status = keyStatus(active.id);
+      const usability = providerUsability(cfg, status.hasKey ? "x" : "");
       return {
-        configured: true, provider: active.provider, baseUrl: active.baseUrl, model: active.model,
-        hasApiKey: apiKey.length > 0, usable: usability.usable, reason: usability.reason ?? null,
+        configured: true,
+        provider: active.provider,
+        baseUrl: active.baseUrl,
+        model: active.model,
+        usable: usability.usable,
+        reason: usability.reason ?? null,
         id: active.id,
+        ...status,
       };
     }
     const cfg = await loadProviderConfig(deps.platform, deps.configDir);

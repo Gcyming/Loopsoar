@@ -344,6 +344,20 @@
       "hasRequest": true
     },
     {
+      "channel": "settings:setApiKey",
+      "domain": "settings",
+      "method": "setApiKey",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:clearApiKey",
+      "domain": "settings",
+      "method": "clearApiKey",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "settings:listProviders",
       "domain": "settings",
       "method": "listProviders",

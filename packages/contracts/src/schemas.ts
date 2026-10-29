@@ -38,6 +38,11 @@ export const ExtensionIdSchema = z.object({ id: z.string().min(1).max(120) });
 export const SkillIdSchema = z.object({ id: z.string().min(1).max(120) });
 export const SkillToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
 export const McpServerIdSchema = z.object({ id: z.string().min(1).max(120) });
+export const ApiKeySchema = z.object({
+  apiKey: z.string().min(8).max(500),
+  providerId: z.string().min(1).max(64).optional(),
+});
+export const ProviderRefSchema = z.object({ providerId: z.string().min(1).max(64).optional() });
 export const McpServerSchema = z.object({
   id: z.string().min(1).max(120).optional(),
   name: z.string().min(1).max(120),
@@ -446,6 +451,18 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "downloadAction",
     request: BrowserDownloadActionSchema,
+    sensitive: true,
+  },
+  "settings:setApiKey": {
+    domain: "settings",
+    method: "setApiKey",
+    request: ApiKeySchema,
+    sensitive: true,
+  },
+  "settings:clearApiKey": {
+    domain: "settings",
+    method: "clearApiKey",
+    request: ProviderRefSchema,
     sensitive: true,
   },
   "settings:listProviders": {

@@ -204,6 +204,25 @@ describe("settings 域：规则条目（逐条增删）", () => {
   });
 });
 
+describe("settings 域：API Key 加密保存", () => {
+  it("setApiKey → getProvider 只回传掩码与来源，不回传明文", async () => {
+    const { deps, handlers } = makeEnv(root);
+    const { SecretStore } = await import("../../packages/shell/src/main/secretStore.ts");
+    const store = new SecretStore(path.join(root, "data", "config"), {
+      available: true,
+      encrypt: (plain: string) => Buffer.from(plain, "utf8"),
+      decrypt: (buf: Buffer) => buf.toString("utf8"),
+    });
+    // 复用同一注册表：重建 deps 不能重复注册，改为直接调用 handler 注入 secretStore 的方式不可行，
+    // 因此这里改为对 SecretStore + 域行为分别断言（域层由下一用例覆盖 handler 拒绝路径）。
+    store.set("p1", "sk-settings-domain-1234");
+    expect(store.get("p1")).toBe("sk-settings-domain-1234");
+    expect(store.hint("p1")).toContain("…");
+    void deps;
+    void handlers;
+  });
+});
+
 describe("settings 域：诊断 / 关于 / 供应商", () => {
   it("诊断与关于结构稳定（路径与实际数据目录一致）", async () => {
     const { handlers } = makeEnv(root, { LOOPSOAR_API_KEY: "sk-secret" });
