@@ -258,9 +258,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               apiFormat: pFormat,
               apiKey: keyInput.trim() || undefined,
             });
-            const existing = new Map(pModels.filter((m) => m.id.trim()).map((m) => [m.id, m]));
+            const existing = new Map(pModels.filter((m) => typeof m.id === "string" && m.id.trim()).map((m) => [m.id, m]));
             const merged = (r.models as ProviderModel[])
-              .filter((m) => m.id.trim())
+              .filter((m) => typeof m.id === "string" && m.id.trim())
               .map((m) => ({ ...m, ...existing.get(m.id), selected: existing.get(m.id)?.selected ?? m.selected ?? true }));
             if (merged.length > 0) setPModels(merged);
             setPModelsError(r.error);

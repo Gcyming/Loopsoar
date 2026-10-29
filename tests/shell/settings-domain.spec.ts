@@ -17,7 +17,7 @@ import {
 } from "../../packages/shell/src/main/domains/settings.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
-function makeEnv(root: string, env: Record<string, string | undefined> = {}) {
+function makeEnv(root: string, env: Record<string, string | undefined> = {}, extra: Partial<SettingsDeps> = {}) {
   const dataDir = path.join(root, "data");
   const configDir = path.join(dataDir, "config");
   const workspaceRoot = path.join(root, "workspace");
@@ -37,6 +37,7 @@ function makeEnv(root: string, env: Record<string, string | undefined> = {}) {
     workspaceRoot,
     env,
     appVersion: "9.9.9-test",
+    ...extra,
   };
   registerSettingsDomain(deps);
   return { deps, handlers };
@@ -220,6 +221,77 @@ describe("settings 域：API Key 加密保存", () => {
     expect(store.hint("p1")).toContain("…");
     void deps;
     void handlers;
+  });
+});
+
+describe("settings 域：listModels 探测", () => {
+  it("使用表单刚输入的密钥（未保存）而不是活跃供应商的旧密钥；并解析模型参数", async () => {
+    const { SecretStore } = await import("../../packages/shell/src/main/secretStore.ts");
+    const secrets = new SecretStore(path.join(root, "data", "config"), {
+      available: true,
+      encrypt: (plain: string) => Buffer.from(plain, "utf8"),
+      decrypt: (buf: Buffer) => buf.toString("utf8"),
+    });
+    secrets.set("active", "sk-stored-old");
+    const { handlers } = makeEnv(root, {}, {
+      providers: {
+        list: () => [{ id: "active", provider: "mock", baseUrl: "http://127.0.0.1:1/v1", model: "m" }],
+        active: () => ({ id: "active", provider: "mock", baseUrl: "http://127.0.0.1:1/v1", model: "m" }),
+        upsert: () => ({ id: "active", provider: "mock", baseUrl: "", model: "" }),
+        remove: () => true,
+        setActive: () => true,
+      } as never,
+      secrets,
+    });
+    const realFetch = globalThis.fetch;
+    let seenAuth = "";
+    let seenUrl = "";
+    try {
+      globalThis.fetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
+        seenUrl = String(url);
+        seenAuth = init?.headers?.Authorization ?? "";
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: "model-a", context_length: 128000, max_output_tokens: 8192, architecture: { input_modalities: ["image"] }, reasoning: { supported_efforts: ["low", "high"] } },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch;
+      const res = (await invoke(handlers, "settings:listModels", {
+        provider: "agnes",
+        baseUrl: "https://api.example.com/v1",
+        model: "gpt-x",
+        apiKey: "sk-form-typed",
+      })) as { models: { id: string; contextWindow?: number; vision?: boolean; thinkingEfforts?: string[] }[]; error: string | null };
+      expect(res.error).toBeNull();
+      expect(seenUrl).toBe("https://api.example.com/v1/models");
+      expect(seenAuth).toBe("Bearer sk-form-typed");
+      expect(res.models[0].id).toBe("model-a");
+      expect(res.models[0].contextWindow).toBe(128000);
+      expect(res.models[0].vision).toBe(true);
+      expect(res.models[0].thinkingEfforts).toEqual(["low", "high"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("拉取失败返回空列表 + 可读错误（不再塞占位模型）", async () => {
+    const { handlers } = makeEnv(root);
+    const realFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () => new Response("unauthorized", { status: 401 })) as typeof fetch;
+      const res = (await invoke(handlers, "settings:listModels", {
+        provider: "agnes",
+        baseUrl: "https://api.example.com/v1",
+        model: "",
+      })) as { models: unknown[]; error: string };
+      expect(res.models).toEqual([]);
+      expect(res.error).toContain("401");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
 

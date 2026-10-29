@@ -602,22 +602,44 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
 
   // ── 模型列表（用于输入区模型选择弹层，不跳转） ──
   handleTrusted(deps, "settings:listModels", async (payload) => {
-    const raw = payload as { provider: string; baseUrl: string; model?: string };
+    const raw = payload as {
+      provider: string;
+      baseUrl: string;
+      model?: string;
+      apiFormat?: "auto" | "openai" | "anthropic";
+      apiKey?: string;
+    };
     const cfg = validateProviderConfig({ provider: raw.provider, baseUrl: raw.baseUrl, model: raw.model || "default" });
     const activeId = deps.providers?.active()?.id;
-    const apiKey = (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
+    // 密钥优先级：表单刚输入的（未保存）> 活跃供应商已保存 > 环境变量
+    const typedKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
+    const apiKey = typedKey || (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
+    const isAnthropic =
+      raw.apiFormat === "anthropic" || (raw.apiFormat !== "openai" && /anthropic|claude/i.test(cfg.baseUrl));
+    const modelsBase = cfg.baseUrl.replace(/\/+$/, "");
+    const modelsUrl = isAnthropic
+      ? `${modelsBase.replace(/\/v1$/, "")}/v1/models`
+      : /\/v1$/.test(modelsBase)
+        ? `${modelsBase}/models`
+        : `${modelsBase}/v1/models`;
+    const headers: Record<string, string> = apiKey
+      ? isAnthropic
+        ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+        : { Authorization: `Bearer ${apiKey}` }
+      : isAnthropic
+        ? { "anthropic-version": "2023-06-01" }
+        : {};
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(`${cfg.baseUrl}/models`, {
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-        signal: controller.signal,
-      });
+      const response = await fetch(modelsUrl, { headers, signal: controller.signal });
       if (!response.ok) {
-        return { models: [cfg.model], error: `HTTP ${response.status}` };
+        const bodyText = (await response.text().catch(() => "")).slice(0, 200);
+        return { models: [], error: `HTTP ${response.status}${bodyText ? `：${bodyText}` : ""}` };
       }
-      const data = (await response.json()) as { data?: Record<string, unknown>[] };
-      const models = (data.data ?? [])
+      const data = (await response.json()) as { data?: Record<string, unknown>[]; models?: Record<string, unknown>[] };
+      const rows = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
+      const models = rows
         .slice(0, 500)
         .map((m) => enrichModelSpec(m))
         .filter((m) => typeof m.id === "string" && m.id.length > 0)
@@ -625,8 +647,8 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       return { models, error: null };
     } catch (err) {
       return {
-        models: [cfg.model],
-        error: err instanceof Error ? (err.message.includes("abort") ? "获取模型列表超时" : err.message) : "获取失败",
+        models: [],
+        error: err instanceof Error ? (err.message.includes("abort") ? "获取模型列表超时（8s）" : err.message) : "获取失败",
       };
     } finally {
       clearTimeout(timer);
