@@ -37,6 +37,16 @@ interface ChatMessage {
   /** 尾巴序号：变化即重新触发动画（React key）。 */
   tailSeq?: number;
   status?: "streaming" | "done" | "error";
+  /** 推理内容（可折叠） */
+  reasoning?: string;
+  /** 工具调用轨迹 */
+  tools?: { id: string; label: string; state: "running" | "done" | "error" }[];
+  /** 耗时统计：首字 / 总耗时（毫秒） */
+  timing?: { firstTokenMs?: number; totalMs?: number; rounds?: number; toolCalls?: number; tokens?: number };
+  /** 创建时间戳（显示 HH:mm） */
+  createdAt?: number;
+  /** 错误说明 */
+  errorText?: string;
 }
 
 
@@ -168,6 +178,10 @@ export default function App(): React.JSX.Element {
   const [modelList, setModelList] = useState<{ models: ProviderModel[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const omniboxRef = useRef<HTMLInputElement | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const sendStartedAtRef = useRef<number>(0);
+  const firstTokenAtRef = useRef<number>(0);
+  const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
 
@@ -235,6 +249,7 @@ export default function App(): React.JSX.Element {
 
     /** 追加流式增量：text 累积 + tail 标记（触发逐单元渐入动画）。 */
     const upsertAssistant = (delta: string): void => {
+      if (firstTokenAtRef.current === 0) firstTokenAtRef.current = Date.now();
       const id = activeAssistantRef.current ?? nextId("a");
       activeAssistantRef.current = id;
       tailSeqRef.current += 1;
@@ -242,7 +257,10 @@ export default function App(): React.JSX.Element {
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.id === id);
         if (idx === -1) {
-          return [...prev, { id, role: "assistant", text: delta, tail: delta, tailSeq, status: "streaming" }];
+          return [
+            ...prev,
+            { id, role: "assistant" as const, text: delta, tail: delta, tailSeq, status: "streaming" as const, createdAt: Date.now() },
+          ];
         }
         const next = [...prev];
         next[idx] = {
@@ -267,10 +285,31 @@ export default function App(): React.JSX.Element {
       }),
       api.on("chat:stream:reasoning", (payload) => {
         const p = payload as { content?: string };
-        if (typeof p.content === "string" && p.content.length > 0) pushTransient("reasoning", p.content);
+        if (typeof p.content === "string" && p.content.length > 0) {
+          if (firstTokenAtRef.current === 0) firstTokenAtRef.current = Date.now();
+          setMessages((prev) => {
+            const at = activeAssistantRef.current;
+            return prev.map((m) => (m.id === at ? { ...m, reasoning: (m.reasoning ?? "") + p.content } : m));
+          });
+        }
       }),
       api.on("chat:stream:tool", (payload) => {
-        pushTransient("tool", JSON.stringify((payload as { content?: string }).content ?? "").slice(0, 400));
+        const content = String((payload as { content?: string }).content ?? "").slice(0, 400);
+        let label = content;
+        try {
+          const parsed = JSON.parse(content) as { name?: string; tool?: string; args?: unknown };
+          label = `${parsed.name ?? parsed.tool ?? "工具"}${parsed.args ? ` ${JSON.stringify(parsed.args).slice(0, 120)}` : ""}`;
+        } catch {
+          // 保持原文
+        }
+        setMessages((prev) => {
+          const at = activeAssistantRef.current;
+          if (!at) return prev;
+          return prev.map((m) => {
+            if (m.id !== at) return m;
+            return { ...m, tools: [...(m.tools ?? []), { id: nextId("tool"), label, state: "running" }] };
+          });
+        });
       }),
       api.on("chat:stream:progress", (payload) => {
         pushTransient("system", String((payload as { content?: string }).content ?? ""));
@@ -295,26 +334,53 @@ export default function App(): React.JSX.Element {
       }),
       api.on("chat:stream:done", (payload) => {
         const p = payload as { content?: string };
-        activeAssistantRef.current = null;
-        setBusy(false);
-        setMessages((prev) =>
-          prev.map((m) => (m.status === "streaming" ? { ...m, status: "done", tail: undefined } : m)),
-        );
+        const start = sendStartedAtRef.current;
+        const first = firstTokenAtRef.current;
+        let usage: { rounds?: number; toolCalls?: number; totalTokens?: number } = {};
+        let statusText = "完成";
         try {
-          const parsed = JSON.parse(p.content ?? "{}") as { status?: string; reason?: string };
-          setNotice(`完成：${parsed.status ?? "done"}${parsed.reason ? ` · ${parsed.reason}` : ""}`);
+          const parsed = JSON.parse(p.content ?? "{}") as {
+            status?: string;
+            usage?: { rounds?: number; toolCalls?: number; totalTokens?: number };
+          };
+          usage = parsed.usage ?? {};
+          statusText = parsed.status === "done" ? "完成" : `完成（${parsed.status ?? "done"}）`;
         } catch {
-          setNotice("完成");
+          // 保持默认
         }
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.status !== "streaming") return m;
+            return {
+              ...m,
+              status: "done",
+              tail: undefined,
+              tools: (m.tools ?? []).map((t) => ({ ...t, state: t.state === "running" ? "done" : t.state })),
+              timing: {
+                firstTokenMs: first && start ? first - start : undefined,
+                totalMs: start ? Date.now() - start : undefined,
+                ...usage,
+              },
+            };
+          }),
+        );
+        activeAssistantRef.current = null;
+        firstTokenAtRef.current = 0;
+        sendStartedAtRef.current = 0;
+        setBusy(false);
+        setNotice(statusText);
       }),
       api.on("chat:stream:error", (payload) => {
         const p = payload as { content?: string; message?: string };
         activeAssistantRef.current = null;
         setBusy(false);
         setMessages((prev) =>
-          prev.map((m) => (m.status === "streaming" ? { ...m, status: "error", tail: undefined } : m)),
+          prev.map((m) =>
+            m.status === "streaming"
+              ? { ...m, status: "error", tail: undefined, errorText: p.message ?? p.content ?? "未知错误" }
+              : m,
+          ),
         );
-        pushTransient("system", `错误：${p.message ?? p.content ?? "未知错误"}`);
       }),
     ];
     return () => {
@@ -327,6 +393,12 @@ export default function App(): React.JSX.Element {
     setSettingsSection(section ?? "general");
     setSettingsOpen(true);
   }, []);
+
+  // 新消息/流式增量时自动滚到底部
+  useEffect(() => {
+    const el = messageListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
   // 供应商/模型变更同步：设置页保存后刷新模型 chip 与模型列表
   useEffect(() => {
@@ -412,12 +484,6 @@ export default function App(): React.JSX.Element {
     return `推理：${map[value] ?? value}`;
   }, []);
 
-  const cycleEffort = useCallback((): void => {
-    const options = ["", ...effortOptions];
-    const idx = options.indexOf(reasoningEffort);
-    setReasoningEffort(options[(idx + 1) % options.length]);
-  }, [effortOptions, reasoningEffort]);
-
   const chooseModel = useCallback(
     (model: string): void => {
       setModelMenuOpen(false);
@@ -445,8 +511,10 @@ export default function App(): React.JSX.Element {
     setInput("");
     setBusy(true);
     setNotice("");
-    setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text, status: "done" }]);
+    setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() }]);
     activeAssistantRef.current = null;
+    sendStartedAtRef.current = Date.now();
+    firstTokenAtRef.current = 0;
     void api.chat.stream({ message: text, sessionId: sessionIdRef.current, mode, reasoningEffort: reasoningEffort || undefined }).catch((err: unknown) => {
       setBusy(false);
       setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
@@ -964,26 +1032,92 @@ export default function App(): React.JSX.Element {
               </div>
             ) : null}
           </div>
-          <div style={styles.messageList}>
+          <div ref={messageListRef} style={styles.messageList}>
             {messages.length === 0 ? (
               <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
             ) : (
-              messages.map((m) => (
-                <div key={m.id} className="msg-enter" style={styles.message}>
-                  <span style={{ ...styles.roleTag, color: roleColor(m.role) }}>{ROLE_LABEL[m.role]}</span>
-                  <span style={styles.messageText}>
-                    {m.tail && m.status === "streaming"
-                      ? m.text.slice(0, m.text.length - m.tail.length)
-                      : m.text}
-                    {m.tail && m.status === "streaming" ? (
-                      <span key={m.tailSeq} className="stream-tail">
-                        {m.tail}
-                      </span>
-                    ) : null}
-                    {m.status === "streaming" ? <span className="stream-caret" /> : null}
-                  </span>
-                </div>
-              ))
+              messages.map((m) => {
+                const mine = m.role === "user";
+                return (
+                  <div key={m.id} className="msg-enter" style={{ ...styles.msgRow, justifyContent: mine ? "flex-end" : "flex-start" }}>
+                    <div
+                      style={{
+                        ...styles.bubble,
+                        ...(mine ? styles.bubbleUser : styles.bubbleAssistant),
+                        ...(m.status === "error" ? styles.bubbleError : {}),
+                      }}
+                    >
+                      <div style={styles.bubbleHead}>
+                        <span style={{ ...styles.roleTag, color: roleColor(m.role) }}>{ROLE_LABEL[m.role]}</span>
+                        <span style={styles.bubbleTime}>
+                          {new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                        <span style={{ flex: 1 }} />
+                        {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
+                        {m.text ? (
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            style={styles.copyBtn}
+                            title="复制"
+                            onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
+                          >
+                            <Icon name="file" size={11} />
+                          </button>
+                        ) : null}
+                      </div>
+                      {m.reasoning ? (
+                        <div style={styles.reasoningBlock}>
+                          <button
+                            type="button"
+                            style={styles.reasoningToggle}
+                            onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
+                          >
+                            <Icon name="bulb" size={11} style={{ marginRight: 4 }} />
+                            思考过程 {expandedReasoning[m.id] ? "收起" : "展开"}
+                          </button>
+                          {expandedReasoning[m.id] ? <div style={styles.reasoningText}>{m.reasoning}</div> : null}
+                        </div>
+                      ) : null}
+                      {m.tools && m.tools.length > 0 ? (
+                        <div style={styles.toolList}>
+                          {m.tools.map((t) => (
+                            <div key={t.id} style={styles.toolRow}>
+                              <Icon
+                                name={t.state === "error" ? "warning" : t.state === "done" ? "check" : "spinner"}
+                                size={10}
+                                className={t.state === "running" ? "spinner" : undefined}
+                                style={{ marginRight: 5 }}
+                              />
+                              {t.label}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div style={styles.bubbleText}>
+                        {m.tail && m.status === "streaming"
+                          ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
+                          : renderRich(m.text)}
+                        {m.tail && m.status === "streaming" ? (
+                          <span key={m.tailSeq} className="stream-tail">
+                            {m.tail}
+                          </span>
+                        ) : null}
+                        {m.status === "streaming" ? <span className="stream-caret" /> : null}
+                      </div>
+                      {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
+                      {m.timing ? (
+                        <div style={styles.bubbleFoot}>
+                          {m.timing.firstTokenMs ? `首字 ${fmtMs(m.timing.firstTokenMs)} · ` : ""}
+                          总耗时 {fmtMs(m.timing.totalMs ?? 0)}
+                          {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
+                          {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
           <div style={styles.composer}>
@@ -1117,6 +1251,25 @@ export default function App(): React.JSX.Element {
                           {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
                         </>
                       )}
+                      {effortOptions.length > 0 ? (
+                        <div style={styles.effortSection}>
+                          <div style={styles.modelMenuHead}>推理等级</div>
+                          <div style={styles.effortRow}>
+                            {["", ...effortOptions].map((value) => (
+                              <button
+                                key={value || "off"}
+                                type="button"
+                                className="chip"
+                                style={{ ...styles.chip, ...(reasoningEffort === value ? styles.chipActive : {}) }}
+                                onClick={() => setReasoningEffort(value)}
+                                title={value || "关闭推理"}
+                              >
+                                {effortLabel(value).replace("推理：", "")}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="model-item"
@@ -1131,18 +1284,6 @@ export default function App(): React.JSX.Element {
                     </div>
                   ) : null}
                 </span>
-                {effortOptions.length > 0 ? (
-                  <button
-                    type="button"
-                    className="chip"
-                    style={{ ...styles.chip, ...(reasoningEffort ? styles.chipActive : {}) }}
-                    title="推理等级（当前模型支持）"
-                    onClick={cycleEffort}
-                  >
-                    <Icon name="bulb" size={12} style={{ marginRight: 4 }} />
-                    {effortLabel(reasoningEffort)}
-                  </button>
-                ) : null}
                 <span style={styles.spacer} />
                 {busy ? (
                   <>
@@ -1239,6 +1380,41 @@ export default function App(): React.JSX.Element {
       ) : null}
     </div>
   );
+}
+
+/** 轻量富文本：代码块 + 行内代码 + 粗体（不引入第三方依赖）。 */
+function renderRich(text: string): React.ReactNode {
+  if (!text) return null;
+  const blocks = text.split(/(```[\s\S]*?```)/g);
+  return blocks.map((block, bi) => {
+    if (block.startsWith("```")) {
+      const body = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
+      return (
+        <pre key={`code-${bi}`} style={styles.codeBlock}>
+          <code>{body}</code>
+        </pre>
+      );
+    }
+    const parts = block.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+    return (
+      <span key={`text-${bi}`}>
+        {parts.map((part, pi) => {
+          if (part.startsWith("`") && part.endsWith("`")) {
+            return <code key={pi} style={styles.inlineCode}>{part.slice(1, -1)}</code>;
+          }
+          if (part.startsWith("**") && part.endsWith("**")) {
+            return <strong key={pi}>{part.slice(2, -2)}</strong>;
+          }
+          return <React.Fragment key={pi}>{part}</React.Fragment>;
+        })}
+      </span>
+    );
+  });
+}
+
+function fmtMs(ms: number): string {
+  if (!ms || ms < 0) return "—";
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 /* ---------------------------------- 样式 ---------------------------------- */
@@ -1609,6 +1785,78 @@ const styles: Record<string, React.CSSProperties> = {
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
   messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
+  msgRow: { display: "flex", width: "100%" },
+  bubble: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    maxWidth: "92%",
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.inkRaised,
+  },
+  bubbleUser: { background: BRAND.ochreSoft, borderColor: "rgba(200,118,60,0.35)" },
+  bubbleAssistant: { background: BRAND.inkRaised },
+  bubbleError: { borderColor: "rgba(248,113,113,0.45)" },
+  bubbleHead: { display: "flex", alignItems: "center", gap: 6 },
+  bubbleTime: { fontSize: 9.5, color: BRAND.linenFaint },
+  copyBtn: { width: 20, height: 20, opacity: 0.7 },
+  streamDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    background: BRAND.ochre,
+    animation: "pulseDot 1.1s ease-in-out infinite",
+  },
+  reasoningBlock: { borderLeft: `2px solid #5b5470`, paddingLeft: 8 },
+  reasoningToggle: {
+    border: "none",
+    background: "transparent",
+    color: "#9a8fb8",
+    fontSize: 10.5,
+    cursor: "pointer",
+    padding: 0,
+    display: "inline-flex",
+    alignItems: "center",
+  },
+  reasoningText: { marginTop: 4, fontSize: 11, color: BRAND.linenMuted, whiteSpace: "pre-wrap", lineHeight: 1.6 },
+  toolList: { display: "flex", flexDirection: "column", gap: 3 },
+  toolRow: {
+    display: "flex",
+    alignItems: "center",
+    fontSize: 10.5,
+    color: BRAND.linenMuted,
+    background: BRAND.ink,
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: 6,
+    padding: "3px 6px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  bubbleText: { fontSize: 12.5, lineHeight: 1.75, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  codeBlock: {
+    margin: "6px 0",
+    padding: 8,
+    borderRadius: 7,
+    background: BRAND.ink,
+    border: `1px solid ${BRAND.border}`,
+    fontSize: 11,
+    lineHeight: 1.5,
+    overflowX: "auto",
+    fontFamily: "ui-monospace, Consolas, monospace",
+  },
+  inlineCode: {
+    padding: "0 4px",
+    borderRadius: 4,
+    background: BRAND.ink,
+    fontSize: 11,
+    fontFamily: "ui-monospace, Consolas, monospace",
+    color: "#d8c9a8",
+  },
+  errBox: { fontSize: 11, color: "#f87171", background: "rgba(248,113,113,0.10)", padding: "5px 7px", borderRadius: 6 },
+  bubbleFoot: { fontSize: 9.5, color: BRAND.linenFaint, marginTop: 2 },
   message: { display: "flex", flexDirection: "column", gap: 4 },
   roleTag: { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6 },
   messageText: {
@@ -1650,6 +1898,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: BRAND.ochreSoft },
   spacer: { flex: 1 },
+  effortSection: { borderTop: `1px solid ${BRAND.border}`, padding: "6px 4px 2px" },
+  effortRow: { display: "flex", flexWrap: "wrap", gap: 4 },
   modelBadge: {
     marginLeft: 6,
     fontSize: 9,

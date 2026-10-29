@@ -24,7 +24,7 @@ export class StreamChunkBatcher {
   private buffer: ChunkItem[] = [];
   private charCount = 0;
   private timer: NodeJS.Timeout | null = null;
-  private readonly flushIntervalMs = 40; // §5 规格：40ms
+  private readonly flushIntervalMs = 20; // 20ms：降低流式增量延迟（原 40ms 观感偏慢）
   private readonly maxBatchChars = 24000; // §5 规格：24000 字
 
   constructor(private onFlush: (batch: ChunkBatch) => void) {}
