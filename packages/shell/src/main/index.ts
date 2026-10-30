@@ -226,13 +226,29 @@ function scheduleE2EPlanDemo(win: BrowserWindow): void {
       });
     }, 1200);
     setTimeout(() => {
+      // TODO_UPDATE：计划推进（触发「已完成 / 开始」播报）
+      push("chat:stream:tool", {
+        content: JSON.stringify({
+          toolName: "todo_write",
+          args: {
+            steps: [
+              { content: "读取当前页面正文", status: "done" },
+              { content: "提取三个关键结论", status: "done" },
+              { content: "整理成表格并复制", status: "in_progress" },
+            ],
+          },
+          result: { ok: true },
+        }),
+      });
+    }, 1600);
+    setTimeout(() => {
       push("chat:stream:chunk", { content: "正文已读取，正在提炼结论……" });
-    }, 1500);
+    }, 1900);
     setTimeout(() => {
       push("chat:stream:done", {
         content: JSON.stringify({ status: "done", reason: "E2E 计划演示", usage: { rounds: 1, toolCalls: 1, totalTokens: 128 } }),
       });
-    }, 2200);
+    }, 2600);
   });
 }
 

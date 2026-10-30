@@ -56,6 +56,8 @@ interface ChatMessage {
   plan?: PlanStep[];
   /** 是否为运行中注入的转向提示 */
   steer?: boolean;
+  /** 待办播报（计划步骤开始/完成时追加一行） */
+  announces?: { id: string; kind: "start" | "done"; text: string }[];
 }
 
 
@@ -363,10 +365,25 @@ export default function App(): React.JSX.Element {
           if (!at) return prev;
           return prev.map((m) => {
             if (m.id !== at) return m;
+            const prevPlan = m.plan ?? [];
+            const announces = [...(m.announces ?? [])];
+            if (plan) {
+              for (const step of plan) {
+                const before = prevPlan.find((x) => x.content === step.content);
+                if (!before && step.status === "in_progress") {
+                  announces.push({ id: nextId("announce"), kind: "start", text: step.content });
+                } else if (before && before.status !== "done" && step.status === "done") {
+                  announces.push({ id: nextId("announce"), kind: "done", text: step.content });
+                } else if (!before && step.status === "done") {
+                  announces.push({ id: nextId("announce"), kind: "done", text: step.content });
+                }
+              }
+            }
             return {
               ...m,
               tools: [...(m.tools ?? []), { id: nextId("tool"), label, state: "running" }],
               ...(plan ? { plan } : {}),
+              ...(announces.length > (m.announces ?? []).length ? { announces } : {}),
             };
           });
         });
@@ -1345,6 +1362,20 @@ export default function App(): React.JSX.Element {
                           </span>
                         </div>
                       ) : null}
+                      {(m.announces ?? []).length > 0 ? (
+                        <div style={styles.announces}>
+                          {(m.announces ?? []).slice(-6).map((item) => (
+                            <div key={item.id} style={styles.announceRow}>
+                              <span style={{ ...styles.announceMark, color: item.kind === "done" ? "#4ade80" : BRAND.ochreHover }}>
+                                {item.kind === "done" ? "✓" : "▶"}
+                              </span>
+                              <span style={styles.announceText} title={item.text}>
+                                {item.kind === "done" ? "已完成：" : "开始："}{item.text}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       {m.plan && m.plan.length > 0 ? <PlanCard steps={m.plan} /> : null}
                       <div className="msg-body-text" style={styles.assistantBody}>
                         {m.tail && m.status === "streaming"
@@ -2314,6 +2345,10 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
+  announces: { display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px" },
+  announceRow: { display: "flex", alignItems: "baseline", gap: 6, fontSize: 11, color: BRAND.linenFaint, minWidth: 0 },
+  announceMark: { width: 10, flex: "none", textAlign: "center", fontSize: 9.5 },
+  announceText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 },
   msgHover: {
     display: "flex",
     alignItems: "center",
