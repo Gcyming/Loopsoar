@@ -29,6 +29,9 @@ const server = createServer(async (req, res) => {
     connection: "keep-alive",
   });
   res.write(": loopsoar mock stream\n\n");
+  // 模拟慢上游：首字延迟（用于验证「发送后立即有反应」）
+  const firstDelay = Number(process.env.MOCK_FIRST_DELAY_MS ?? "0");
+  if (firstDelay > 0) await sleep(firstDelay);
   for (const chunk of REPLY_CHUNKS) {
     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
     await sleep(140);

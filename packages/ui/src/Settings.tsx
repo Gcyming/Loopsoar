@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BRAND, BADGE } from "./theme.js";
+import TopicRail from "./TopicRail.js";
+import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { Icon } from "./Icon.js";
 import type {
   AboutInfo, DiagnosticsInfo, InstalledExtension, LocationsInfo, LoopsoarAPI, McpServerInfo, MemoryListResult,
@@ -11,10 +13,23 @@ import type {
  * 全部数据经 preload 白名单；规则与记忆在保存后即时生效（主进程惰性读取）。
  */
 
-type SectionId = "general" | "permissions" | "providers" | "rules" | "skills" | "memory" | "extensions" | "mcp" | "storage" | "advanced" | "about";
+type SectionId =
+  | "general"
+  | "appearance"
+  | "permissions"
+  | "providers"
+  | "rules"
+  | "skills"
+  | "memory"
+  | "extensions"
+  | "mcp"
+  | "storage"
+  | "advanced"
+  | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: string; hint: string; group: string }[] = [
-  { id: "general", group: "基础", label: "通用", icon: "settings", hint: "外观、搜索、启动" },
+  { id: "general", group: "基础", label: "通用", icon: "settings", hint: "搜索、启动、代理" },
+  { id: "appearance", group: "基础", label: "外观", icon: "capture", hint: "卷轴参数 / 动效" },
   { id: "permissions", group: "基础", label: "权限", icon: "check", hint: "工具类别决策" },
   { id: "providers", group: "能力", label: "供应商", icon: "cloud-upload", hint: "模型服务" },
   { id: "rules", group: "能力", label: "规则", icon: "file", hint: "AGENTS.md 逐条" },
@@ -60,6 +75,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [pFormat, setPFormat] = useState<"auto" | "openai" | "anthropic">("auto");
   const [pRpm, setPRpm] = useState("");
   const [pModelDraft, setPModelDraft] = useState("");
+  const [rail, setRail] = useState<RailParams>(() => (typeof window === "undefined" ? DEFAULT_CHAT_RAIL : loadRailParams()));
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [pEditing, setPEditing] = useState(false);
@@ -197,6 +213,120 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (loading) return <div style={S.muted}>加载设置…</div>;
     if (!api) return <div style={S.muted}>未在 Electron shell 中运行。</div>;
     switch (section) {
+      case "appearance": {
+        const updateRail = (patch: Partial<RailParams>): void => {
+          setRail(saveRailParams(patch));
+        };
+        const saveAnimations = (value: string): void => {
+          if (!api || !prefs) return;
+          const next = { ...prefs, animations: value as Preferences["animations"] };
+          setPrefs(next);
+          void api.settings
+            .setPreferences(next)
+            .then((r) => {
+              setPrefs(r.preferences);
+              onPreferencesSaved?.(r.preferences);
+              ok("动效强度已保存");
+            })
+            .catch(bad);
+        };
+        const sliderDefs: { key: keyof Pick<RailParams, "w" | "amp" | "lam0" | "lam1" | "spd" | "tap">; label: string; min: number; max: number; step: number; fmt: (v: number) => string }[] = [
+          { key: "w", label: "卷轴宽度", min: 6, max: 32, step: 1, fmt: (v) => `${v}px` },
+          { key: "amp", label: "常态振幅", min: 0, max: 100, step: 1, fmt: (v) => `${v}%` },
+          { key: "lam0", label: "亮线波长", min: 8, max: 400, step: 1, fmt: (v) => `${v}px` },
+          { key: "lam1", label: "暗线波长", min: 8, max: 400, step: 1, fmt: (v) => `${v}px` },
+          { key: "spd", label: "荡漾速度", min: 0, max: 4, step: 0.05, fmt: (v) => v.toFixed(2) },
+          { key: "tap", label: "两端渐隐", min: 0, max: 400, step: 5, fmt: (v) => `${v}px` },
+        ];
+        return (
+          <div>
+            <Head t="外观" h="聊天区卷轴（滚动条）参数即时生效：拖动即滚动、悬停查看位置与消息摘要" />
+            <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
+              <div style={{ width: 320, maxWidth: "100%", flexShrink: 0 }}>
+                <div style={S.fieldLabel}><span>实时预览</span><span style={S.fieldHint}>悬停 / 拖动查看效果</span></div>
+                <div style={{ position: "relative", height: 300, border: `1px solid ${BRAND.border}`, borderRadius: 10, overflow: "hidden", background: BRAND.ink }}>
+                  <div id="loopsoar-rail-demo" className="chat-scroll" style={{ height: "100%", overflowY: "auto", padding: "10px 34px 10px 10px" }}>
+                    {[
+                      "你：帮我总结当前网页",
+                      "Loopsoar：我先看页面结构，再提取正文。",
+                      "你：顺便找出三个关键结论",
+                      "Loopsoar：已提取正文并整理成要点。",
+                      "你：把结论写成表格",
+                      "Loopsoar：表格已生成，可复制到文档。",
+                      "你：再检查有没有遗漏的数据",
+                      "Loopsoar：检查完毕，补充了两处数据来源。",
+                    ].map((line, i) => (
+                      <div
+                        key={i}
+                        data-rail-label={line}
+                        style={{
+                          marginBottom: 10,
+                          padding: "7px 9px",
+                          borderRadius: 8,
+                          background: i % 2 === 0 ? BRAND.ochreSoft : BRAND.inkRaised,
+                          border: `1px solid ${BRAND.border}`,
+                          fontSize: 11.5,
+                          color: BRAND.linen,
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                  <TopicRail scroller={() => document.getElementById("loopsoar-rail-demo")} />
+                </div>
+                <div style={S.note}>把鼠标放进预览框：悬停出现位置气泡，按住拖动即滚动。外观设置与聊天区共用同一份参数。</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 280 }}>
+                <div className="panel-card" style={S.card}>
+                  <div style={S.formHead}>卷轴参数</div>
+                  {sliderDefs.map((item) => (
+                    <div key={item.key} style={S.sliderRow}>
+                      <span style={S.sliderLabel}>{item.label}</span>
+                      <input
+                        type="range"
+                        min={item.min}
+                        max={item.max}
+                        step={item.step}
+                        value={rail[item.key]}
+                        onChange={(e) => updateRail({ [item.key]: Number(e.target.value) } as Partial<RailParams>)}
+                        style={{ flex: 1, accentColor: BRAND.ochre }}
+                      />
+                      <span style={S.sliderValue}>{item.fmt(rail[item.key])}</span>
+                    </div>
+                  ))}
+                  <div style={S.rowBetween}>
+                    <label style={S.checkRow}>
+                      <input type="checkbox" checked={rail.pause} onChange={(e) => updateRail({ pause: e.target.checked })} />
+                      悬停时暂停荡漾
+                    </label>
+                    <label style={S.checkRow}>
+                      <input type="checkbox" checked={rail.flip} onChange={(e) => updateRail({ flip: e.target.checked })} />
+                      衬托方向翻转
+                    </label>
+                  </div>
+                  <div style={S.btns}>
+                    <Btn label="恢复默认" onClick={() => setRail(saveRailParams({ ...DEFAULT_CHAT_RAIL }))} />
+                  </div>
+                </div>
+                <div className="panel-card" style={S.card}>
+                  <div style={S.formHead}>动效</div>
+                  <Field l="动画强度" h="关：所有入场 / 波动动画停止（无障碍）">
+                    <Seg
+                      v={prefs?.animations ?? "full"}
+                      opts={[["full", "完整"], ["reduced", "减弱"], ["off", "关闭"]]}
+                      on={saveAnimations}
+                    />
+                  </Field>
+                  <div style={S.note}>与 slime 外观页一致：参数改动即时生效、无需重启；保存在本机浏览器存储。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       case "general":
         return prefs ? (<div>
           <Head t="通用" h="外观、搜索与启动行为（config/preferences.json）" />
@@ -799,7 +929,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail]);
 
   return (
     <div className="settings-overlay" style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -912,6 +1042,10 @@ const S: Record<string, React.CSSProperties> = {
   btns: { display: "flex", alignItems: "center", gap: 10, paddingTop: 12, flexWrap: "wrap" },
   card: { border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 12, marginBottom: 10, background: BRAND.inkPanel },
   grid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 10 },
+  sliderRow: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 },
+  sliderLabel: { width: 76, fontSize: 11.5, color: BRAND.linenMuted, flexShrink: 0 },
+  sliderValue: { width: 62, textAlign: "right", fontSize: 11, color: BRAND.linenFaint, fontVariantNumeric: "tabular-nums" },
+  checkRow: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: BRAND.linenMuted, marginTop: 4 },
   modelSection: { borderTop: `1px solid ${BRAND.border}`, paddingTop: 10, marginTop: 6 },
   modelSectionHead: { fontSize: 12.5, fontWeight: 700, marginBottom: 8 },
   modelAddRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8, justifyContent: "flex-end" },

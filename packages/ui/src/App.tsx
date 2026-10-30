@@ -559,21 +559,38 @@ export default function App(): React.JSX.Element {
     setPermReq(null);
   }, [api, permReq]);
 
+  /** 发送一条文本：立即渲染用户消息 + 助手占位（不等首字），再发起流式请求。 */
+  const sendText = useCallback(
+    (raw: string): void => {
+      const text = raw.trim();
+      if (!text || !api) return;
+      setBusy(true);
+      setNotice("");
+      const assistantId = nextId("assistant");
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() },
+        { id: assistantId, role: "assistant", text: "", status: "streaming", createdAt: Date.now() },
+      ]);
+      activeAssistantRef.current = assistantId;
+      sendStartedAtRef.current = Date.now();
+      firstTokenAtRef.current = 0;
+      void api.chat
+        .stream({ message: text, sessionId: sessionIdRef.current, mode, reasoningEffort: reasoningEffort || undefined })
+        .catch((err: unknown) => {
+          setBusy(false);
+          setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
+        });
+    },
+    [api, mode, reasoningEffort],
+  );
+
   const send = useCallback((): void => {
     const text = input.trim();
-    if (!text || !api) return;
+    if (!text) return;
     setInput("");
-    setBusy(true);
-    setNotice("");
-    setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() }]);
-    activeAssistantRef.current = null;
-    sendStartedAtRef.current = Date.now();
-    firstTokenAtRef.current = 0;
-    void api.chat.stream({ message: text, sessionId: sessionIdRef.current, mode, reasoningEffort: reasoningEffort || undefined }).catch((err: unknown) => {
-      setBusy(false);
-      setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
-    });
-  }, [api, input]);
+    sendText(text);
+  }, [input, sendText]);
 
   /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
   const rollbackTo = useCallback(
@@ -772,14 +789,10 @@ export default function App(): React.JSX.Element {
     if (new URLSearchParams(location.search).get("e2e") !== "chat") return;
     const message = "你好，请简单介绍一下你自己";
     const timer = setTimeout(() => {
-      setBusy(true);
-      setMessages((prev) => [...prev, { id: nextId("u"), role: "user", text: message, status: "done" }]);
-      void api.chat
-        .stream({ message, sessionId: sessionIdRef.current, mode: "build" })
-        .catch(() => setBusy(false));
+      sendText(message);
     }, 900);
     return () => clearTimeout(timer);
-  }, [api]);
+  }, [api, sendText]);
 
   // E2E：?e2e=model-menu / perm-menu 自动展开输入区弹层（验证锚定与不被裁切）
   useEffect(() => {
@@ -1167,8 +1180,14 @@ export default function App(): React.JSX.Element {
                       {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
                     </div>
                     <div style={styles.assistantMain}>
-                      {hasTimeline ? (
+                      {hasTimeline || m.status === "streaming" ? (
                         <div className="think-timeline is-live" style={styles.timeline}>
+                          {!m.reasoning && m.status === "streaming" ? (
+                            <div className="think-step">
+                              <span className="think-step-mark" />
+                              <span className="think-step-text" style={styles.toolStepText}>思考中…</span>
+                            </div>
+                          ) : null}
                           {m.reasoning ? (
                             <div className="think-step">
                               <span className="think-step-mark" />
