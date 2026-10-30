@@ -305,7 +305,9 @@ export interface LoopsoarAPI {
       mode?: "build" | "plan";
       reasoningEffort?: string;
     }): Promise<{ accepted: boolean; sessionId: string }>;
-    stop(payload: { sessionId: string }): Promise<{ stopped: boolean }>;
+    stop(payload: { sessionId?: string }): Promise<{ stopped: boolean }>;
+    rollback(payload: { keepCount: number; sessionId?: string }): Promise<{ ok: boolean; session: unknown }>;
+    steer(payload: { message: string; sessionId?: string }): Promise<{ accepted: boolean }>;
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
     sessions(): Promise<{ sessions: SessionMeta[]; currentId: string | null }>;
     newSession(): Promise<{ session: { sessionId: string } | null; sessions: SessionMeta[]; currentId: string | null }>;

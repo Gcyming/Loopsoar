@@ -13,6 +13,11 @@ export const ChatStreamSchema = z.object({
   /** 推理等级（如 low/medium/high）；由模型参数声明支持值。 */
   reasoningEffort: z.string().max(30).optional(),
 });
+export const ChatSteerSchema = z.object({
+  /** 运行中注入的转向提示（轮次边界生效，不打断当前输出）。 */
+  message: z.string().min(1).max(4000),
+  sessionId: z.string().max(64).optional(),
+});
 export const ChatRollbackSchema = z.object({
   /** 截断到第 N 条持久化消息（保留 [0, keepCount)），用于消息回滚。 */
   keepCount: z.number().int().min(0).max(10_000),
@@ -185,6 +190,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "stream",
     request: ChatStreamSchema,
+    sensitive: true,
+  },
+  "chat:steer": {
+    domain: "chat",
+    method: "steer",
+    request: ChatSteerSchema,
     sensitive: true,
   },
   "chat:rollback": {

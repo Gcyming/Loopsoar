@@ -137,6 +137,9 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       const steerPrompt = steerTexts.length > 0
         ? `\n[系统转向提示] ${steerTexts.join(" · ")}\n`
         : "";
+      if (steerTexts.length > 0) {
+        emit("progress", { note: `已注入 ${steerTexts.length} 条转向提示（下一轮生效）` });
+      }
 
       // 无进度检测预热：每轮开始记录当前进度状态（用于后续判断）
       let roundHadTextProgress = false;

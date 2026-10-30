@@ -248,6 +248,8 @@ export class InternalToolExecutor {
  */
 export class ChatService {
   private permBus: PermRequestBus;
+  /** sessionId → 当前运行中的转向总线（steer 注入用） */
+  private steerBuses = new Map<string, SteerBus>();
   private aborts = new Map<string, AbortController>();
 
   constructor(private opts: ChatServiceOptions = {}) {
@@ -265,6 +267,7 @@ export class ChatService {
     if (!controller) return false;
     controller.abort();
     this.aborts.delete(sessionId);
+      this.steerBuses.delete(sessionId);
     return true;
   }
 
@@ -334,6 +337,8 @@ export class ChatService {
 
     const controller = new AbortController();
     this.aborts.set(sessionId, controller);
+    const steers = new SteerBus();
+    this.steerBuses.set(sessionId, steers);
 
     const resolvedAllowlist = this.opts.getToolAllowlist?.(input.mode) ?? this.opts.toolAllowlist;
     const executor = new InternalToolExecutor({
@@ -375,7 +380,7 @@ export class ChatService {
         },
         messages,
         reasoningEffort: input.reasoningEffort,
-        steers: new SteerBus(),
+        steers,
         signal: controller.signal,
       });
 
@@ -404,6 +409,17 @@ export class ChatService {
     }
 
     return { status: outcome, reason, finalText, usage, chunks, claims };
+  }
+
+  /** 注入转向提示：运行中在下一轮边界生效；无运行中会话返回 false。 */
+  steer(sessionId: string | undefined, text: string): boolean {
+    // 未指定会话时：若只有一个运行中的会话，默认注入到它（UI 通常只有一个活动流）
+    const fallbackId = this.steerBuses.size === 1 ? [...this.steerBuses.keys()][0] : undefined;
+    const id = sessionId && this.steerBuses.has(sessionId) ? sessionId : (fallbackId ?? "");
+    const bus = id ? this.steerBuses.get(id) : undefined;
+    if (!bus || !text.trim()) return false;
+    bus.push(text.trim());
+    return true;
   }
 
   /** 当前挂起确认数（界面状态条/测试用）。 */

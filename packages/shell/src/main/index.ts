@@ -236,6 +236,30 @@ function scheduleE2EPlanDemo(win: BrowserWindow): void {
   });
 }
 
+/** E2E：运行中注入转向提示（验证转向卡与 steer 通道）。 */
+function scheduleE2ESteerDemo(win: BrowserWindow): void {
+  if (!process.env.LOOPSOAR_E2E_STEER) return;
+  win.webContents.once("did-finish-load", () => {
+    setTimeout(() => {
+      void win.webContents
+        .executeJavaScript(
+          `(() => {
+            const ta = document.querySelector('textarea');
+            const sendBtn = document.querySelector('.send-btn');
+            if (!ta || !sendBtn) return 'missing-ui';
+            const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+            setter.call(ta, '换个方向：先给结论，再列证据。');
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+            setTimeout(() => sendBtn.click(), 60);
+            return 'steer-sent';
+          })()`,
+        )
+        .then((r) => console.log(`[E2E] STEER ${r}`))
+        .catch((err) => console.log(`[E2E] STEER failed: ${String(err)}`));
+    }, 1200);
+  });
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -289,6 +313,7 @@ function createMainWindow(): void {
   scheduleE2EScreenshot(mainWindow);
   scheduleE2ERailHover(mainWindow);
   scheduleE2EPlanDemo(mainWindow);
+  scheduleE2ESteerDemo(mainWindow);
   scheduleE2EDemoChat(mainWindow);
 }
 

@@ -53,6 +53,8 @@ interface ChatMessage {
   errorText?: string;
   /** 任务规划（来自计划类工具调用参数） */
   plan?: PlanStep[];
+  /** 是否为运行中注入的转向提示 */
+  steer?: boolean;
 }
 
 
@@ -630,10 +632,22 @@ export default function App(): React.JSX.Element {
 
   const send = useCallback((): void => {
     const text = input.trim();
-    if (!text) return;
+    if (!text || !api) return;
     setInput("");
+    if (busy) {
+      // 运行中：作为「转向提示」注入（轮次边界生效，不打断当前输出）
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
+      ]);
+      void api.chat
+        .steer({ message: text, sessionId: sessionIdRef.current ?? undefined })
+        .then((r) => setNotice(r.accepted ? "转向已注入（下一轮生效）" : "转向未生效：当前没有运行中的回复"))
+        .catch((err: unknown) => setNotice(`转向失败：${err instanceof Error ? err.message : String(err)}`));
+      return;
+    }
     sendText(text);
-  }, [input, sendText]);
+  }, [api, busy, input, sendText]);
 
   /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
   const rollbackTo = useCallback(
@@ -914,7 +928,8 @@ export default function App(): React.JSX.Element {
     if (risky.some((x) => x === "confirm")) return "权限：询问";
     return "权限：放行";
   };
-  const canSend = Boolean(api) && !busy && input.trim() !== "";
+  // 运行中输入非空时仍可发送：此时作为「转向提示」注入（steer）
+  const canSend = Boolean(api) && input.trim() !== "";
 
   // 历史 / 下载面板（以点击的按钮为基点展开）
   const renderHistoryPanel = (): React.JSX.Element => (
@@ -1208,8 +1223,26 @@ export default function App(): React.JSX.Element {
                   return (
                     <div key={m.id} className="msg-row" style={styles.msgRowUser} data-rail-label={`你：${m.text.slice(0, 24)}`}
                       data-rail-role="user">
-                      <div className="msg-user-bubble" style={styles.userBubble}>
-                        {m.text}
+                      <div className="msg-user-bubble" style={{ ...styles.userBubble, ...(m.steer ? styles.userBubbleSteer : {}) }}>
+                        {m.steer ? <span style={styles.steerBadge}>转向</span> : null}
+                        {(() => {
+                          const { body, docs } = splitAttachments(m.text);
+                          return (
+                            <>
+                              {docs.length > 0 ? (
+                                <div style={styles.attachRow}>
+                                  {docs.map((path) => (
+                                    <span key={path} style={styles.attachChip} title={path}>
+                                      <Icon name="file" size={11} style={{ marginRight: 4 }} />
+                                      {baseName(path)}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {body ? <span>{body}</span> : null}
+                            </>
+                          );
+                        })()}
                       </div>
                       <div className="msg-hover" style={styles.msgHover}>
                         <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
@@ -1380,6 +1413,9 @@ export default function App(): React.JSX.Element {
                 <span style={styles.measureChip}>
                   <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
                   {provider?.configured ? provider.model : "未配置模型"}
+                </span>
+                <span style={styles.measureChip}>
+                  <Icon name="file" size={12} style={{ marginRight: 4 }} />附件
                 </span>
                 <span style={styles.measureChip}>停止</span>
                 <span style={styles.measureChip}>发送</span>
@@ -1553,6 +1589,26 @@ export default function App(): React.JSX.Element {
                     </div>
                   ) : null}
                 </span>
+                <button
+                  type="button"
+                  className="chip"
+                  style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
+                  title="添加附件（把文件路径放进消息，Agent 可用工具读取）"
+                  aria-label="添加附件"
+                  onClick={() => {
+                    void api?.dialog
+                      .pickPath({ kind: "file", title: "选择附件" })
+                      .then((r) => {
+                        if (r.canceled || !r.path) return;
+                        setInput((prev) => (prev ? `${prev}\n【附件】${r.path}` : `【附件】${r.path}`));
+                        setNotice("已添加附件（路径已放入消息）");
+                      })
+                      .catch(() => {});
+                  }}
+                >
+                  <Icon name="file" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
+                  {compactUi ? null : "附件"}
+                </button>
                 <span style={styles.spacer} />
                 {busy ? (
                   <>
@@ -1569,18 +1625,17 @@ export default function App(): React.JSX.Element {
                       {compactUi ? null : "停止"}
                     </button>
                   </>
-                ) : (
-                  <button
-                    type="button"
-                    className="send-btn"
-                    style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
-                    onClick={send}
-                    disabled={!canSend}
-                    title="发送（Enter）"
-                  >
-                    <Icon name="send" size={15} />
-                  </button>
-                )}
+                ) : null}
+                <button
+                  type="button"
+                  className="send-btn"
+                  style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
+                  onClick={send}
+                  disabled={!canSend}
+                  title={busy ? "发送转向提示（运行中发送 = 转向，下一轮生效）" : "发送（Enter）"}
+                >
+                  <Icon name={busy ? "forward" : "send"} size={15} />
+                </button>
               </div>
             </div>
             <div style={styles.composerFoot}>
@@ -1656,6 +1711,24 @@ export default function App(): React.JSX.Element {
       ) : null}
     </div>
   );
+}
+
+/** 拆分「【附件】路径」：正文与附件路径分离（展示卡片，发送仍用原文）。 */
+function splitAttachments(text: string): { body: string; docs: string[] } {
+  const docs: string[] = [];
+  const re = /【附件】([^\n]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const path = match[1].trim();
+    if (path) docs.push(path);
+  }
+  const body = text.replace(re, "").trim();
+  return { body, docs };
+}
+
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
 }
 
 /** 轻量富文本：代码块 + 行内代码 + 粗体（不引入第三方依赖）。 */
@@ -2203,6 +2276,36 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
     userSelect: "text",
+  },
+  userBubbleSteer: {
+    background: "transparent",
+    border: `1px dashed ${BRAND.ochre}`,
+    color: BRAND.ochreHover,
+  },
+  steerBadge: {
+    display: "inline-block",
+    marginRight: 6,
+    padding: "0 5px",
+    borderRadius: 4,
+    fontSize: 9.5,
+    fontWeight: 700,
+    border: `1px solid ${BRAND.ochre}`,
+    color: BRAND.ochreHover,
+    verticalAlign: "1px",
+  },
+  attachRow: { display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 5 },
+  attachChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    maxWidth: 220,
+    padding: "2px 7px",
+    borderRadius: 6,
+    fontSize: 10.5,
+    background: "rgba(255,255,255,0.10)",
+    border: "1px solid rgba(255,255,255,0.18)",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   },
   msgHover: {
     display: "flex",
