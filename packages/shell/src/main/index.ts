@@ -260,6 +260,30 @@ function scheduleE2ESteerDemo(win: BrowserWindow): void {
   });
 }
 
+/** E2E：地址栏搜索（验证 omnibox 搜索路径）。 */
+function scheduleE2ESearchDemo(win: BrowserWindow): void {
+  const query = process.env.LOOPSOAR_E2E_SEARCH;
+  if (!query) return;
+  win.webContents.once("did-finish-load", () => {
+    setTimeout(() => {
+      void win.webContents
+        .executeJavaScript(
+          `(() => {
+            const input = document.querySelector('input');
+            if (!input) return 'no-input';
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            setter.call(input, ${JSON.stringify(query)});
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            return 'search-sent';
+          })()`,
+        )
+        .then((r) => console.log(`[E2E] SEARCH ${r}`))
+        .catch((err) => console.log(`[E2E] SEARCH failed: ${String(err)}`));
+    }, 900);
+  });
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -314,6 +338,7 @@ function createMainWindow(): void {
   scheduleE2ERailHover(mainWindow);
   scheduleE2EPlanDemo(mainWindow);
   scheduleE2ESteerDemo(mainWindow);
+  scheduleE2ESearchDemo(mainWindow);
   scheduleE2EDemoChat(mainWindow);
 }
 

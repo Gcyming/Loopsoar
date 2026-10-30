@@ -9,7 +9,8 @@
     "./schemas": "./src/schemas.ts",
     "./layout": "./src/layout.ts",
     "./navigation": "./src/navigation.ts",
-    "./security-policy": "./src/security-policy.ts"
+    "./security-policy": "./src/security-policy.ts",
+    "./omnibox": "./src/omnibox.ts"
   },
   "scripts": {
     "gen": "tsx scripts/gen.ts",

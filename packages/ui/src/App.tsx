@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { normalizeNavigateUrl } from "loopsoar-contracts/navigation";
+import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
   BootStatus,
@@ -699,16 +700,22 @@ export default function App(): React.JSX.Element {
   const navigate = useCallback(
     (raw?: string): void => {
       if (!api) return;
-      const normalized = normalizeNavigateUrl(raw ?? address);
-      if (!normalized.ok) {
-        setNotice(`导航被拒绝：${normalized.reason}`);
+      const input = raw ?? address;
+      const engine = (preferences?.searchEngine ?? "bing") as "bing" | "google" | "duckduckgo";
+      const resolved = resolveOmniboxInput(input, engine);
+      if (resolved.kind === "invalid") {
+        setNotice(`导航被拒绝：${resolved.reason}`);
         return;
       }
-      setNotice("导航中…");
-      void api.browser.navigate({ url: normalized.url }).then((result) => {
+      if (resolved.kind === "search") {
+        setNotice(`搜索：${resolved.query}`);
+      } else {
+        setNotice("导航中…");
+      }
+      void api.browser.navigate({ url: resolved.url }).then((result) => {
         if (result.ok) {
-          setCurrentUrl(result.url ?? normalized.url);
-          setAddress(result.url ?? normalized.url);
+          setCurrentUrl(result.url ?? resolved.url);
+          setAddress(result.url ?? resolved.url);
           setNotice("导航完成");
           void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         } else {
@@ -716,7 +723,7 @@ export default function App(): React.JSX.Element {
         }
       });
     },
-    [address, api],
+    [address, api, preferences],
   );
 
   const newTab = useCallback((): void => {
