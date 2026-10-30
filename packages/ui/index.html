@@ -464,6 +464,28 @@
     html[data-animations="off"] .pop-in,
     html[data-animations="off"] .stream-dot,
     html[data-animations="off"] .text-scan-light { animation: none !important; }
+    /* ── 卷轴：隐藏原生滚动条，右侧由 canvas 卷轴代替 ── */
+    .chat-scroll { scrollbar-width: none; scrollbar-gutter: auto; }
+    .chat-scroll::-webkit-scrollbar { width: 0; height: 0; }
+    .topic-rail-tip {
+      position: absolute;
+      right: calc(100% + 10px);
+      top: 0;
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: rgba(17, 19, 24, 0.94);
+      border: 1px solid #2c2c31;
+      color: #c9c3b6;
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translateY(0);
+      transition: opacity 120ms ease;
+      pointer-events: none;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    }
+    .topic-rail-tip.on { opacity: 1; }
   </style>
   </head>
   <body>

@@ -17,6 +17,8 @@ import type {
 import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
 import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
+import TopicRail from "./TopicRail.js";
+import LiveStatus from "./LiveStatus.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -182,8 +184,13 @@ export default function App(): React.JSX.Element {
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
-  const [canScrollUp, setCanScrollUp] = useState(false);
-  const [canScrollDown, setCanScrollDown] = useState(false);
+  /** 上下文占用估算（0~1，用于实时状态行） */
+  const contextPct = useMemo(() => {
+    const spec = provider?.models?.find((m) => m.id === provider.model);
+    const cap = spec?.contextWindow && spec.contextWindow > 0 ? spec.contextWindow : 128000;
+    const chars = messages.reduce((n, m) => n + m.text.length + (m.reasoning?.length ?? 0), 0) + input.length;
+    return Math.min(100, Math.round((chars / 4 / cap) * 100));
+  }, [messages, input, provider]);
   /** 挤压检测：可用宽度 / 内容自然宽度；低于阈值时按钮收缩为圆形图标 */
   const [squeezeRatio, setSqueezeRatio] = useState(1);
   const [compactUi, setCompactUi] = useState(false);
@@ -428,27 +435,11 @@ export default function App(): React.JSX.Element {
     return () => observer.disconnect();
   }, [provider, permSummary, mode, reasoningEffort, sidebarWidth, modelList]);
 
-  const updateScrollInfo = useCallback((): void => {
-    const el = messageListRef.current;
-    if (!el) return;
-    setCanScrollUp(el.scrollTop > 4);
-    setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 4);
-  }, []);
-
   // 新消息/流式增量时自动滚到底部
   useEffect(() => {
     const el = messageListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-    updateScrollInfo();
-  }, [messages, updateScrollInfo]);
-
-  /** 卷轴按钮：按半屏滚动（平滑）。 */
-  const scrollPage = useCallback((direction: -1 | 1): void => {
-    const el = messageListRef.current;
-    if (!el) return;
-    el.scrollBy({ top: direction * Math.max(140, Math.round(el.clientHeight * 0.7)), behavior: "smooth" });
-    window.setTimeout(updateScrollInfo, 260);
-  }, [updateScrollInfo]);
+  }, [messages]);
 
   // 供应商/模型变更同步：设置页保存后刷新模型 chip 与模型列表
   useEffect(() => {
@@ -1121,7 +1112,7 @@ export default function App(): React.JSX.Element {
             ) : null}
           </div>
           <div style={styles.messageArea}>
-            <div ref={messageListRef} style={styles.messageList} onScroll={updateScrollInfo}>
+            <div ref={messageListRef} className="chat-scroll" style={styles.messageList}>
             {messages.length === 0 ? (
               <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
             ) : (
@@ -1135,7 +1126,7 @@ export default function App(): React.JSX.Element {
                 });
                 if (mine) {
                   return (
-                    <div key={m.id} className="msg-row" style={styles.msgRowUser}>
+                    <div key={m.id} className="msg-row" style={styles.msgRowUser} data-rail-label={`你：${m.text.slice(0, 24)}`}>
                       <div className="msg-user-bubble" style={styles.userBubble}>
                         {m.text}
                       </div>
@@ -1163,117 +1154,115 @@ export default function App(): React.JSX.Element {
                   );
                 }
                 return (
-                  <div key={m.id} className="msg-row" style={styles.msgRowAssistant}>
-                    {hasTimeline ? (
-                      <div className="think-timeline is-live" style={styles.timeline}>
-                        {m.reasoning ? (
-                          <div className="think-step">
-                            <span className="think-step-mark" />
-                            <button
-                              type="button"
-                              className="think-step-toggle"
-                              onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
-                              title={expandedReasoning[m.id] ? "收起思考过程" : "展开思考过程"}
-                            >
-                              {expandedReasoning[m.id] ? "收起思考过程" : "思考过程"}
-                              {expandedReasoning[m.id] ? null : (
-                                <span className="think-step-preview">
-                                  {m.reasoning.replace(/\s+/g, " ").slice(0, 90)}
-                                </span>
-                              )}
-                            </button>
-                            {expandedReasoning[m.id] ? (
-                              <div className="think-step-text">{m.reasoning}</div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {(m.tools ?? []).map((t) => (
-                          <div key={t.id} className="think-step">
-                            <span className="think-step-mark" data-state={t.state} />
-                            <span className="think-step-text" style={styles.toolStepText}>
-                              {t.label}
-                              <span className="think-step-state">
-                                {t.state === "running" ? "进行中" : t.state === "error" ? "失败" : "完成"}
-                              </span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {showThinking ? (
-                      <div style={styles.thinkingRow}>
-                        <span className="text-scan-light">正在思考</span>
-                        <span className="stream-dot-row">
-                          <span className="stream-dot" />
-                          <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
-                          <span className="stream-dot" style={{ animationDelay: "0.4s" }} />
-                        </span>
-                      </div>
-                    ) : null}
-                    <div className="msg-body-text" style={styles.assistantBody}>
-                      {m.tail && m.status === "streaming"
-                        ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
-                        : renderRich(m.text)}
-                      {m.tail && m.status === "streaming" ? (
-                        <span key={m.tailSeq} className="stream-tail">
-                          {m.tail}
-                        </span>
-                      ) : null}
-                      {m.status === "streaming" && m.text ? <span className="stream-caret" /> : null}
+                  <div
+                    key={m.id}
+                    className="msg-row"
+                    style={styles.msgRowAssistant}
+                    data-rail-label={`Loopsoar：${(m.text || m.reasoning || "回复").slice(0, 26)}`}
+                  >
+                    <div style={styles.assistantHead}>
+                      <span style={styles.avatar}>L</span>
+                      <span style={styles.assistantName}>Loopsoar</span>
+                      {provider?.model ? <span style={styles.assistantModel}>{provider.model}</span> : null}
+                      {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
                     </div>
-                    {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
-                    <div className="msg-hover" style={styles.msgHover}>
-                      <span style={styles.msgHoverTag}>Loopsoar</span>
-                      {provider?.model ? <span>· {provider.model}</span> : null}
-                      <span>· {timeText}</span>
-                      {m.text ? (
-                        <button
-                          type="button"
-                          className="msg-action"
-                          title="复制回复"
-                          onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
-                        >
-                          <Icon name="file" size={12} />
-                        </button>
+                    <div style={styles.assistantMain}>
+                      {hasTimeline ? (
+                        <div className="think-timeline is-live" style={styles.timeline}>
+                          {m.reasoning ? (
+                            <div className="think-step">
+                              <span className="think-step-mark" />
+                              <button
+                                type="button"
+                                className="think-step-toggle"
+                                onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
+                                title={expandedReasoning[m.id] ? "收起思考过程" : "展开思考过程"}
+                              >
+                                <Icon name="bolt" size={12} style={{ color: BRAND.ochreHover }} />
+                                {expandedReasoning[m.id] ? "收起思考过程" : "思考过程"}
+                                {expandedReasoning[m.id] ? null : (
+                                  <span className="think-step-preview">
+                                    {m.reasoning.replace(/\s+/g, " ").slice(0, 80)}
+                                  </span>
+                                )}
+                              </button>
+                              {expandedReasoning[m.id] ? (
+                                <div className="think-step-text">{m.reasoning}</div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {(m.tools ?? []).map((t) => (
+                            <div key={t.id} className="think-step">
+                              <span className="think-step-mark" data-state={t.state} />
+                              <span className="think-step-text" style={styles.toolStepText}>
+                                {t.label}
+                                <span className="think-step-state">
+                                  {t.state === "running" ? "进行中" : t.state === "error" ? "失败" : "完成"}
+                                </span>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       ) : null}
-                      {m.timing ? (
-                        <span style={styles.msgTiming}>
-                          首字 {fmtMs(m.timing.firstTokenMs ?? 0)} · 总耗时 {fmtMs(m.timing.totalMs ?? 0)}
-                          {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
-                          {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
-                        </span>
+                      {showThinking ? (
+                        <div style={styles.thinkingRow}>
+                          <span className="text-scan-light">正在思考</span>
+                          <span className="stream-dot-row">
+                            <span className="stream-dot" />
+                            <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
+                            <span className="stream-dot" style={{ animationDelay: "0.4s" }} />
+                          </span>
+                        </div>
                       ) : null}
+                      <div className="msg-body-text" style={styles.assistantBody}>
+                        {m.tail && m.status === "streaming"
+                          ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
+                          : renderRich(m.text)}
+                        {m.tail && m.status === "streaming" ? (
+                          <span key={m.tailSeq} className="stream-tail">
+                            {m.tail}
+                          </span>
+                        ) : null}
+                        {m.status === "streaming" && m.text ? <span className="stream-caret" /> : null}
+                      </div>
+                      {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
+                      {m.status === "streaming" ? (
+                        <LiveStatus
+                          startedAt={m.createdAt ?? Date.now()}
+                          contextPct={contextPct}
+                          runningTool={(m.tools ?? []).some((t) => t.state === "running")}
+                          hasText={m.text.length > 0}
+                        />
+                      ) : null}
+                      <div className="msg-hover" style={styles.msgHover}>
+                        <span style={styles.msgHoverTag}>Loopsoar</span>
+                        {provider?.model ? <span>· {provider.model}</span> : null}
+                        <span>· {timeText}</span>
+                        {m.text ? (
+                          <button
+                            type="button"
+                            className="msg-action"
+                            title="复制回复"
+                            onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
+                          >
+                            <Icon name="file" size={12} />
+                          </button>
+                        ) : null}
+                        {m.timing ? (
+                          <span style={styles.msgTiming}>
+                            首字 {fmtMs(m.timing.firstTokenMs ?? 0)} · 总耗时 {fmtMs(m.timing.totalMs ?? 0)}
+                            {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
+                            {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 );
               })
             )}
             </div>
-            {canScrollUp || canScrollDown ? (
-            <div style={styles.scrollRail} className="scroll-rail">
-              <button
-                type="button"
-                className="scroll-btn"
-                title="向上滚动"
-                disabled={!canScrollUp}
-                onClick={() => scrollPage(-1)}
-                style={{ ...styles.scrollBtn, opacity: canScrollUp ? 1 : 0.25 }}
-              >
-                <Icon name="back" size={12} style={{ transform: "rotate(90deg)" }} />
-              </button>
-              <div style={styles.scrollRailLine} />
-              <button
-                type="button"
-                className="scroll-btn"
-                title="向下滚动"
-                disabled={!canScrollDown}
-                onClick={() => scrollPage(1)}
-                style={{ ...styles.scrollBtn, opacity: canScrollDown ? 1 : 0.25 }}
-              >
-                <Icon name="forward" size={12} style={{ transform: "rotate(90deg)" }} />
-              </button>
-            </div>
-            ) : null}
+            <TopicRail scroller={() => messageListRef.current} />
           </div>
           <div style={styles.composer}>
             <div ref={composerBoxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
@@ -1570,6 +1559,7 @@ export default function App(): React.JSX.Element {
 /** 轻量富文本：代码块 + 行内代码 + 粗体（不引入第三方依赖）。 */
 function renderRich(text: string): React.ReactNode {
   if (!text) return null;
+  // 先按代码块切分
   const blocks = text.split(/(```[\s\S]*?```)/g);
   return blocks.map((block, bi) => {
     if (block.startsWith("```")) {
@@ -1580,20 +1570,89 @@ function renderRich(text: string): React.ReactNode {
         </pre>
       );
     }
-    const parts = block.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
-    return (
-      <span key={`text-${bi}`}>
-        {parts.map((part, pi) => {
-          if (part.startsWith("`") && part.endsWith("`")) {
-            return <code key={pi} style={styles.inlineCode}>{part.slice(1, -1)}</code>;
-          }
-          if (part.startsWith("**") && part.endsWith("**")) {
-            return <strong key={pi}>{part.slice(2, -2)}</strong>;
-          }
-          return <React.Fragment key={pi}>{part}</React.Fragment>;
-        })}
-      </span>
-    );
+    // 行级渲染：标题 / 无序列表 / 引用 / 普通段落
+    const lines = block.split(/\n/);
+    const nodes: React.ReactNode[] = [];
+    let list: string[] = [];
+    let listKey = 0;
+    const flushList = (): void => {
+      if (list.length === 0) return;
+      const items = list;
+      list = [];
+      nodes.push(
+        <ul key={`ul-${bi}-${listKey++}`} style={styles.richList}>
+          {items.map((item, ii) => (
+            <li key={ii} style={styles.richListItem}>
+              {inlineRich(item)}
+            </li>
+          ))}
+        </ul>,
+      );
+    };
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\s+$/, "");
+      const bullet = /^\s*([-*•])\s+(.*)$/.exec(line);
+      if (bullet) {
+        list.push(bullet[2]);
+        continue;
+      }
+      flushList();
+      if (!line.trim()) {
+        nodes.push(<div key={`gap-${bi}-${nodes.length}`} style={{ height: 6 }} />);
+        continue;
+      }
+      const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (heading) {
+        const level = heading[1].length;
+        nodes.push(
+          <div key={`h-${bi}-${nodes.length}`} style={{ ...styles.richHeading, fontSize: level <= 2 ? 16 : 14, marginTop: level <= 2 ? 10 : 8 }}>
+            {inlineRich(heading[2])}
+          </div>,
+        );
+        continue;
+      }
+      const quote = /^\s*>\s?(.*)$/.exec(line);
+      if (quote) {
+        nodes.push(
+          <div key={`q-${bi}-${nodes.length}`} style={styles.richQuote}>
+            {inlineRich(quote[1])}
+          </div>,
+        );
+        continue;
+      }
+      nodes.push(
+        <div key={`p-${bi}-${nodes.length}`} style={styles.richPara}>
+          {inlineRich(line)}
+        </div>,
+      );
+    }
+    flushList();
+    return <React.Fragment key={`text-${bi}`}>{nodes}</React.Fragment>;
+  });
+}
+
+/** 行内：行内代码 / 粗体 / 斜体 / 链接。 */
+function inlineRich(text: string): React.ReactNode {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g);
+  return parts.map((part, pi) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={pi} style={styles.inlineCode}>{part.slice(1, -1)}</code>;
+    }
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={pi}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+      return <em key={pi}>{part.slice(1, -1)}</em>;
+    }
+    const link = /^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/.exec(part);
+    if (link) {
+      return (
+        <a key={pi} href={link[2]} target="_blank" rel="noreferrer" style={styles.richLink}>
+          {link[1]}
+        </a>
+      );
+    }
+    return <React.Fragment key={pi}>{part}</React.Fragment>;
   });
 }
 
@@ -2005,7 +2064,31 @@ const styles: Record<string, React.CSSProperties> = {
   scrollRailLine: { width: 14, height: 1, background: BRAND.border },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
   msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
-  msgRowAssistant: { display: "flex", flexDirection: "column", alignItems: "stretch", marginBottom: 16 },
+  msgRowAssistant: { display: "flex", flexDirection: "column", alignItems: "stretch", marginBottom: 18 },
+  assistantHead: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 },
+  avatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 999,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "linear-gradient(135deg, rgba(200,118,60,0.85), rgba(217,138,79,0.45))",
+    border: `1px solid ${BRAND.borderStrong}`,
+    color: "#fff",
+    fontSize: 12.5,
+    fontWeight: 700,
+    flex: "none",
+  },
+  assistantName: { fontSize: 13.5, fontWeight: 700, color: BRAND.linen },
+  assistantModel: {
+    fontSize: 10.5,
+    color: BRAND.linenFaint,
+    padding: "0 6px",
+    borderRadius: 999,
+    border: `1px solid ${BRAND.border}`,
+  },
+  assistantMain: { paddingLeft: 34 },
   userBubble: {
     maxWidth: "78%",
     padding: "10px 14px",
@@ -2013,7 +2096,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: BRAND.ochre,
     color: "#ffffff",
     lineHeight: 1.65,
-    fontSize: 13.5,
+    fontSize: 14,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
     userSelect: "text",
@@ -2029,7 +2112,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
   msgTiming: { marginLeft: "auto" },
-  assistantBody: { fontSize: 13.5, lineHeight: 1.8, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  assistantBody: { fontSize: 14.5, lineHeight: 1.85, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
   thinkingRow: { display: "inline-flex", alignItems: "center", gap: 7, color: BRAND.linenMuted, fontSize: 13 },
   timeline: {
     position: "relative",
@@ -2090,6 +2173,12 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   bubbleText: { fontSize: 12.5, lineHeight: 1.75, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  richPara: { margin: "2px 0" },
+  richHeading: { fontWeight: 700, marginBottom: 4 },
+  richList: { margin: "4px 0", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 3 },
+  richListItem: { lineHeight: 1.75 },
+  richQuote: { borderLeft: `2px solid ${BRAND.border}`, paddingLeft: 10, color: BRAND.linenMuted, margin: "4px 0" },
+  richLink: { color: BRAND.ochreHover, textDecoration: "underline" },
   codeBlock: {
     margin: "6px 0",
     padding: 8,
