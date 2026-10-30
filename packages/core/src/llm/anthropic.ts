@@ -33,8 +33,20 @@ function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages
       continue;
     }
     if (msg.role === "tool") {
-      // 降级：无 tool_use_id，用文本回填
-      out.push({ role: "user", content: [{ type: "text", text: `[工具结果]\n${msg.content}` }] });
+      out.push({
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: msg.tool_call_id ?? "unknown", content: msg.content }],
+      });
+      continue;
+    }
+    if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+      out.push({
+        role: "assistant",
+        content: [
+          ...(msg.content ? [{ type: "text", text: msg.content }] : []),
+          ...msg.tool_calls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: call.args ?? {} })),
+        ],
+      });
       continue;
     }
     out.push({ role: msg.role, content: [{ type: "text", text: msg.content }] });

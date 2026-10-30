@@ -2,6 +2,11 @@
  * 本地 Mock OpenAI 兼容服务（仅用于 E2E 验收：验证「真 HTTP 流式对话」闭环）。
  * 用法：node scripts/mock-openai-server.mjs [port]
  * 不依赖任何外部网络；任何 model 名都接受。
+ *
+ * 环境变量：
+ *   MOCK_FIRST_DELAY_MS  首字延迟（模拟慢上游）
+ *   MOCK_TOOL_NAME       启用工具轮模拟：第一轮返回该工具的 tool_call，第二轮回显工具结果
+ *   MOCK_TOOL_ARGS       工具调用参数 JSON 字符串（默认 "{}"）
  */
 import { createServer } from "node:http";
 
@@ -19,15 +24,28 @@ const REPLY_CHUNKS = [
   "更多见 [Loopsoar](https://example.com)。",
 ];
 
+function sse(res, payload) {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 const server = createServer(async (req, res) => {
   if (!req.url || !req.url.endsWith("/chat/completions")) {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
     return;
   }
-  // 消费请求体（模拟真实服务端行为）
-  req.resume();
-  await new Promise((r) => req.on("end", r));
+  // 读取请求体（用于工具轮模拟 / 请求统计）
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  let body = {};
+  try {
+    body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } catch {
+    body = {};
+  }
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const toolName = process.env.MOCK_TOOL_NAME;
+  console.log(`MOCK_REQ roles=${messages.map((m) => m.role).join(",")} tool=${toolName ?? "-"}`);
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -35,14 +53,49 @@ const server = createServer(async (req, res) => {
     connection: "keep-alive",
   });
   res.write(": loopsoar mock stream\n\n");
+
+  // 工具轮模拟：第一轮没有 tool 消息 → 发一个 tool_call；第二轮（已有工具结果）→ 回显结果
+  if (toolName) {
+    const hasToolResult = messages.some((msg) => msg.role === "tool");
+    if (!hasToolResult) {
+      const args = process.env.MOCK_TOOL_ARGS || "{}";
+      sse(res, {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id: "call_mock_1", type: "function", function: { name: toolName, arguments: args } },
+              ],
+            },
+          },
+        ],
+      });
+      sse(res, { usage: { total_tokens: 64 } });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+    const lastTool = [...messages].reverse().find((msg) => msg.role === "tool");
+    const toolText = typeof lastTool?.content === "string" ? lastTool.content : "";
+    const reply = `工具执行完成，我已拿到结果（回灌 ${toolText.length} 字符）：\n\n${toolText.slice(0, 240)}\n\n基于以上内容，我完成了查询。`;
+    for (const part of reply.match(/[\s\S]{1,18}/g) ?? [reply]) {
+      sse(res, { choices: [{ delta: { content: part } }] });
+      await sleep(50);
+    }
+    sse(res, { usage: { total_tokens: 128 } });
+    res.write("data: [DONE]\n\n");
+    res.end();
+    return;
+  }
+
   // 模拟慢上游：首字延迟（用于验证「发送后立即有反应」）
   const firstDelay = Number(process.env.MOCK_FIRST_DELAY_MS ?? "0");
   if (firstDelay > 0) await sleep(firstDelay);
   for (const chunk of REPLY_CHUNKS) {
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
+    sse(res, { choices: [{ delta: { content: chunk } }] });
     await sleep(140);
   }
-  res.write(`data: ${JSON.stringify({ usage: { total_tokens: 420 } })}\n\n`);
+  sse(res, { usage: { total_tokens: 420 } });
   res.write("data: [DONE]\n\n");
   res.end();
 });

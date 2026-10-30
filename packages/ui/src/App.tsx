@@ -893,9 +893,10 @@ export default function App(): React.JSX.Element {
     if (!api || typeof location === "undefined") return;
     if (new URLSearchParams(location.search).get("e2e") !== "chat") return;
     const message = "你好，请简单介绍一下你自己";
+    const delay = Number(new URLSearchParams(location.search).get("chatDelay") ?? "900");
     const timer = setTimeout(() => {
       sendText(message);
-    }, 900);
+    }, Number.isFinite(delay) && delay >= 0 ? delay : 900);
     return () => clearTimeout(timer);
   }, [api, sendText]);
 

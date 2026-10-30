@@ -11,6 +11,10 @@
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** assistant 轮的工具调用（多轮工具对话必需） */
+  tool_calls?: { id: string; name: string; args: unknown }[];
+  /** role="tool" 时对应的工具调用 id */
+  tool_call_id?: string;
 }
 
 // LLM 请求：包含对话上下文、可用工具清单、最大 Token 限制、中止信号。

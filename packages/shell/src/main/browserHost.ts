@@ -286,6 +286,13 @@ export class BrowserHost {
     for (const id of [...this.tabs.keys()]) await this.closeTab(id);
   }
 
+  /** 在活动标签执行 JS（Agent 工具用；返回 JSON-safe 结果）。 */
+  async executeScript(script: string): Promise<unknown> {
+    const entry = this.activeEntry();
+    if (!entry) throw new Error("当前没有打开的网页标签");
+    return entry.adapter.executeJs(script);
+  }
+
   async snapshot(): Promise<BrowserSnapshot | null> {
     return this.activeEntry()?.adapter.snapshot() ?? null;
   }

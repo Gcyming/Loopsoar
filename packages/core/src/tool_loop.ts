@@ -91,6 +91,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
   let finalText = "";
   let seq = 0;
+  /** 多轮工具对话上下文（首轮由 opts.messages 初始化，之后累积 assistant/tool 消息） */
+  let conversation: LlmMessage[] | null = null;
 
   const emit = (type: LoopEvent["type"], data: unknown): void => {
     sink({ seq: seq++, type, data, ts: Date.now() });
@@ -144,16 +146,29 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       // 无进度检测预热：每轮开始记录当前进度状态（用于后续判断）
       let roundHadTextProgress = false;
       let roundHadToolProgress = false;
+      let roundText = "";
+      let sawDone = false;
+      const roundToolCalls: {
+        id: string;
+        name: string;
+        args: unknown;
+        result: { ok: boolean; content?: string; error?: string };
+      }[] = [];
 
-      // 构造 LLM 流式请求
-      const baseMessages: LlmMessage[] = opts.messages
-        ? [...opts.messages]
-        : [
-            { role: "system", content: "你是 Loopsoar 平台的执行引擎，按诚实协议执行任务，必要时调用工具。" },
-            { role: "user", content: "继续执行任务。如有需要调用工具，请直接给出工具调用指令；如已完成，请说明并总结结果。" },
-          ];
+      // 多轮工具对话上下文（工具结果必须回灌，否则模型"失忆" → 回答截断/重复调用）
+      if (!conversation) {
+        conversation = opts.messages
+          ? [...opts.messages]
+          : [
+              { role: "system", content: "你是 Loopsoar 平台的执行引擎，按诚实协议执行任务，必要时调用工具。" },
+              { role: "user", content: "继续执行任务。如有需要调用工具，请直接给出工具调用指令；如已完成，请说明并总结结果。" },
+            ];
+      }
+      if (steerPrompt) {
+        conversation = [...conversation, { role: "user", content: `【转向提示】${steerPrompt}` }];
+      }
       const request: LlmRequest = {
-        messages: steerPrompt ? [...baseMessages, { role: "user", content: `【转向提示】${steerPrompt}` }] : baseMessages,
+        messages: conversation,
         tools: tools(),
         maxTokens: undefined,
         reasoningEffort: opts.reasoningEffort,
@@ -177,6 +192,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               const textContent = chunk.text ?? "";
               emit("chunk", { text: textContent });
               finalText += textContent;
+              roundText += textContent;
               if (textContent.trim().length > 0) {
                 roundHadTextProgress = true;
               }
@@ -190,6 +206,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             }
 
             case "tool_call": {
+              if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] tool_call", (chunk as { toolCall?: { name?: string } }).toolCall?.name);
               const tc = chunk as { kind: "tool_call"; toolCall: { id: string; name: string; args: unknown } };
               const toolCall: ToolCall = {
                 id: tc.toolCall.id,
@@ -251,12 +268,14 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 usage.totalTokens += chunk.tokens;
               }
 
-              // 记录工具执行结果到最终文本（便于后续轮次参考）
-              const resultLine = `\n[工具 ${toolCall.name}] ${toolResult.ok ? "成功" : "失败"}: ${toolResult.content || toolResult.error || "无内容"}\n`;
-              finalText += resultLine;
-              if (toolResult.ok && (toolResult.content || resultLine.trim().length > 0)) {
-                roundHadToolProgress = true;
-              }
+              // 工具结果只进对话上下文，不混进助手正文（否则 UI 会把工具输出当回答显示）
+              roundToolCalls.push({
+                id: toolCall.id,
+                name: toolCall.name,
+                args: toolCall.args,
+                result: { ok: toolResult.ok, content: toolResult.content, error: toolResult.error },
+              });
+              if (toolResult.ok) roundHadToolProgress = true;
 
               // 工具调用上限检查：每次工具执行后检查是否达到上限
               if (usage.toolCalls >= maxToolCalls) {
@@ -276,13 +295,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             }
 
             case "done": {
-              emit("done", { finalText });
-              return {
-                status: "done",
-                reason: "LLM 返回 done，任务完成",
-                finalText,
-                usage,
-              };
+              sawDone = true;
+              break;
             }
 
             case "error": {
@@ -308,6 +322,34 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
         return {
           status: "error",
           reason: `LLM 流调用异常：${msg}`,
+          finalText,
+          usage,
+        };
+      }
+
+      // 本轮产生过工具调用：把 assistant(tool_calls) 与工具结果回灌，进入下一轮
+      if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] round done", { round, sawDone, tools: roundToolCalls.length, text: roundText.length });
+      if (roundToolCalls.length > 0) {
+        conversation = [
+          ...conversation,
+          {
+            role: "assistant",
+            content: roundText,
+            tool_calls: roundToolCalls.map((call) => ({ id: call.id, name: call.name, args: call.args })),
+          },
+          ...roundToolCalls.map((call) => ({
+            role: "tool" as const,
+            tool_call_id: call.id,
+            content: call.result.ok
+              ? (call.result.content ?? "")
+              : `[工具失败] ${call.result.error ?? call.result.content ?? "未知错误"}`,
+          })),
+        ];
+      } else if (sawDone) {
+        emit("done", { finalText });
+        return {
+          status: "done",
+          reason: "LLM 返回 done，任务完成",
           finalText,
           usage,
         };

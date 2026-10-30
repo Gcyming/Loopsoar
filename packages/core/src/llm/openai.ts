@@ -100,7 +100,23 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
         },
         body: JSON.stringify({
           model: opts.model,
-          messages: req.messages,
+          messages: req.messages.map((m) => {
+            if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+              return {
+                role: "assistant",
+                content: m.content,
+                tool_calls: m.tool_calls.map((call) => ({
+                  id: call.id,
+                  type: "function",
+                  function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
+                })),
+              };
+            }
+            if (m.role === "tool") {
+              return { role: "tool", tool_call_id: m.tool_call_id, content: m.content };
+            }
+            return { role: m.role, content: m.content };
+          }),
           stream: true,
           ...(req.tools && req.tools.length > 0
             ? {

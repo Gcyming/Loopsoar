@@ -43,6 +43,7 @@ import { SecretStore } from "./secretStore.js";
 import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
+import { registerBrowserTools } from "./browserTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
@@ -121,7 +122,7 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           if (navUrl) {
             const outcome = await browserHost?.navigate(navUrl);
             console.log("E2E_NAV", JSON.stringify(outcome));
-            await new Promise((r) => setTimeout(r, 2500)); // 等真实页面渲染完成
+            await new Promise((r) => setTimeout(r, Number(process.env.LOOPSOAR_E2E_NAV_WAIT_MS ?? 2500))); // 等真实页面渲染完成
           }
           // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
           const anyWin = win as unknown as { capturePage?: () => Promise<{ toPNG(): Buffer }> };
@@ -580,6 +581,10 @@ app.whenReady().then(async () => {
     if (!/^https?:\/\//i.test(url)) return;
     void browserHost?.newTab(url);
   });
+  // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
+  registerBrowserTools(registry, () => browserHost);
+  sandbox.syncKnownTools(registry.list().map((t) => t.name));
+
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
   const downloads = new DownloadsBridge(
     () => loadPreferences(dirs.configDir).downloadDir ?? "",
