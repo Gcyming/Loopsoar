@@ -22,14 +22,14 @@ export interface RailParams {
 }
 
 export const DEFAULT_CHAT_RAIL: RailParams = {
-  w: 20,
-  amp: 55,
-  lam0: 46,
-  lam1: 53,
-  spd: 1,
+  w: 16,
+  amp: 48,
+  lam0: 86,
+  lam1: 112,
+  spd: 0.8,
   flip: false,
   pause: true,
-  tap: 90,
+  tap: 130,
 };
 
 export const RAIL_PARAMS_EVENT = "loopsoar:rail-params";
