@@ -1139,7 +1139,8 @@ export default function App(): React.JSX.Element {
                 });
                 if (mine) {
                   return (
-                    <div key={m.id} className="msg-row" style={styles.msgRowUser} data-rail-label={`你：${m.text.slice(0, 24)}`}>
+                    <div key={m.id} className="msg-row" style={styles.msgRowUser} data-rail-label={`你：${m.text.slice(0, 24)}`}
+                      data-rail-role="user">
                       <div className="msg-user-bubble" style={styles.userBubble}>
                         {m.text}
                       </div>
@@ -1172,6 +1173,7 @@ export default function App(): React.JSX.Element {
                     className="msg-row"
                     style={styles.msgRowAssistant}
                     data-rail-label={`Loopsoar：${(m.text || m.reasoning || "回复").slice(0, 26)}`}
+                    data-rail-role="assistant"
                   >
                     <div style={styles.assistantHead}>
                       <span style={styles.avatar}>L</span>
@@ -1197,13 +1199,13 @@ export default function App(): React.JSX.Element {
                                 onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
                                 title={expandedReasoning[m.id] ? "收起思考过程" : "展开思考过程"}
                               >
-                                <Icon name="bolt" size={12} style={{ color: BRAND.ochreHover }} />
-                                {expandedReasoning[m.id] ? "收起思考过程" : "思考过程"}
-                                {expandedReasoning[m.id] ? null : (
-                                  <span className="think-step-preview">
-                                    {m.reasoning.replace(/\s+/g, " ").slice(0, 80)}
-                                  </span>
-                                )}
+                                <Icon name="bolt" size={12} style={{ color: BRAND.ochreHover, flex: "none" }} />
+                                <span style={styles.thinkToggleLabel}>{expandedReasoning[m.id] ? "收起思考过程" : "思考过程"}</span>
+                                <Icon
+                                  name="forward"
+                                  size={9}
+                                  style={{ transform: expandedReasoning[m.id] ? "rotate(-90deg)" : "rotate(90deg)", opacity: 0.7, flex: "none" }}
+                                />
                               </button>
                               {expandedReasoning[m.id] ? (
                                 <div className="think-step-text">{m.reasoning}</div>
@@ -2132,6 +2134,7 @@ const styles: Record<string, React.CSSProperties> = {
   msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
   msgTiming: { marginLeft: "auto" },
   assistantBody: { fontSize: 14.5, lineHeight: 1.85, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  thinkToggleLabel: { whiteSpace: "nowrap", flex: "none" },
   thinkingRow: { display: "inline-flex", alignItems: "center", gap: 7, color: BRAND.linenMuted, fontSize: 13 },
   timeline: {
     position: "relative",

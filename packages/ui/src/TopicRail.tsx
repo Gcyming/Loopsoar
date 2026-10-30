@@ -32,6 +32,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
   const phaseRef = React.useRef(0);
   const hoverRef = React.useRef(false);
   const dragRef = React.useRef(false);
+  const pointerYRef = React.useRef(-1);
   const reducedRef = React.useRef(false);
   const [railWidth, setRailWidth] = React.useState<number>(DEFAULT_CHAT_RAIL.w);
 
@@ -68,7 +69,8 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     const collect = (): RailPoint[] => {
       const sc = scroller();
       if (!sc) return [];
-      const nodes = Array.from(sc.querySelectorAll<HTMLElement>("[data-rail-label]"));
+      // 只取「话题锚点」（用户消息）；助手回复不再逐条打点（slime 的卷轴刻度是稀疏的）
+      const nodes = Array.from(sc.querySelectorAll<HTMLElement>("[data-rail-label][data-rail-role='user']"));
       const base = sc.getBoundingClientRect().top - sc.scrollTop + sc.clientTop;
       return nodes.map((node) => ({
         y: Math.max(0, node.getBoundingClientRect().top - base),
@@ -181,15 +183,30 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // ④ 消息锚点：轨道右侧的小圆点（与 slime 截图一致，不画在线上）
+      // ④ 话题锚点：轨道右侧的小圆点（稀疏，仅用户消息）
       const dotX = width - 4.5;
       for (const point of pointsRef.current) {
         const y = padTop + (point.y / Math.max(1, sc.scrollHeight)) * innerH;
         if (y < top - 2 || y > bottom + 2) continue;
         ctx.beginPath();
-        ctx.fillStyle = "rgba(245, 190, 140, 0.75)";
-        ctx.arc(dotX, y, 1.6, 0, Math.PI * 2);
+        ctx.fillStyle = hoverRef.current ? "rgba(255, 214, 170, 0.95)" : "rgba(245, 190, 140, 0.7)";
+        ctx.arc(dotX, y, 1.7, 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      // ⑤ 悬停反馈：整条卷轴加一层很淡的暖色衬底 + 光标位置的光点
+      if (hoverRef.current) {
+        ctx.fillStyle = "rgba(217, 138, 79, 0.06)";
+        ctx.fillRect(0, 0, width, height);
+        if (pointerYRef.current >= 0) {
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(255, 214, 170, 0.9)";
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = "rgba(255, 205, 160, 0.8)";
+          ctx.arc(cx, pointerYRef.current, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
       }
     };
 
@@ -247,6 +264,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     };
     const onPointerMove = (event: PointerEvent): void => {
       hoverRef.current = true;
+      pointerYRef.current = Math.max(0, Math.min(height, event.clientY - host.getBoundingClientRect().top));
       if (dragRef.current) jump(event.clientY);
       showTip(event.clientY);
     };
@@ -259,6 +277,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     };
     const onPointerLeave = (): void => {
       hoverRef.current = false;
+      pointerYRef.current = -1;
       if (!dragRef.current) tip.classList.remove("on");
     };
     const onScroll = (): void => {

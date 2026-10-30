@@ -177,6 +177,31 @@ function scheduleE2EDemoChat(win: BrowserWindow): void {
   });
 }
 
+/** E2E：把鼠标移到卷轴上，验证悬停气泡/高亮（仅显式环境变量启用）。 */
+function scheduleE2ERailHover(win: BrowserWindow): void {
+  if (!process.env.LOOPSOAR_E2E_HOVER_RAIL) return;
+  win.webContents.once("did-finish-load", () => {
+    setTimeout(() => {
+      void win.webContents
+        .executeJavaScript(
+          `(() => {
+            const rail = document.querySelector('.topic-rail');
+            if (!rail) return 'no-rail';
+            const r = rail.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            const y = r.top + r.height * 0.45;
+            for (const type of ['pointerenter', 'pointermove']) {
+              rail.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: 1, bubbles: true }));
+            }
+            return 'hovered';
+          })()`,
+        )
+        .then((r) => console.log(`[E2E] RAIL_HOVER ${r}`))
+        .catch((err) => console.log(`[E2E] RAIL_HOVER failed: ${String(err)}`));
+    }, 1200);
+  });
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -228,6 +253,7 @@ function createMainWindow(): void {
     void mainWindow.loadURL(`${PROTOCOL}://app/index.html${query}`);
   }
   scheduleE2EScreenshot(mainWindow);
+  scheduleE2ERailHover(mainWindow);
   scheduleE2EDemoChat(mainWindow);
 }
 
