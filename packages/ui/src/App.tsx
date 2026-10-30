@@ -19,6 +19,8 @@ import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
 import LiveStatus from "./LiveStatus.js";
+import ContextRing from "./ContextRing.js";
+import PlanCard, { type PlanStep } from "./PlanCard.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -49,6 +51,8 @@ interface ChatMessage {
   createdAt?: number;
   /** 错误说明 */
   errorText?: string;
+  /** 任务规划（来自计划类工具调用参数） */
+  plan?: PlanStep[];
 }
 
 
@@ -184,13 +188,15 @@ export default function App(): React.JSX.Element {
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
-  /** 上下文占用估算（0~1，用于实时状态行） */
-  const contextPct = useMemo(() => {
+  /** 上下文占用估算：used=约 4 字符/token；cap=模型声明上下文窗口 */
+  const contextUsage = useMemo(() => {
     const spec = provider?.models?.find((m) => m.id === provider.model);
     const cap = spec?.contextWindow && spec.contextWindow > 0 ? spec.contextWindow : 128000;
     const chars = messages.reduce((n, m) => n + m.text.length + (m.reasoning?.length ?? 0), 0) + input.length;
-    return Math.min(100, Math.round((chars / 4 / cap) * 100));
+    const used = Math.round(chars / 4);
+    return { used, cap, pct: Math.min(100, Math.round((used / cap) * 100)) };
   }, [messages, input, provider]);
+  const contextPct = contextUsage.pct;
   /** 挤压检测：可用宽度 / 内容自然宽度；低于阈值时按钮收缩为圆形图标 */
   const [squeezeRatio, setSqueezeRatio] = useState(1);
   const [compactUi, setCompactUi] = useState(false);
@@ -310,9 +316,42 @@ export default function App(): React.JSX.Element {
       api.on("chat:stream:tool", (payload) => {
         const content = String((payload as { content?: string }).content ?? "").slice(0, 400);
         let label = content;
+        let plan: PlanStep[] | null = null;
         try {
-          const parsed = JSON.parse(content) as { name?: string; tool?: string; args?: unknown };
-          label = `${parsed.name ?? parsed.tool ?? "工具"}${parsed.args ? ` ${JSON.stringify(parsed.args).slice(0, 120)}` : ""}`;
+          const parsed = JSON.parse(content) as { toolName?: string; name?: string; tool?: string; args?: unknown };
+          const toolName = parsed.toolName ?? parsed.name ?? parsed.tool ?? "工具";
+          const args = (typeof parsed.args === "string" ? (() => { try { return JSON.parse(parsed.args as string); } catch { return {}; } })() : parsed.args) as
+            | Record<string, unknown>
+            | undefined;
+          label = `${toolName}${args ? ` ${JSON.stringify(args).slice(0, 120)}` : ""}`;
+          // 计划类工具只显示摘要（完整步骤由 PlanCard 呈现，避免一长串 JSON 撑乱会话）
+          if (/todo|plan|task/i.test(toolName)) label = `${toolName} · 计划`;
+          // 计划类工具：todo_write / plan / tasks ... 参数里带 steps/todos/items
+          if (/todo|plan|task/i.test(toolName) && args) {
+            const rawSteps = (args.steps ?? args.todos ?? args.items ?? args.plan ?? args.tasks) as unknown;
+            if (Array.isArray(rawSteps)) {
+              const statusOf = (value: unknown): PlanStep["status"] => {
+                const text = String(value ?? "").toLowerCase();
+                if (text === "done" || text === "completed" || text === "complete" || text === "success") return "done";
+                if (text === "in_progress" || text === "running" || text === "active" || text === "doing") return "in_progress";
+                return "pending";
+              };
+              plan = rawSteps
+                .map((step) => {
+                  if (typeof step === "string") return { content: step, status: "pending" as PlanStep["status"] };
+                  if (step && typeof step === "object") {
+                    const record = step as Record<string, unknown>;
+                    const text = String(record.content ?? record.text ?? record.title ?? record.task ?? "").trim();
+                    if (!text) return null;
+                    return { content: text, status: statusOf(record.status ?? record.state) };
+                  }
+                  return null;
+                })
+                .filter((step): step is PlanStep => step !== null)
+                .slice(0, 30);
+              if (plan.length === 0) plan = null;
+            }
+          }
         } catch {
           // 保持原文
         }
@@ -321,7 +360,11 @@ export default function App(): React.JSX.Element {
           if (!at) return prev;
           return prev.map((m) => {
             if (m.id !== at) return m;
-            return { ...m, tools: [...(m.tools ?? []), { id: nextId("tool"), label, state: "running" }] };
+            return {
+              ...m,
+              tools: [...(m.tools ?? []), { id: nextId("tool"), label, state: "running" }],
+              ...(plan ? { plan } : {}),
+            };
           });
         });
       }),
@@ -608,6 +651,30 @@ export default function App(): React.JSX.Element {
       void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
     },
     [api, messages],
+  );
+
+  /** 重新生成：回滚到上一条用户消息并重发（复用现有 rollback + sendText 通道）。 */
+  const regenerate = useCallback(
+    (assistantId: string): void => {
+      const idx = messages.findIndex((m) => m.id === assistantId);
+      if (idx < 0) return;
+      let userIdx = -1;
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        if (messages[i].role === "user") {
+          userIdx = i;
+          break;
+        }
+      }
+      if (userIdx < 0) return;
+      const text = messages[userIdx].text;
+      const keepCount = messages
+        .slice(0, userIdx)
+        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
+      setMessages((prev) => prev.slice(0, userIdx));
+      void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
+      window.setTimeout(() => sendText(text), 80);
+    },
+    [api, messages, sendText],
   );
 
   const stop = useCallback((): void => {
@@ -1180,6 +1247,9 @@ export default function App(): React.JSX.Element {
                       <span style={styles.assistantName}>Loopsoar</span>
                       {provider?.model ? <span style={styles.assistantModel}>{provider.model}</span> : null}
                       {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
+                      <span style={styles.assistantHeadRight}>
+                        <ContextRing used={contextUsage.used} cap={contextUsage.cap} loading={m.status === "streaming"} />
+                      </span>
                     </div>
                     <div style={styles.assistantMain}>
                       {hasTimeline || m.status === "streaming" ? (
@@ -1235,6 +1305,7 @@ export default function App(): React.JSX.Element {
                           </span>
                         </div>
                       ) : null}
+                      {m.plan && m.plan.length > 0 ? <PlanCard steps={m.plan} /> : null}
                       <div className="msg-body-text" style={styles.assistantBody}>
                         {m.tail && m.status === "streaming"
                           ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
@@ -1259,6 +1330,16 @@ export default function App(): React.JSX.Element {
                         <span style={styles.msgHoverTag}>Loopsoar</span>
                         {provider?.model ? <span>· {provider.model}</span> : null}
                         <span>· {timeText}</span>
+                        {m.status !== "streaming" && m.text ? (
+                          <button
+                            type="button"
+                            className="msg-action"
+                            title="重新生成（回滚到上一条提问并重发）"
+                            onClick={() => regenerate(m.id)}
+                          >
+                            <Icon name="reload" size={12} />
+                          </button>
+                        ) : null}
                         {m.text ? (
                           <button
                             type="button"
@@ -2110,6 +2191,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: `1px solid ${BRAND.border}`,
   },
   assistantMain: { paddingLeft: 34 },
+  assistantHeadRight: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 },
   userBubble: {
     maxWidth: "78%",
     padding: "10px 14px",

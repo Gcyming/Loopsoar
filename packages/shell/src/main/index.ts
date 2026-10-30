@@ -202,6 +202,40 @@ function scheduleE2ERailHover(win: BrowserWindow): void {
   });
 }
 
+/** E2E：演示计划卡 + 上下文环（合成 chat 事件，仅显式环境变量启用）。 */
+function scheduleE2EPlanDemo(win: BrowserWindow): void {
+  if (!process.env.LOOPSOAR_E2E_PLAN) return;
+  win.webContents.once("did-finish-load", () => {
+    const push = (channel: string, payload: unknown): void => pushToRenderer(channel, payload);
+    setTimeout(() => {
+      push("chat:stream:chunk", { content: "我先拆解一下任务，再逐步执行。" });
+    }, 900);
+    setTimeout(() => {
+      push("chat:stream:tool", {
+        content: JSON.stringify({
+          toolName: "todo_write",
+          args: {
+            steps: [
+              { content: "读取当前页面正文", status: "done" },
+              { content: "提取三个关键结论", status: "in_progress" },
+              { content: "整理成表格并复制", status: "pending" },
+            ],
+          },
+          result: { ok: true },
+        }),
+      });
+    }, 1200);
+    setTimeout(() => {
+      push("chat:stream:chunk", { content: "正文已读取，正在提炼结论……" });
+    }, 1500);
+    setTimeout(() => {
+      push("chat:stream:done", {
+        content: JSON.stringify({ status: "done", reason: "E2E 计划演示", usage: { rounds: 1, toolCalls: 1, totalTokens: 128 } }),
+      });
+    }, 2200);
+  });
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -254,6 +288,7 @@ function createMainWindow(): void {
   }
   scheduleE2EScreenshot(mainWindow);
   scheduleE2ERailHover(mainWindow);
+  scheduleE2EPlanDemo(mainWindow);
   scheduleE2EDemoChat(mainWindow);
 }
 
