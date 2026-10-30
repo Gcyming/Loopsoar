@@ -122,6 +122,10 @@ export const PreferencesSchema = z.object({
   memoryAutoCapture: z.boolean(),
   /** 右侧 Agent 面板宽度（可拖拽调整，持久化）。 */
   sidebarWidth: z.number().int().min(240).max(720),
+  /** Agent 单次任务最多请求轮数。 */
+  agentMaxRounds: z.number().int().min(1).max(500).optional(),
+  /** Agent 单次任务最多工具调用次数。 */
+  agentMaxToolCalls: z.number().int().min(1).max(2000).optional(),
 });
 
 /** 权限策略（设置 · 权限）：工具类别的默认决策。 */

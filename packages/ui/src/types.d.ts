@@ -55,6 +55,8 @@ export interface Preferences {
   memoryStorePath?: string;
   memoryAutoCapture: boolean;
   sidebarWidth: number;
+  agentMaxRounds?: number;
+  agentMaxToolCalls?: number;
 }
 
 export interface PermissionCategory {

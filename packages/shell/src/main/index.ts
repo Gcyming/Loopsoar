@@ -561,6 +561,11 @@ app.whenReady().then(async () => {
         role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
         content: m.text,
       })),
+    // Agent 请求上限（设置 · 通用）
+    getAgentLimits: () => {
+      const prefs = loadPreferences(dirs.configDir);
+      return { maxRounds: prefs.agentMaxRounds, maxToolCalls: prefs.agentMaxToolCalls };
+    },
     // 模式：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单
     getToolAllowlist: (mode?: "build" | "plan") => {
       if (mode === "plan") {
@@ -609,13 +614,31 @@ app.whenReady().then(async () => {
     ...deps,
     extensions,
     push: pushToRenderer,
-    openExtensionsDir: async () => (await shell.openPath(extensions.dirPath())) === "",
+    openExtensionsDir: async () => {
+      try {
+        fs.mkdirSync(extensions.dirPath(), { recursive: true });
+      } catch {
+        // 已存在/权限问题交由 openPath 报错
+      }
+      const err = await shell.openPath(extensions.dirPath());
+      if (err) console.log(`[Loopsoar] 打开扩展目录失败：${err}`);
+      return err === "";
+    },
   });
   registerSkillsDomain({
     ...deps,
     skills,
     push: pushToRenderer,
-    openSkillsDir: async () => (await shell.openPath(skills.dirPath())) === "",
+    openSkillsDir: async () => {
+      try {
+        fs.mkdirSync(skills.dirPath(), { recursive: true });
+      } catch {
+        // 已存在/权限问题交由 openPath 报错
+      }
+      const err = await shell.openPath(skills.dirPath());
+      if (err) console.log(`[Loopsoar] 打开技能目录失败：${err}`);
+      return err === "";
+    },
   });
   registerMcpDomain({
     ...deps,

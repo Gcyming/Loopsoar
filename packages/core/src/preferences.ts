@@ -18,6 +18,10 @@ export const PreferencesSchema = z.object({
   memoryStorePath: z.string().max(1024).optional(),
   memoryAutoCapture: z.boolean(),
   sidebarWidth: z.number().int().min(240).max(720),
+  /** Agent 单次任务最多请求轮数（防止无限循环；默认 40）。 */
+  agentMaxRounds: z.number().int().min(1).max(500).optional(),
+  /** Agent 单次任务最多工具调用次数（默认 100）。 */
+  agentMaxToolCalls: z.number().int().min(1).max(2000).optional(),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -32,6 +36,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   memoryStorePath: "",
   memoryAutoCapture: true,
   sidebarWidth: 360,
+  agentMaxRounds: 40,
+  agentMaxToolCalls: 100,
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
@@ -47,6 +53,8 @@ export function mergePreferences(raw: unknown): Preferences {
     downloadDir: parsed.data.downloadDir ?? "",
     workspaceRoot: parsed.data.workspaceRoot ?? "",
     memoryStorePath: parsed.data.memoryStorePath ?? "",
+    agentMaxRounds: parsed.data.agentMaxRounds ?? 40,
+    agentMaxToolCalls: parsed.data.agentMaxToolCalls ?? 100,
   };
 }
 

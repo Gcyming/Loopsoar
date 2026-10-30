@@ -22,6 +22,7 @@ import TopicRail from "./TopicRail.js";
 import LiveStatus from "./LiveStatus.js";
 import ContextRing from "./ContextRing.js";
 import PlanCard, { type PlanStep } from "./PlanCard.js";
+import ToolCard, { type ToolCardData } from "./ToolCard.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -44,8 +45,10 @@ interface ChatMessage {
   status?: "streaming" | "done" | "error";
   /** 推理内容（可折叠） */
   reasoning?: string;
-  /** 工具调用轨迹 */
-  tools?: { id: string; label: string; state: "running" | "done" | "error" }[];
+  /** 工具调用轨迹（卡片数据） */
+  tools?: ToolCardData[];
+  /** 非正常收束的中断原因（预算/轮次/中止/异常） */
+  interrupted?: { status: string; reason: string };
   /** 耗时统计：首字 / 总耗时（毫秒） */
   timing?: { firstTokenMs?: number; totalMs?: number; rounds?: number; toolCalls?: number; tokens?: number };
   /** 创建时间戳（显示 HH:mm） */
@@ -319,18 +322,23 @@ export default function App(): React.JSX.Element {
         }
       }),
       api.on("chat:stream:tool", (payload) => {
-        const content = String((payload as { content?: string }).content ?? "").slice(0, 400);
-        let label = content;
+        const raw = String((payload as { content?: string }).content ?? "");
+        let toolName = "工具";
+        let toolArgs: unknown;
+        let toolResult: { ok?: boolean; content?: string; error?: string } | null = null;
         let plan: PlanStep[] | null = null;
         try {
-          const parsed = JSON.parse(content) as { toolName?: string; name?: string; tool?: string; args?: unknown };
-          const toolName = parsed.toolName ?? parsed.name ?? parsed.tool ?? "工具";
-          const args = (typeof parsed.args === "string" ? (() => { try { return JSON.parse(parsed.args as string); } catch { return {}; } })() : parsed.args) as
-            | Record<string, unknown>
-            | undefined;
-          label = `${toolName}${args ? ` ${JSON.stringify(args).slice(0, 120)}` : ""}`;
-          // 计划类工具只显示摘要（完整步骤由 PlanCard 呈现，避免一长串 JSON 撑乱会话）
-          if (/todo|plan|task/i.test(toolName)) label = `${toolName} · 计划`;
+          const parsed = JSON.parse(raw) as {
+            toolName?: string;
+            name?: string;
+            tool?: string;
+            args?: unknown;
+            result?: { ok?: boolean; content?: string; error?: string };
+          };
+          toolName = parsed.toolName ?? parsed.name ?? parsed.tool ?? "工具";
+          toolArgs = typeof parsed.args === "string" ? (() => { try { return JSON.parse(parsed.args as string); } catch { return parsed.args; } })() : parsed.args;
+          toolResult = parsed.result ?? null;
+          const args = (toolArgs ?? {}) as Record<string, unknown>;
           // 计划类工具：todo_write / plan / tasks ... 参数里带 steps/todos/items
           if (/todo|plan|task/i.test(toolName) && args) {
             const rawSteps = (args.steps ?? args.todos ?? args.items ?? args.plan ?? args.tasks) as unknown;
@@ -358,7 +366,7 @@ export default function App(): React.JSX.Element {
             }
           }
         } catch {
-          // 保持原文
+          toolResult = { ok: false, content: raw.slice(0, 2000) };
         }
         setMessages((prev) => {
           const at = activeAssistantRef.current;
@@ -381,7 +389,10 @@ export default function App(): React.JSX.Element {
             }
             return {
               ...m,
-              tools: [...(m.tools ?? []), { id: nextId("tool"), label, state: "running" }],
+              tools: [
+                ...(m.tools ?? []),
+                { id: nextId("tool"), name: toolName, args: toolArgs, result: toolResult, state: toolResult?.ok === false ? "error" : "done" },
+              ],
               ...(plan ? { plan } : {}),
               ...(announces.length > (m.announces ?? []).length ? { announces } : {}),
             };
@@ -415,13 +426,18 @@ export default function App(): React.JSX.Element {
         const first = firstTokenAtRef.current;
         let usage: { rounds?: number; toolCalls?: number; totalTokens?: number } = {};
         let statusText = "完成";
+        let interrupted: { status: string; reason: string } | undefined;
         try {
           const parsed = JSON.parse(p.content ?? "{}") as {
             status?: string;
+            reason?: string;
             usage?: { rounds?: number; toolCalls?: number; totalTokens?: number };
           };
           usage = parsed.usage ?? {};
-          statusText = parsed.status === "done" ? "完成" : `完成（${parsed.status ?? "done"}）`;
+          if (parsed.status && parsed.status !== "done") {
+            interrupted = { status: parsed.status, reason: parsed.reason ?? "未提供原因" };
+            statusText = `已中断（${parsed.status}）：${parsed.reason ?? ""}`;
+          }
         } catch {
           // 保持默认
         }
@@ -438,6 +454,7 @@ export default function App(): React.JSX.Element {
                 totalMs: start ? Date.now() - start : undefined,
                 ...usage,
               },
+              ...(interrupted ? { interrupted } : {}),
             };
           }),
         );
@@ -1367,17 +1384,11 @@ export default function App(): React.JSX.Element {
                               ) : null}
                             </div>
                           ) : null}
-                          {(m.tools ?? []).map((t) => (
-                            <div key={t.id} className="think-step">
-                              <span className="think-step-mark" data-state={t.state} />
-                              <span className="think-step-text" style={styles.toolStepText}>
-                                {t.label}
-                                <span className="think-step-state">
-                                  {t.state === "running" ? "进行中" : t.state === "error" ? "失败" : "完成"}
-                                </span>
-                              </span>
-                            </div>
-                          ))}
+                          <div className="tool-cards">
+                            {(m.tools ?? []).map((tool) => (
+                              <ToolCard key={tool.id} tool={tool} />
+                            ))}
+                          </div>
                         </div>
                       ) : null}
                       {showThinking ? (
@@ -1417,6 +1428,12 @@ export default function App(): React.JSX.Element {
                         {m.status === "streaming" && m.text ? <span className="stream-caret" /> : null}
                       </div>
                       {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
+                      {m.interrupted ? (
+                        <div style={styles.interruptBox}>
+                          <span style={styles.interruptTag}>{m.interrupted.status}</span>
+                          <span>本轮已中断：{m.interrupted.reason}</span>
+                        </div>
+                      ) : null}
                       {m.status === "streaming" ? (
                         <LiveStatus
                           startedAt={m.createdAt ?? Date.now()}
@@ -1827,7 +1844,6 @@ function baseName(path: string): string {
 /** 轻量富文本：代码块 + 行内代码 + 粗体（不引入第三方依赖）。 */
 function renderRich(text: string): React.ReactNode {
   if (!text) return null;
-  // 先按代码块切分
   const blocks = text.split(/(```[\s\S]*?```)/g);
   return blocks.map((block, bi) => {
     if (block.startsWith("```")) {
@@ -1835,65 +1851,93 @@ function renderRich(text: string): React.ReactNode {
       const body = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
       return <CodeBlock key={`code-${bi}`} code={body} lang={head} />;
     }
-    // 行级渲染：标题 / 无序列表 / 引用 / 普通段落
-    const lines = block.split(/\n/);
-    const nodes: React.ReactNode[] = [];
-    let list: string[] = [];
-    let listKey = 0;
-    const flushList = (): void => {
-      if (list.length === 0) return;
-      const items = list;
-      list = [];
-      nodes.push(
-        <ul key={`ul-${bi}-${listKey++}`} style={styles.richList}>
-          {items.map((item, ii) => (
-            <li key={ii} style={styles.richListItem}>
-              {inlineRich(item)}
-            </li>
-          ))}
-        </ul>,
-      );
-    };
-    for (const rawLine of lines) {
-      const line = rawLine.replace(/\s+$/, "");
-      const bullet = /^\s*([-*•])\s+(.*)$/.exec(line);
-      if (bullet) {
-        list.push(bullet[2]);
-        continue;
-      }
+    return <React.Fragment key={`text-${bi}`}>{renderPlainLines(block, bi)}</React.Fragment>;
+  });
+}
+
+/** 行级渲染（支持 GFM 表格）。 */
+function renderPlainLines(block: string, bi: number): React.ReactNode[] {
+  const lines = block.split(/\n/);
+  const nodes: React.ReactNode[] = [];
+  let list: string[] = [];
+  let listKey = 0;
+  const splitRow = (line: string): string[] =>
+    line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  const flushList = (): void => {
+    if (list.length === 0) return;
+    const items = list;
+    list = [];
+    nodes.push(
+      <ul key={`ul-${bi}-${listKey++}`} style={styles.richList}>
+        {items.map((item, ii) => (
+          <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
+        ))}
+      </ul>,
+    );
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].replace(/\s+$/, "");
+    // 表格：| a | b |  +  分隔行
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
       flushList();
-      if (!line.trim()) {
-        nodes.push(<div key={`gap-${bi}-${nodes.length}`} style={{ height: 6 }} />);
-        continue;
-      }
-      const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-      if (heading) {
-        const level = heading[1].length;
-        nodes.push(
-          <div key={`h-${bi}-${nodes.length}`} style={{ ...styles.richHeading, fontSize: level <= 2 ? 16 : 14, marginTop: level <= 2 ? 10 : 8 }}>
-            {inlineRich(heading[2])}
-          </div>,
-        );
-        continue;
-      }
-      const quote = /^\s*>\s?(.*)$/.exec(line);
-      if (quote) {
-        nodes.push(
-          <div key={`q-${bi}-${nodes.length}`} style={styles.richQuote}>
-            {inlineRich(quote[1])}
-          </div>,
-        );
-        continue;
+      const header = splitRow(line);
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+        rows.push(splitRow(lines[i]));
+        i += 1;
       }
       nodes.push(
-        <div key={`p-${bi}-${nodes.length}`} style={styles.richPara}>
-          {inlineRich(line)}
+        <div key={`tbl-${bi}-${nodes.length}`} style={styles.tableWrap}>
+          <table style={styles.table}>
+            <thead>
+              <tr>{header.map((cell, ci) => <th key={ci} style={styles.th}>{inlineRich(cell)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={styles.td}>{inlineRich(cell)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
         </div>,
       );
+      continue;
+    }
+    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
+    if (bullet) {
+      list.push(bullet[1]);
+      i += 1;
+      continue;
     }
     flushList();
-    return <React.Fragment key={`text-${bi}`}>{nodes}</React.Fragment>;
-  });
+    if (!line.trim()) {
+      nodes.push(<div key={`gap-${bi}-${nodes.length}`} style={{ height: 6 }} />);
+      i += 1;
+      continue;
+    }
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (heading) {
+      nodes.push(
+        <div key={`h-${bi}-${nodes.length}`} style={{ ...styles.richHeading, fontSize: heading[1].length <= 2 ? 16 : 14, marginTop: 10 }}>
+          {inlineRich(heading[2])}
+        </div>,
+      );
+      i += 1;
+      continue;
+    }
+    const quote = /^\s*>\s?(.*)$/.exec(line);
+    if (quote) {
+      nodes.push(<div key={`q-${bi}-${nodes.length}`} style={styles.richQuote}>{inlineRich(quote[1])}</div>);
+      i += 1;
+      continue;
+    }
+    nodes.push(<div key={`p-${bi}-${nodes.length}`} style={styles.richPara}>{inlineRich(line)}</div>);
+    i += 1;
+  }
+  flushList();
+  return nodes;
 }
 
 /** 行内：行内代码 / 粗体 / 斜体 / 链接。 */
@@ -2422,6 +2466,40 @@ const styles: Record<string, React.CSSProperties> = {
   announceRow: { display: "flex", alignItems: "baseline", gap: 6, fontSize: 11, color: BRAND.linenFaint, minWidth: 0 },
   announceMark: { width: 10, flex: "none", textAlign: "center", fontSize: 9.5 },
   announceText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 },
+  interruptBox: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 6,
+    margin: "4px 0",
+    padding: "5px 8px",
+    borderRadius: 6,
+    border: "1px solid rgba(242,184,85,0.35)",
+    background: "rgba(242,184,85,0.08)",
+    color: "#f2b855",
+    fontSize: 11,
+    lineHeight: 1.6,
+  },
+  interruptTag: {
+    flex: "none",
+    padding: "0 5px",
+    borderRadius: 4,
+    border: "1px solid rgba(242,184,85,0.5)",
+    fontSize: 9.5,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  tableWrap: { overflowX: "auto", margin: "8px 0", border: `1px solid ${BRAND.border}`, borderRadius: 8 },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
+  th: {
+    textAlign: "left",
+    padding: "6px 9px",
+    background: "rgba(255,255,255,0.04)",
+    borderBottom: `1px solid ${BRAND.border}`,
+    color: BRAND.linen,
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  td: { padding: "6px 9px", borderBottom: `1px solid ${BRAND.border}`, color: BRAND.linenMuted, verticalAlign: "top" },
   msgHover: {
     display: "flex",
     alignItems: "center",

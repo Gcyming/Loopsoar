@@ -334,6 +334,20 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Field l="动效强度" h="关闭后全局停用动画与过渡"><Seg v={prefs.animations} opts={[["full", "完整"], ["reduced", "弱化"], ["off", "关闭"]]} on={(x) => setPrefs({ ...prefs, animations: x as Preferences["animations"] })} /></Field>
           <Field l="默认搜索引擎"><Seg v={prefs.searchEngine} opts={[["bing", "Bing"], ["google", "Google"], ["duckduckgo", "DuckDuckGo"]]} on={(x) => setPrefs({ ...prefs, searchEngine: x as Preferences["searchEngine"] })} /></Field>
           <Field l="启动时恢复上次会话"><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
+          <Field l="Agent 请求上限" h="单次任务最多请求轮数（默认 40）；防止异常循环，撞上限会明确标注中断原因">
+            <In
+              v={String(prefs.agentMaxRounds ?? 40)}
+              ph="40"
+              on={(x) => setPrefs({ ...prefs, agentMaxRounds: Math.max(1, Math.min(500, Number(x) || 40)) })}
+            />
+          </Field>
+          <Field l="工具调用上限" h="单次任务最多工具调用次数（默认 100）">
+            <In
+              v={String(prefs.agentMaxToolCalls ?? 100)}
+              ph="100"
+              on={(x) => setPrefs({ ...prefs, agentMaxToolCalls: Math.max(1, Math.min(2000, Number(x) || 100)) })}
+            />
+          </Field>
           <Field l="自动记忆汇总" h="每轮对话结束自动抽取记忆"><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
           <div style={S.note}>以上设置修改后立即生效（自动保存）。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
