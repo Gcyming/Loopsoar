@@ -116,7 +116,7 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
     setTimeout(() => {
       void (async () => {
         try {
-          await new Promise((r) => setTimeout(r, 800)); // 等 React 首帧与 IPC 数据渲染
+          await new Promise((r) => setTimeout(r, Number(process.env.LOOPSOAR_E2E_HOLD_MS ?? 800))); // 等 React 首帧与 IPC 数据渲染
           const navUrl = process.env.LOOPSOAR_E2E_NAV_URL;
           if (navUrl) {
             const outcome = await browserHost?.navigate(navUrl);

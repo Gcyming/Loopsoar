@@ -1176,7 +1176,34 @@ export default function App(): React.JSX.Element {
               <Icon name="agent" size={14} style={{ marginRight: 6 }} />
               Agent 对话
             </span>
-            <span style={styles.sidebarAgent}>{agentLabel}</span>
+            <span style={styles.sidebarActions}>
+              <button
+                type="button"
+                className="icon-btn"
+                title="复制整段会话为 Markdown"
+                onClick={() => {
+                  const markdown = messages
+                    .filter((m) => m.role === "user" || m.role === "assistant")
+                    .map((m) => {
+                      const who = m.role === "user" ? (m.steer ? "用户（转向）" : "用户") : "Loopsoar";
+                      const think = m.reasoning ? `> 思考过程：${m.reasoning.replace(/\n/g, "\n> ")}\n\n` : "";
+                      return `### ${who}\n\n${think}${m.text}`;
+                    })
+                    .join("\n\n---\n\n");
+                  if (!markdown.trim()) {
+                    setNotice("会话为空，没有可复制的内容");
+                    return;
+                  }
+                  void navigator.clipboard
+                    ?.writeText(markdown)
+                    .then(() => setNotice("整段会话已复制为 Markdown"))
+                    .catch(() => setNotice("复制失败：剪贴板不可用"));
+                }}
+              >
+                <Icon name="file" size={13} />
+              </button>
+              <span style={styles.sidebarAgent}>{agentLabel}</span>
+            </span>
           </div>
           <div style={styles.sessionBar}>
             <span style={styles.anchor}>
@@ -1751,6 +1778,33 @@ export default function App(): React.JSX.Element {
   );
 }
 
+/** 代码块：带语言标签与「复制」按钮（纯 UI）。 */
+function CodeBlock({ code, lang }: { code: string; lang: string }): React.ReactElement {
+  const [copied, setCopied] = React.useState(false);
+  const copy = (): void => {
+    void navigator.clipboard
+      ?.writeText(code)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1400);
+      })
+      .catch(() => {});
+  };
+  return (
+    <div style={styles.codeWrap}>
+      <div style={styles.codeHead}>
+        <span style={styles.codeLang}>{lang || "code"}</span>
+        <button type="button" className="msg-action" title="复制代码" onClick={copy} style={styles.codeCopy}>
+          {copied ? "已复制" : "复制"}
+        </button>
+      </div>
+      <pre style={styles.codeBlock}>
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 /** 拆分「【附件】路径」：正文与附件路径分离（展示卡片，发送仍用原文）。 */
 function splitAttachments(text: string): { body: string; docs: string[] } {
   const docs: string[] = [];
@@ -1776,12 +1830,9 @@ function renderRich(text: string): React.ReactNode {
   const blocks = text.split(/(```[\s\S]*?```)/g);
   return blocks.map((block, bi) => {
     if (block.startsWith("```")) {
+      const head = /^```([^\n]*)/.exec(block)?.[1]?.trim() ?? "";
       const body = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
-      return (
-        <pre key={`code-${bi}`} style={styles.codeBlock}>
-          <code>{body}</code>
-        </pre>
-      );
+      return <CodeBlock key={`code-${bi}`} code={body} lang={head} />;
     }
     // 行级渲染：标题 / 无序列表 / 引用 / 普通段落
     const lines = block.split(/\n/);
@@ -1860,7 +1911,16 @@ function inlineRich(text: string): React.ReactNode {
     const link = /^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/.exec(part);
     if (link) {
       return (
-        <a key={pi} href={link[2]} target="_blank" rel="noreferrer" style={styles.richLink}>
+        <a
+          key={pi}
+          href={link[2]}
+          rel="noreferrer"
+          style={styles.richLink}
+          onClick={(event) => {
+            event.preventDefault();
+            void window.loopsoarAPI?.browser.newTab({ url: link[2] }).catch(() => {});
+          }}
+        >
           {link[1]}
         </a>
       );
@@ -2243,6 +2303,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sidebarTitle: { display: "inline-flex", alignItems: "center" },
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
+  sidebarActions: { display: "inline-flex", alignItems: "center", gap: 6 },
+  codeWrap: { margin: "6px 0", border: `1px solid ${BRAND.border}`, borderRadius: 8, overflow: "hidden" },
+  codeHead: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "4px 8px",
+    background: "rgba(255,255,255,0.04)",
+    borderBottom: `1px solid ${BRAND.border}`,
+  },
+  codeLang: { fontSize: 9.5, color: BRAND.linenFaint, textTransform: "lowercase", letterSpacing: 0.4 },
+  codeCopy: { fontSize: 10, color: BRAND.linenMuted, width: "auto", padding: "0 6px", height: 18 },
   messageArea: { position: "relative", flex: 1, minHeight: 0, display: "flex" },
   messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   scrollRail: {
@@ -2429,7 +2501,7 @@ const styles: Record<string, React.CSSProperties> = {
   richQuote: { borderLeft: `2px solid ${BRAND.border}`, paddingLeft: 10, color: BRAND.linenMuted, margin: "4px 0" },
   richLink: { color: BRAND.ochreHover, textDecoration: "underline" },
   codeBlock: {
-    margin: "6px 0",
+    margin: 0,
     padding: 8,
     borderRadius: 7,
     background: BRAND.ink,

@@ -9,8 +9,14 @@ const port = Number(process.argv[2] ?? 19500);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const REPLY_CHUNKS = [
-  "你好！", "我是 Loopsoar", "（本地模拟模型）", "这条回复来自",
-  "真实 HTTP SSE 流式通道，", "不是占位文本。", "对话链路已验证通过。",
+  "你好！我是 Loopsoar（本地模拟模型）。",
+  "\n\n这条回复来自**真实 HTTP SSE 流式通道**：\n\n",
+  "- 支持 Markdown 渲染（标题/列表/引用/链接）\n",
+  "- 代码块带复制按钮\n",
+  "- 行内代码 `loopsoar`\n\n",
+  "### 示例代码\n\n```ts\nconst loopsoar = createAgent({\n  mode: \"build\",\n});\nconsole.log(loopsoar.id);\n```\n\n",
+  "> 引用：这是 slime 风格渲染的样例。\n\n",
+  "更多见 [Loopsoar](https://example.com)。",
 ];
 
 const server = createServer(async (req, res) => {
