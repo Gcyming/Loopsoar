@@ -14,7 +14,9 @@ const server = path.join(root, "scripts", "mock-mcp-server.mjs");
 
 function makeHost(name: string) {
   const registry = new ToolRegistry();
-  const host = new McpHost(path.join(root, ".tmp-mcp-test", name), registry, () => {});
+  // 每个用例独立目录：避免历史 mcp.json 里的旧端点/旧 id 干扰（HTTP 端口每次不同）
+  const unique = `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const host = new McpHost(path.join(root, ".tmp-mcp-test", unique), registry, () => {});
   return { host, registry };
 }
 

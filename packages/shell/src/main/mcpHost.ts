@@ -360,6 +360,9 @@ export class McpHost {
       if (data.error) throw new Error(describeMcpError("rpc", `${data.error.code} ${data.error.message}`));
       return data.result;
     } catch (err) {
+      if (process.env.LOOPSOAR_MCP_DEBUG) {
+        console.log(`[MCP-HTTP] ${method} failed:`, err instanceof Error ? err.message : err, (err as { cause?: unknown })?.cause);
+      }
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(describeMcpError("timeout", method));
       }
@@ -380,7 +383,8 @@ export class McpHost {
       });
       const sessionId = res.headers.get("mcp-session-id");
       if (sessionId) http.sessionId = sessionId;
-      await res.body?.cancel();
+      // 消费响应体（不要 abort：abort 会杀掉 keep-alive 连接，导致下一次请求 fetch failed）
+      await res.text().catch(() => "");
     } catch {
       // 通知失败不影响调用
     }
