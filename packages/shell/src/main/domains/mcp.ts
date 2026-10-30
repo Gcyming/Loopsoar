@@ -19,7 +19,17 @@ export function registerMcpDomain(deps: McpDeps): void {
   }));
 
   handleTrusted(deps, "mcp:add", (payload) => {
-    const p = payload as { id?: string; name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean };
+    const p = payload as {
+      id?: string;
+      name: string;
+      transport?: "stdio" | "http";
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+      enabled?: boolean;
+    };
     if (!deps.mcp) throw new Error("MCP 客户端未装配");
     const server = deps.mcp.add(p);
     deps.push?.("mcp:updated", { action: "add", server });

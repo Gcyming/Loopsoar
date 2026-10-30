@@ -123,8 +123,16 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
         const d = (y - vpCenter) / (vpLen * 1.1 + 1);
         return dir * amp * 0.7 * Math.exp(-(d * d) / 2);
       };
+      // slime 的「衬托」：指针附近把曲线推开一段（不是画光点），高斯窗避免生硬
+      const ptrY = pointerYRef.current;
+      const hovering = hoverRef.current && ptrY >= 0;
+      const pointerPush = (y: number): number => {
+        if (!hovering) return 0;
+        const d = (y - ptrY) / 34;
+        return dir * amp * 2.1 * Math.exp(-(d * d) / 2);
+      };
       const xAt = (y: number, lambda: number, phi: number): number =>
-        cx + pushAt(y) + amp * taper(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
+        cx + pushAt(y) + pointerPush(y) + amp * taper(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
 
       const stroke = (
         lambda: number,
@@ -194,19 +202,27 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
         ctx.fill();
       }
 
-      // ⑤ 悬停反馈：整条卷轴加一层很淡的暖色衬底 + 光标位置的光点
-      if (hoverRef.current) {
-        ctx.fillStyle = "rgba(217, 138, 79, 0.06)";
-        ctx.fillRect(0, 0, width, height);
-        if (pointerYRef.current >= 0) {
-          ctx.beginPath();
-          ctx.fillStyle = "rgba(255, 214, 170, 0.9)";
-          ctx.shadowBlur = 8;
-          ctx.shadowColor = "rgba(255, 205, 160, 0.8)";
-          ctx.arc(cx, pointerYRef.current, 2.2, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
+      // ⑤ 悬停：指针附近的一小段线被提亮（衬托 + 局部高光），不画光点
+      if (hovering) {
+        const from = Math.max(top, ptrY - 46);
+        const to = Math.min(bottom, ptrY + 46);
+        const hoverGrad = ctx.createLinearGradient(0, from, 0, to);
+        hoverGrad.addColorStop(0, "rgba(255, 224, 190, 0.10)");
+        hoverGrad.addColorStop(0.5, "rgba(255, 236, 214, 1)");
+        hoverGrad.addColorStop(1, "rgba(255, 224, 190, 0.10)");
+        ctx.beginPath();
+        for (let y = from; y <= to; y += 1) {
+          const x = xAt(y, p.lam0, 0);
+          if (y === from) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = hoverGrad;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "rgba(255, 214, 170, 0.75)";
+        ctx.stroke();
+        ctx.shadowBlur = 0;
       }
     };
 

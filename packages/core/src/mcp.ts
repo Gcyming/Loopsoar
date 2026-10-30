@@ -14,15 +14,34 @@ import { z } from "zod";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 
-export const McpServerConfigSchema = z.object({
-  id: z.string().min(1).max(120).optional(),
-  name: z.string().min(1).max(120),
-  /** 启动命令（stdio 传输），如 "npx" / "node"。 */
-  command: z.string().min(1).max(500),
-  args: z.array(z.string().max(500)).max(50).optional(),
-  env: z.record(z.string().max(2000)).optional(),
-  enabled: z.boolean().optional(),
-});
+export const McpTransportSchema = z.enum(["stdio", "http"]);
+export type McpTransport = z.infer<typeof McpTransportSchema>;
+
+export const McpServerConfigSchema = z
+  .object({
+    id: z.string().min(1).max(120).optional(),
+    name: z.string().min(1).max(120),
+    /** 传输方式；缺省按 stdio（向后兼容旧 mcp.json）。 */
+    transport: McpTransportSchema.optional(),
+    /** 启动命令（stdio 传输），如 "npx" / "node"。 */
+    command: z.string().max(500).optional(),
+    args: z.array(z.string().max(500)).max(50).optional(),
+    env: z.record(z.string().max(2000)).optional(),
+    /** Streamable HTTP：端点 URL（如 https://example.com/mcp）。 */
+    url: z.string().url().max(2000).optional(),
+    /** Streamable HTTP：附加请求头（认证等；不落日志）。 */
+    headers: z.record(z.string().max(2000)).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const transport = value.transport ?? (value.url ? "http" : "stdio");
+    if (transport === "http" && !value.url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "HTTP 传输需要 url" });
+    }
+    if (transport === "stdio" && !value.command) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "stdio 传输需要 command" });
+    }
+  });
 
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 

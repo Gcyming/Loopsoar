@@ -70,9 +70,12 @@ export const ProviderRefSchema = z.object({ providerId: z.string().min(1).max(64
 export const McpServerSchema = z.object({
   id: z.string().min(1).max(120).optional(),
   name: z.string().min(1).max(120),
-  command: z.string().min(1).max(500),
+  transport: z.enum(["stdio", "http"]).optional(),
+  command: z.string().max(500).optional(),
   args: z.array(z.string().max(500)).max(50).optional(),
   env: z.record(z.string().max(2000)).optional(),
+  url: z.string().url().max(2000).optional(),
+  headers: z.record(z.string().max(2000)).optional(),
   enabled: z.boolean().optional(),
 });
 export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });

@@ -37,8 +37,16 @@ interface PendingCall {
   timer: NodeJS.Timeout;
 }
 
+interface HttpState {
+  url: string;
+  headers: Record<string, string>;
+  sessionId?: string;
+}
+
 interface Connection {
   config: McpServerConfig;
+  /** HTTP 传输状态（stdio 时缺省）。 */
+  http?: HttpState;
   state: McpServerState;
   error?: string;
   tools: McpToolBinding[];
@@ -59,8 +67,12 @@ interface Connection {
 export interface McpServerInfo {
   id: string;
   name: string;
+  /** stdio | http */
+  transport: "stdio" | "http";
   command: string;
   args: string[];
+  /** HTTP 端点（stdio 时为空） */
+  url?: string;
   enabled: boolean;
   state: McpServerState;
   tools: string[];
@@ -126,8 +138,10 @@ export class McpHost {
       return {
         id,
         name: cfg.name,
-        command: cfg.command,
+        transport: cfg.transport ?? (cfg.url ? "http" : "stdio"),
+        command: cfg.command ?? "",
         args: cfg.args ?? [],
+        url: cfg.url,
         enabled: cfg.enabled ?? true,
         state: conn?.state ?? "idle",
         tools: conn?.tools.map((t) => t.registryName) ?? [],
@@ -139,10 +153,12 @@ export class McpHost {
   }
 
   add(input: McpServerConfig): McpServerInfo {
+    // 统一校验（transport 与 command/url 的匹配由 core schema 的 superRefine 决定）
+    const parsed = McpServerConfigSchema.parse(input);
     const list = this.readConfig();
     const ids = list.map((c) => c.id ?? "");
     const id = input.id && !ids.includes(input.id) ? input.id : this.slug(input.name, ids);
-    const cfg: McpServerConfig = { ...input, id };
+    const cfg: McpServerConfig = { ...parsed, id };
     const at = list.findIndex((c) => (c.id ?? "") === id);
     if (at >= 0) list[at] = cfg;
     else list.push(cfg);
@@ -248,6 +264,7 @@ export class McpHost {
   }
 
   private request(conn: Connection, method: string, params?: unknown, timeoutMs = CALL_TIMEOUT_MS): Promise<unknown> {
+    if (conn.http) return this.httpRpc(conn, method, params, timeoutMs);
     if (!conn.child) return Promise.reject(new Error(describeMcpError("transport", "进程未启动")));
     const id = ++conn.nextId;
     return new Promise<unknown>((resolve, reject) => {
@@ -267,8 +284,103 @@ export class McpHost {
   }
 
   private notify(conn: Connection, method: string, params?: unknown): void {
+    if (conn.http) {
+      void this.httpNotify(conn, method, params);
+      return;
+    }
     try {
       this.sendRaw(conn, { jsonrpc: "2.0", method, params });
+    } catch {
+      // 通知失败不影响调用
+    }
+  }
+
+  /* ───────────── Streamable HTTP 传输（POST JSON-RPC，兼容 SSE 响应） ───────────── */
+
+  private httpHeaders(conn: Connection): Record<string, string> {
+    const http = conn.http!;
+    return {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...(http.sessionId ? { "mcp-session-id": http.sessionId } : {}),
+      ...http.headers,
+    };
+  }
+
+  private async httpRpc(conn: Connection, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+    const http = conn.http!;
+    if (!http.url) throw new Error(describeMcpError("transport", "HTTP 端点未配置"));
+    const id = ++conn.nextId;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(http.url, {
+        method: "POST",
+        headers: this.httpHeaders(conn),
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        signal: controller.signal,
+      });
+      const sessionId = res.headers.get("mcp-session-id");
+      if (sessionId) http.sessionId = sessionId;
+      if (!res.ok) throw new Error(describeMcpError("rpc", `HTTP ${res.status}`));
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("text/event-stream") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep = buffer.indexOf("\n\n");
+          while (sep >= 0) {
+            const rawEvent = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            for (const line of rawEvent.split("\n")) {
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (!payload) continue;
+              let msg: JsonRpcMessage;
+              try {
+                msg = JSON.parse(payload) as JsonRpcMessage;
+              } catch {
+                continue;
+              }
+              if (msg.id === id) {
+                if (msg.error) throw new Error(describeMcpError("rpc", `${msg.error.code} ${msg.error.message}`));
+                return msg.result;
+              }
+            }
+            sep = buffer.indexOf("\n\n");
+          }
+        }
+        throw new Error(describeMcpError("transport", "SSE 响应结束但未收到结果"));
+      }
+      const data = (await res.json()) as JsonRpcMessage;
+      if (data.error) throw new Error(describeMcpError("rpc", `${data.error.code} ${data.error.message}`));
+      return data.result;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(describeMcpError("timeout", method));
+      }
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async httpNotify(conn: Connection, method: string, params?: unknown): Promise<void> {
+    const http = conn.http!;
+    if (!http.url) return;
+    try {
+      const res = await fetch(http.url, {
+        method: "POST",
+        headers: this.httpHeaders(conn),
+        body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+      });
+      const sessionId = res.headers.get("mcp-session-id");
+      if (sessionId) http.sessionId = sessionId;
+      await res.body?.cancel();
     } catch {
       // 通知失败不影响调用
     }
@@ -344,26 +456,37 @@ export class McpHost {
     this.connections.set(id, conn);
     this.onUpdate();
 
+    const transport = cfg.transport ?? (cfg.url ? "http" : "stdio");
+    if (transport === "http") {
+      conn.http = { url: cfg.url ?? "", headers: cfg.headers ?? {} };
+    }
     try {
-      this.spawnProcess(id, conn);
-      try {
+      if (conn.http) {
         const init = (await this.request(conn, "initialize", this.initParams(), CONNECT_TIMEOUT_MS)) as {
           capabilities?: unknown;
         };
         conn.capabilities = init.capabilities ?? null;
-      } catch (firstErr) {
-        // 帧格式探测失败：切 Content-Length 帧重试一次（slime "flip framing" 教训）
-        conn.framing = "header";
-        conn.decoder = new McpFrameDecoder();
-        this.killProcess(conn);
+      } else {
         this.spawnProcess(id, conn);
-        const init = (await this.request(conn, "initialize", this.initParams(), CONNECT_TIMEOUT_MS)) as {
-          capabilities?: unknown;
-        };
-        conn.capabilities = init.capabilities ?? null;
-        conn.stderrRing.push(
-          `握手已切换 Content-Length 帧重试成功（${firstErr instanceof Error ? firstErr.message : String(firstErr)}）`,
-        );
+        try {
+          const init = (await this.request(conn, "initialize", this.initParams(), CONNECT_TIMEOUT_MS)) as {
+            capabilities?: unknown;
+          };
+          conn.capabilities = init.capabilities ?? null;
+        } catch (firstErr) {
+          // 帧格式探测失败：切 Content-Length 帧重试一次（slime "flip framing" 教训）
+          conn.framing = "header";
+          conn.decoder = new McpFrameDecoder();
+          this.killProcess(conn);
+          this.spawnProcess(id, conn);
+          const init = (await this.request(conn, "initialize", this.initParams(), CONNECT_TIMEOUT_MS)) as {
+            capabilities?: unknown;
+          };
+          conn.capabilities = init.capabilities ?? null;
+          conn.stderrRing.push(
+            `握手已切换 Content-Length 帧重试成功（${firstErr instanceof Error ? firstErr.message : String(firstErr)}）`,
+          );
+        }
       }
       this.notify(conn, "notifications/initialized", {});
       await this.refreshTools(id, conn);
@@ -391,9 +514,11 @@ export class McpHost {
 
   private spawnProcess(serverId: string, conn: Connection): void {
     const cfg = conn.config;
+    const command = cfg.command ?? "";
+    if (!command) throw new Error(describeMcpError("transport", "stdio 传输缺少启动命令"));
     const needsShell =
-      process.platform === "win32" && /^(npx|npm|pnpm|yarn|bun|uvx|uv|cmd|powershell)$/i.test(cfg.command);
-    const child = spawn(cfg.command, cfg.args ?? [], {
+      process.platform === "win32" && /^(npx|npm|pnpm|yarn|bun|uvx|uv|cmd|powershell)$/i.test(command);
+    const child = spawn(command, cfg.args ?? [], {
       env: sanitizeMcpEnv(process.env, cfg.env),
       stdio: ["pipe", "pipe", "pipe"],
       shell: needsShell,

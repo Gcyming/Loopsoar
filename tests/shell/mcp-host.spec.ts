@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
 import { McpHost } from "../../packages/shell/src/main/mcpHost.ts";
+import { spawn } from "node:child_process";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const server = path.join(root, "scripts", "mock-mcp-server.mjs");
@@ -82,4 +83,53 @@ describe("MCP 宿主（stdio 生命周期）", () => {
       host.shutdown();
     }
   }, 25000);
+});
+
+describe("MCP 宿主（Streamable HTTP 传输）", () => {
+  it("HTTP：initialize → tools/list → tools/call → 断开清理", async () => {
+    const httpServer = path.join(root, "scripts", "mock-mcp-http-server.mjs");
+    const child = spawn(process.execPath, [httpServer], { stdio: ["ignore", "pipe", "inherit"] });
+    const port = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("mock http server 启动超时")), 8000);
+      child.stdout!.setEncoding("utf8");
+      child.stdout!.on("data", (chunk: string) => {
+        const match = /MOCK_MCP_HTTP_READY (\d+)/.exec(chunk);
+        if (match) {
+          clearTimeout(timer);
+          resolve(Number(match[1]));
+        }
+      });
+      child.on("error", reject);
+    });
+    const { host, registry } = makeHost("mcp-http.json");
+    try {
+      host.add({ name: "web", transport: "http", url: `http://127.0.0.1:${port}/mcp` });
+      const info = await host.connect("web");
+      expect(info?.state).toBe("ready");
+      expect(info?.transport).toBe("http");
+      expect(info?.capabilities).toContain("tools");
+      expect(registry.list().some((t) => t.name === "mcp__web__echo")).toBe(true);
+      const tool = registry.get("mcp__web__echo")!;
+      const result = await tool.execute({ agentId: "test", params: { text: "over-http" }, platform: {} });
+      expect(result.ok).toBe(true);
+      expect(result.content).toContain("echo: over-http");
+      host.disconnect("web");
+      expect(registry.list().some((t) => t.name.startsWith("mcp__web__"))).toBe(false);
+    } finally {
+      host.shutdown();
+      child.kill();
+    }
+  }, 25000);
+
+  it("HTTP：端点不可达 → 该服务器 error，不影响其它服务器", async () => {
+    const { host } = makeHost("mcp-http-bad.json");
+    try {
+      host.add({ name: "dead", transport: "http", url: "http://127.0.0.1:1/mcp" });
+      const info = await host.connect("dead");
+      expect(info?.state).toBe("error");
+      expect(info?.error).toBeTruthy();
+    } finally {
+      host.shutdown();
+    }
+  }, 15000);
 });

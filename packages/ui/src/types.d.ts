@@ -225,8 +225,10 @@ export interface SkillRecord {
 export interface McpServerInfo {
   id: string;
   name: string;
+  transport?: "stdio" | "http";
   command: string;
   args: string[];
+  url?: string;
   enabled: boolean;
   state: "idle" | "connecting" | "ready" | "error";
   tools: string[];
@@ -248,8 +250,10 @@ export interface SkillRecord {
 export interface McpServerInfo {
   id: string;
   name: string;
+  transport?: "stdio" | "http";
   command: string;
   args: string[];
+  url?: string;
   enabled: boolean;
   state: "idle" | "connecting" | "ready" | "error";
   tools: string[];
@@ -407,7 +411,17 @@ export interface LoopsoarAPI {
   };
   mcp: LoopsoarDomain & {
     list(): Promise<{ servers: McpServerInfo[]; configPath: string }>;
-    add(payload: { id?: string; name: string; command: string; args?: string[] }): Promise<{ server: McpServerInfo; servers: McpServerInfo[] }>;
+    add(payload: {
+      id?: string;
+      name: string;
+      transport?: "stdio" | "http";
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+      enabled?: boolean;
+    }): Promise<{ server: McpServerInfo; servers: McpServerInfo[] }>;
     remove(payload: { id: string }): Promise<{ removed: boolean; servers: McpServerInfo[] }>;
     connect(payload: { id: string }): Promise<{ server: McpServerInfo | null; servers: McpServerInfo[] }>;
     disconnect(payload: { id: string }): Promise<{ ok: boolean; servers: McpServerInfo[] }>;
@@ -420,7 +434,17 @@ export interface LoopsoarAPI {
   };
   mcp: LoopsoarDomain & {
     list(): Promise<{ servers: McpServerInfo[]; configPath: string }>;
-    add(payload: { id?: string; name: string; command: string; args?: string[] }): Promise<{ server: McpServerInfo; servers: McpServerInfo[] }>;
+    add(payload: {
+      id?: string;
+      name: string;
+      transport?: "stdio" | "http";
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+      enabled?: boolean;
+    }): Promise<{ server: McpServerInfo; servers: McpServerInfo[] }>;
     remove(payload: { id: string }): Promise<{ removed: boolean; servers: McpServerInfo[] }>;
     connect(payload: { id: string }): Promise<{ server: McpServerInfo | null; servers: McpServerInfo[] }>;
     disconnect(payload: { id: string }): Promise<{ ok: boolean; servers: McpServerInfo[] }>;

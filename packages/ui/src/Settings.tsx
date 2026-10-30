@@ -67,7 +67,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [skillSkips, setSkillSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
   const [mcpConfigPath, setMcpConfigPath] = useState("");
-  const [mcpForm, setMcpForm] = useState({ name: "", command: "", args: "" });
+  const [mcpForm, setMcpForm] = useState({ name: "", transport: "stdio" as "stdio" | "http", command: "", args: "", url: "" });
   const [keyInput, setKeyInput] = useState("");
   const [pModels, setPModels] = useState<ProviderModel[]>([]);
   const [pModelsError, setPModelsError] = useState<string | null>(null);
@@ -831,27 +831,43 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       case "mcp":
         return (
           <div>
-            <Head t="MCP 服务" h="独立子系统：通过 stdio JSON-RPC 连接外部工具服务；工具以 mcp__&lt;server&gt;__&lt;tool&gt; 注册进工具表" />
+            <Head t="MCP 服务" h="独立子系统：支持 stdio（本地进程）与 Streamable HTTP（远程端点）两种传输；工具以 mcp__&lt;server&gt;__&lt;tool&gt; 注册进工具表" />
             <div style={S.note}>配置文件：<code style={S.code}>{mcpConfigPath || "—"}</code></div>
             <div className="panel-card" style={S.card}>
               <div style={S.formHead}>添加 MCP 服务器</div>
-              <Field l="名称"><In v={mcpForm.name} ph="filesystem / github" on={(x) => setMcpForm({ ...mcpForm, name: x })} /></Field>
-              <Field l="启动命令"><In v={mcpForm.command} ph="npx / node / uvx" on={(x) => setMcpForm({ ...mcpForm, command: x })} /></Field>
-              <Field l="参数" h="空格分隔"><In v={mcpForm.args} ph="-y @modelcontextprotocol/server-filesystem D:/work" on={(x) => setMcpForm({ ...mcpForm, args: x })} /></Field>
+              <Field l="名称"><In v={mcpForm.name} ph="filesystem / github / remote" on={(x) => setMcpForm({ ...mcpForm, name: x })} /></Field>
+              <Field l="传输方式" h="stdio=本地进程；http=远程 Streamable HTTP">
+                <Seg v={mcpForm.transport} opts={[["stdio", "stdio（本地）"], ["http", "HTTP（远程）"]]} on={(x) => setMcpForm({ ...mcpForm, transport: x as "stdio" | "http" })} />
+              </Field>
+              {mcpForm.transport === "http" ? (
+                <Field l="端点 URL" h="如 https://example.com/mcp（POST JSON-RPC；支持 SSE 响应）">
+                  <In v={mcpForm.url} ph="https://example.com/mcp" on={(x) => setMcpForm({ ...mcpForm, url: x })} />
+                </Field>
+              ) : (
+                <>
+                  <Field l="启动命令"><In v={mcpForm.command} ph="npx / node / uvx" on={(x) => setMcpForm({ ...mcpForm, command: x })} /></Field>
+                  <Field l="参数" h="空格分隔"><In v={mcpForm.args} ph="-y @modelcontextprotocol/server-filesystem D:/work" on={(x) => setMcpForm({ ...mcpForm, args: x })} /></Field>
+                </>
+              )}
               <div style={S.btns}>
                 <Btn
                   label="添加"
                   primary
                   onClick={() =>
                     void api.mcp
-                      .add({
-                        name: mcpForm.name.trim() || "mcp",
-                        command: mcpForm.command.trim() || "npx",
-                        args: mcpForm.args.trim() ? (mcpForm.args.match(/"[^"]*"|\S+/g) ?? []).map((x) => x.replace(/^"|"$/g, "")) : [],
-                      })
+                      .add(
+                        mcpForm.transport === "http"
+                          ? { name: mcpForm.name.trim() || "mcp", transport: "http", url: mcpForm.url.trim() }
+                          : {
+                              name: mcpForm.name.trim() || "mcp",
+                              transport: "stdio",
+                              command: mcpForm.command.trim() || "npx",
+                              args: mcpForm.args.trim() ? (mcpForm.args.match(/"[^"]*"|\S+/g) ?? []).map((x) => x.replace(/^"|"$/g, "")) : [],
+                            },
+                      )
                       .then((r) => {
                         setMcpServers(r.servers);
-                        setMcpForm({ name: "", command: "", args: "" });
+                        setMcpForm({ name: "", transport: "stdio", command: "", args: "", url: "" });
                         ok("MCP 服务器已添加（点击连接）");
                       })
                       .catch(bad)
@@ -883,7 +899,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     </span>
                   </div>
                   <div style={S.providerRows}>
-                    <div style={S.providerRow}><span style={S.providerKey}>命令</span><span style={S.providerVal}>{[srv.command, ...srv.args].join(" ")}</span></div>
+                    <div style={S.providerRow}>
+                      <span style={S.providerKey}>{srv.transport === "http" ? "端点" : "命令"}</span>
+                      <span style={S.providerVal}>{srv.transport === "http" ? (srv.url ?? "—") : [srv.command, ...srv.args].filter(Boolean).join(" ")}</span>
+                    </div>
                     {srv.error ? <div style={S.providerRow}><span style={S.providerKey}>错误</span><span style={S.errText}>{srv.error}</span></div> : null}
                     {srv.tools.length > 0 ? <div style={S.providerRow}><span style={S.providerKey}>工具</span><span style={S.providerVal}>{srv.tools.slice(0, 6).join(" · ")}{srv.tools.length > 6 ? " …" : ""}</span></div> : null}
                     {srv.stderr.length > 0 ? (
