@@ -132,6 +132,8 @@ export const SettingsProviderSchema = z.object({
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),
   model: z.string().min(1).max(200),
+  /** 测试连接时的自定义请求头（模板与聊天一致；不落盘）。 */
+  headers: z.record(z.string().max(120), z.string().max(2000)).refine((value) => Object.keys(value).length <= 30, { message: "请求头最多 30 条" }).optional(),
 });
 
 /** 通用偏好（设置 · 通用）。 */

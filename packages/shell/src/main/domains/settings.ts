@@ -14,7 +14,9 @@
  * 安全纪律：apiKey 永不落盘、永不回传；规则注入前经 core/rules 校验与护栏。
  */
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import {
   validateProviderConfig,
@@ -283,6 +285,7 @@ function enrichModelSpec(raw: Record<string, unknown>): {
 async function testProvider(
   deps: SettingsDeps,
   cfg: ProviderConfig,
+  headerTemplates?: Record<string, string>,
 ): Promise<{ ok: boolean; status?: number; latencyMs?: number; message: string }> {
   // 密钥解析：加密库（活跃供应商）优先，环境变量兜底；测试任意配置时复用该密钥
   const activeId = deps.providers?.active()?.id;
@@ -296,7 +299,15 @@ async function testProvider(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "User-Agent": "Loopsoar/1.0",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...renderHeaderTemplates(headerTemplates, {
+          provider: cfg.provider,
+          model: cfg.model,
+          sessionId: "test-provider",
+          requestId: randomUUID(),
+          timestamp: new Date().toISOString(),
+        }),
       },
       body: JSON.stringify({
         model: cfg.model,
@@ -476,8 +487,9 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   });
 
   handleTrusted(deps, "settings:testProvider", async (payload) => {
+    const raw = payload as { headers?: Record<string, string> };
     const cfg = validateProviderConfig(payload);
-    return testProvider(deps, cfg);
+    return testProvider(deps, cfg, raw.headers);
   });
 
   // ── 通用偏好 / 存储位置 ──
@@ -633,6 +645,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         ? `${modelsBase}/models`
         : `${modelsBase}/v1/models`;
     const headers: Record<string, string> = {
+      "User-Agent": "Loopsoar/1.0",
       ...(apiKey
         ? isAnthropic
           ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
@@ -640,7 +653,13 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         : isAnthropic
           ? { "anthropic-version": "2023-06-01" }
           : {}),
-      ...(raw.headers ?? {}),
+      ...renderHeaderTemplates(raw.headers, {
+        provider: cfg.provider,
+        model: cfg.model,
+        sessionId: "model-list-probe",
+        requestId: randomUUID(),
+        timestamp: new Date().toISOString(),
+      }),
     };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);

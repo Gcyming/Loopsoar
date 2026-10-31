@@ -168,6 +168,17 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 测试：389 全绿（providerStore 2、LLM headers 1、adapter 2、Markdown 5 等）
 - 证据：gui-70 转向选择、gui-71 权限浮层、gui-72 请求头设置
 
+## 二·十八、2026-10-31 第十五次增量（请求头模板：OpenCode Go 等客户端限制）
+- contracts 新增 `headerTemplate.ts`（单一产地）：`{{sessionId}} / {{provider}} / {{model}} / {{requestId}} / {{timestamp}}`
+  渲染、未知变量保留、保存前校验；UI 帮助与设置校验共用同一份变量清单
+- 核心 LLM 客户端：默认 `User-Agent: Loopsoar/1.0`；新增 `resolveHeaders()` 每次请求解析（会话 ID/请求 ID 动态）
+- ChatService：`getLlm(sessionId)` → 壳体按当前会话渲染请求头（x-opencode-session 每会话稳定）
+- 模型列表探测 / 测试连接同样使用渲染后的请求头（带默认 UA）
+- 设置页：请求头输入支持模板变量，未知变量保存时报错并列出可用变量
+- 测试：395 全绿（headerTemplate 4、LLM 动态头/默认 UA 2 等）；真机验证 mock 服务收到
+  `x-opencode-session: sess-…`、`User-Agent: Loopsoar/mock-chat`、`x-test-request: <uuid>`
+- 证据：gui-73-header-template.png
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

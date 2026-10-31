@@ -20,6 +20,8 @@ export interface OpenAiClientOptions {
   maxRetries?: number;
   /** 自定义请求头（会在默认头之后合并，可用于代理鉴权/UA）。 */
   headers?: Record<string, string>;
+  /** 每次 HTTP 请求前解析请求头（用于 {{sessionId}} 等模板变量；静态 headers 之后合并）。 */
+  resolveHeaders?: () => Record<string, string>;
 }
 
 export interface NormalizedUsage {
@@ -98,8 +100,11 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // 默认标识本客户端（多数服务商要求可识别的 UA；自定义 headers 可覆盖）
+          "User-Agent": "Loopsoar/1.0",
           ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
           ...(opts.headers ?? {}),
+          ...(opts.resolveHeaders?.() ?? {}),
         },
         body: JSON.stringify({
           model: opts.model,

@@ -408,7 +408,12 @@ export interface LoopsoarAPI {
     clearApiKey(payload: { providerId?: string }): Promise<{ cleared: boolean }>;
     getProvider(): Promise<ProviderStatus>;
     setProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<{ saved: boolean; usable: boolean; reason?: string | null }>;
-    testProvider(payload: { provider: string; baseUrl: string; model: string }): Promise<TestProviderResult>;
+    testProvider(payload: {
+      provider: string;
+      baseUrl: string;
+      model: string;
+      headers?: Record<string, string>;
+    }): Promise<TestProviderResult>;
     clearProvider(): Promise<{ cleared: boolean }>;
     getPreferences(): Promise<{ preferences: Preferences; defaults: Preferences; searchUrlExample: string; locations: LocationsInfo }>;
     setPreferences(payload: Preferences): Promise<{ saved: boolean; preferences: Preferences }>;

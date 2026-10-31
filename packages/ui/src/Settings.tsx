@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BRAND, BADGE } from "./theme.js";
+import {
+  HEADER_TEMPLATE_VARIABLES,
+  unknownHeaderTemplateVariables,
+} from "loopsoar-contracts/headerTemplate";
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { Icon } from "./Icon.js";
@@ -522,7 +526,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       {item.rpm ? <span style={S.tag}>RPM {item.rpm}</span> : null}
                     </span>
                     <span style={S.icons}>
-                      <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model }).then(setTestRes).catch(bad)} />
+                      <Btn label="测试" small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model, headers: item.headers }).then(setTestRes).catch(bad)} />
                       <Btn label="编辑" small onClick={() => startEdit(item)} />
                       <Btn label="删除" small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); }).catch(bad)} />
                     </span>
@@ -617,7 +621,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     />
                   </div>
                 </Field>
-                <Field l="自定义请求头" h="每行一条「Key: Value」（如 x-api-key / User-Agent）；随供应商保存，聊天与探测共用，可用于代理/特殊网关鉴权">
+                <Field
+                  l="自定义请求头"
+                  h={`每行一条「Key: Value」；支持变量 ${HEADER_TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(" ")}（sessionId=会话、requestId/timestamp=每请求），用于 OpenCode Go 等要求客户端标识/会话头的服务`}
+                >
                   <Area v={pHeaders} rows={3} on={setPHeaders} />
                 </Field>
                 <Field l="RPM 兜底" h="每分钟请求上限（留空 = 不主动限制）">
@@ -713,7 +720,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   )}
                 </div>
                 <div style={S.btns}>
-                  <Btn label="测试连接" onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default" }).then(setTestRes).catch(bad)} />
+                  <Btn label="测试连接" onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default", headers: parseHeaderLines(pHeaders) }).then(setTestRes).catch(bad)} />
                   <Btn label="保存并启用" primary onClick={() => void commit()} />
                   <Btn label="取消" onClick={() => setEditingProviderId(null)} />
                   {testRes ? <span style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</span> : null}
@@ -1147,6 +1154,10 @@ function parseHeaderLines(text: string): Record<string, string> | undefined {
     headers[key] = value;
   }
   if (Object.keys(headers).length > 30) throw new Error("请求头最多 30 条");
+  const unknown = unknownHeaderTemplateVariables(headers);
+  if (unknown.length > 0) {
+    throw new Error(`未知请求头变量：${unknown.map((name) => `{{${name}}}`).join("、")}；可用变量：${HEADER_TEMPLATE_VARIABLES.join(" / ")}`);
+  }
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 

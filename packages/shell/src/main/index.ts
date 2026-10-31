@@ -4,12 +4,14 @@
  * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
  */
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHANNEL_BINDINGS, EVENTS } from "loopsoar-contracts/schemas";
+import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { createNodePlatform } from "loopsoar-core/platform";
 import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
@@ -529,10 +531,23 @@ app.whenReady().then(async () => {
     const stored = providerId ? (secrets.get(providerId) ?? "") : "";
     return stored || resolveApiKeyFromEnv(process.env);
   };
-  const buildLlmFromActive = (): LlmClient | undefined => {
+  const buildLlmFromActive = (sessionId?: string): LlmClient | undefined => {
     const active = providers.active();
     const key = resolveProviderKey(active?.id);
     if (!active || !key) return undefined;
+    // 请求头模板（{{sessionId}} / {{model}} / {{requestId}} …）：按请求渲染，
+    // 让 x-opencode-session 这类"每会话/每请求"限制无需为每个供应商写死。
+    const resolveHeaders =
+      active.headers && Object.keys(active.headers).length > 0
+        ? (): Record<string, string> =>
+            renderHeaderTemplates(active.headers, {
+              provider: active.provider,
+              model: active.model,
+              sessionId: sessionId ?? "no-session",
+              requestId: randomUUID(),
+              timestamp: new Date().toISOString(),
+            })
+        : undefined;
     // 端点协议：显式指定优先，auto 按 baseUrl 推断（OpenAI 兼容 / Anthropic Messages）
     const format = active.apiFormat && active.apiFormat !== "auto" ? active.apiFormat : inferApiFormat(active.baseUrl);
     if (format === "anthropic") {
@@ -540,10 +555,10 @@ app.whenReady().then(async () => {
         baseUrl: active.baseUrl.replace(/\/v1$/, ""),
         apiKey: key,
         model: active.model,
-        headers: active.headers,
+        resolveHeaders,
       });
     }
-    return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model, headers: active.headers });
+    return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model, resolveHeaders });
   };
   // 惰性引用：供应商增删改/切换活跃后立即生效（无需重启）
   let llmRef: LlmClient | undefined = buildLlmFromActive();
@@ -627,7 +642,7 @@ app.whenReady().then(async () => {
     // 权限策略：设置面板保存后即时生效
     permissionPolicy: () => loadPermissions(dirs.configDir),
     // 供应商：设置面板保存后即时生效
-    getLlm: () => llmRef,
+    getLlm: (sessionId?: string) => buildLlmFromActive(sessionId) ?? llmRef,
     // 会话历史：每次 stream 读取持久化消息，让模型具备多轮上下文（回滚后同样生效）
     getHistory: () =>
       (sessions.load()?.messages ?? []).slice(-400).map((m) => ({

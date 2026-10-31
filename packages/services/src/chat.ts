@@ -57,7 +57,7 @@ export interface ChatServiceOptions {
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
   permissionPolicy?: () => Permissions;
   /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
-  getLlm?: () => LlmClient | undefined;
+  getLlm?: (sessionId?: string) => LlmClient | undefined;
   /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
   getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
   /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 12 万字符）。 */
@@ -281,8 +281,9 @@ export class ChatService {
   async stream(input: ChatInput, sink?: (item: ChunkItem) => void): Promise<ChatStreamResult> {
     const { platform, registry, sandbox, agent } = this.opts;
     // 惰性 LLM：设置面板保存供应商后可立即生效（无需重启）
-    const llm = this.opts.getLlm?.() ?? this.opts.llm;
     const sessionId = input.sessionId ?? `sess-${Date.now()}`;
+    // 传入 sessionId：供应商请求头模板里的 {{sessionId}} 按当前会话渲染
+    const llm = this.opts.getLlm?.(sessionId) ?? this.opts.llm;
     const chunks: ChunkBatch[] = [];
     const batcher = new StreamChunkBatcher((batch) => {
       chunks.push(batch);

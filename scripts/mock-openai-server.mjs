@@ -53,6 +53,11 @@ const server = createServer(async (req, res) => {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const toolName = process.env.MOCK_TOOL_NAME;
   console.log(`MOCK_REQ roles=${messages.map((m) => m.role).join(",")} tool=${toolName ?? "-"}`);
+  if (process.env.MOCK_LOG_HEADERS === "1") {
+    const keep = ["user-agent", "x-opencode-session", "x-request-id", "x-test-request", "authorization"];
+    const picked = Object.fromEntries(keep.map((name) => [name, req.headers[name] ?? null]));
+    console.log(`MOCK_HEADERS ${JSON.stringify(picked)}`);
+  }
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",

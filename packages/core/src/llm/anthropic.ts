@@ -19,6 +19,8 @@ export interface AnthropicClientOptions {
   maxRetries?: number;
   /** 自定义请求头（会在默认头之后合并）。 */
   headers?: Record<string, string>;
+  /** 每次 HTTP 请求前解析请求头（模板变量；在静态 headers 之后合并）。 */
+  resolveHeaders?: () => Record<string, string>;
 }
 
 function effortToBudget(effort: string): number {
@@ -91,7 +93,9 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           "content-type": "application/json",
           "x-api-key": opts.apiKey,
           "anthropic-version": "2023-06-01",
+          "User-Agent": "Loopsoar/1.0",
           ...(opts.headers ?? {}),
+          ...(opts.resolveHeaders?.() ?? {}),
         },
         body: JSON.stringify(body),
         signal: controller.signal,
