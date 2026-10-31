@@ -8,6 +8,7 @@ import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import type { PermissionsState, ProviderModel, ProviderStatus } from "./types.js";
+import { usePopover } from "./popover.js";
 
 export interface ComposerProps {
   value: string;
@@ -77,7 +78,23 @@ export default function Composer({
   onPickAttachment,
   notice,
 }: ComposerProps): React.ReactElement {
-  const [permMenuOpen, setPermMenuOpen] = React.useState(false);
+  // 权限/模型菜单互斥：同一时刻只开一个（打开另一个会自动收起）。
+  const [openMenu, setOpenMenu] = React.useState<"perm" | "model" | null>(null);
+  usePopover("composer-perm", openMenu === "perm", (next) => {
+    if (!next) setOpenMenu(null);
+  });
+  usePopover("composer-model", modelMenuOpen, (next) => {
+    if (!next) onCloseModelMenu();
+  });
+  const openPermissionMenu = (): void => {
+    if (!permSummary) return;
+    onCloseModelMenu();
+    setOpenMenu((prev) => (prev === "perm" ? null : "perm"));
+  };
+  const openModelMenuSafely = (): void => {
+    setOpenMenu(null);
+    onOpenModelMenu();
+  };
   const adjustPermission = (category: "read" | "write" | "terminal" | "network", value: "allow" | "confirm" | "deny"): void => {
     if (!permSummary) return;
     onPermissionChange({
@@ -128,20 +145,20 @@ export default function Composer({
             {compactUi ? null : mode === "build" ? "Build" : "Plan"}
           </button>
 
-          <span style={styles.anchor}>
+          <span style={styles.anchor} data-popover-trigger>
             <button
               type="button"
               className="chip"
               style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
               title={`当前会话权限${compactUi ? "（空间不足，已折叠）" : ""}`}
               aria-label="当前会话权限"
-              onClick={() => setPermMenuOpen((open) => !open)}
+              onClick={openPermissionMenu}
             >
               <Icon name="check" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
               {compactUi ? null : permSummary ? permissionLabel(permSummary) : "权限"}
             </button>
-            {permMenuOpen && permSummary ? (
-              <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover }}>
+            {openMenu === "perm" && permSummary ? (
+              <div className="pop-in" data-popover style={{ ...styles.popover, ...styles.chipPopover }}>
                 <div style={styles.modelMenuHead}>本会话工具权限</div>
                 {PERMISSION_CATEGORIES.map((category) => (
                   <div key={category.key} style={styles.permRow}>
@@ -164,35 +181,42 @@ export default function Composer({
                     </span>
                   </div>
                 ))}
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="model-item"
-                  style={styles.modelMenuFoot}
+                  style={{ ...styles.modelMenuItem, ...styles.modelMenuFoot }}
                   onClick={() => {
-                    setPermMenuOpen(false);
+                    setOpenMenu(null);
+                    onOpenSettings("permissions");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setOpenMenu(null);
                     onOpenSettings("permissions");
                   }}
                 >
                   打开完整权限设置…
-                </button>
+                </div>
               </div>
             ) : null}
           </span>
 
-          <span style={styles.anchor}>
+          <span style={styles.anchor} data-popover-trigger>
             <button
               type="button"
               className="chip"
               style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
               title={`选择模型：${provider?.configured ? provider.model : "未配置"}${compactUi ? "（空间不足，已折叠）" : ""}`}
               aria-label="选择模型"
-              onClick={onOpenModelMenu}
+              onClick={openModelMenuSafely}
             >
               <Icon name="cloud-upload" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
               {compactUi ? null : provider?.configured ? provider.model : "未配置模型"}
             </button>
             {modelMenuOpen ? (
-              <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
+              <div className="pop-in" data-popover style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
                 <div style={styles.modelMenuHead}>{provider?.provider ?? "未配置"} · 选择模型</div>
                 {modelList === null ? (
                   <div style={styles.modelMenuItem}>加载中…</div>
@@ -237,17 +261,24 @@ export default function Composer({
                     </div>
                   </div>
                 ) : null}
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="model-item"
-                  style={styles.modelMenuFoot}
+                  style={{ ...styles.modelMenuItem, ...styles.modelMenuFoot }}
                   onClick={() => {
+                    onCloseModelMenu();
+                    onOpenSettings("providers");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
                     onCloseModelMenu();
                     onOpenSettings("providers");
                   }}
                 >
                   管理供应商 / 添加模型…
-                </button>
+                </div>
               </div>
             ) : null}
           </span>
@@ -420,6 +451,8 @@ const styles: Record<string, React.CSSProperties> = {
     paddingTop: 6,
     borderTop: `1px solid ${BRAND.border}`,
     justifyContent: "center",
+    textAlign: "center",
+    background: "transparent",
     color: BRAND.linenFaint,
   },
 };

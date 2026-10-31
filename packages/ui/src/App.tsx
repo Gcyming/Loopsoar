@@ -20,6 +20,7 @@ import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
 import MessageList from "./MessageList.js";
+import { usePopover } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import Composer from "./Composer.js";
 import { type TimelineStep } from "./timeline.js";
@@ -163,7 +164,6 @@ export default function App(): React.JSX.Element {
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [permMenuOpen, setPermMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
@@ -172,8 +172,15 @@ export default function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [modelList, setModelList] = useState<{ models: ProviderModel[]; error: string | null } | null>(null);
+  // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc 收起（含 Composer 内菜单）。
+  usePopover("app-session", sessionOpen, setSessionOpen);
+  usePopover("app-history", historyOpen, setHistoryOpen);
+  usePopover("app-downloads", downloadsOpen, setDownloadsOpen);
+
   const sessionIdRef = useRef<string>(nextId("sess"));
   const omniboxRef = useRef<HTMLInputElement | null>(null);
+  /** 最近一次同步到地址栏的 URL（仅活动标签 URL 变化时才覆盖，避免打断用户输入）。 */
+  const lastSyncedUrlRef = useRef<string>("");
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
@@ -213,6 +220,7 @@ export default function App(): React.JSX.Element {
       if (prefsResult.status === "fulfilled") {
         const prefs = prefsResult.value.preferences;
         setPreferences(prefs);
+        setReasoningEffort(prefs.reasoningEffort ?? "");
         if (prefs.sidebarWidth) {
           setSidebarWidth(prefs.sidebarWidth);
           void api.browser.setSidebarWidth({ width: prefs.sidebarWidth }).catch(() => {});
@@ -238,7 +246,15 @@ export default function App(): React.JSX.Element {
       const dlResult = await api.browser.downloads().catch(() => null);
       if (dlResult) setDownloads(dlResult.downloads);
       const tabsResult = await api.browser.listTabs().catch(() => null);
-      if (tabsResult) setTabs(tabsResult.tabs);
+      if (tabsResult) {
+        setTabs(tabsResult.tabs);
+        const active = tabsResult.tabs.find((tab) => tab.active);
+        if (active?.url) {
+          lastSyncedUrlRef.current = active.url;
+          setAddress(active.url);
+          setCurrentUrl(active.url);
+        }
+      }
       if (bootResult.status === "fulfilled") setBoot(bootResult.value);
       if (providerResult.status === "fulfilled") setProvider(providerResult.value);
       if (agentsResult.status === "fulfilled") setAgents(agentsResult.value.agents);
@@ -351,7 +367,16 @@ export default function App(): React.JSX.Element {
       }),
       api.on("browser:tabs", (payload) => {
         const p = payload as { tabs?: TabState[] };
-        if (Array.isArray(p.tabs)) setTabs(p.tabs);
+        if (!Array.isArray(p.tabs)) return;
+        setTabs(p.tabs);
+        // 地址栏与活动网页强绑定：用户点链接 / AI 导航 / 页面重定向 / 切标签都走这里。
+        const active = p.tabs.find((tab) => tab.active);
+        const nextUrl = active?.url ?? "";
+        if (nextUrl !== lastSyncedUrlRef.current) {
+          lastSyncedUrlRef.current = nextUrl;
+          setAddress(nextUrl);
+          setCurrentUrl(nextUrl);
+        }
       }),
       api.on("memory:updated", () => {
         /* 记忆条目在设置面板中查看；主界面保持安静 */
@@ -791,7 +816,6 @@ export default function App(): React.JSX.Element {
       setHistoryOpen(true);
       setDownloadsOpen(false);
       setModelMenuOpen(false);
-      setPermMenuOpen(false);
     });
   }, [api, historyOpen]);
 
@@ -806,7 +830,6 @@ export default function App(): React.JSX.Element {
       setDownloadsOpen(true);
       setHistoryOpen(false);
       setModelMenuOpen(false);
-      setPermMenuOpen(false);
     });
   }, [api, downloadsOpen]);
 
@@ -870,10 +893,33 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!api || typeof location === "undefined") return;
     const mode = new URLSearchParams(location.search).get("e2e");
-    if (mode !== "model-menu" && mode !== "perm-menu") return;
+    if (mode !== "model-menu" && mode !== "perm-menu" && mode !== "menus-overlap" && mode !== "set-effort") return;
+    const clickPermissionChip = (): void => {
+      // 权限菜单的开关属于 Composer：深链只负责点击它的触发 chip（避免 App 再维护一份状态）。
+      const chips = Array.from(document.querySelectorAll<HTMLElement>(".chip"));
+      chips.find((chip) => (chip.textContent ?? "").includes("权限"))?.click();
+    };
     const timer = setTimeout(() => {
-      if (mode === "model-menu") openModelMenu();
-      else void api.settings.getPermissions().then((r) => { setPermSummary(r); setPermMenuOpen(true); }).catch(() => {});
+      if (mode === "model-menu") {
+        openModelMenu();
+        return;
+      }
+      if (mode === "set-effort") {
+        // E2E：展开模型菜单并点击「高」推理等级，用于验证偏好持久化（重启后仍为高）。
+        openModelMenu();
+        window.setTimeout(() => {
+          const buttons = Array.from(document.querySelectorAll<HTMLElement>("[data-popover] .chip"));
+          buttons.find((button) => (button.textContent ?? "").trim() === "高")?.click();
+        }, 700);
+        return;
+      }
+      if (mode === "menus-overlap") {
+        // 先开模型菜单，再点权限 chip：验证全局互斥（最终只应保留权限菜单）。
+        openModelMenu();
+        window.setTimeout(clickPermissionChip, 400);
+        return;
+      }
+      clickPermissionChip();
     }, 900);
     return () => clearTimeout(timer);
   }, [api, openModelMenu]);
@@ -924,7 +970,7 @@ export default function App(): React.JSX.Element {
 
   // 历史 / 下载面板（以点击的按钮为基点展开）
   const renderHistoryPanel = (): React.JSX.Element => (
-    <div className="pop-in" style={styles.popover}>
+    <div className="pop-in" data-popover style={styles.popover}>
       <div style={styles.dropTitle}>历史记录（本标签）</div>
       {historyEntries.length === 0 ? (
         <div style={styles.dropEmpty}>暂无历史</div>
@@ -954,7 +1000,7 @@ export default function App(): React.JSX.Element {
   );
 
   const renderDownloadsPanel = (): React.JSX.Element => (
-    <div className="pop-in" style={{ ...styles.popover, right: 0, left: "auto", width: 400 }}>
+    <div className="pop-in" data-popover style={{ ...styles.popover, right: 0, left: "auto", width: 400 }}>
       <div style={styles.dropTitle}>下载</div>
       {downloads.length === 0 ? (
         <div style={styles.dropEmpty}>暂无下载</div>
@@ -1093,7 +1139,7 @@ export default function App(): React.JSX.Element {
             </span>
           </div>
           <div style={styles.sessionBar}>
-            <span style={styles.anchor}>
+            <span style={styles.anchor} data-popover-trigger>
               <button
                 type="button"
                 className="chip"
@@ -1110,7 +1156,7 @@ export default function App(): React.JSX.Element {
               <Icon name="plus" size={13} />
             </button>
             {sessionOpen ? (
-              <div style={styles.sessionMenu}>
+              <div data-popover style={styles.sessionMenu}>
                 <div style={styles.dropTitle}>会话历史</div>
                 {sessions.length === 0 ? <div style={styles.dropEmpty}>还没有会话</div> : null}
                 {sessions.map((x) => (
@@ -1189,7 +1235,16 @@ export default function App(): React.JSX.Element {
             onChooseModel={chooseModel}
             effortOptions={effortOptions}
             reasoningEffort={reasoningEffort}
-            onReasoningEffortChange={setReasoningEffort}
+            onReasoningEffortChange={(value) => {
+              setReasoningEffort(value);
+              if (!api || !preferences) return;
+              const next = { ...preferences, reasoningEffort: value };
+              setPreferences(next);
+              void api.settings
+                .setPreferences(next)
+                .then((r) => setPreferences(r.preferences))
+                .catch(() => {});
+            }}
             effortLabel={effortLabel}
             permissionLabel={permissionLabel}
             onPickAttachment={() => {

@@ -14,7 +14,8 @@ export interface WebContentsLike {
   getURL(): string;
   capturePage(): Promise<{ toPNG(): Buffer }>;
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
-  on(event: "dom-ready" | "did-finish-load", cb: () => void): void;
+  /** 页面事件（真实 Electron WebContents 兼容；测试可只实现用到的部分）。 */
+  on(event: string, cb: (...args: unknown[]) => void): void;
 }
 
 export interface WebContentsViewLike {
@@ -25,6 +26,10 @@ export interface WebContentsAdapterOptions {
   view: WebContentsViewLike;
   /** 销毁视图（由外壳传入：从窗口移除 + 释放）。 */
   onClose?: () => void;
+  /** 页面主动导航（用户点链接 / 页面重定向 / SPA 路由）→ 让外壳同步地址栏与标签状态。 */
+  onNavigate?: (url: string) => void;
+  /** 页面标题变化 → 标签标题同步。 */
+  onTitle?: (title: string) => void;
 }
 
 /** DOM 侧注入脚本：给可交互元素打编号（data-loops-el），返回数量。 */
@@ -89,6 +94,16 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
         .catch(() => done());
       setTimeout(done, 15_000);
     });
+  }
+
+  // 关键：用户点网页里的链接不会经过外壳的 navigate()，必须靠 WebContents 事件
+  // 把地址回传给外壳；否则会出现"地址栏与网页各说各话"（网址与网页割裂）。
+  if (opts.onNavigate) {
+    wc.on("did-navigate", (...args) => opts.onNavigate?.(String(args[0] ?? "")));
+    wc.on("did-navigate-in-page", (...args) => opts.onNavigate?.(String(args[0] ?? "")));
+  }
+  if (opts.onTitle) {
+    wc.on("page-title-updated", (...args) => opts.onTitle?.(String(args[0] ?? "")));
   }
 
   return {

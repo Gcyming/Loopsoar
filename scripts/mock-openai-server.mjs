@@ -67,9 +67,34 @@ const server = createServer(async (req, res) => {
     if (process.env.MOCK_PLAN === "1") calls.push("todo_write");
     const toolResultCount = messages.filter((msg) => msg.role === "tool").length;
     if (process.env.MOCK_REASONING === "1") {
-      const thoughts = toolResultCount === 0
-        ? ["用户想了解当前页面的内容。", "我应该先读取页面快照，再根据结果总结。", "如果页面没有打开，就先导航到目标地址。"]
-        : ["工具结果已经回来了。", "先核对页面标题与正文，再整理成简洁结论。", "如果需要分步骤推进，可以用 todo_write 记录规划。"];
+      const thoughts = process.env.MOCK_REASONING_MARKDOWN === "1"
+        ? (toolResultCount === 0
+          ? [
+              `用户想了解当前页面的内容。
+我先看一遍页面结构，再决定是否需要读取正文。
+这两句属于同一段落，应该自然换行而不是每行单独成段。`,
+              `
+
+---
+
+### 检查要点
+- 页面标题与正文是否一致
+- 工具结果是否完整返回
+- 需要时用 todo_write 记录规划
+
+1. 先读页面
+2. 再核对信息
+3. 最后输出结论`,
+            ]
+          : [`工具结果已经回来了。
+先核对页面标题与正文，再整理成简洁结论。`, `
+
+---
+
+整理完成，准备输出。`])
+        : (toolResultCount === 0
+          ? ["用户想了解当前页面的内容。", "我应该先读取页面快照，再根据结果总结。", "如果页面没有打开，就先导航到目标地址。"]
+          : ["工具结果已经回来了。", "先核对页面标题与正文，再整理成简洁结论。", "如果需要分步骤推进，可以用 todo_write 记录规划。"]);
       for (const thought of thoughts) {
         sse(res, { choices: [{ delta: { reasoning_content: thought } }] });
         await sleep(70);

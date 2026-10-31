@@ -137,6 +137,7 @@ function TimelineGroupBlock({
             key={`s${group.from + index}`}
             step={step}
             autoExpand={group.isLast && isLastOfGroup}
+            forceExpand={expandAll}
             streamingTail={streamingTail}
             groupHeadline={group.headline}
             Markdown={Markdown}
@@ -174,6 +175,7 @@ function TimelineGroupBlock({
 function TimelineNode({
   step,
   autoExpand,
+  forceExpand,
   streamingTail,
   groupHeadline,
   Markdown,
@@ -181,13 +183,15 @@ function TimelineNode({
 }: {
   step: TimelineStep;
   autoExpand?: boolean;
+  /** E2E/演示：强制展开所有思考段（?expandAllGroups=1）。 */
+  forceExpand?: boolean;
   streamingTail?: boolean;
   /** 所在工作阶段的组头（用于去重：组头已展示同一句时，省掉重复的摘要行）。 */
   groupHeadline?: string;
   Markdown: MarkdownFn;
   onOpenUrl?: (url: string) => void;
 }): React.ReactElement | null {
-  const [expanded, setExpanded] = React.useState(Boolean(autoExpand));
+  const [expanded, setExpanded] = React.useState(Boolean(autoExpand || forceExpand));
 
   if (step.kind === "think") {
     const clean = step.text.trim();
@@ -207,7 +211,7 @@ function TimelineNode({
         <button type="button" className="think-step-toggle" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起这段思考" : "展开这段思考（Markdown）"}>
           <Chevron open={expanded} size={10} />
           <span className="think-step-preview">
-            {displayPreview || (duplicateOfHeadline ? "展开思考" : "思考…")}
+            {displayPreview || (duplicateOfHeadline ? (expanded ? "收起思考" : "展开思考") : "思考…")}
             {!duplicateOfHeadline && clean.length > 120 ? "…" : ""}
           </span>
         </button>

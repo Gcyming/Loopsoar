@@ -145,6 +145,18 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 验收截图：gui-64-session-acceptance.png（时间线 + 工具 diff + 规划卡）
 - 基线：typecheck 0、376 tests、gen/check 一致、build 6/6
 
+## 二·十六、2026-10-31 第十三次增量（UI 修复：网址绑定 / 菜单 / 持久化 / Markdown）
+- 网址与网页强绑定：WebContents 增加 did-navigate/page-title-updated 回调 → BrowserHost 同步 URL/标题/历史；
+  App 的 browser:tabs 事件按活动标签 URL 同步地址栏（仅 URL 变化时覆盖，避免打断输入）；AI 打开网页时地址栏同步
+- 菜单浮层：新增 `popover.ts` 全局仲裁（同时只开一个、点击外部/Esc 收起、互斥）；Composer 权限/模型菜单、
+  会话列表、历史/下载全部接入；底部操作项改 div 修复原生 button 白块
+- 推理强度持久化：偏好新增 `reasoningEffort`（contracts/core/UI 类型三处同步），启动恢复、切换即保存；
+  排查同类模型设置（模型选择本身已由 provider 配置持久化）
+- Markdown 检修：连续行按软换行合并为段落（不再每行一段）、支持 `---/***/___` 分隔线、有序列表、
+  `+/*/•` 无序列表；思考区/穿插正文去掉 pre-wrap；新增 Markdown 5 用例
+- 证据：gui-65 模型菜单、gui-66 AI 导航后地址栏、gui-67 菜单互斥、gui-68 推理等级重启保持、gui-69 Markdown
+- 测试：384 全绿（Markdown 5 + BrowserHost 2 + 偏好 1）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

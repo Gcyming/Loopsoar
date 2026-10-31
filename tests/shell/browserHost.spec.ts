@@ -171,3 +171,49 @@ describe("BrowserHost（多标签）", () => {
     expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 640, height: 550 });
   });
 });
+
+describe("BrowserHost（地址与网页强绑定）", () => {
+  function makeHostWithEvents() {
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const host = new BrowserHost({
+      createView: () =>
+        ({
+          setBounds() {},
+          setVisible() {},
+          webContents: {
+            async loadURL() {},
+            getURL: () => "https://example.com/",
+            async capturePage() {
+              return { toPNG: () => Buffer.from("") };
+            },
+            async executeJavaScript(code: string) {
+              return code.includes("document.title") ? "Example" : 1;
+            },
+            on(event: string, cb: (...args: unknown[]) => void) {
+              handlers.set(event, cb);
+            },
+          },
+        }) as unknown as HostView,
+      attachView: () => {},
+      detachView: () => {},
+      getWindowSize: () => ({ width: 1360, height: 860 }),
+    });
+    return { host, handlers };
+  }
+
+  it("网页内点击链接（did-navigate）→ 标签 URL/历史/地址同步数据更新", async () => {
+    const { host, handlers } = makeHostWithEvents();
+    await host.navigate("https://example.com/");
+    handlers.get("did-navigate")?.("https://example.com/next");
+    const tab = host.listTabs()[0];
+    expect(tab.url).toBe("https://example.com/next");
+    expect(tab.canBack).toBe(true);
+  });
+
+  it("页面标题变化（page-title-updated）→ 标签标题同步", async () => {
+    const { host, handlers } = makeHostWithEvents();
+    await host.navigate("https://example.com/");
+    handlers.get("page-title-updated")?.("新标题 - 站点");
+    expect(host.listTabs()[0].title).toBe("新标题 - 站点");
+  });
+});

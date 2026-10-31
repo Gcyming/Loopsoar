@@ -57,6 +57,7 @@ export interface Preferences {
   sidebarWidth: number;
   agentMaxRounds?: number;
   agentMaxToolCalls?: number;
+  reasoningEffort?: string;
 }
 
 export interface PermissionCategory {

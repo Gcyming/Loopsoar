@@ -68,31 +68,60 @@ function inlineRich(text: string): React.ReactNode {
   });
 }
 
-/** 行级渲染（支持 GFM 表格）。 */
+/** 行级渲染（GFM 表格 / 列表 / 标题 / 引用 / 分隔线 / 段落）。 */
 function renderPlainLines(block: string, bi: number, compact = false): React.ReactNode[] {
   const lines = block.split(/\n/);
   const nodes: React.ReactNode[] = [];
   let list: string[] = [];
+  let listOrdered = false;
   let listKey = 0;
+  /** 段落缓冲：连续的普通文本行按 Markdown 软换行合并成一段，而不是每行一个 div。 */
+  let paragraph: string[] = [];
   const splitRow = (line: string): string[] =>
     line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+
+  const flushParagraph = (): void => {
+    if (paragraph.length === 0) return;
+    const text = paragraph.join(" ").replace(/\s+/g, " ").trim();
+    paragraph = [];
+    if (!text) return;
+    nodes.push(
+      <div key={`p-${bi}-${nodes.length}`} style={{ ...styles.richPara, ...(compact ? styles.compactPara : null) }}>
+        {inlineRich(text)}
+      </div>,
+    );
+  };
   const flushList = (): void => {
     if (list.length === 0) return;
     const items = list;
+    const ordered = listOrdered;
     list = [];
+    listOrdered = false;
+    const listStyle = { ...styles.richList, ...(compact ? styles.compactList : null) };
     nodes.push(
-      <ul key={`ul-${bi}-${listKey++}`} style={{ ...styles.richList, ...(compact ? styles.compactList : null) }}>
-        {items.map((item, ii) => (
-          <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
-        ))}
-      </ul>,
+      ordered ? (
+        <ol key={`ol-${bi}-${listKey++}`} style={listStyle}>
+          {items.map((item, ii) => (
+            <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
+          ))}
+        </ol>
+      ) : (
+        <ul key={`ul-${bi}-${listKey++}`} style={listStyle}>
+          {items.map((item, ii) => (
+            <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
+          ))}
+        </ul>
+      ),
     );
   };
 
   let i = 0;
   while (i < lines.length) {
     const line = lines[i].replace(/\s+$/, "");
+
+    // 表格：| a | b |  +  分隔行
     if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+      flushParagraph();
       flushList();
       const header = splitRow(line);
       const rows: string[][] = [];
@@ -117,20 +146,48 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
       );
       continue;
     }
-    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
+
+    // 水平分隔线：--- / *** / ___（必须在列表之前判断，否则会被当成列表项）
+    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      nodes.push(<hr key={`hr-${bi}-${nodes.length}`} style={{ ...styles.rule, ...(compact ? styles.compactRule : null) }} />);
+      i += 1;
+      continue;
+    }
+
+    // 无序列表
+    const bullet = /^\s*[-*+•]\s+(.*)$/.exec(line);
     if (bullet) {
+      flushParagraph();
+      if (list.length > 0 && listOrdered) flushList();
+      listOrdered = false;
       list.push(bullet[1]);
       i += 1;
       continue;
     }
-    flushList();
-    if (!line.trim()) {
-      nodes.push(<div key={`gap-${bi}-${nodes.length}`} style={{ height: 6 }} />);
+
+    // 有序列表
+    const ordered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (ordered) {
+      flushParagraph();
+      if (list.length > 0 && !listOrdered) flushList();
+      listOrdered = true;
+      list.push(ordered[1]);
       i += 1;
       continue;
     }
+
+    flushList();
+    if (!line.trim()) {
+      flushParagraph();
+      i += 1;
+      continue;
+    }
+
     const heading = /^(#{1,4})\s+(.*)$/.exec(line);
     if (heading) {
+      flushParagraph();
       nodes.push(
         <div
           key={`h-${bi}-${nodes.length}`}
@@ -147,15 +204,20 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
       i += 1;
       continue;
     }
+
     const quote = /^\s*>\s?(.*)$/.exec(line);
     if (quote) {
+      flushParagraph();
       nodes.push(<div key={`q-${bi}-${nodes.length}`} style={{ ...styles.richQuote, ...(compact ? styles.compactQuote : null) }}>{inlineRich(quote[1])}</div>);
       i += 1;
       continue;
     }
-    nodes.push(<div key={`p-${bi}-${nodes.length}`} style={{ ...styles.richPara, ...(compact ? styles.compactPara : null) }}>{inlineRich(line)}</div>);
+
+    // 普通文本：进入段落缓冲，连续行合并为一段（软换行）
+    paragraph.push(line);
     i += 1;
   }
+  flushParagraph();
   flushList();
   return nodes;
 }
@@ -181,6 +243,8 @@ const styles: Record<string, React.CSSProperties> = {
   compactPara: { fontSize: 12.5, lineHeight: 1.75, margin: "0.45em 0" },
   compactList: { margin: "0.45em 0", paddingLeft: 18, fontSize: 12.5 },
   compactTable: { fontSize: 11 },
+  rule: { border: "none", borderTop: "1px solid rgba(255,255,255,0.14)", margin: "10px 0" },
+  compactRule: { margin: "7px 0" },
   codeWrap: {
     margin: "8px 0",
     border: `1px solid ${BRAND.border}`,
@@ -222,7 +286,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: BRAND.linenMuted,
     fontSize: 13,
   },
-  richPara: { margin: "3px 0", whiteSpace: "pre-wrap" },
+  richPara: { margin: "3px 0" },
   richList: { margin: "4px 0", paddingLeft: 20 },
   richListItem: { margin: "2px 0" },
   inlineCode: {

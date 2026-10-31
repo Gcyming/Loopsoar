@@ -67,7 +67,7 @@ export default function BrowserChrome({
           <button type="button" className="icon-btn" title="刷新" disabled={!currentUrl} onClick={onNavigate}>
             <Icon name="reload" size={16} />
           </button>
-          <span style={styles.anchor}>
+          <span style={styles.anchor} data-popover-trigger>
             <button type="button" className="icon-btn" title="历史记录" onClick={onToggleHistory}>
               <Icon name="history" size={16} />
             </button>
@@ -94,7 +94,7 @@ export default function BrowserChrome({
         </div>
 
         <div style={styles.topActions}>
-          <span style={styles.anchor}>
+          <span style={styles.anchor} data-popover-trigger>
             <button type="button" className="icon-btn" title="下载" onClick={onToggleDownloads} style={{ position: "relative" }}>
               <Icon name="download" size={17} />
               {downloadsActive ? <span style={styles.dlDot} /> : null}

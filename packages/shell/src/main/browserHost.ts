@@ -49,9 +49,11 @@ interface TabEntry {
   adapter: BrowserAdapter;
   url: string;
   title: string;
-  /** 导航历史（仅记录应用内发起的导航；后退/前进按栈移动）。 */
+  /** 导航历史（应用内导航与网页内点击都会追加；后退/前进按栈移动）。 */
   history: string[];
   index: number;
+  /** 外壳发起的导航进行中：此期间忽略 WebContents 的导航事件，避免重复入栈。 */
+  navigating?: boolean;
 }
 
 export type NavigateOutcome = { ok: true; url: string; tabId: string } | { ok: false; error: string };
@@ -73,9 +75,33 @@ export class BrowserHost {
 
   private createTab(): TabEntry {
     const view = this.deps.createView();
-    const adapter = createWebContentsViewAdapter({ view });
     this.deps.attachView(view);
     const id = this.nextId();
+    // 网页内点击/重定向/SPA 路由：同步地址、标题与历史栈，让地址栏与网页始终一致。
+    const adapter = createWebContentsViewAdapter({
+      view,
+      onNavigate: (url: string): void => {
+        const entry = this.tabs.get(id);
+        if (!entry || entry.navigating || !url || entry.url === url) return;
+        entry.url = url;
+        const current = entry.index >= 0 ? entry.history[entry.index] : undefined;
+        if (current !== url) {
+          entry.history = entry.history.slice(0, entry.index + 1);
+          entry.history.push(url);
+          entry.index = entry.history.length - 1;
+        }
+        this.applyLayout();
+        this.emitTabs();
+      },
+      onTitle: (title: string): void => {
+        const entry = this.tabs.get(id);
+        if (!entry) return;
+        const next = title.trim().slice(0, 80) || this.hostnameOf(entry.url);
+        if (next === entry.title) return;
+        entry.title = next;
+        this.emitTabs();
+      },
+    });
     const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1 };
     this.tabs.set(id, entry);
     // 新标签必须立即成为活动标签；否则 newTab 里 `id = activeId` 会拿到旧标签，
@@ -200,13 +226,17 @@ export class BrowserHost {
     }
     this.activeId = id;
     const entry = this.tabs.get(id)!;
+    entry.navigating = true;
     try {
       const result = await entry.adapter.navigate(normalized.url);
       entry.url = result.url;
       if (record) {
-        entry.history = entry.history.slice(0, entry.index + 1);
-        entry.history.push(result.url);
-        entry.index = entry.history.length - 1;
+        const current = entry.index >= 0 ? entry.history[entry.index] : undefined;
+        if (current !== result.url) {
+          entry.history = entry.history.slice(0, entry.index + 1);
+          entry.history.push(result.url);
+          entry.index = entry.history.length - 1;
+        }
       }
       try {
         const title = await entry.adapter.executeJs("document.title");
@@ -219,6 +249,8 @@ export class BrowserHost {
       return { ok: true, url: result.url, tabId: id };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      entry.navigating = false;
     }
   }
 

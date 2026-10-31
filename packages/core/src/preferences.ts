@@ -22,6 +22,8 @@ export const PreferencesSchema = z.object({
   agentMaxRounds: z.number().int().min(1).max(500).optional(),
   /** Agent 单次任务最多工具调用次数（默认 100）。 */
   agentMaxToolCalls: z.number().int().min(1).max(2000).optional(),
+  /** 推理强度（空 = 模型默认；重启后保持）。 */
+  reasoningEffort: z.string().max(64).optional(),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -38,6 +40,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sidebarWidth: 360,
   agentMaxRounds: 40,
   agentMaxToolCalls: 100,
+  reasoningEffort: "",
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
@@ -55,6 +58,7 @@ export function mergePreferences(raw: unknown): Preferences {
     memoryStorePath: parsed.data.memoryStorePath ?? "",
     agentMaxRounds: parsed.data.agentMaxRounds ?? 40,
     agentMaxToolCalls: parsed.data.agentMaxToolCalls ?? 100,
+    reasoningEffort: parsed.data.reasoningEffort ?? "",
   };
 }
 
