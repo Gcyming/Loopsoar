@@ -122,7 +122,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 图片附件缩略图：contracts `fs:readImage`（扩展名白名单 + 6MB 上限）→ shell imageRead → preload 自动生成
   `loopsoarAPI.fs.readImage`；用户消息的图片附件渲染真实缩略图（模块级缓存，失败回退文件 chip）
 - E2E：`LOOPSOAR_E2E_CHAT_TEXT` 注入任意消息文本；`scrollTo=user` 定位用户气泡
-- 测试：imageRead 3 用例（data URL / 扩展名拒绝 / 体积上限）
+- 测试：imageRead 3 用例；新增 domain 后守卫 channels-have-handlers 立刻发现漏装配（已补 registerFsDomain）
 - 证据：gui-60-attachment-image.png（图片缩略图 + 正在思考/LiveStatus）
 - 会话板块追平清单更新：图片附件 ✅；剩余压缩报告明细、App <1200 行拆分
 

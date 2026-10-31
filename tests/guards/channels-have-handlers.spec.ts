@@ -16,6 +16,7 @@ import { registerMemoryDomain } from "../../packages/shell/src/main/domains/memo
 import { registerExtensionsDomain } from "../../packages/shell/src/main/domains/extensions.ts";
 import { registerSkillsDomain } from "../../packages/shell/src/main/domains/skills.ts";
 import { registerMcpDomain } from "../../packages/shell/src/main/domains/mcp.ts";
+import { registerFsDomain } from "../../packages/shell/src/main/domains/fs.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -102,6 +103,7 @@ function assemble(): void {
     push: () => {},
     openSkillsDir: async () => true,
   });
+  registerFsDomain(deps);
   registerMcpDomain({
     ...deps,
     mcp: {
