@@ -224,6 +224,12 @@ export interface SkillRecord {
   warnings?: string[];
 }
 
+export interface ExtensionRuntimeStatus {
+  state: "idle" | "starting" | "ready" | "error";
+  tools: string[];
+  error?: string;
+}
+
 export interface McpServerInfo {
   id: string;
   name: string;
@@ -249,6 +255,12 @@ export interface SkillRecord {
   warnings?: string[];
 }
 
+export interface ExtensionRuntimeStatus {
+  state: "idle" | "starting" | "ready" | "error";
+  tools: string[];
+  error?: string;
+}
+
 export interface McpServerInfo {
   id: string;
   name: string;
@@ -271,6 +283,8 @@ export interface InstalledExtension {
     version: string;
     description?: string;
     author?: string;
+    /** 入口文件（相对扩展目录）；为空表示纯声明式扩展 */
+    main?: string;
     permissions?: string[];
   };
   dir: string;
@@ -452,8 +466,19 @@ export interface LoopsoarAPI {
     disconnect(payload: { id: string }): Promise<{ ok: boolean; servers: McpServerInfo[] }>;
   };
   extensions: LoopsoarDomain & {
-    list(): Promise<{ extensions: InstalledExtension[]; dir: string; skipped: { dir: string; reason: string }[] }>;
-    setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; extension: InstalledExtension | null }>;
+    list(): Promise<{
+      extensions: InstalledExtension[];
+      dir: string;
+      skipped: { dir: string; reason: string }[];
+      runtime?: Record<string, ExtensionRuntimeStatus>;
+    }>;
+    setEnabled(payload: { id: string; enabled: boolean }): Promise<{
+      ok: boolean;
+      extension: InstalledExtension | null;
+      runtime?: ExtensionRuntimeStatus;
+    }>;
+    start(payload: { id: string }): Promise<{ status: ExtensionRuntimeStatus; runtime: Record<string, ExtensionRuntimeStatus> }>;
+    stop(payload: { id: string }): Promise<{ status: ExtensionRuntimeStatus; runtime: Record<string, ExtensionRuntimeStatus> }>;
     remove(payload: { id: string }): Promise<{ removed: boolean }>;
     openDir(): Promise<{ ok: boolean; dir: string }>;
   };

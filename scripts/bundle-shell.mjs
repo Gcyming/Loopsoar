@@ -5,7 +5,7 @@
  * 产物：packages/shell/dist/main.bundle.mjs
  */
 import { build } from "esbuild";
-import { rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync } from "node:fs";
 
 await rmSync("packages/shell/dist/main.bundle.mjs", { force: true });
 
@@ -25,3 +25,8 @@ const result = await build({
 const outputs = Object.values(result.metafile?.outputs ?? {});
 const bytes = outputs.reduce((sum, o) => sum + o.bytes, 0);
 console.log(`bundle 完成：packages/shell/dist/main.bundle.mjs（${(bytes / 1024).toFixed(1)} KB）`);
+
+// 扩展运行时 worker 必须是独立文件（spawn 子进程用），随主包一起产出
+mkdirSync("packages/shell/dist", { recursive: true });
+copyFileSync("packages/shell/src/main/extensionWorker.mjs", "packages/shell/dist/extensionWorker.mjs");
+console.log("worker 完成：packages/shell/dist/extensionWorker.mjs");

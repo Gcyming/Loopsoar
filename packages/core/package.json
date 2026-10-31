@@ -33,7 +33,8 @@
     "./loop": "./src/loop/index.js",
     "./extension": "./src/extension.js",
     "./skill": "./src/skill.js",
-    "./mcp": "./src/mcp.js"
+    "./mcp": "./src/mcp.js",
+    "./extensionWorker": "./src/extensionWorker.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

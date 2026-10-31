@@ -449,6 +449,20 @@
       "hasRequest": true
     },
     {
+      "channel": "extensions:start",
+      "domain": "extensions",
+      "method": "start",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:stop",
+      "domain": "extensions",
+      "method": "stop",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "extensions:openDir",
       "domain": "extensions",
       "method": "openDir",

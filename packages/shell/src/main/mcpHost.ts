@@ -93,6 +93,8 @@ export class McpHost {
     private configFile: string,
     private registry: ToolRegistry,
     private onUpdate: () => void,
+    /** 工具集变化回调：壳层据此刷新沙箱已知工具（否则新工具会被判「未知工具名」拒绝）。 */
+    private onToolsChanged?: () => void,
   ) {}
 
   /* ─────────────────────────── 配置 ─────────────────────────── */
@@ -184,6 +186,7 @@ export class McpHost {
     for (const tool of this.registry.list()) {
       if (tool.name.startsWith(prefix)) this.registry.unregister(tool.name);
     }
+    this.onToolsChanged?.();
   }
 
   private registerTools(serverId: string, bindings: McpToolBinding[]): void {
@@ -201,6 +204,7 @@ export class McpHost {
         });
         registered.push(finalName);
       }
+      this.onToolsChanged?.();
     } catch (err) {
       // 注册失败回滚，保持旧工具集不变（原子性）
       for (const name of registered) this.registry.unregister(name);

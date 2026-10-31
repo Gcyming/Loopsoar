@@ -21,6 +21,7 @@ const REPLY_CHUNKS = [
   "- 行内代码 `loopsoar`\n\n",
   "### 示例代码\n\n```ts\nconst loopsoar = createAgent({\n  mode: \"build\",\n});\nconsole.log(loopsoar.id);\n```\n\n",
   "> 引用：这是 slime 风格渲染的样例。\n\n",
+  "| 特性 | 支持 |\n|---|---|\n| 流式输出 | ✓ |\n| 工具调用 | ✓ |\n| Markdown 表格 | ✓ |\n\n",
   "更多见 [Loopsoar](https://example.com)。",
 ];
 

@@ -74,6 +74,8 @@ export const IPC_CHANNELS = {
   "extensions:list": { domain: "extensions", method: "list", sensitive: true, hasRequest: false },
   "extensions:setEnabled": { domain: "extensions", method: "setEnabled", sensitive: true, hasRequest: true },
   "extensions:remove": { domain: "extensions", method: "remove", sensitive: true, hasRequest: true },
+  "extensions:start": { domain: "extensions", method: "start", sensitive: true, hasRequest: true },
+  "extensions:stop": { domain: "extensions", method: "stop", sensitive: true, hasRequest: true },
   "extensions:openDir": { domain: "extensions", method: "openDir", sensitive: true, hasRequest: false },
   "skills:list": { domain: "skills", method: "list", sensitive: true, hasRequest: false },
   "skills:reload": { domain: "skills", method: "reload", sensitive: true, hasRequest: false },
@@ -139,7 +141,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "dialog": ["pickPath"],
     "memory": ["list", "add", "update", "delete", "stats", "clear"],
     "window": ["minimize", "maximize", "close", "state"],
-    "extensions": ["list", "setEnabled", "remove", "openDir"],
+    "extensions": ["list", "setEnabled", "remove", "start", "stop", "openDir"],
     "skills": ["list", "reload", "setEnabled", "openDir"],
     "mcp": ["list", "add", "remove", "connect", "disconnect"]
     },

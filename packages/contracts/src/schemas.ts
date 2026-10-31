@@ -577,6 +577,18 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: ExtensionIdSchema,
     sensitive: true,
   },
+  "extensions:start": {
+    domain: "extensions",
+    method: "start",
+    request: ExtensionIdSchema,
+    sensitive: true,
+  },
+  "extensions:stop": {
+    domain: "extensions",
+    method: "stop",
+    request: ExtensionIdSchema,
+    sensitive: true,
+  },
   "extensions:openDir": {
     domain: "extensions",
     method: "openDir",

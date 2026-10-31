@@ -12,4 +12,5 @@ out/
 
 # E2E 临时数据目录
 .loopsoar-data-empty/
+.loopsoar-data-mock/
 .tmp-mcp-test/

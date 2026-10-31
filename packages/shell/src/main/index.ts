@@ -3,6 +3,7 @@
  * 允许 import electron 的文件只有两个：本文件与 main/electronBrowser.ts（薄适配层）。
  * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
  */
+import { spawn } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
@@ -45,6 +46,7 @@ import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
+import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
 
@@ -359,6 +361,26 @@ function createMainWindow(): void {
   scheduleE2EDemoChat(mainWindow);
 }
 
+/** 打开文件夹：Windows 直接拉起 explorer.exe（shell.openPath 在部分环境会弹「无法访问」错误）。 */
+async function openDirectoryNative(dir: string): Promise<string> {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // 已存在/权限问题交给后续检查
+  }
+  if (!fs.existsSync(dir)) return `目录不存在：${dir}`;
+  if (process.platform === "win32") {
+    try {
+      const child = spawn("explorer.exe", [dir], { detached: true, stdio: "ignore" });
+      child.unref();
+      return "";
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  return (await shell.openPath(dir)) || "";
+}
+
 /**
  * 解析可写数据根：优先显式覆盖 → 品牌 userData → 工作区本地目录 → 临时目录。
  * 为什么做降级链：受限会话/只读盘上 %APPDATA% 可能不可写，宁可换目录也不能启动即挂。
@@ -485,8 +507,11 @@ app.whenReady().then(async () => {
   const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
   const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
-  const mcp = new McpHost(path.join(dirs.dataDir, "mcp.json"), registry, () =>
-    pushToRenderer("mcp:updated", { servers: mcp.list() }),
+  const mcp = new McpHost(
+    path.join(dirs.dataDir, "mcp.json"),
+    registry,
+    () => pushToRenderer("mcp:updated", { servers: mcp.list() }),
+    () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
   );
 
   // Agent 注册表（真实实现）：内置默认 Agent → 决定身份段与工具白名单
@@ -610,19 +635,30 @@ app.whenReady().then(async () => {
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost, downloads });
+  // 扩展运行时：每个启用扩展一个隔离子进程，工具桥接为 ext__<id>__<tool>
+  const extensionRuntime = new ExtensionRuntime({
+    extensions,
+    registry,
+    workerPath: resolveWorkerPath(__dirname),
+    onUpdate: (id, status) => pushToRenderer("extensions:updated", { id, runtime: status }),
+    onToolsChanged: () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
+  });
+  // 异步启动已启用扩展（失败互相隔离，不阻塞主窗口）
+  setTimeout(() => {
+    void extensionRuntime.startEnabled().catch(() => undefined);
+  }, 500);
+
   registerExtensionsDomain({
     ...deps,
     extensions,
+    extensionStatus: () => extensionRuntime.statuses(),
+    startExtension: (id) => extensionRuntime.start(id),
+    stopExtension: (id) => extensionRuntime.stop(id),
     push: pushToRenderer,
     openExtensionsDir: async () => {
-      try {
-        fs.mkdirSync(extensions.dirPath(), { recursive: true });
-      } catch {
-        // 已存在/权限问题交由 openPath 报错
-      }
-      const err = await shell.openPath(extensions.dirPath());
-      if (err) console.log(`[Loopsoar] 打开扩展目录失败：${err}`);
-      return err === "";
+      const error = await openDirectoryNative(extensions.dirPath());
+      if (error) console.log(`[Loopsoar] 打开扩展目录失败：${error}`);
+      return error === "";
     },
   });
   registerSkillsDomain({
@@ -630,14 +666,9 @@ app.whenReady().then(async () => {
     skills,
     push: pushToRenderer,
     openSkillsDir: async () => {
-      try {
-        fs.mkdirSync(skills.dirPath(), { recursive: true });
-      } catch {
-        // 已存在/权限问题交由 openPath 报错
-      }
-      const err = await shell.openPath(skills.dirPath());
-      if (err) console.log(`[Loopsoar] 打开技能目录失败：${err}`);
-      return err === "";
+      const error = await openDirectoryNative(skills.dirPath());
+      if (error) console.log(`[Loopsoar] 打开技能目录失败：${error}`);
+      return error === "";
     },
   });
   registerMcpDomain({

@@ -16,6 +16,8 @@ export interface ToolDefinition {
   description: string;
   permissions: ToolPermissions;
   schema: ZodTypeAny;
+  /** 显式 JSON Schema（扩展工具等非 zod 声明来源；优先于 schema 推导）。 */
+  parameters?: unknown;
   execute(ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -71,9 +73,8 @@ export class ToolRegistry {
   toolSchemas(toolsOnly?: string[]): Array<{ type: "function"; function: { name: string; description: string; parameters: unknown } }> {
     const defs = toolsOnly ? this.list().filter((d) => toolsOnly.includes(d.name)) : this.list();
     return defs.map((d) => {
-      const schemaObj = d.schema ? (d.schema as any)._def?.shape ? (d.schema as any) : null : null;
-      // P1 接真实 JSON Schema 转换（zodToJsonSchema）；当前占位
-      const parameters = { type: "object" as const, properties: {}, additionalProperties: false };
+      // 扩展工具直接带 JSON Schema；内置工具暂用占位（P1 再接 zod→JSON Schema）
+      const parameters = d.parameters ?? { type: "object" as const, properties: {}, additionalProperties: false };
       return {
         type: "function" as const,
         function: {

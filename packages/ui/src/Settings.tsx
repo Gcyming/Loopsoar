@@ -4,7 +4,7 @@ import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { Icon } from "./Icon.js";
 import type {
-  AboutInfo, DiagnosticsInfo, InstalledExtension, LocationsInfo, LoopsoarAPI, McpServerInfo, MemoryListResult,
+  AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopsoarAPI, McpServerInfo, MemoryListResult,
   PermissionsState, Preferences, ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
@@ -62,6 +62,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [extensions, setExtensions] = useState<InstalledExtension[]>([]);
+  const [extensionRuntime, setExtensionRuntime] = useState<Record<string, ExtensionRuntimeStatus>>({});
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [skillsDir, setSkillsDir] = useState("");
   const [skillSkips, setSkillSkips] = useState<{ dir: string; reason: string }[]>([]);
@@ -128,6 +129,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setExtensions(ext.value.extensions);
           setExtensionsDir(ext.value.dir);
           setExtensionSkips(ext.value.skipped);
+          setExtensionRuntime(ext.value.runtime ?? {});
         }
         if (sk.status === "fulfilled") {
           setSkills(sk.value.skills);
@@ -153,6 +155,21 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     }, 400);
     return () => clearTimeout(timer);
   }, [api, prefs, loading, onPreferencesSaved]);
+
+  // 扩展运行状态异步就绪：监听 extensions:updated 刷新列表（否则刚打开设置会显示「未启动」）
+  useEffect(() => {
+    if (!api) return;
+    const off = api.on("extensions:updated", () => {
+      void api.extensions
+        .list()
+        .then((r) => {
+          setExtensions(r.extensions);
+          setExtensionRuntime(r.runtime ?? {});
+        })
+        .catch(() => {});
+    });
+    return off;
+  }, [api]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -756,8 +773,28 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Head t="扩展" h="本地插件：把扩展目录放入下方路径，每个扩展含 loopsoar.extension.json 清单" />
             <div style={S.note}>扩展目录：<code style={S.code}>{extensionsDir || "—"}</code></div>
             <div style={S.btns}>
-              <Btn label="打开扩展目录" onClick={() => void api.extensions.openDir()} />
-              <Btn label="重新扫描" onClick={() => void api.extensions.list().then((r) => { setExtensions(r.extensions); setExtensionsDir(r.dir); setExtensionSkips(r.skipped); })} />
+              <Btn
+                label="打开扩展目录"
+                onClick={() =>
+                  void api.extensions
+                    .openDir()
+                    .then((r) => {
+                      if (!r.ok) bad(`打开目录失败（${r.dir}）：系统未返回成功，请检查路径权限`);
+                    })
+                    .catch(bad)
+                }
+              />
+              <Btn
+                label="重新扫描"
+                onClick={() =>
+                  void api.extensions.list().then((r) => {
+                    setExtensions(r.extensions);
+                    setExtensionsDir(r.dir);
+                    setExtensionSkips(r.skipped);
+                    setExtensionRuntime(r.runtime ?? {});
+                  })
+                }
+              />
             </div>
             {extensionSkips.length > 0 ? (
               <div style={S.note}>
@@ -780,9 +817,59 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     </span>
                     <span style={S.icons}>
                       <label style={S.tag}>
-                        <Toggle v={ext.enabled} on={(next) => void api.extensions.setEnabled({ id: ext.manifest.id, enabled: next }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} />
+                        <Toggle
+                          v={ext.enabled}
+                          on={(next) =>
+                            void api.extensions.setEnabled({ id: ext.manifest.id, enabled: next }).then(() =>
+                              api.extensions.list().then((r) => {
+                                setExtensions(r.extensions);
+                                setExtensionRuntime(r.runtime ?? {});
+                              }),
+                            )
+                          }
+                        />
                       </label>
-                      <Btn label="卸载" small onClick={() => void api.extensions.remove({ id: ext.manifest.id }).then(() => void api.extensions.list().then((r) => setExtensions(r.extensions)))} />
+                      {ext.manifest.main ? (
+                        (extensionRuntime[ext.manifest.id]?.state ?? "idle") === "ready" ? (
+                          <Btn
+                            label="停止"
+                            small
+                            onClick={() =>
+                              void api.extensions.stop({ id: ext.manifest.id }).then(() => {
+                                void api.extensions.list().then((r) => {
+                                  setExtensions(r.extensions);
+                                  setExtensionRuntime(r.runtime ?? {});
+                                });
+                              })
+                            }
+                          />
+                        ) : (
+                          <Btn
+                            label="启动"
+                            small
+                            onClick={() =>
+                              void api.extensions.start({ id: ext.manifest.id }).then(() => {
+                                void api.extensions.list().then((r) => {
+                                  setExtensions(r.extensions);
+                                  setExtensionRuntime(r.runtime ?? {});
+                                });
+                              })
+                            }
+                          />
+                        )
+                      ) : null}
+                      <Btn
+                        label="卸载"
+                        small
+                        onClick={() =>
+                          void api.extensions.remove({ id: ext.manifest.id }).then(() =>
+                            void api.extensions.list().then((r) => {
+                              setExtensions(r.extensions);
+                              setExtensionRuntime(r.runtime ?? {});
+                            }),
+                          )
+                        }
+                      />
                     </span>
                   </div>
                   {ext.manifest.description ? <div style={S.providerVal}>{ext.manifest.description}</div> : null}
@@ -791,11 +878,39 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       <div style={S.providerRow}><span style={S.providerKey}>权限</span><span style={S.providerVal}>{ext.manifest.permissions.join(" · ")}</span></div>
                     </div>
                   ) : null}
+                  <div style={S.providerRow}>
+                    <span style={S.providerKey}>运行</span>
+                    <span style={S.providerVal}>
+                      {(() => {
+                        const status = extensionRuntime[ext.manifest.id] ?? { state: "idle", tools: [] };
+                        const label =
+                          status.state === "ready"
+                            ? `已加载 · ${status.tools.length} 个工具`
+                            : status.state === "starting"
+                              ? "启动中…"
+                              : status.state === "error"
+                                ? `加载失败：${status.error ?? "未知"}`
+                                : ext.manifest.main
+                                  ? "未启动（点「启动」或打开开关）"
+                                  : "纯声明式扩展（无入口）";
+                        return <span style={status.state === "error" ? S.errText : undefined}>{label}</span>;
+                      })()}
+                    </span>
+                  </div>
+                  {extensionRuntime[ext.manifest.id]?.tools.length ? (
+                    <div style={S.providerRow}>
+                      <span style={S.providerKey}>工具</span>
+                      <span style={S.providerVal}>{extensionRuntime[ext.manifest.id].tools.join(" · ")}</span>
+                    </div>
+                  ) : null}
                   <div style={S.providerRow}><span style={S.providerKey}>目录</span><span style={S.providerVal}>{ext.dir}</span></div>
                 </div>
               ))
             )}
-            <div style={S.note}>安全：扩展只提供清单与入口声明；工具执行仍走沙箱与权限确认，不绕过四要素校验。</div>
+            <div style={S.note}>
+              隔离：每个扩展运行在独立子进程（启动超时 8s、调用超时 20s、崩溃自动注销工具），
+              工具名 ext__&lt;扩展&gt;__&lt;工具&gt; 注册进全局工具表；执行仍走沙箱与权限确认。
+            </div>
           </div>
         );
 
@@ -805,7 +920,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Head t="技能（Skills）" h="独立子系统：SKILL.md 纯文本（frontmatter + 正文），只做提示词注入，不提供任何工具" />
             <div style={S.note}>技能目录：<code style={S.code}>{skillsDir || "—"}</code></div>
             <div style={S.btns}>
-              <Btn label="打开技能目录" onClick={() => void api.skills.openDir()} />
+              <Btn
+                label="打开技能目录"
+                onClick={() =>
+                  void api.skills
+                    .openDir()
+                    .then((r) => {
+                      if (!r.ok) bad(`打开目录失败（${r.dir}）：系统未返回成功，请检查路径权限`);
+                    })
+                    .catch(bad)
+                }
+              />
               <Btn label="重新扫描" onClick={() => void api.skills.reload().then((r) => { setSkills(r.skills); setSkillSkips(r.skipped); })} />
             </div>
             {skillSkips.length > 0 ? (

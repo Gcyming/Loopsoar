@@ -239,14 +239,14 @@ export default function App(): React.JSX.Element {
           const history = await api.chat.history().catch(() => null);
           if (history?.session?.messages?.length) {
             sessionIdRef.current = history.session.sessionId;
-            setMessages(
-              history.session.messages.map((m) => ({
+            const restored = history.session.messages.map((m) => ({
                 id: nextId(m.role),
                 role: m.role === "user" ? ("user" as const) : ("assistant" as const),
                 text: m.text,
                 status: "done" as const,
-              })),
-            );
+              }));
+            // 只在界面仍为空时恢复：避免异步历史把用户刚发出的消息覆盖掉（曾导致"回复消失"）
+            setMessages((prev) => (prev.length === 0 ? restored : prev));
           }
         }
       }

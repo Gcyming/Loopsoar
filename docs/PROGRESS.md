@@ -28,7 +28,9 @@
 - MCP：stdio + Streamable HTTP（`/mcp` JSON-RPC，兼容 SSE 响应、`mcp-session-id`），
   生命周期（5s 握手、帧翻转重试、能力门控、工具刷新、超时/错误分类、重连退避）
 - 技能：SKILL.md 容错解析 + CJK 2-gram 打分 + Top-3 注入（隔离，不注册工具）
-- 扩展：清单扫描/本地示例（**运行时加载尚未实现**）
+- 扩展运行时：每个扩展独立子进程 worker（8s 启动/20s 调用超时、崩溃隔离、工具注销），
+  工具以 `ext__<id>__<tool>` 注册进 ToolRegistry（携带 JSON Schema，权限仍走沙箱确认）；
+  设置·扩展显示运行状态/工具清单，可启动/停止；ADR-0008
 
 ### 会话 UI（向 slime 对齐，进行中）
 - 气泡/助手区块、头像、LiveStatus（正在思考/输出/等待上游、已用时、上下文%）、
@@ -68,8 +70,8 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
    - `pnpm dev` 后发一条会触发工具的请求（或 mock `MOCK_TOOL_NAME=browser_snapshot`）
 2. **会话渲染继续对齐 slime**：终端输出卡（等宽终端样式）、网址卡细节、
    展开/收起、渐入渐出、时间线完整度（slime `ChatPanel.tsx` 的 TimelineNode/PlanCard/LiveStatusLine 逐块对照）
-3. **扩展运行时**（用户点名"最重要"）：子进程 worker + 工具桥接 + 超时/崩溃隔离；
-   先写 ADR（放在 `docs/decisions/`），再落代码，禁止动 contracts/core/shell 分层
+3. ~~扩展运行时~~：已完成（ADR-0008 + 单测 + 真机 E2E `gui-46-extension-runtime.png`）；
+   下一步可做：扩展安装引导（zip/目录）、签名与版本校验、市场
 4. **打开技能/扩展目录报错修复未实测**：已在 shell 打开前 `mkdirSync`；
    若仍失败，把 设置→高级 diagnostics 与报错发出来
 5. Agent 中断原因可视化：done 的 `status/reason` 已进气泡横幅，但需要一次真实失败/预算中断验证
@@ -91,7 +93,15 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 安全：apiKey 永不回传渲染层/不进日志；导航仅 http/https；工具按类别过权限与沙箱
 - 提交前必跑：typecheck + vitest + build + `pnpm gen/check`
 
-## 五、本次存档对应改动
+## 五、2026-10-31 增量（第二轮）
+- 扩展运行时（ADR-0008）：子进程 worker + 工具桥接 + 超时/崩溃隔离 + 设置页运行状态/启停
+- 修复动态工具被沙箱拒绝：MCP/扩展工具注册后回调 `syncKnownTools`（此前 MCP「权限拒绝：未知工具名」根因）
+- 打开技能/扩展目录改用 explorer.exe（绕开 shell.openPath 的 Windows 访问错误），失败回传 UI
+- 历史恢复竞态保护：只填充空会话，不覆盖实时消息
+- Markdown 表格渲染验证通过（`gui-45-tables.png`）；工具卡片验证通过（`gui-44` / `gui-46`）
+- 新增测试：`tests/shell/extensionRuntime.spec.ts`（3 用例，真实子进程）
+
+## 六、第一轮存档对应改动
 - 请求上限可配置（contracts/core Preferences + ChatService getAgentLimits + 设置·通用）
 - 工具卡片 ToolCard（参数摘要/状态/展开输出/URL 链接卡）
 - 中断原因横幅（done.status/reason → 气泡内展示）
