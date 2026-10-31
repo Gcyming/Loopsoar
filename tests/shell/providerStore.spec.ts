@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ProviderStore } from "../../packages/shell/src/main/providerStore.ts";
+import { ProviderStore, isSameProviderTarget } from "../../packages/shell/src/main/providerStore.ts";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-provider-"));
@@ -42,5 +42,24 @@ describe("ProviderStore 自定义请求头", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe("切模型目标识别", () => {
+  it("同 provider + 规范化 baseUrl 视为同一供应商（原地改 model，不新建）", () => {
+    expect(
+      isSameProviderTarget(
+        { id: "a", provider: "mock", baseUrl: "http://127.0.0.1:19500/v1", model: "mock-chat" },
+        { provider: "mock", baseUrl: "http://127.0.0.1:19500/v1/" },
+      ),
+    ).toBe(true);
+    expect(
+      isSameProviderTarget(
+        { id: "a", provider: "mock", baseUrl: "http://127.0.0.1:19500/v1", model: "mock-chat" },
+        { provider: "opencode-go", baseUrl: "https://opencode.ai/inference/go/openai/v1" },
+      ),
+    ).toBe(false);
+    expect(isSameProviderTarget(null, { provider: "x", baseUrl: "https://x.test" })).toBe(false);
   });
 });

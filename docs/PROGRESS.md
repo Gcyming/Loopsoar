@@ -187,6 +187,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   新增「OpenCode Go」快速填充预设（服务商/接口/OpenAI 协议/默认头/示例模型）
 - 测试：398 全绿（providerDefaults 3 等）；截图 gui-74
 
+## 二·二十、2026-11-01 第十七次增量（跨供应商模型菜单）
+- 模型菜单改为按供应商分组展示全部已配置供应商（活动置顶、当前模型打勾、显示各供应商接口域名），
+  不再只显示当前供应商；选择其他供应商模型会自动切换活跃供应商并更新模型
+- 数据整备抽成纯逻辑 `modelGroups.ts`（默认模型必显示、停用模型隐藏、去重、活动置顶），3 用例
+- 修复切模型产生重复供应商的旧 bug：`settings:setProvider` 在目标就是活跃供应商时原地改 model
+  （新增 `isSameProviderTarget` 纯函数 + 用例）
+- 测试：402 全绿；证据：gui-75（分组菜单）、gui-76（切到 opencode-go · glm-5.3）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

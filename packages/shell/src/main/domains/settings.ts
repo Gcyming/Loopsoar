@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { withProviderDefaults } from "../providerDefaults.js";
+import { isSameProviderTarget } from "../providerStore.js";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import {
   validateProviderConfig,
@@ -461,9 +462,15 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:setProvider", async (payload) => {
     const cfg = validateProviderConfig(payload);
     writeJsonFile(paths.provider, cfg);
-    // 同步进多供应商列表（保持单一数据源），并立即重建 LLM 客户端
+    // 同步进多供应商列表（保持单一数据源），并立即重建 LLM 客户端。
+    // 关键：切模型时若目标就是当前活跃供应商，必须原地更新 model，
+    // 否则每次换模型都会 upsert 出一条新供应商（模型菜单出现重复供应商）。
     if (deps.providers) {
-      const item = deps.providers.upsert({ provider: cfg.provider, baseUrl: cfg.baseUrl, model: cfg.model });
+      const active = deps.providers.active();
+      const sameTarget = active !== null && isSameProviderTarget(active, cfg);
+      const item = sameTarget && active
+        ? deps.providers.upsert({ ...active, model: cfg.model })
+        : deps.providers.upsert({ provider: cfg.provider, baseUrl: cfg.baseUrl, model: cfg.model });
       deps.providers.setActive(item.id);
       deps.onProvidersChanged?.();
     }

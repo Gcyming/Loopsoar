@@ -40,6 +40,18 @@ export interface ProvidersFile {
   items: ProviderItem[];
 }
 
+/** 判断"切模型的目标"是否就是当前活跃供应商（同 provider + 规范化 baseUrl）。 */
+export function isSameProviderTarget(
+  active: ProviderItem | null,
+  target: { provider: string; baseUrl: string },
+): boolean {
+  if (!active) return false;
+  return (
+    active.provider === target.provider &&
+    active.baseUrl.replace(/\/+$/, "") === target.baseUrl.replace(/\/+$/, "")
+  );
+}
+
 export class ProviderStore {
   private file: string;
   private legacyFile: string;

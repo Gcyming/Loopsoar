@@ -7,7 +7,8 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
-import type { PermissionsState, ProviderModel, ProviderStatus } from "./types.js";
+import type { PermissionsState, ProviderStatus } from "./types.js";
+import type { ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import Popover from "./AnchoredPopover.js";
 
@@ -31,8 +32,9 @@ export interface ComposerProps {
   modelMenuOpen: boolean;
   onOpenModelMenu: () => void;
   onCloseModelMenu: () => void;
-  modelList: { models: ProviderModel[]; error: string | null } | null;
-  onChooseModel: (modelId: string) => void;
+  /** 跨供应商模型清单（按供应商分组）；null = 加载中。 */
+  modelGroups: ModelGroup[] | null;
+  onChooseModel: (modelId: string, providerId: string) => void;
   effortOptions: string[];
   reasoningEffort: string;
   onReasoningEffortChange: (value: string) => void;
@@ -69,7 +71,7 @@ export default function Composer({
   modelMenuOpen,
   onOpenModelMenu,
   onCloseModelMenu,
-  modelList,
+  modelGroups,
   onChooseModel,
   effortOptions,
   reasoningEffort,
@@ -230,70 +232,83 @@ export default function Composer({
               <Icon name="cloud-upload" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
               {compactUi ? null : provider?.configured ? provider.model : "未配置模型"}
             </button>
-            <Popover anchorRef={modelAnchorRef} open={modelMenuOpen} onClose={onCloseModelMenu} width={300}>
-                <div style={styles.modelMenuHead}>{provider?.provider ?? "未配置"} · 选择模型</div>
-                {modelList === null ? (
-                  <div style={styles.modelMenuItem}>加载中…</div>
-                ) : (
-                  <>
-                    {modelList.models.map((model) => (
+            <Popover anchorRef={modelAnchorRef} open={modelMenuOpen} onClose={onCloseModelMenu} width={340}>
+              <div style={styles.modelMenuHead}>选择模型 · 跨供应商</div>
+              {modelGroups === null ? (
+                <div style={styles.modelMenuItem}>加载中…</div>
+              ) : modelGroups.length === 0 ? (
+                <div style={styles.modelMenuItem}>还没有供应商，请先添加</div>
+              ) : (
+                modelGroups.map((group) => (
+                  <div key={group.providerId} style={styles.modelGroup}>
+                    <div style={styles.modelGroupHead}>
+                      <span style={styles.modelGroupName}>{group.provider}</span>
+                      {group.active ? <span style={styles.modelGroupBadge}>当前</span> : null}
+                      <span style={styles.modelGroupHost} title={group.baseUrl}>
+                        {group.baseUrl.replace(/^https?:\/\//, "").slice(0, 28)}
+                      </span>
+                    </div>
+                    {group.models.map((model) => {
+                      const current = group.active && model.id === provider?.model;
+                      return (
+                        <button
+                          key={`${group.providerId}-${model.id}`}
+                          type="button"
+                          className="model-item"
+                          style={{ ...styles.modelMenuItem, ...(current ? styles.modelMenuItemActive : {}) }}
+                          onClick={() => onChooseModel(model.id, group.providerId)}
+                          title={`${group.provider} · ${model.id}${model.contextWindow ? ` · 上下文 ${Math.round(model.contextWindow / 1000)}K` : ""}${model.thinkingEfforts?.length ? ` · 推理 ${model.thinkingEfforts.join("/")}` : ""}`}
+                        >
+                          <span style={styles.modelItemName}>
+                            {model.id}
+                            {model.thinking ? <span style={styles.modelBadge}>推理</span> : null}
+                            {model.vision ? <span style={styles.modelBadge}>视觉</span> : null}
+                          </span>
+                          {current ? <Icon name="check" size={12} /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))
+              )}
+              {effortOptions.length > 0 ? (
+                <div style={styles.effortSection}>
+                  <div style={styles.modelMenuHead}>推理等级</div>
+                  <div style={styles.effortRow}>
+                    {["", ...effortOptions].map((effort) => (
                       <button
-                        key={model.id}
+                        key={effort || "off"}
                         type="button"
-                        className="model-item"
-                        style={{ ...styles.modelMenuItem, ...(model.id === provider?.model ? styles.modelMenuItemActive : {}) }}
-                        onClick={() => onChooseModel(model.id)}
-                        title={`${model.id}${model.contextWindow ? ` · 上下文 ${Math.round(model.contextWindow / 1000)}K` : ""}${model.thinkingEfforts?.length ? ` · 推理 ${model.thinkingEfforts.join("/")}` : ""}`}
+                        className="chip"
+                        style={{ ...styles.chip, ...(reasoningEffort === effort ? styles.chipActive : {}) }}
+                        onClick={() => onReasoningEffortChange(effort)}
+                        title={effort || "关闭推理"}
                       >
-                        <span style={styles.modelItemName}>
-                          {model.id}
-                          {model.thinking ? <span style={styles.modelBadge}>推理</span> : null}
-                          {model.vision ? <span style={styles.modelBadge}>视觉</span> : null}
-                        </span>
-                        {model.id === provider?.model ? <Icon name="check" size={12} /> : null}
+                        {effortLabel(effort).replace("推理：", "")}
                       </button>
                     ))}
-                    {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
-                  </>
-                )}
-                {effortOptions.length > 0 ? (
-                  <div style={styles.effortSection}>
-                    <div style={styles.modelMenuHead}>推理等级</div>
-                    <div style={styles.effortRow}>
-                      {["", ...effortOptions].map((effort) => (
-                        <button
-                          key={effort || "off"}
-                          type="button"
-                          className="chip"
-                          style={{ ...styles.chip, ...(reasoningEffort === effort ? styles.chipActive : {}) }}
-                          onClick={() => onReasoningEffortChange(effort)}
-                          title={effort || "关闭推理"}
-                        >
-                          {effortLabel(effort).replace("推理：", "")}
-                        </button>
-                      ))}
-                    </div>
                   </div>
-                ) : null}
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className="model-item"
-                  style={{ ...styles.modelMenuItem, ...styles.modelMenuFoot }}
-                  onClick={() => {
-                    onCloseModelMenu();
-                    onOpenSettings("providers");
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    onCloseModelMenu();
-                    onOpenSettings("providers");
-                  }}
-                >
-                  管理供应商 / 添加模型…
                 </div>
-              </Popover>
+              ) : null}
+              <div
+                role="button"
+                tabIndex={0}
+                className="model-item"
+                style={{ ...styles.modelMenuItem, ...styles.modelMenuFoot }}
+                onClick={() => {
+                  onCloseModelMenu();
+                  onOpenSettings("providers");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onCloseModelMenu();
+                  onOpenSettings("providers");
+                }}
+              >
+                管理供应商 / 添加模型…
+              </div>
+            </Popover>
           </span>
 
           <button
@@ -493,6 +508,17 @@ const styles: Record<string, React.CSSProperties> = {
   modelMenuErr: { fontSize: 10.5, color: "#f0a35e", padding: "4px 6px" },
   effortSection: { borderTop: `1px solid ${BRAND.border}`, marginTop: 6, paddingTop: 4 },
   effortRow: { display: "flex", gap: 4, flexWrap: "wrap", padding: "0 2px" },
+  modelGroup: { borderTop: `1px solid ${BRAND.border}`, padding: "4px 0" },
+  modelGroupHead: { display: "flex", alignItems: "center", gap: 6, padding: "3px 6px 4px" },
+  modelGroupName: { fontSize: 11, fontWeight: 650, color: BRAND.linen },
+  modelGroupBadge: {
+    fontSize: 9,
+    padding: "0 4px",
+    borderRadius: 999,
+    color: BRAND.ochreHover,
+    border: `1px solid ${BRAND.ochre}`,
+  },
+  modelGroupHost: { marginLeft: "auto", fontSize: 9.5, color: BRAND.linenFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   modelMenuFoot: {
     width: "100%",
     marginTop: 6,

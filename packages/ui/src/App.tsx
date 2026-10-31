@@ -20,6 +20,7 @@ import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
 import MessageList from "./MessageList.js";
+import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import Composer from "./Composer.js";
@@ -171,7 +172,7 @@ export default function App(): React.JSX.Element {
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
-  const [modelList, setModelList] = useState<{ models: ProviderModel[]; error: string | null } | null>(null);
+  const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
   // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc 收起（含 Composer 内菜单）。
   usePopover("app-session", sessionOpen, setSessionOpen);
   usePopover("app-history", historyOpen, setHistoryOpen);
@@ -495,7 +496,7 @@ export default function App(): React.JSX.Element {
     observer.observe(box);
     observer.observe(ghost);
     return () => observer.disconnect();
-  }, [provider, permSummary, mode, reasoningEffort, sidebarWidth, modelList]);
+  }, [provider, permSummary, mode, reasoningEffort, sidebarWidth, modelGroups]);
 
   // 供应商/模型变更同步：设置页保存后刷新模型 chip 与模型列表
   useEffect(() => {
@@ -562,24 +563,18 @@ export default function App(): React.JSX.Element {
       openSettings("providers");
       return;
     }
-    setModelMenuOpen((v) => !v);
-    // 先用已保存的模型清单秒开（离线可用），再异步拉取最新列表
-    // 只展示在供应商设置里「启用」的模型；默认模型始终保留
-    const cached = (provider.models ?? []).filter((m) => m.selected !== false || m.id === provider.model);
-    setModelList({ models: cached.length > 0 ? cached : [{ id: provider.model ?? "" }], error: null });
+    if (modelMenuOpen) {
+      setModelMenuOpen(false);
+      return;
+    }
+    setModelMenuOpen(true);
+    // 跨供应商：直接读本地供应商清单（含模型参数），不做远端探测，秒开且离线可用
+    setModelGroups(null);
     void api.settings
-      .listModels({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model: provider.model ?? "" })
-      .then((r) => {
-        if (r.models.length > 0 || r.error) {
-          const enabled = new Map(cached.map((m) => [m.id, m]));
-          const fetched = r.models
-            .filter((m) => enabled.size === 0 || enabled.has(m.id) || m.id === provider.model)
-            .map((m) => ({ ...m, selected: enabled.get(m.id)?.selected ?? m.selected }));
-          setModelList({ models: fetched.length > 0 ? fetched : cached, error: r.error });
-        }
-      })
-      .catch(() => {});
-  }, [api, provider, openSettings]);
+      .listProviders()
+      .then((result) => setModelGroups(buildModelGroups(result.items, result.activeId)))
+      .catch(() => setModelGroups([]));
+  }, [api, modelMenuOpen, openSettings, provider]);
 
   // 当前模型声明的推理等级；为空则不显示「推理」chip
   const effortOptions = useMemo(() => {
@@ -595,18 +590,22 @@ export default function App(): React.JSX.Element {
   }, []);
 
   const chooseModel = useCallback(
-    (model: string): void => {
+    (modelId: string, providerId: string): void => {
       setModelMenuOpen(false);
-      if (!api || !provider) return;
-      void api.settings
-        .setProvider({ provider: provider.provider ?? "", baseUrl: provider.baseUrl ?? "", model })
-        .then(() => {
-          setProvider({ ...provider, model, configured: true });
-          setNotice(`已切换模型：${model}`);
-        })
-        .catch(() => {});
+      if (!api) return;
+      const group = modelGroups?.find((item) => item.providerId === providerId);
+      if (!group) return;
+      void (async () => {
+        if (!group.active) await api.settings.setActiveProvider({ id: providerId });
+        await api.settings.setProvider({ provider: group.provider, baseUrl: group.baseUrl, model: modelId });
+        const nextProvider = await api.settings.getProvider();
+        setProvider(nextProvider);
+        const list = await api.settings.listProviders().catch(() => null);
+        if (list) setModelGroups(buildModelGroups(list.items, list.activeId));
+        setNotice(`已切换到 ${group.provider} · ${modelId}`);
+      })().catch((err: unknown) => setNotice(`切换模型失败：${err instanceof Error ? err.message : String(err)}`));
     },
-    [api, provider],
+    [api, modelGroups],
   );
 
   const respondPermission = useCallback((choice: "allow-once" | "allow-session" | "deny"): void => {
@@ -1240,7 +1239,7 @@ export default function App(): React.JSX.Element {
             modelMenuOpen={modelMenuOpen}
             onOpenModelMenu={openModelMenu}
             onCloseModelMenu={() => setModelMenuOpen(false)}
-            modelList={modelList}
+            modelGroups={modelGroups}
             onChooseModel={chooseModel}
             effortOptions={effortOptions}
             reasoningEffort={reasoningEffort}

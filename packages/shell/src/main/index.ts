@@ -136,6 +136,10 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           // 验收辅助：按可见文案点击一次（如设置页「编辑」），用于截图前展开表单
           const clickText = process.env.LOOPSOAR_E2E_CLICK_TEXT;
           if (clickText) {
+            const clickDelay = Number(process.env.LOOPSOAR_E2E_CLICK_DELAY_MS ?? 0);
+            if (Number.isFinite(clickDelay) && clickDelay > 0) {
+              await new Promise((r) => setTimeout(r, clickDelay));
+            }
             // 支持 "编辑|OpenCode Go" 依次点击多个可见文案，用于截图前展开并填充表单
             for (const wanted of clickText.split("|").map((item) => item.trim()).filter(Boolean)) {
               const clicked = await win.webContents
