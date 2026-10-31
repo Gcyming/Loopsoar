@@ -139,6 +139,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 证据：gui-63-timeline-dedupe.png
 - App.tsx 当前 1647 行（已拆出 TitleBar/顶栏/消息列表/消息视图/输入区/时间线/产物/Markdown/事件层）
 
+## 二·十五、会话板块验收（收尾）
+- 新增 `docs/ACCEPTANCE-SESSION.md`：逐项对照 slime 会话区（消息/时间线/工具/规划/产物/附件/压缩/会话管理/架构），
+  结论：主链路通过验收；差异集中团队协作、斜杠命令/剪贴板图片、右栏明细
+- 验收截图：gui-64-session-acceptance.png（时间线 + 工具 diff + 规划卡）
+- 基线：typecheck 0、376 tests、gen/check 一致、build 6/6
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先
