@@ -329,6 +329,15 @@ export class BrowserHost {
     return this.activeEntry()?.adapter.snapshot() ?? null;
   }
 
+  /** 页面缩放：0.5～2.0，按活动标签生效（Ctrl + +/-/0）。 */
+  setZoom(nextFactor: number): { ok: boolean; factor?: number; error?: string } {
+    const entry = this.activeEntry();
+    if (!entry || !entry.url) return { ok: false, error: "当前没有打开的网页" };
+    const factor = Math.max(0.5, Math.min(2, Math.round(nextFactor * 10) / 10));
+    entry.adapter.setZoom?.(factor);
+    return { ok: true, factor };
+  }
+
   async screenshot(): Promise<string | null> {
     return this.activeEntry()?.adapter.screenshot() ?? null;
   }

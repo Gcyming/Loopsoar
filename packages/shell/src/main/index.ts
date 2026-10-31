@@ -130,6 +130,26 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             console.log("E2E_NAV", JSON.stringify(outcome));
             await new Promise((r) => setTimeout(r, Number(process.env.LOOPSOAR_E2E_NAV_WAIT_MS ?? 2500))); // 等真实页面渲染完成
           }
+          // 验收辅助：按可见文案点击一次（如设置页「编辑」），用于截图前展开表单
+          const clickText = process.env.LOOPSOAR_E2E_CLICK_TEXT;
+          if (clickText) {
+            const clicked = await win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const wanted = ${JSON.stringify(clickText)};
+                  const nodes = Array.from(document.querySelectorAll('button, [role="button"]'));
+                  const target = nodes.find((node) => (node.textContent || '').trim() === wanted);
+                  if (!target) return false;
+                  target.click();
+                  return true;
+                })()`,
+                true,
+              )
+              .catch(() => false);
+            console.log("E2E_CLICK", clickText, clicked);
+            await new Promise((r) => setTimeout(r, 800));
+          }
+
           // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
           const anyWin = win as unknown as { capturePage?: () => Promise<{ toPNG(): Buffer }> };
           const image =
@@ -516,9 +536,14 @@ app.whenReady().then(async () => {
     // 端点协议：显式指定优先，auto 按 baseUrl 推断（OpenAI 兼容 / Anthropic Messages）
     const format = active.apiFormat && active.apiFormat !== "auto" ? active.apiFormat : inferApiFormat(active.baseUrl);
     if (format === "anthropic") {
-      return createAnthropicClient({ baseUrl: active.baseUrl.replace(/\/v1$/, ""), apiKey: key, model: active.model });
+      return createAnthropicClient({
+        baseUrl: active.baseUrl.replace(/\/v1$/, ""),
+        apiKey: key,
+        model: active.model,
+        headers: active.headers,
+      });
     }
-    return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model });
+    return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model, headers: active.headers });
   };
   // 惰性引用：供应商增删改/切换活跃后立即生效（无需重启）
   let llmRef: LlmClient | undefined = buildLlmFromActive();

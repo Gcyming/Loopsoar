@@ -18,6 +18,8 @@ export interface OpenAiClientOptions {
   firstByteTimeoutMs?: number;
   /** 最大重试次数（默认 3）。 */
   maxRetries?: number;
+  /** 自定义请求头（会在默认头之后合并，可用于代理鉴权/UA）。 */
+  headers?: Record<string, string>;
 }
 
 export interface NormalizedUsage {
@@ -97,6 +99,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
         headers: {
           "Content-Type": "application/json",
           ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
+          ...(opts.headers ?? {}),
         },
         body: JSON.stringify({
           model: opts.model,

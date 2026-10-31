@@ -17,6 +17,8 @@ export interface AnthropicClientOptions {
   model: string;
   timeoutMs?: number;
   maxRetries?: number;
+  /** 自定义请求头（会在默认头之后合并）。 */
+  headers?: Record<string, string>;
 }
 
 function effortToBudget(effort: string): number {
@@ -89,6 +91,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           "content-type": "application/json",
           "x-api-key": opts.apiKey,
           "anthropic-version": "2023-06-01",
+          ...(opts.headers ?? {}),
         },
         body: JSON.stringify(body),
         signal: controller.signal,

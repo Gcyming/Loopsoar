@@ -79,6 +79,8 @@ export const ProviderItemSchema = z.object({
   model: z.string().min(1).max(200),
   apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
   rpm: z.number().int().min(1).max(1_000_000).optional(),
+  /** 自定义请求头（如代理鉴权 / 特殊 UA）；键值均为字符串，最多 30 条。 */
+  headers: z.record(z.string().max(120), z.string().max(2000)).refine((value) => Object.keys(value).length <= 30, { message: "请求头最多 30 条" }).optional(),
   models: z.array(ProviderModelSchema).max(500).optional(),
 });
 export const ProviderItemIdSchema = z.object({ id: z.string().min(1).max(64) });
@@ -112,6 +114,8 @@ export const SettingsListModelsSchema = z.object({
   apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
   /** 表单里刚输入、尚未保存的密钥（仅本次探测使用，不落盘不回显）。 */
   apiKey: z.string().max(500).optional(),
+  /** 探测模型列表时的自定义请求头（仅本次探测使用，不落盘）。 */
+  headers: z.record(z.string().max(120), z.string().max(2000)).refine((value) => Object.keys(value).length <= 30, { message: "请求头最多 30 条" }).optional(),
 });
 export const PickPathSchema = z.object({
   kind: z.enum(["file", "directory"]),

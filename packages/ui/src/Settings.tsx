@@ -58,6 +58,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [perms, setPerms] = useState<PermissionsState | null>(null);
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [pForm, setPForm] = useState({ provider: "", baseUrl: "", model: "" });
+  /** 自定义请求头（Key: Value 每行一条；保存前解析）。 */
+  const [pHeaders, setPHeaders] = useState("");
   const [providerItems, setProviderItems] = useState<ProviderItem[]>([]);
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
@@ -399,12 +401,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           if (item) {
             setEditingProviderId(item.id);
             setPForm({ provider: item.provider, baseUrl: item.baseUrl, model: item.model });
+            setPHeaders(formatHeaderLines(item.headers));
             setPFormat(item.apiFormat ?? "auto");
             setPRpm(item.rpm ? String(item.rpm) : "");
             setPModels(item.models ?? [{ id: item.model, selected: true }]);
           } else {
             setEditingProviderId("new");
             setPForm({ provider: "", baseUrl: "", model: "" });
+            setPHeaders("");
             setPFormat("auto");
             setPRpm("");
             resetModels();
@@ -422,6 +426,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               model: pForm.model,
               apiFormat: pFormat,
               apiKey: keyInput.trim() || undefined,
+              headers: parseHeaderLines(pHeaders) ?? undefined,
             });
             const existing = new Map(pModels.filter((m) => typeof m.id === "string" && m.id.trim()).map((m) => [m.id, m]));
             const merged = (r.models as ProviderModel[])
@@ -474,6 +479,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               model: defaultModel,
               apiFormat: pFormat,
               rpm: pRpm.trim() ? Number(pRpm) : undefined,
+              headers: parseHeaderLines(pHeaders) ?? undefined,
               models,
             });
             await api.settings.setActiveProvider({ id: r.item.id });
@@ -523,6 +529,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   </div>
                   <div style={S.providerRows}>
                     <div style={S.providerRow}><span style={S.providerKey}>接口</span><span style={S.providerVal}>{item.baseUrl}</span></div>
+                    {item.headers && Object.keys(item.headers).length > 0 ? (
+                      <div style={S.providerRow}><span style={S.providerKey}>请求头</span><span style={S.providerVal}>{Object.keys(item.headers).length} 条</span></div>
+                    ) : null}
                     <div style={S.providerRow}>
                       <span style={S.providerKey}>默认模型</span>
                       <span style={S.providerVal}>
@@ -607,6 +616,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       }}
                     />
                   </div>
+                </Field>
+                <Field l="自定义请求头" h="每行一条「Key: Value」（如 x-api-key / User-Agent）；随供应商保存，聊天与探测共用，可用于代理/特殊网关鉴权">
+                  <Area v={pHeaders} rows={3} on={setPHeaders} />
                 </Field>
                 <Field l="RPM 兜底" h="每分钟请求上限（留空 = 不主动限制）">
                   <In v={pRpm} ph="留空 = 不限制" on={setPRpm} />
@@ -1122,6 +1134,27 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
 function Head({ t, h }: { t: string; h: string }) {
   return <div style={{ marginBottom: 14 }}><div style={{ fontSize: 15, fontWeight: 700 }}>{t}</div><div style={{ marginTop: 4, fontSize: 11.5, color: BRAND.linenMuted, lineHeight: 1.6 }}>{h}</div></div>;
 }
+/** 请求头文本 ⇄ 对象：每行一条 `Key: Value`；空行忽略，非法行抛可读错误。 */
+function parseHeaderLines(text: string): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const [index, line] of lines.entries()) {
+    const colon = line.indexOf(":");
+    if (colon <= 0) throw new Error(`请求头第 ${index + 1} 行格式应为「Key: Value」`);
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    if (!key || /\s/.test(key)) throw new Error(`请求头第 ${index + 1} 行 Key 不能为空或包含空格`);
+    headers[key] = value;
+  }
+  if (Object.keys(headers).length > 30) throw new Error("请求头最多 30 条");
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function formatHeaderLines(headers?: Record<string, string>): string {
+  if (!headers) return "";
+  return Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n");
+}
+
 function Field({ l, h, children }: { l: string; h?: string; children: React.ReactNode }) {
   return <div style={S.field}><div style={S.fieldLabel}><span>{l}</span>{h ? <span style={S.fieldHint}>{h}</span> : null}</div><div style={S.fieldCtl}>{children}</div></div>;
 }

@@ -9,6 +9,7 @@ import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import type { PermissionsState, ProviderModel, ProviderStatus } from "./types.js";
 import { usePopover } from "./popover.js";
+import Popover from "./AnchoredPopover.js";
 
 export interface ComposerProps {
   value: string;
@@ -80,6 +81,21 @@ export default function Composer({
 }: ComposerProps): React.ReactElement {
   // 权限/模型菜单互斥：同一时刻只开一个（打开另一个会自动收起）。
   const [openMenu, setOpenMenu] = React.useState<"perm" | "model" | null>(null);
+  const [askSteer, setAskSteer] = React.useState(false);
+  const permAnchorRef = React.useRef<HTMLSpanElement | null>(null);
+  const modelAnchorRef = React.useRef<HTMLSpanElement | null>(null);
+  const sendAnchorRef = React.useRef<HTMLButtonElement | null>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  usePopover("composer-steer", askSteer, setAskSteer);
+  /** 运行中发送先询问：编辑 / 直接引导 / 取消（对齐 slime 的中断插入选择）。 */
+  const requestSend = (): void => {
+    if (!value.trim()) return;
+    if (busy) {
+      setAskSteer(true);
+      return;
+    }
+    onSend();
+  };
   usePopover("composer-perm", openMenu === "perm", (next) => {
     if (!next) setOpenMenu(null);
   });
@@ -120,12 +136,13 @@ export default function Composer({
           <span style={styles.measureChip}>发送</span>
         </div>
         <textarea
+          ref={textareaRef}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              onSend();
+              requestSend();
             }
           }}
           placeholder="输入消息（Enter 发送，Shift+Enter 换行）"
@@ -145,7 +162,7 @@ export default function Composer({
             {compactUi ? null : mode === "build" ? "Build" : "Plan"}
           </button>
 
-          <span style={styles.anchor} data-popover-trigger>
+          <span ref={permAnchorRef} style={styles.anchor} data-popover-trigger>
             <button
               type="button"
               className="chip"
@@ -157,8 +174,7 @@ export default function Composer({
               <Icon name="check" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
               {compactUi ? null : permSummary ? permissionLabel(permSummary) : "权限"}
             </button>
-            {openMenu === "perm" && permSummary ? (
-              <div className="pop-in" data-popover style={{ ...styles.popover, ...styles.chipPopover }}>
+            <Popover anchorRef={permAnchorRef} open={openMenu === "perm" && Boolean(permSummary)} onClose={() => setOpenMenu(null)} width={260}>
                 <div style={styles.modelMenuHead}>本会话工具权限</div>
                 {PERMISSION_CATEGORIES.map((category) => (
                   <div key={category.key} style={styles.permRow}>
@@ -171,7 +187,7 @@ export default function Composer({
                           className="perm-seg"
                           style={{
                             ...styles.permSegBtn,
-                            ...(permSummary.permissions[category.key] === decision ? styles.permSegBtnOn : {}),
+                            ...(permSummary?.permissions[category.key] === decision ? styles.permSegBtnOn : {}),
                           }}
                           onClick={() => adjustPermission(category.key, decision)}
                         >
@@ -199,11 +215,10 @@ export default function Composer({
                 >
                   打开完整权限设置…
                 </div>
-              </div>
-            ) : null}
+              </Popover>
           </span>
 
-          <span style={styles.anchor} data-popover-trigger>
+          <span ref={modelAnchorRef} style={styles.anchor} data-popover-trigger>
             <button
               type="button"
               className="chip"
@@ -215,8 +230,7 @@ export default function Composer({
               <Icon name="cloud-upload" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
               {compactUi ? null : provider?.configured ? provider.model : "未配置模型"}
             </button>
-            {modelMenuOpen ? (
-              <div className="pop-in" data-popover style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
+            <Popover anchorRef={modelAnchorRef} open={modelMenuOpen} onClose={onCloseModelMenu} width={300}>
                 <div style={styles.modelMenuHead}>{provider?.provider ?? "未配置"} · 选择模型</div>
                 {modelList === null ? (
                   <div style={styles.modelMenuItem}>加载中…</div>
@@ -279,8 +293,7 @@ export default function Composer({
                 >
                   管理供应商 / 添加模型…
                 </div>
-              </div>
-            ) : null}
+              </Popover>
           </span>
 
           <button
@@ -312,16 +325,48 @@ export default function Composer({
             </>
           ) : null}
           <button
+            ref={sendAnchorRef}
             type="button"
             className="send-btn"
             style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
-            onClick={onSend}
+            onClick={requestSend}
             disabled={!canSend}
             title={busy ? "发送转向提示（运行中发送 = 转向，下一轮生效）" : "发送（Enter）"}
           >
             <Icon name={busy ? "forward" : "send"} size={15} />
           </button>
         </div>
+        <Popover anchorRef={sendAnchorRef} open={askSteer} onClose={() => setAskSteer(false)} width={280}>
+          <div style={styles.steerAskTitle}>当前回复仍在进行</div>
+          <div style={styles.steerAskText}>这条消息将作为「转向提示」在下一轮开始时注入，不会打断当前输出。</div>
+          <div style={styles.steerAskActions}>
+            <button
+              type="button"
+              className="chip"
+              style={styles.chip}
+              onClick={() => {
+                setAskSteer(false);
+                window.setTimeout(() => textareaRef.current?.focus(), 0);
+              }}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              className="chip"
+              style={{ ...styles.chip, ...styles.chipActive }}
+              onClick={() => {
+                setAskSteer(false);
+                onSend();
+              }}
+            >
+              直接引导
+            </button>
+            <button type="button" className="chip" style={styles.chip} onClick={() => setAskSteer(false)}>
+              取消
+            </button>
+          </div>
+        </Popover>
       </div>
       <div style={styles.composerFoot}>
         <span style={styles.notice}>
@@ -389,6 +434,9 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     flexShrink: 0,
   },
+  steerAskTitle: { fontSize: 12, fontWeight: 650, color: BRAND.linen, padding: "2px 4px 4px" },
+  steerAskText: { fontSize: 11, lineHeight: 1.65, color: BRAND.linenMuted, padding: "0 4px 8px" },
+  steerAskActions: { display: "flex", gap: 6, justifyContent: "flex-end", borderTop: `1px solid ${BRAND.border}`, paddingTop: 8 },
   composerFoot: { display: "flex", gap: 8, marginTop: 4, fontSize: 10.5, color: BRAND.linenFaint, minHeight: 14 },
   notice: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   popover: {

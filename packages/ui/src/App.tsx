@@ -893,7 +893,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!api || typeof location === "undefined") return;
     const mode = new URLSearchParams(location.search).get("e2e");
-    if (mode !== "model-menu" && mode !== "perm-menu" && mode !== "menus-overlap" && mode !== "set-effort") return;
+    if (mode !== "model-menu" && mode !== "perm-menu" && mode !== "menus-overlap" && mode !== "set-effort" && mode !== "steer-choice") return;
     const clickPermissionChip = (): void => {
       // 权限菜单的开关属于 Composer：深链只负责点击它的触发 chip（避免 App 再维护一份状态）。
       const chips = Array.from(document.querySelectorAll<HTMLElement>(".chip"));
@@ -902,6 +902,15 @@ export default function App(): React.JSX.Element {
     const timer = setTimeout(() => {
       if (mode === "model-menu") {
         openModelMenu();
+        return;
+      }
+      if (mode === "steer-choice") {
+        // E2E：先发起一轮长回复，再在运行中输入并发送 → 应弹出「编辑 / 直接引导 / 取消」选择
+        sendText("你好，请简单介绍一下你自己");
+        window.setTimeout(() => setInput("补充：只看最近一周的情报"), 700);
+        window.setTimeout(() => {
+          document.querySelector<HTMLButtonElement>(".send-btn")?.click();
+        }, 1100);
         return;
       }
       if (mode === "set-effort") {
@@ -922,7 +931,7 @@ export default function App(): React.JSX.Element {
       clickPermissionChip();
     }, 900);
     return () => clearTimeout(timer);
-  }, [api, openModelMenu]);
+  }, [api, openModelMenu, sendText]);
 
   // E2E 深链：?e2e=settings&section=xxx 直接打开对应设置分区
   useEffect(() => {

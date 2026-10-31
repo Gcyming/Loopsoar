@@ -14,6 +14,8 @@ export interface WebContentsLike {
   getURL(): string;
   capturePage(): Promise<{ toPNG(): Buffer }>;
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
+  /** 页面缩放（Electron 0.5～2.0；测试可只实现用到的部分）。 */
+  setZoomFactor?(factor: number): void;
   /** 页面事件（真实 Electron WebContents 兼容；测试可只实现用到的部分）。 */
   on(event: string, cb: (...args: unknown[]) => void): void;
 }
@@ -102,8 +104,27 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
     wc.on("did-navigate", (...args) => opts.onNavigate?.(String(args[0] ?? "")));
     wc.on("did-navigate-in-page", (...args) => opts.onNavigate?.(String(args[0] ?? "")));
   }
+  // 页面缩放快捷键（Ctrl + =/-/0）：WebContentsView 有独立焦点，主窗口快捷键捕获不到，
+  // 必须在每个标签自己的 webContents 上监听。
+  let zoomFactor = 1;
+  wc.on("before-input-event", (...args) => {
+    const event = args[0] as { preventDefault?: () => void } | undefined;
+    const input = args[1] as { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean } | undefined;
+    if (!input || input.type !== "keyDown" || !(input.control || input.meta)) return;
+    const key = input.key ?? "";
+    let next = zoomFactor;
+    if (key === "0") next = 1;
+    else if (key === "+" || key === "=") next = Math.round((zoomFactor + 0.1) * 10) / 10;
+    else if (key === "-" || key === "_") next = Math.round((zoomFactor - 0.1) * 10) / 10;
+    else return;
+    event?.preventDefault?.();
+    zoomFactor = Math.max(0.5, Math.min(2, next));
+    wc.setZoomFactor?.(zoomFactor);
+  });
+
   if (opts.onTitle) {
-    wc.on("page-title-updated", (...args) => opts.onTitle?.(String(args[0] ?? "")));
+    // Electron 签名：(event, title, explicitSet) —— 取 args[1]，否则会把 event 渲染成 [object Object]
+    wc.on("page-title-updated", (...args) => opts.onTitle?.(String(args[1] ?? "")));
   }
 
   return {
@@ -180,6 +201,10 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
 
     async executeJs(code: string) {
       return wc.executeJavaScript(code, true);
+    },
+
+    setZoom(factor: number) {
+      wc.setZoomFactor?.(factor);
     },
 
     async close() {

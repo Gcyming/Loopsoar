@@ -157,6 +157,17 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 证据：gui-65 模型菜单、gui-66 AI 导航后地址栏、gui-67 菜单互斥、gui-68 推理等级重启保持、gui-69 Markdown
 - 测试：384 全绿（Markdown 5 + BrowserHost 2 + 偏好 1）
 
+## 二·十七、2026-10-31 第十四次增量（UI 回归修复 + 请求头 + 页面缩放）
+- 运行中发送选择：新增「编辑 / 直接引导 / 取消」浮层（编辑聚焦输入、直接引导立即 steer、取消保留文本）
+- 自定义请求头：供应商配置新增 headers（contracts/providerStore/settings/UI 表单全链路；最多 30 条，
+  聊天与模型探测共用；用于 opencode go 等需要网关鉴权的服务）
+- 吐字重排：StreamFade 不再按尾部窗口切分（字符搬家导致末行回挤），整段走同一 Markdown，DOM 稳定
+- 浮层遮挡：新增 AnchoredPopover（Portal + fixed 定位），权限/模型菜单不再被输入区裁切/覆盖
+- 标签标题 [object Object]：page-title-updated 取 args[1]（Electron 签名 event,title,...）
+- 页面比例：WebContentsView 支持 Ctrl + =/-/0 页面缩放（每个标签自己的 webContents 监听）
+- 测试：389 全绿（providerStore 2、LLM headers 1、adapter 2、Markdown 5 等）
+- 证据：gui-70 转向选择、gui-71 权限浮层、gui-72 请求头设置
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

@@ -213,7 +213,8 @@ describe("BrowserHost（地址与网页强绑定）", () => {
   it("页面标题变化（page-title-updated）→ 标签标题同步", async () => {
     const { host, handlers } = makeHostWithEvents();
     await host.navigate("https://example.com/");
-    handlers.get("page-title-updated")?.("新标题 - 站点");
+    // Electron 签名：(event, title, explicitSet)
+    handlers.get("page-title-updated")?.({}, "新标题 - 站点");
     expect(host.listTabs()[0].title).toBe("新标题 - 站点");
   });
 });

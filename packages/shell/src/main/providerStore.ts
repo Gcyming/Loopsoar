@@ -29,6 +29,8 @@ export interface ProviderItem {
   apiFormat?: "auto" | "openai" | "anthropic";
   /** 上游 RPM 兜底（留空 = 不主动限制）。 */
   rpm?: number;
+  /** 自定义请求头（代理鉴权 / UA 等；键值字符串，最多 30 条）。 */
+  headers?: Record<string, string>;
   /** 已探测/手工维护的模型清单（含上下文、输出、视觉、思考与推理等级）。 */
   models?: ProviderModel[];
 }
@@ -66,7 +68,8 @@ export class ProviderStore {
     if (raw && Array.isArray(raw.items)) {
       const items = raw.items
         .filter((x): x is ProviderItem => !!x && typeof x.id === "string" && typeof x.baseUrl === "string")
-        .slice(0, 50);
+        .slice(0, 50)
+        .map((item) => ({ ...item, headers: this.sanitizeHeaders(item.headers) }));
       const activeId = raw.activeId && items.some((i) => i.id === raw.activeId) ? raw.activeId : (items[0]?.id ?? null);
       return { activeId, items };
     }
@@ -84,6 +87,16 @@ export class ProviderStore {
       return file;
     }
     return { activeId: null, items: [] };
+  }
+
+  /** 只接受字符串键值、限量：避免配置文件被注入任意字段或无限膨胀。 */
+  private sanitizeHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+    if (!headers || typeof headers !== "object") return undefined;
+    const entries = Object.entries(headers)
+      .filter(([key, value]) => typeof key === "string" && key.trim() && typeof value === "string")
+      .map(([key, value]) => [key.trim(), value] as const)
+      .slice(0, 30);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
   }
 
   private slug(base: string, existingIds: string[]): string {
@@ -111,6 +124,7 @@ export class ProviderStore {
     model: string;
     apiFormat?: "auto" | "openai" | "anthropic";
     rpm?: number;
+    headers?: Record<string, string>;
     models?: ProviderModel[];
   }): ProviderItem {
     const file = this.load();
@@ -122,6 +136,7 @@ export class ProviderStore {
       model: input.model,
       apiFormat: input.apiFormat ?? "auto",
       rpm: input.rpm,
+      headers: this.sanitizeHeaders(input.headers ?? file.items.find((i) => i.id === id)?.headers),
       models: input.models ?? file.items.find((i) => i.id === id)?.models,
     };
     const idx = file.items.findIndex((i) => i.id === id);

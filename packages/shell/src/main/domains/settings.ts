@@ -361,7 +361,16 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   }));
 
   handleTrusted(deps, "settings:upsertProvider", (payload) => {
-    const p = payload as { id?: string; provider: string; baseUrl: string; model: string };
+    const p = payload as {
+      id?: string;
+      provider: string;
+      baseUrl: string;
+      model: string;
+      apiFormat?: "auto" | "openai" | "anthropic";
+      rpm?: number;
+      headers?: Record<string, string>;
+      models?: Parameters<ProviderStore["upsert"]>[0]["models"];
+    };
     if (!deps.providers) throw new Error("供应商存储未装配");
     const item = deps.providers.upsert(p);
     deps.onProvidersChanged?.();
@@ -608,6 +617,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       model?: string;
       apiFormat?: "auto" | "openai" | "anthropic";
       apiKey?: string;
+      headers?: Record<string, string>;
     };
     const cfg = validateProviderConfig({ provider: raw.provider, baseUrl: raw.baseUrl, model: raw.model || "default" });
     const activeId = deps.providers?.active()?.id;
@@ -622,13 +632,16 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       : /\/v1$/.test(modelsBase)
         ? `${modelsBase}/models`
         : `${modelsBase}/v1/models`;
-    const headers: Record<string, string> = apiKey
-      ? isAnthropic
-        ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
-        : { Authorization: `Bearer ${apiKey}` }
-      : isAnthropic
-        ? { "anthropic-version": "2023-06-01" }
-        : {};
+    const headers: Record<string, string> = {
+      ...(apiKey
+        ? isAnthropic
+          ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+          : { Authorization: `Bearer ${apiKey}` }
+        : isAnthropic
+          ? { "anthropic-version": "2023-06-01" }
+          : {}),
+      ...(raw.headers ?? {}),
+    };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {

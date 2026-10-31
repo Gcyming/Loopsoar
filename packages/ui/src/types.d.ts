@@ -209,6 +209,8 @@ export interface ProviderItem {
   model: string;
   apiFormat?: "auto" | "openai" | "anthropic";
   rpm?: number;
+  /** 自定义请求头（随供应商配置持久化）。 */
+  headers?: Record<string, string>;
   models?: ProviderModel[];
   hasKey?: boolean;
   keyHint?: string | null;
@@ -387,6 +389,7 @@ export interface LoopsoarAPI {
       model?: string;
       apiFormat?: "auto" | "openai" | "anthropic";
       apiKey?: string;
+      headers?: Record<string, string>;
     }): Promise<{ models: ProviderModel[]; error: string | null }>;
     listProviders(): Promise<{ items: ProviderItem[]; activeId: string | null }>;
     upsertProvider(payload: {
@@ -396,6 +399,7 @@ export interface LoopsoarAPI {
       model: string;
       apiFormat?: "auto" | "openai" | "anthropic";
       rpm?: number;
+      headers?: Record<string, string>;
       models?: ProviderModel[];
     }): Promise<{ item: ProviderItem; items: ProviderItem[]; activeId: string | null }>;
     removeProvider(payload: { id: string }): Promise<{ removed: boolean; items: ProviderItem[]; activeId: string | null }>;
