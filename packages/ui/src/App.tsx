@@ -21,6 +21,7 @@ import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
 import MessageList from "./MessageList.js";
 import BrowserChrome from "./BrowserChrome.js";
+import Composer from "./Composer.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -1158,256 +1159,52 @@ export default function App(): React.JSX.Element {
             onRegenerate={regenerate}
             onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
           />
-          <div style={styles.composer}>
-            <div ref={composerBoxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
-              {/* 隐藏测量行：始终保持完整文案，用于计算自然宽度 */}
-              <div ref={measureRowRef} aria-hidden style={styles.measureRow}>
-                <span style={styles.measureChip}>
-                  <Icon name="bolt" size={12} style={{ marginRight: 4 }} />Build
-                </span>
-                <span style={styles.measureChip}>
-                  <Icon name="check" size={12} style={{ marginRight: 4 }} />
-                  {permSummary ? permissionLabel(permSummary) : "权限"}
-                </span>
-                <span style={styles.measureChip}>
-                  <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
-                  {provider?.configured ? provider.model : "未配置模型"}
-                </span>
-                <span style={styles.measureChip}>
-                  <Icon name="file" size={12} style={{ marginRight: 4 }} />附件
-                </span>
-                <span style={styles.measureChip}>停止</span>
-                <span style={styles.measureChip}>发送</span>
-              </div>
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                placeholder="输入消息（Enter 发送，Shift+Enter 换行）"
-                style={styles.textarea}
-                rows={3}
-              />
-              <div style={styles.chipRow}>
-                <button
-                  type="button"
-                  className="chip"
-                  style={{
-                    ...styles.chip,
-                    ...(compactUi ? styles.chipCompact : {}),
-                    ...(mode === "build" ? styles.chipActive : {}),
-                  }}
-                  title={`模式：${mode === "build" ? "Build 可执行工具" : "Plan 只读规划"}${compactUi ? "（空间不足，已折叠）" : ""}`}
-                  aria-label={mode === "build" ? "Build 模式" : "Plan 模式"}
-                  onClick={() => setMode(mode === "build" ? "plan" : "build")}
-                >
-                  <Icon name="bolt" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                  {compactUi ? null : mode === "build" ? "Build" : "Plan"}
-                </button>
-                <span style={styles.anchor}>
-                  <button
-                    type="button"
-                    className="chip"
-                    style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-                    title={`当前会话权限${compactUi ? "（空间不足，已折叠）" : ""}`}
-                    aria-label="当前会话权限"
-                    onClick={() => {
-                      if (!permSummary) {
-                        void api?.settings.getPermissions().then((r) => { setPermSummary(r); setPermMenuOpen(true); }).catch(() => {});
-                        return;
-                      }
-                      setPermMenuOpen((v) => !v);
-                    }}
-                  >
-                    <Icon name="check" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                    {compactUi ? null : permSummary ? permissionLabel(permSummary) : "权限"}
-                  </button>
-                  {permMenuOpen && permSummary ? (
-                    <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover }}>
-                      <div style={styles.modelMenuHead}>本会话工具权限</div>
-                      {[
-                        { key: "read", label: "读取文件" },
-                        { key: "write", label: "写入文件" },
-                        { key: "terminal", label: "执行命令" },
-                        { key: "network", label: "网络访问" },
-                      ].map((cat) => (
-                        <div key={cat.key} style={styles.permRow}>
-                          <span style={styles.permCat}>{cat.label}</span>
-                          <span style={styles.permSeg}>
-                            {(["allow", "confirm", "deny"] as const).map((v) => (
-                              <button
-                                key={v}
-                                type="button"
-                                className="perm-seg"
-                                style={{
-                                  ...styles.permSegBtn,
-                                  ...(permSummary.permissions[cat.key as "read"] === v ? styles.permSegBtnOn : {}),
-                                }}
-                                onClick={() => {
-                                  const next = {
-                                    ...permSummary,
-                                    permissions: { ...permSummary.permissions, [cat.key]: v },
-                                  };
-                                  setPermSummary(next);
-                                  void api?.settings.setPermissions(next.permissions).catch(() => {});
-                                }}
-                              >
-                                {v === "allow" ? "允许" : v === "confirm" ? "询问" : "拒绝"}
-                              </button>
-                            ))}
-                          </span>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        className="model-item"
-                        style={styles.modelMenuFoot}
-                        onClick={() => {
-                          setPermMenuOpen(false);
-                          openSettings("permissions");
-                        }}
-                      >
-                        打开完整权限设置…
-                      </button>
-                    </div>
-                  ) : null}
-                </span>
-                <span style={styles.anchor}>
-                  <button
-                    type="button"
-                    className="chip"
-                    style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-                    title={`选择模型：${provider?.configured ? provider.model : "未配置"}${compactUi ? "（空间不足，已折叠）" : ""}`}
-                    aria-label="选择模型"
-                    onClick={openModelMenu}
-                  >
-                    <Icon name="cloud-upload" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                    {compactUi ? null : provider?.configured ? provider.model : "未配置模型"}
-                  </button>
-                  {modelMenuOpen ? (
-                    <div className="pop-in" style={{ ...styles.popover, ...styles.chipPopover, width: 300 }}>
-                      <div style={styles.modelMenuHead}>{provider?.provider ?? "未配置"} · 选择模型</div>
-                      {modelList === null ? (
-                        <div style={styles.modelMenuItem}>加载中…</div>
-                      ) : (
-                        <>
-                          {modelList.models.map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              className="model-item"
-                              style={{ ...styles.modelMenuItem, ...(m.id === provider?.model ? styles.modelMenuItemActive : {}) }}
-                              onClick={() => chooseModel(m.id)}
-                              title={`${m.id}${m.contextWindow ? ` · 上下文 ${Math.round(m.contextWindow / 1000)}K` : ""}${m.thinkingEfforts?.length ? ` · 推理 ${m.thinkingEfforts.join("/")}` : ""}`}
-                            >
-                              <span style={styles.modelItemName}>
-                                {m.id}
-                                {m.thinking ? <span style={styles.modelBadge}>推理</span> : null}
-                                {m.vision ? <span style={styles.modelBadge}>视觉</span> : null}
-                              </span>
-                              {m.id === provider?.model ? <Icon name="check" size={12} /> : null}
-                            </button>
-                          ))}
-                          {modelList.error ? <div style={styles.modelMenuErr}>{modelList.error}（可回退到默认模型）</div> : null}
-                        </>
-                      )}
-                      {effortOptions.length > 0 ? (
-                        <div style={styles.effortSection}>
-                          <div style={styles.modelMenuHead}>推理等级</div>
-                          <div style={styles.effortRow}>
-                            {["", ...effortOptions].map((value) => (
-                              <button
-                                key={value || "off"}
-                                type="button"
-                                className="chip"
-                                style={{ ...styles.chip, ...(reasoningEffort === value ? styles.chipActive : {}) }}
-                                onClick={() => setReasoningEffort(value)}
-                                title={value || "关闭推理"}
-                              >
-                                {effortLabel(value).replace("推理：", "")}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="model-item"
-                        style={styles.modelMenuFoot}
-                        onClick={() => {
-                          setModelMenuOpen(false);
-                          openSettings("providers");
-                        }}
-                      >
-                        管理供应商 / 添加模型…
-                      </button>
-                    </div>
-                  ) : null}
-                </span>
-                <button
-                  type="button"
-                  className="chip"
-                  style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-                  title="添加附件（把文件路径放进消息，Agent 可用工具读取）"
-                  aria-label="添加附件"
-                  onClick={() => {
-                    void api?.dialog
-                      .pickPath({ kind: "file", title: "选择附件" })
-                      .then((r) => {
-                        if (r.canceled || !r.path) return;
-                        setInput((prev) => (prev ? `${prev}\n【附件】${r.path}` : `【附件】${r.path}`));
-                        setNotice("已添加附件（路径已放入消息）");
-                      })
-                      .catch(() => {});
-                  }}
-                >
-                  <Icon name="file" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                  {compactUi ? null : "附件"}
-                </button>
-                <span style={styles.spacer} />
-                {busy ? (
-                  <>
-                    <Icon name="spinner" size={14} className="spinner" style={styles.spinnerInline} />
-                    <button
-                      type="button"
-                      className="chip"
-                      style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-                      onClick={stop}
-                      title={`停止生成${compactUi ? "（空间不足，已折叠）" : ""}`}
-                      aria-label="停止生成"
-                    >
-                      <Icon name="stop" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                      {compactUi ? null : "停止"}
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  className="send-btn"
-                  style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
-                  onClick={send}
-                  disabled={!canSend}
-                  title={busy ? "发送转向提示（运行中发送 = 转向，下一轮生效）" : "发送（Enter）"}
-                >
-                  <Icon name={busy ? "forward" : "send"} size={15} />
-                </button>
-              </div>
-            </div>
-            <div style={styles.composerFoot}>
-              <span style={styles.notice}>
-                {notice ||
-                  (busy
-                    ? "生成中…"
-                    : mode === "plan"
-                      ? "Plan 模式：只读规划，不执行写操作"
-                      : "Build 模式：可在权限范围内执行工具")}
-              </span>
-            </div>
-          </div>
+          <Composer
+            value={input}
+            onChange={setInput}
+            onSend={send}
+            onStop={stop}
+            busy={busy}
+            canSend={canSend}
+            mode={mode}
+            onToggleMode={() => setMode(mode === "build" ? "plan" : "build")}
+            compactUi={compactUi}
+            squeezeRatio={squeezeRatio}
+            boxRef={composerBoxRef}
+            measureRef={measureRowRef}
+            provider={provider}
+            permSummary={permSummary}
+            onPermissionChange={(next) => {
+              void api?.settings
+                .setPermissions(next.permissions)
+                .then(() => api.settings.getPermissions())
+                .then((r) => setPermSummary(r))
+                .catch(() => {});
+            }}
+            onOpenSettings={openSettings}
+            modelMenuOpen={modelMenuOpen}
+            onOpenModelMenu={openModelMenu}
+            onCloseModelMenu={() => setModelMenuOpen(false)}
+            modelList={modelList}
+            onChooseModel={chooseModel}
+            effortOptions={effortOptions}
+            reasoningEffort={reasoningEffort}
+            onReasoningEffortChange={setReasoningEffort}
+            effortLabel={effortLabel}
+            permissionLabel={permissionLabel}
+            onPickAttachment={() => {
+              void api?.dialog
+                .pickPath({ kind: "file", title: "选择附件" })
+                .then((r) => {
+                  if (r.canceled || !r.path) return;
+                  setInput((prev) => (prev ? `${prev}
+【附件】${r.path}` : `【附件】${r.path}`));
+                  setNotice("已添加附件（路径已放入消息）");
+                })
+                .catch(() => {});
+            }}
+            notice={notice}
+          />
         </aside>
       </div>
 
@@ -1578,51 +1375,24 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeft: `1px solid ${BRAND.border}`,
     transition: "background 120ms",
   },
-  permRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "5px 8px",
-  },
-  permCat: { fontSize: 11.5, color: BRAND.linenMuted },
-  permSeg: { display: "inline-flex", border: `1px solid ${BRAND.border}`, borderRadius: 6, overflow: "hidden" },
-  permSegBtn: {
-    padding: "2px 7px",
-    border: "none",
-    background: "transparent",
-    color: BRAND.linenFaint,
-    fontSize: 10.5,
-    cursor: "pointer",
-  },
-  permSegBtnOn: { background: BRAND.ochre, color: BRAND.ink, fontWeight: 700 },
   anchor: { position: "relative", display: "inline-flex" },
-  popover: {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    marginTop: 6,
-    width: 360,
-    maxHeight: 360,
-    overflowY: "auto",
-    borderRadius: 10,
-    border: `1px solid ${BRAND.borderStrong}`,
-    background: BRAND.inkRaised,
-    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
-    padding: 8,
-    zIndex: 45,
+  /** 会话栏 chip（输入区 chip 已迁到 Composer；这里保留会话切换所需的最小定义）。 */
+  chip: {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 24,
+    padding: "0 8px",
+    borderRadius: 12,
+    border: `1px solid ${BRAND.border}`,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    fontSize: 11,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   },
-  chipPopover: {
-    top: "auto",
-    bottom: "100%",
-    left: "auto",
-    right: 0,
-    marginTop: 0,
-    marginBottom: 6,
-    width: 300,
-    maxWidth: "calc(100vw - 24px)",
-    maxHeight: 320,
-    overflowY: "auto",
-  },
+  chipCompact: { width: 24, padding: 0, justifyContent: "center" },
   dropPanel: {
     position: "absolute",
     top: 84,
@@ -1715,37 +1485,6 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
     padding: 6,
     zIndex: 20,
-  },
-  modelMenuHead: { fontSize: 10.5, color: BRAND.linenFaint, padding: "4px 8px 6px" },
-  modelMenuItem: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    width: "100%",
-    padding: "7px 8px",
-    borderRadius: 7,
-    border: "none",
-    background: "transparent",
-    color: BRAND.linen,
-    fontSize: 12,
-    cursor: "pointer",
-    textAlign: "left",
-  },
-  modelMenuItemActive: { background: BRAND.ochreSoft, color: BRAND.ochreHover },
-  modelItemName: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 },
-  modelMenuErr: { fontSize: 10.5, color: BRAND.danger, padding: "4px 8px" },
-  modelMenuFoot: {
-    marginTop: 4,
-    borderTop: `1px solid ${BRAND.border}`,
-    borderRadius: 0,
-    padding: "8px 8px 4px",
-    fontSize: 11.5,
-    color: BRAND.linenMuted,
-    background: "transparent",
-    border: "none",
-    width: "100%",
-    textAlign: "left",
-    cursor: "pointer",
   },
   sidebar: {
     display: "flex",
@@ -1865,91 +1604,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
-  composer: { borderTop: `1px solid ${BRAND.border}`, padding: 10 },
-  composerBox: {
-    position: "relative",
-    minWidth: 0,
-    maxWidth: "100%",
-    boxSizing: "border-box",
-    borderRadius: 12,
-    border: `1px solid ${BRAND.border}`,
-    background: BRAND.ink,
-    padding: "8px 8px 6px",
-  },
-  chipRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "nowrap" },
-  chip: {
-    flexShrink: 1,
-    minWidth: 0,
-    display: "inline-flex",
-    alignItems: "center",
-    height: 24,
-    padding: "0 9px",
-    borderRadius: 999,
-    border: `1px solid ${BRAND.border}`,
-    background: "transparent",
-    color: BRAND.linenMuted,
-    fontSize: 11,
-    cursor: "pointer",
-    maxWidth: 170,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: BRAND.ochreSoft },
-  chipCompact: {
-    width: 28,
-    height: 28,
-    padding: 0,
-    justifyContent: "center",
-    borderRadius: 999,
-    flexShrink: 0,
-    transition: "width 140ms ease, border-radius 140ms ease",
-  },
-  measureRow: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    display: "flex",
-    gap: 6,
-    visibility: "hidden",
-    pointerEvents: "none",
-    whiteSpace: "nowrap",
-  },
-  measureChip: {
-    display: "inline-flex",
-    alignItems: "center",
-    height: 24,
-    padding: "0 9px",
-    borderRadius: 999,
-    border: `1px solid ${BRAND.border}`,
-    fontSize: 11,
-  },
-  spacer: { flex: 1 },
-  effortSection: { borderTop: `1px solid ${BRAND.border}`, padding: "6px 4px 2px" },
-  effortRow: { display: "flex", flexWrap: "wrap", gap: 4 },
-  modelBadge: {
-    marginLeft: 6,
-    fontSize: 9,
-    padding: "0 4px",
-    borderRadius: 4,
-    border: `1px solid ${BRAND.border}`,
-    color: BRAND.linenFaint,
-    verticalAlign: "1px",
-  },
-  sendBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    border: "none",
-    background: BRAND.ochre,
-    color: BRAND.ink,
-    display: "grid",
-    placeItems: "center",
-    cursor: "pointer",
-    flex: "none",
-    transition: "transform 80ms, background 120ms",
-  },
-  composerFoot: { marginTop: 6, padding: "0 2px" },
   permOverlay: {
     position: "fixed",
     inset: 0,
@@ -1972,29 +1626,7 @@ const styles: Record<string, React.CSSProperties> = {
   permTarget: { color: BRAND.linenMuted, fontSize: 11.5, marginLeft: 4, wordBreak: "break-all" },
   permHint: { marginTop: 8, fontSize: 11, color: BRAND.linenFaint, lineHeight: 1.6 },
   permBtns: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 },
-  textarea: {
-    width: "100%",
-    boxSizing: "border-box",
-    resize: "none",
-    borderRadius: 8,
-    border: `1px solid ${BRAND.border}`,
-    background: BRAND.ink,
-    color: BRAND.linen,
-    padding: 10,
-    fontSize: 12.5,
-    lineHeight: 1.6,
-    outline: "none",
-  },
   composerRow: { display: "flex", alignItems: "center", gap: 8, marginTop: 8 },
-  spinnerInline: { color: BRAND.ochre, flex: "none" },
-  notice: {
-    flex: 1,
-    fontSize: 11,
-    color: BRAND.linenFaint,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
   statusBar: {
     display: "flex",
     alignItems: "center",
