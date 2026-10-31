@@ -19,7 +19,7 @@ import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
 import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
-import ChatMessageView from "./ChatMessageView.js";
+import MessageList from "./MessageList.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -172,7 +172,6 @@ export default function App(): React.JSX.Element {
   const [modelList, setModelList] = useState<{ models: ProviderModel[]; error: string | null } | null>(null);
   const sessionIdRef = useRef<string>(nextId("sess"));
   const omniboxRef = useRef<HTMLInputElement | null>(null);
-  const messageListRef = useRef<HTMLDivElement | null>(null);
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
@@ -298,7 +297,22 @@ export default function App(): React.JSX.Element {
         });
       }),
       api.on("chat:stream:progress", (payload) => {
-        pushTransient("system", String((payload as { content?: string }).content ?? ""));
+        const raw = String((payload as { content?: string }).content ?? "");
+        let parsed: { note?: string; compressed?: boolean; dropped?: number } = {};
+        try {
+          parsed = JSON.parse(raw) as typeof parsed;
+        } catch {
+          parsed = { note: raw };
+        }
+        if (parsed.compressed) {
+          const note = parsed.note ?? `已自动压缩 ${parsed.dropped ?? 0} 条早期消息`;
+          setMessages((prev) => {
+            const at = activeAssistantRef.current;
+            return prev.map((m) => (m.id === at ? { ...m, compressNote: note } : m));
+          });
+          return;
+        }
+        if (parsed.note) pushTransient("system", parsed.note);
       }),
       api.on("chat:stream:heartbeat", () => {}),
       api.on("perm:request", (payload) => {
@@ -431,12 +445,6 @@ export default function App(): React.JSX.Element {
     observer.observe(ghost);
     return () => observer.disconnect();
   }, [provider, permSummary, mode, reasoningEffort, sidebarWidth, modelList]);
-
-  // 新消息/流式增量时自动滚到底部
-  useEffect(() => {
-    const el = messageListRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
 
   // 供应商/模型变更同步：设置页保存后刷新模型 chip 与模型列表
   useEffect(() => {
@@ -1194,34 +1202,21 @@ export default function App(): React.JSX.Element {
               </div>
             ) : null}
           </div>
-          <div style={styles.messageArea}>
-            <div ref={messageListRef} className="chat-scroll" style={styles.messageList}>
-            {messages.length === 0 ? (
-              <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
-            ) : (
-              messages.map((m) => (
-                <ChatMessageView
-                  key={m.id}
-                  message={m}
-                  mode={mode}
-                  providerModel={provider?.model ?? undefined}
-                  contextUsed={contextUsage.used}
-                  contextCap={contextUsage.cap}
-                  contextPct={contextPct}
-                  thinkingOpen={thinkingOpen[m.id] ?? true}
-                  expandAllGroups={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
-                  openProducts={new URLSearchParams(location.search).get("openProducts") === "1"}
-                  onToggleThinking={() => setThinkingOpen((prev) => ({ ...prev, [m.id]: !(prev[m.id] ?? true) }))}
-                  onRollback={rollbackTo}
-                  onRegenerate={regenerate}
-                  onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
-                />
-              ))
-
-            )}
-            </div>
-            <TopicRail scroller={() => messageListRef.current} />
-          </div>
+          <MessageList
+            messages={messages}
+            mode={mode}
+            providerModel={provider?.model ?? undefined}
+            contextUsed={contextUsage.used}
+            contextCap={contextUsage.cap}
+            contextPct={contextPct}
+            thinkingOpen={thinkingOpen}
+            expandAllGroups={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
+            openProducts={new URLSearchParams(location.search).get("openProducts") === "1"}
+            onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
+            onRollback={rollbackTo}
+            onRegenerate={regenerate}
+            onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
+          />
           <div style={styles.composer}>
             <div ref={composerBoxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
               {/* 隐藏测量行：始终保持完整文案，用于计算自然宽度 */}
@@ -1911,8 +1906,6 @@ const styles: Record<string, React.CSSProperties> = {
   sidebarTitle: { display: "inline-flex", alignItems: "center" },
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
   sidebarActions: { display: "inline-flex", alignItems: "center", gap: 6 },
-  messageArea: { position: "relative", flex: 1, minHeight: 0, display: "flex" },
-  messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   scrollRail: {
     position: "absolute",
     right: 8,
@@ -1943,7 +1936,6 @@ const styles: Record<string, React.CSSProperties> = {
     transition: "background 120ms, color 120ms, opacity 160ms",
   },
   scrollRailLine: { width: 14, height: 1, background: BRAND.border },
-  emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
   announces: { display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px" },
   announceRow: { display: "flex", alignItems: "baseline", gap: 6, fontSize: 11, color: BRAND.linenFaint, minWidth: 0 },
   announceMark: { width: 10, flex: "none", textAlign: "center", fontSize: 9.5 },

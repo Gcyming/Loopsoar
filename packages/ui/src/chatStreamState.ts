@@ -27,6 +27,8 @@ export interface ChatMessage {
   timing?: { firstTokenMs?: number; totalMs?: number; rounds?: number; toolCalls?: number; tokens?: number };
   createdAt?: number;
   errorText?: string;
+  /** 上下文自动压缩提示（来自 progress 事件，渲染在正文之前）。 */
+  compressNote?: string;
   steer?: boolean;
   /** 交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导）。 */
   timeline?: TimelineStep[];

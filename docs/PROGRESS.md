@@ -110,6 +110,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 测试：chatStreamState 6 用例；全量 373 全绿
 - 证据：gui-57-architecture-refactor.png（重构后渲染无回归）
 
+## 二·十、2026-10-31 第八轮增量（会话板块追平项）
+- 新增 `MessageList.tsx`：滚动容器 + 自动滚底 + 卷轴 + 消息渲染，App 再瘦身（2155 行）
+- 上下文自动压缩提示：progress 事件带 compressed 时写入消息 compressNote，正文前渲染「已自动压缩 N 条早期消息」
+- E2E 工具运行态：新增 `LOOPSOAR_E2E_LIVE_TOOL` 合成 tool_start（不返回结果），验证「执行中」呼吸胶囊
+- 证据：gui-59-live-tool.png（执行中状态 + 思考展开 + 流式正文 + LiveStatus）
+- 会话板块追平清单：时间线/工具卡/规划/播报/引导/产物/diff/压缩提示/运行态 ✅；
+  剩余：图片附件预览、压缩报告明细、App <1200 行拆分（顶栏/侧栏/输入区）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

@@ -208,6 +208,23 @@ function scheduleE2ERailHover(win: BrowserWindow): void {
   });
 }
 
+/** E2E：演示工具「执行中」呼吸状态（只发 tool_start，不发结果；仅显式环境变量启用）。 */
+function scheduleE2ELiveTool(win: BrowserWindow): void {
+  if (!process.env.LOOPSOAR_E2E_LIVE_TOOL) return;
+  win.webContents.once("did-finish-load", () => {
+    const push = (channel: string, payload: unknown): void => pushToRenderer(channel, payload);
+    setTimeout(() => push("chat:stream:chunk", { content: "先读取页面，再整理结论。" }), 700);
+    setTimeout(() => push("chat:stream:reasoning", { content: "当前页面可能还没打开，我先调用浏览器快照工具。" }), 950);
+    setTimeout(
+      () =>
+        push("chat:stream:tool_start", {
+          content: JSON.stringify({ toolCallId: "call-e2e-live", toolName: "browser_snapshot", args: { maxChars: 4000 } }),
+        }),
+      1200,
+    );
+  });
+}
+
 /** E2E：演示计划卡 + 上下文环（合成 chat 事件，仅显式环境变量启用）。 */
 function scheduleE2EPlanDemo(win: BrowserWindow): void {
   if (!process.env.LOOPSOAR_E2E_PLAN) return;
@@ -358,6 +375,7 @@ function createMainWindow(): void {
   }
   scheduleE2EScreenshot(mainWindow);
   scheduleE2ERailHover(mainWindow);
+  scheduleE2ELiveTool(mainWindow);
   scheduleE2EPlanDemo(mainWindow);
   scheduleE2ESteerDemo(mainWindow);
   scheduleE2ESearchDemo(mainWindow);

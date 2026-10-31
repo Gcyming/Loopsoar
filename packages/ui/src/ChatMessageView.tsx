@@ -134,6 +134,12 @@ export default function ChatMessageView({
             </span>
           </div>
         ) : null}
+        {m.compressNote ? (
+          <div className="compress-note" title={m.compressNote}>
+            <span className="compress-note-mark" aria-hidden>⤵</span>
+            <span>{m.compressNote}</span>
+          </div>
+        ) : null}
         <div className="msg-body-text" style={styles.assistantBody}>
           {m.status === "streaming" && displayText ? (
             <StreamFadeText text={displayText} Markdown={({ text }) => renderRich(text)} />
