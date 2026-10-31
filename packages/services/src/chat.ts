@@ -340,7 +340,13 @@ export class ChatService {
       budgetChars: historyBudgetChars(this.opts.getContextWindow?.()),
     });
     if (compression.compressed) {
-      emit("progress", { note: compression.summary, compressed: true, dropped: compression.droppedCount });
+      emit("progress", {
+        note: compression.summary,
+        compressed: true,
+        dropped: compression.droppedCount,
+        beforeChars: compression.beforeChars,
+        afterChars: compression.afterChars,
+      });
     }
     const messages = [
       { role: "system" as const, content: stableContent },

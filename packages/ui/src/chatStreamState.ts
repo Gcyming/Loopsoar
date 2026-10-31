@@ -29,6 +29,8 @@ export interface ChatMessage {
   errorText?: string;
   /** 上下文自动压缩提示（来自 progress 事件，渲染在正文之前）。 */
   compressNote?: string;
+  /** 压缩报告明细（条数/前后字符数；用于可展开的压缩报告）。 */
+  compressStats?: { dropped: number; beforeChars: number; afterChars: number };
   steer?: boolean;
   /** 交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导）。 */
   timeline?: TimelineStep[];

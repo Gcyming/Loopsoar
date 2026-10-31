@@ -126,6 +126,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 证据：gui-60-attachment-image.png（图片缩略图 + 正在思考/LiveStatus）
 - 会话板块追平清单更新：图片附件 ✅；剩余压缩报告明细、App <1200 行拆分
 
+## 二·十二、2026-10-31 第十轮增量（压缩报告 + 顶栏拆分）
+- 上下文压缩报告明细：ChatService progress 带 beforeChars/afterChars；消息气泡内压缩提示显示
+  「压缩 N 条 · A→B 字符 · 节省 X%」+ 保留策略说明
+- 新增 `BrowserChrome.tsx`：后退/前进/刷新/历史 + 地址搜索 + 下载/快照/设置 + 标签栏；
+  App.tsx 2194 → 2032 行（删除 14 个重复样式键）
+- 证据：gui-61-chrome-refactor.png（顶栏/标签/时间线/运行态均正常）
+- 剩余：Composer 拆分、思考组头去重、diff 折叠动效
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

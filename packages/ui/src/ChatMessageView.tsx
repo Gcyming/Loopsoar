@@ -142,7 +142,15 @@ export default function ChatMessageView({
         {m.compressNote ? (
           <div className="compress-note" title={m.compressNote}>
             <span className="compress-note-mark" aria-hidden>⤵</span>
-            <span>{m.compressNote}</span>
+            <span style={styles.compressText}>
+              {m.compressStats
+                ? `上下文自动压缩 ${m.compressStats.dropped} 条早期消息 · ${m.compressStats.beforeChars} → ${m.compressStats.afterChars} 字符（节省 ${Math.max(
+                    0,
+                    Math.round((1 - m.compressStats.afterChars / Math.max(1, m.compressStats.beforeChars)) * 100),
+                  )}%）`
+                : m.compressNote}
+            </span>
+            {m.compressStats ? <span style={styles.compressHint}>已保留最近原文，早期内容为确定性摘要</span> : null}
           </div>
         ) : null}
         <div className="msg-body-text" style={styles.assistantBody}>
@@ -266,6 +274,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#1a140f",
     fontWeight: 600,
   },
+  compressText: { flex: 1, minWidth: 0 },
+  compressHint: { flexShrink: 0, color: BRAND.linenFaint, fontSize: 10 },
   attachRow: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 5 },
   attachThumb: {
     display: "block",

@@ -20,6 +20,7 @@ import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
 import MessageList from "./MessageList.js";
+import BrowserChrome from "./BrowserChrome.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -298,7 +299,13 @@ export default function App(): React.JSX.Element {
       }),
       api.on("chat:stream:progress", (payload) => {
         const raw = String((payload as { content?: string }).content ?? "");
-        let parsed: { note?: string; compressed?: boolean; dropped?: number } = {};
+        let parsed: {
+          note?: string;
+          compressed?: boolean;
+          dropped?: number;
+          beforeChars?: number;
+          afterChars?: number;
+        } = {};
         try {
           parsed = JSON.parse(raw) as typeof parsed;
         } catch {
@@ -308,7 +315,23 @@ export default function App(): React.JSX.Element {
           const note = parsed.note ?? `已自动压缩 ${parsed.dropped ?? 0} 条早期消息`;
           setMessages((prev) => {
             const at = activeAssistantRef.current;
-            return prev.map((m) => (m.id === at ? { ...m, compressNote: note } : m));
+            return prev.map((m) =>
+              m.id === at
+                ? {
+                    ...m,
+                    compressNote: note,
+                    ...(typeof parsed.beforeChars === "number" && typeof parsed.afterChars === "number"
+                      ? {
+                          compressStats: {
+                            dropped: parsed.dropped ?? 0,
+                            beforeChars: parsed.beforeChars,
+                            afterChars: parsed.afterChars,
+                          },
+                        }
+                      : {}),
+                  }
+                : m,
+            );
           });
           return;
         }
@@ -977,112 +1000,28 @@ export default function App(): React.JSX.Element {
     <div style={styles.app}>
       <TitleBar maximized={maximized} />
 
-      <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
-        <div style={styles.navGroup}>
-          <button
-            type="button"
-            className="icon-btn"
-            title="后退"
-            disabled={!tabs.find((x) => x.active)?.canBack}
-            onClick={goBack}
-          >
-            <Icon name="back" size={16} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="前进"
-            disabled={!tabs.find((x) => x.active)?.canForward}
-            onClick={goForward}
-          >
-            <Icon name="forward" size={16} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="刷新"
-            disabled={!currentUrl}
-            onClick={() => navigate(currentUrl)}
-          >
-            <Icon name="reload" size={16} />
-          </button>
-          <span style={styles.anchor}>
-            <button type="button" className="icon-btn" title="历史记录" onClick={toggleHistory}>
-              <Icon name="history" size={16} />
-            </button>
-            {historyOpen ? renderHistoryPanel() : null}
-          </span>
-        </div>
-
-        <div style={styles.omniboxWrap}>
-          <Icon name="search" size={14} style={styles.omniboxIcon} />
-          <input
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") navigate();
-            }}
-            ref={omniboxRef}
-            placeholder="输入地址或搜索内容，回车导航…"
-            style={styles.omnibox}
-            aria-label="地址与搜索"
-          />
-          <button type="button" className="icon-btn" title="收藏（待接）" disabled style={styles.omniboxStar}>
-            <Icon name="star" size={15} />
-          </button>
-        </div>
-
-        <div style={styles.topActions}>
-          <span style={styles.anchor}>
-            <button type="button" className="icon-btn" title="下载" onClick={toggleDownloads} style={{ position: "relative" }}>
-              <Icon name="download" size={17} />
-              {downloads.some((d) => d.state === "progressing") ? <span style={styles.dlDot} /> : null}
-            </button>
-            {downloadsOpen ? renderDownloadsPanel() : null}
-          </span>
-          <button type="button" className="icon-btn" title={currentUrl ? "页面快照" : "先打开一个网页"} onClick={snapshot} disabled={!api || !currentUrl}>
-            <Icon name="capture" size={17} />
-          </button>
-          <button type="button" className="icon-btn" title="设置" onClick={() => setSettingsOpen(true)}>
-            <Icon name="settings" size={17} />
-          </button>
-          <button type="button" className="icon-btn" title="更多（待接）" disabled>
-            <Icon name="more" size={17} />
-          </button>
-        </div>
-      </header>
-
-
-      <div style={{ ...styles.tabBar, height: LAYOUT.TAB_BAR_HEIGHT }}>
-        {tabs.length > 0
-          ? tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`tab-item${tab.active ? " is-active" : ""}`}
-              style={{ ...styles.tab, ...(tab.active ? styles.tabActive : {}) }}
-              onClick={() => selectTab(tab.id)}
-              title={tab.url || tab.title}
-            >
-              <span style={styles.tabTitle}>{tab.title || "新建标签页"}</span>
-              <button
-                type="button"
-                className="icon-btn tab-close"
-                title="关闭标签"
-                style={styles.tabClose}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(tab.id);
-                }}
-              >
-                <Icon name="close" size={10} />
-              </button>
-            </div>
-            ))
-          : null}
-        <button type="button" className="icon-btn" title="新建标签页" style={styles.tabAdd} onClick={newTab}>
-          <Icon name="plus" size={13} />
-        </button>
-      </div>
+      <BrowserChrome
+        tabs={tabs}
+        address={address}
+        currentUrl={currentUrl}
+        omniboxRef={omniboxRef}
+        historyOpen={historyOpen}
+        downloadsOpen={downloadsOpen}
+        downloadsActive={downloads.some((d) => d.state === "progressing")}
+        historyPanel={renderHistoryPanel()}
+        downloadsPanel={renderDownloadsPanel()}
+        onAddressChange={setAddress}
+        onNavigate={() => navigate()}
+        onBack={goBack}
+        onForward={goForward}
+        onToggleHistory={toggleHistory}
+        onToggleDownloads={toggleDownloads}
+        onSnapshot={() => void snapshot()}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onSelectTab={selectTab}
+        onCloseTab={closeTab}
+        onNewTab={newTab}
+      />
 
       <div style={styles.body}>
         <section style={styles.browserPane}>
@@ -1588,41 +1527,6 @@ const styles: Record<string, React.CSSProperties> = {
     placeItems: "center",
   },
   // 顶部操作栏
-  topBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "0 10px",
-    background: BRAND.inkRaised,
-    borderBottom: `1px solid ${BRAND.border}`,
-    flexShrink: 0,
-  },
-  navGroup: { display: "flex", gap: 2, flexShrink: 0 },
-  omniboxWrap: {
-    flex: 1,
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    height: 30,
-    padding: "0 6px 0 12px",
-    borderRadius: 15,
-    border: `1px solid ${BRAND.border}`,
-    background: BRAND.ink,
-    minWidth: 0,
-  },
-  omniboxIcon: { color: BRAND.linenFaint, flex: "none" },
-  omnibox: {
-    flex: 1,
-    height: "100%",
-    border: "none",
-    outline: "none",
-    background: "transparent",
-    color: BRAND.linen,
-    fontSize: 13,
-    minWidth: 0,
-  },
-  omniboxStar: { width: 24, height: 24, flex: "none" },
-  topActions: { display: "flex", gap: 2, flexShrink: 0 },
   primaryButton: {
     height: 28,
     padding: "0 12px",
@@ -1648,42 +1552,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
   },
-  tabBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    padding: "0 8px",
-    background: BRAND.inkRaised,
-    borderBottom: `1px solid ${BRAND.border}`,
-    flexShrink: 0,
-    overflowX: "auto",
-    overflowY: "hidden",
-  },
   tabEmpty: { fontSize: 11, color: BRAND.linenFaint, paddingLeft: 4 },
-  tab: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    maxWidth: 220,
-    height: 26,
-    padding: "0 6px 0 10px",
-    borderRadius: 7,
-    border: `1px solid transparent`,
-    color: BRAND.linenMuted,
-    fontSize: 11.5,
-    cursor: "pointer",
-    flex: "0 1 auto",
-    minWidth: 0,
-    transition: "background 120ms, color 120ms, border-color 120ms",
-  },
-  tabActive: {
-    background: BRAND.inkPanel,
-    borderColor: BRAND.borderStrong,
-    color: BRAND.linen,
-  },
-  tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  tabClose: { width: 18, height: 18 },
-  tabAdd: { width: 24, height: 24, flex: "none" },
   body: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden" },
   browserPane: {
     flex: 1,
@@ -1726,15 +1595,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   permSegBtnOn: { background: BRAND.ochre, color: BRAND.ink, fontWeight: 700 },
-  dlDot: {
-    position: "absolute",
-    top: 4,
-    right: 4,
-    width: 6,
-    height: 6,
-    borderRadius: 999,
-    background: BRAND.ochre,
-  },
   anchor: { position: "relative", display: "inline-flex" },
   popover: {
     position: "absolute",
