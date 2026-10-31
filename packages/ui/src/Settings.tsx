@@ -561,14 +561,30 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 <div style={S.formHead}>{editingProviderId === "new" ? "添加供应商" : "编辑供应商"}</div>
                 <div style={S.presetRow}>
                   <span style={S.tag}>快速填充</span>
-                  {[
+                  {([
                     { name: "DeepSeek", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
                     { name: "OpenAI", provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
                     { name: "OpenRouter", provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-chat" },
                     { name: "Agnes", provider: "agnes", baseUrl: "https://api.agnes-ai.cn/v1", model: "agnes-3.0-flash" },
                     { name: "本地", provider: "local", baseUrl: "http://127.0.0.1:8080/v1", model: "local-model" },
-                  ].map((preset) => (
-                    <Btn key={preset.name} label={preset.name} small onClick={() => setPForm({ provider: preset.provider, baseUrl: preset.baseUrl, model: preset.model })} />
+                    {
+                      name: "OpenCode Go",
+                      provider: "opencode-go",
+                      baseUrl: "https://opencode.ai/inference/go/openai/v1",
+                      model: "glm-5.3",
+                      headers: { "x-opencode-session": "{{sessionId}}", "User-Agent": "Loopsoar/1.0" },
+                    },
+                  ] satisfies { name: string; provider: string; baseUrl: string; model: string; headers?: Record<string, string> }[]).map((preset) => (
+                    <Btn
+                      key={preset.name}
+                      label={preset.name}
+                      small
+                      onClick={() => {
+                        setPForm({ provider: preset.provider, baseUrl: preset.baseUrl, model: preset.model });
+                        setPHeaders(formatHeaderLines(preset.headers));
+                        if (preset.headers) setPFormat("openai");
+                      }}
+                    />
                   ))}
                 </div>
                 <Field l="服务商"><In v={pForm.provider} ph="deepseek / openai / agnes / local" on={(x) => setPForm({ ...pForm, provider: x })} /></Field>
@@ -623,9 +639,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 </Field>
                 <Field
                   l="自定义请求头"
-                  h={`每行一条「Key: Value」；支持变量 ${HEADER_TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(" ")}（sessionId=会话、requestId/timestamp=每请求），用于 OpenCode Go 等要求客户端标识/会话头的服务`}
+                  h={`每行一条「Key: Value」；留空即可——OpenCode Go 会自动带上 x-opencode-session / User-Agent。支持变量 ${HEADER_TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(" ")}（sessionId=会话、requestId/timestamp=每请求）`}
                 >
-                  <Area v={pHeaders} rows={3} on={setPHeaders} />
+                  <Area v={pHeaders} rows={4} wide on={setPHeaders} />
                 </Field>
                 <Field l="RPM 兜底" h="每分钟请求上限（留空 = 不主动限制）">
                   <In v={pRpm} ph="留空 = 不限制" on={setPRpm} />
@@ -1180,8 +1196,17 @@ function Toggle({ v, on }: { v: boolean; on: (x: boolean) => void }) {
 function In({ v, ph, on, type }: { v: string; ph?: string; on: (x: string) => void; type?: string }) {
   return <input style={S.input} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
 }
-function Area({ v, rows, on }: { v: string; rows: number; on: (x: string) => void }) {
-  return <textarea style={S.area} rows={rows} value={v} onChange={(e) => on(e.target.value)} spellCheck={false} />;
+function Area({ v, rows, on, wide }: { v: string; rows: number; on: (x: string) => void; wide?: boolean }) {
+  return (
+    <textarea
+      style={wide ? { ...S.area, maxWidth: "none", width: "100%", minWidth: 240, fontFamily: "ui-monospace, Consolas, monospace" } : S.area}
+      rows={rows}
+      value={v}
+      placeholder={wide ? "x-opencode-session: {{sessionId}}\nUser-Agent: Loopsoar/1.0" : undefined}
+      onChange={(e) => on(e.target.value)}
+      spellCheck={false}
+    />
+  );
 }
 function Btn({ label, onClick, primary, small }: { label: string; onClick: () => void; primary?: boolean; small?: boolean }) {
   return <button type="button" className={primary ? "btn-primary" : "btn-ghost"} style={{ ...(primary ? S.primary : S.ghost), ...(small ? S.small : {}) }} onClick={onClick}>{label}</button>;

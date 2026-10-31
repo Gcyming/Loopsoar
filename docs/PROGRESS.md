@@ -179,6 +179,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   `x-opencode-session: sess-…`、`User-Agent: Loopsoar/mock-chat`、`x-test-request: <uuid>`
 - 证据：gui-73-header-template.png
 
+## 二·十九、2026-10-31 第十六次增量（OpenCode Go 开箱可用）
+- 内置供应商默认头：识别 opencode.ai/inference/go（或 provider=opencode-go）→ 自动附加
+  `x-opencode-session: {{sessionId}}` 与 `User-Agent: Loopsoar/1.0`，用户自定义可覆盖
+- 聊天、模型列表探测、测试连接三条路径统一应用默认头（此前测试通过/聊天失败不再发生）
+- 设置页：自定义请求头改为全宽等宽输入框（此前窄栏被挤成白条，实际无法编辑）+ 占位示例；
+  新增「OpenCode Go」快速填充预设（服务商/接口/OpenAI 协议/默认头/示例模型）
+- 测试：398 全绿（providerDefaults 3 等）；截图 gui-74
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

@@ -30,6 +30,7 @@ import {
 } from "./boot.js";
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createElectronBrowserHost, DownloadsBridge } from "./electronBrowser.js";
+import { withProviderDefaults } from "./providerDefaults.js";
 import type { BrowserHost } from "./browserHost.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
@@ -135,21 +136,25 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           // 验收辅助：按可见文案点击一次（如设置页「编辑」），用于截图前展开表单
           const clickText = process.env.LOOPSOAR_E2E_CLICK_TEXT;
           if (clickText) {
-            const clicked = await win.webContents
-              .executeJavaScript(
-                `(() => {
-                  const wanted = ${JSON.stringify(clickText)};
-                  const nodes = Array.from(document.querySelectorAll('button, [role="button"]'));
-                  const target = nodes.find((node) => (node.textContent || '').trim() === wanted);
-                  if (!target) return false;
-                  target.click();
-                  return true;
-                })()`,
-                true,
-              )
-              .catch(() => false);
-            console.log("E2E_CLICK", clickText, clicked);
-            await new Promise((r) => setTimeout(r, 800));
+            // 支持 "编辑|OpenCode Go" 依次点击多个可见文案，用于截图前展开并填充表单
+            for (const wanted of clickText.split("|").map((item) => item.trim()).filter(Boolean)) {
+              const clicked = await win.webContents
+                .executeJavaScript(
+                  `(() => {
+                    const wanted = ${JSON.stringify(wanted)};
+                    const nodes = Array.from(document.querySelectorAll('button, [role="button"]'));
+                    const target = nodes.find((node) => (node.textContent || '').trim() === wanted);
+                    if (!target) return false;
+                    target.click();
+                    return true;
+                  })()`,
+                  true,
+                )
+                .catch(() => false);
+              console.log("E2E_CLICK", wanted, clicked);
+              await new Promise((r) => setTimeout(r, 500));
+            }
+            await new Promise((r) => setTimeout(r, 500));
           }
 
           // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
@@ -537,10 +542,11 @@ app.whenReady().then(async () => {
     if (!active || !key) return undefined;
     // 请求头模板（{{sessionId}} / {{model}} / {{requestId}} …）：按请求渲染，
     // 让 x-opencode-session 这类"每会话/每请求"限制无需为每个供应商写死。
+    const effectiveHeaders = withProviderDefaults(active.provider, active.baseUrl, active.headers);
     const resolveHeaders =
-      active.headers && Object.keys(active.headers).length > 0
+      Object.keys(effectiveHeaders).length > 0
         ? (): Record<string, string> =>
-            renderHeaderTemplates(active.headers, {
+            renderHeaderTemplates(effectiveHeaders, {
               provider: active.provider,
               model: active.model,
               sessionId: sessionId ?? "no-session",

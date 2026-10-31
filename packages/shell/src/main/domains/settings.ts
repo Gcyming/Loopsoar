@@ -17,6 +17,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
+import { withProviderDefaults } from "../providerDefaults.js";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import {
   validateProviderConfig,
@@ -290,6 +291,7 @@ async function testProvider(
   // 密钥解析：加密库（活跃供应商）优先，环境变量兜底；测试任意配置时复用该密钥
   const activeId = deps.providers?.active()?.id;
   const apiKey = (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
+  const effectiveHeaders = withProviderDefaults(cfg.provider, cfg.baseUrl, headerTemplates);
   const url = `${cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -301,7 +303,7 @@ async function testProvider(
         "Content-Type": "application/json",
         "User-Agent": "Loopsoar/1.0",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        ...renderHeaderTemplates(headerTemplates, {
+        ...renderHeaderTemplates(effectiveHeaders, {
           provider: cfg.provider,
           model: cfg.model,
           sessionId: "test-provider",
@@ -653,7 +655,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         : isAnthropic
           ? { "anthropic-version": "2023-06-01" }
           : {}),
-      ...renderHeaderTemplates(raw.headers, {
+      ...renderHeaderTemplates(withProviderDefaults(cfg.provider, cfg.baseUrl, raw.headers), {
         provider: cfg.provider,
         model: cfg.model,
         sessionId: "model-list-probe",
