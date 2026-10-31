@@ -134,6 +134,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 证据：gui-61-chrome-refactor.png（顶栏/标签/时间线/运行态均正常）
 - 剩余：Composer 拆分、思考组头去重、diff 折叠动效
 
+## 二·十四、2026-10-31 第十二轮增量（时间线视觉微调）
+- 思考摘要去重：组头已显示同一句时，摘要行改为「展开思考」操作提示（不再重复整句，也不再留空行）
+- 证据：gui-63-timeline-dedupe.png
+- App.tsx 当前 1647 行（已拆出 TitleBar/顶栏/消息列表/消息视图/输入区/时间线/产物/Markdown/事件层）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

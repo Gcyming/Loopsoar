@@ -138,6 +138,7 @@ function TimelineGroupBlock({
             step={step}
             autoExpand={group.isLast && isLastOfGroup}
             streamingTail={streamingTail}
+            groupHeadline={group.headline}
             Markdown={Markdown}
             onOpenUrl={onOpenUrl}
           />
@@ -174,12 +175,15 @@ function TimelineNode({
   step,
   autoExpand,
   streamingTail,
+  groupHeadline,
   Markdown,
   onOpenUrl,
 }: {
   step: TimelineStep;
   autoExpand?: boolean;
   streamingTail?: boolean;
+  /** 所在工作阶段的组头（用于去重：组头已展示同一句时，省掉重复的摘要行）。 */
+  groupHeadline?: string;
   Markdown: MarkdownFn;
   onOpenUrl?: (url: string) => void;
 }): React.ReactElement | null {
@@ -189,12 +193,23 @@ function TimelineNode({
     const clean = step.text.trim();
     if (!clean) return null;
     const preview = clean.replace(/[#*`>_]/g, "").replace(/\s+/g, " ").slice(0, 120);
+    const normalizedPreview = preview.trim();
+    const normalizedHeadline = (groupHeadline ?? "").replace(/…$/, "").trim();
+    // 组头已经显示同一句话时不再重复（slime 的组头 + 摘要双行在窄栏里很吵）
+    const duplicateOfHeadline =
+      Boolean(normalizedPreview) &&
+      (normalizedHeadline === normalizedPreview ||
+        (normalizedHeadline.length >= 8 && normalizedPreview.startsWith(normalizedHeadline)));
+    const displayPreview = duplicateOfHeadline ? "" : preview;
     return (
       <div className="think-step">
         <span className="think-step-mark" />
         <button type="button" className="think-step-toggle" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起这段思考" : "展开这段思考（Markdown）"}>
           <Chevron open={expanded} size={10} />
-          <span className="think-step-preview">{preview || "思考…"}{clean.length > 120 ? "…" : ""}</span>
+          <span className="think-step-preview">
+            {displayPreview || (duplicateOfHeadline ? "展开思考" : "思考…")}
+            {!duplicateOfHeadline && clean.length > 120 ? "…" : ""}
+          </span>
         </button>
         <Collapse open={expanded}>
           <div className="think-step-text">
