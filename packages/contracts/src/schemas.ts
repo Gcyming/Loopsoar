@@ -18,6 +18,30 @@ export const ChatSteerSchema = z.object({
   message: z.string().min(1).max(4000),
   sessionId: z.string().max(64).optional(),
 });
+/** 思考时间线节点（持久化用；字段宽进严出，未知字段丢弃）。 */
+export const TimelineStepSchema = z.object({
+  kind: z.enum(["think", "body", "tool", "plan", "todo", "steer"]),
+  text: z.string().optional(),
+  id: z.string().optional(),
+  name: z.string().optional(),
+  label: z.string().optional(),
+  detail: z.string().optional(),
+  result: z.string().optional(),
+  ok: z.boolean().optional(),
+  state: z.enum(["running", "done"]).optional(),
+  status: z.enum(["pending", "in_progress", "completed"]).optional(),
+  items: z.array(z.object({
+    id: z.string(),
+    content: z.string(),
+    status: z.enum(["pending", "in_progress", "completed"]),
+  })).max(100).optional(),
+});
+
+export const ChatSaveTimelineSchema = z.object({
+  sessionId: z.string().max(120).optional(),
+  timeline: z.array(TimelineStepSchema).max(600),
+});
+
 export const ChatRollbackSchema = z.object({
   /** 截断到第 N 条持久化消息（保留 [0, keepCount)），用于消息回滚。 */
   keepCount: z.number().int().min(0).max(10_000),
@@ -209,6 +233,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "rollback",
     request: ChatRollbackSchema,
+    sensitive: true,
+  },
+  "chat:saveTimeline": {
+    domain: "chat",
+    method: "saveTimeline",
+    request: ChatSaveTimelineSchema,
     sensitive: true,
   },
   "chat:stop": {
@@ -659,6 +689,7 @@ export const EVENTS = [
   "chat:stream:chunk",
   "chat:stream:reasoning",
   "chat:stream:tool",
+  "chat:stream:tool_start",
   "chat:stream:progress",
   "chat:stream:done",
   "chat:stream:error",

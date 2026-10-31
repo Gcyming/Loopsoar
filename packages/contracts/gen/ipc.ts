@@ -13,6 +13,7 @@ export const IPC_CHANNELS = {
   "chat:stream": { domain: "chat", method: "stream", sensitive: true, hasRequest: true },
   "chat:steer": { domain: "chat", method: "steer", sensitive: true, hasRequest: true },
   "chat:rollback": { domain: "chat", method: "rollback", sensitive: true, hasRequest: true },
+  "chat:saveTimeline": { domain: "chat", method: "saveTimeline", sensitive: true, hasRequest: true },
   "chat:stop": { domain: "chat", method: "stop", sensitive: true, hasRequest: true },
   "chat:send": { domain: "chat", method: "send", sensitive: true, hasRequest: true },
   "perm:respond": { domain: "perm", method: "respond", sensitive: true, hasRequest: true },
@@ -131,7 +132,7 @@ export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEn
 export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
-    "chat": ["stream", "steer", "rollback", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
+    "chat": ["stream", "steer", "rollback", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
     "perm": ["respond"],
     "workspace": ["read", "write"],
     "agents": ["list"],

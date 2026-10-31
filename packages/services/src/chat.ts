@@ -34,6 +34,7 @@ export type ChatEventType =
   | "chunk"
   | "reasoning"
   | "tool"
+  | "tool_start"
   | "progress"
   | "done"
   | "error"

@@ -71,6 +71,25 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   空正文兜底（非 done 时写入「任务未完成：原因」，配合中断横幅，杜绝莫名空白）
 - 测试：contextCompress 5 用例、大技能 2 用例、工具循环 2 用例
 
+## 二·六、2026-10-31 第四轮增量（slime 时间线完整复现）
+- 新增 `packages/ui/src/timeline.ts`（纯逻辑）：节点类型 think/body/tool/plan/todo/steer、
+  连续段合并、按 think 边界分组（工作阶段）、规划去重与推进播报、工具分类/详情/失败判定
+- 新增 `TimelineView.tsx`：思考过程卡（可折叠）→ 工作阶段分组（历史组折叠 / 流式恒展开）→
+  思考摘要行+展开 Markdown / 穿插正文 / 工具卡（分类色点 + 分类徽标 + 详情链接 + 状态胶囊
+  运行中呼吸 & 落定弹动 + 展开输出/终端块/URL 卡）/ 任务规划卡（进度+当前项+条目状态）/
+  推进播报（完成划掉动画）/ 引导卡（用户 steer）
+- 新增 `StreamFade.tsx`：吐字渐入（右→左 + 淡入，水位机制防重播）
+- CSS：grid 0fr↔1fr 展开收起动画、fadeIn、呼吸/落定、划掉、终端块、reduced-motion 降级
+- App 事件累积时间线：reasoning→think、chunk→body、tool_start→运行中工具、
+  tool→落定/规划解析、done→自动收起思考卡；steer→引导卡
+- 新事件 `chat:stream:tool_start`（tool_loop 执行前发出 + tool 结果携带 toolCallId），
+  实时显示「执行中」呼吸状态
+- 时间线持久化：contracts `TimelineStepSchema` + `chat:saveTimeline`；SessionStore.attachTimeline；
+  重启/切会话恢复时间线（截图 gui-55）
+- 新增 `todo_write` 规划工具（内存态清单，返回 Markdown checklist，供规划卡解析）
+- 测试：timeline 6 用例 + tool_loop 防循环/截断用例；共 359 全绿
+- 证据：gui-50-timeline.png、gui-51-timeline-plan.png、gui-55-timeline-restored.png
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先
@@ -78,7 +97,8 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
    但最后一次 E2E 截图停留在历史消息，未能拍到表格/卡片最终效果 —— 需要重跑：
    - 关闭"恢复上次会话"或用干净数据目录
    - `pnpm dev` 后发一条会触发工具的请求（或 mock `MOCK_TOOL_NAME=browser_snapshot`）
-2. **会话渲染继续对齐 slime**：工具卡/表格/中断横幅已完成并有截图；剩余：
+2. **会话渲染继续对齐 slime**：时间线（思考/正文/工具/规划/播报/引导 + 展开收起/渐入/呼吸）已完成；
+   剩余：
    终端输出卡细节（目前复用工具卡等宽输出）、网址卡、展开/收起与渐入渐出的更细动画、
    时间线完整度（逐块对照 slime `ChatPanel.tsx` 的 TimelineNode/PlanCard/LiveStatusLine）
 3. ~~扩展运行时~~：已完成（ADR-0008 + 单测 + 真机 E2E `gui-46-extension-runtime.png`）；

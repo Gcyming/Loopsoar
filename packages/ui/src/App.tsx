@@ -23,6 +23,18 @@ import LiveStatus from "./LiveStatus.js";
 import ContextRing from "./ContextRing.js";
 import PlanCard, { type PlanStep } from "./PlanCard.js";
 import ToolCard, { type ToolCardData } from "./ToolCard.js";
+import Timeline from "./TimelineView.js";
+import StreamFadeText from "./StreamFade.js";
+import {
+  appendTimelineStep,
+  extractToolDetail,
+  foldPlanUpdate,
+  lastPlanItems,
+  parsePlanItems,
+  settleToolStep,
+  type PlanItem,
+  type TimelineStep,
+} from "./timeline.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -61,6 +73,8 @@ interface ChatMessage {
   steer?: boolean;
   /** 待办播报（计划步骤开始/完成时追加一行） */
   announces?: { id: string; kind: "start" | "done"; text: string }[];
+  /** 交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导），对齐 slime。 */
+  timeline?: TimelineStep[];
 }
 
 
@@ -196,6 +210,8 @@ export default function App(): React.JSX.Element {
   const sendStartedAtRef = useRef<number>(0);
   const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
+  /** 时间线「思考过程」卡的开合（按消息 id；流式中默认展开，收尾后自动收起）。 */
+  const [thinkingOpen, setThinkingOpen] = useState<Record<string, boolean>>({});
   /** 上下文占用估算：used=约 4 字符/token；cap=模型声明上下文窗口 */
   const contextUsage = useMemo(() => {
     const spec = provider?.models?.find((m) => m.id === provider.model);
@@ -244,6 +260,7 @@ export default function App(): React.JSX.Element {
                 role: m.role === "user" ? ("user" as const) : ("assistant" as const),
                 text: m.text,
                 status: "done" as const,
+                timeline: Array.isArray(m.timeline) ? (m.timeline as TimelineStep[]) : undefined,
               }));
             // 只在界面仍为空时恢复：避免异步历史把用户刚发出的消息覆盖掉（曾导致"回复消失"）
             setMessages((prev) => (prev.length === 0 ? restored : prev));
@@ -297,6 +314,7 @@ export default function App(): React.JSX.Element {
           tail: delta,
           tailSeq,
           status: "streaming",
+          timeline: appendTimelineStep(next[idx].timeline ?? [], { kind: "body", text: delta }),
         };
         return next;
       });
@@ -313,13 +331,50 @@ export default function App(): React.JSX.Element {
       }),
       api.on("chat:stream:reasoning", (payload) => {
         const p = payload as { content?: string };
-        if (typeof p.content === "string" && p.content.length > 0) {
+        const reasoningDelta = typeof p.content === "string" ? p.content : "";
+        if (reasoningDelta.length > 0) {
           if (firstTokenAtRef.current === 0) firstTokenAtRef.current = Date.now();
           setMessages((prev) => {
             const at = activeAssistantRef.current;
-            return prev.map((m) => (m.id === at ? { ...m, reasoning: (m.reasoning ?? "") + p.content } : m));
+            return prev.map((m) =>
+              m.id === at
+                ? {
+                    ...m,
+                    reasoning: (m.reasoning ?? "") + reasoningDelta,
+                    timeline: appendTimelineStep(m.timeline ?? [], { kind: "think", text: reasoningDelta }),
+                  }
+                : m,
+            );
           });
         }
+      }),
+      api.on("chat:stream:tool_start", (payload) => {
+        let started: { toolCallId?: string; toolName?: string; args?: unknown } = {};
+        try {
+          started = JSON.parse(String((payload as { content?: string }).content ?? "{}"));
+        } catch {
+          return;
+        }
+        if (!started.toolCallId || !started.toolName) return;
+        setMessages((prev) => {
+          const at = activeAssistantRef.current;
+          if (!at) return prev;
+          return prev.map((m) =>
+            m.id === at
+              ? {
+                  ...m,
+                  timeline: appendTimelineStep(m.timeline ?? [], {
+                    kind: "tool",
+                    id: started.toolCallId!,
+                    name: started.toolName!,
+                    label: started.toolName!,
+                    detail: extractToolDetail(started.toolName!, started.args),
+                    state: "running",
+                  }),
+                }
+              : m,
+          );
+        });
       }),
       api.on("chat:stream:tool", (payload) => {
         const raw = String((payload as { content?: string }).content ?? "");
@@ -387,8 +442,45 @@ export default function App(): React.JSX.Element {
                 }
               }
             }
+            // 工具结果里的 checklist（todo_write 等）也可解析成规划
+            let planItems: PlanItem[] | null = null;
+            if (plan) {
+              planItems = plan.map((step, index) => ({
+                id: String(index + 1),
+                content: step.content,
+                status: step.status === "done" ? "completed" : step.status === "in_progress" ? "in_progress" : "pending",
+              }));
+            } else if (/todo|plan|task/i.test(toolName) && toolResult?.content) {
+              const parsedItems = parsePlanItems(toolResult.content);
+              if (parsedItems.length > 0) planItems = parsedItems;
+            }
+            const toolCallId = (() => {
+              try {
+                return (JSON.parse(raw) as { toolCallId?: string }).toolCallId;
+              } catch {
+                return undefined;
+              }
+            })();
+            let timeline = m.timeline ?? [];
+            const hasRunning = Boolean(toolCallId) && timeline.some((step) => step.kind === "tool" && step.id === toolCallId);
+            timeline = hasRunning
+              ? settleToolStep(timeline, toolCallId!, { ok: toolResult?.ok !== false, result: toolResult?.content ?? toolResult?.error })
+              : appendTimelineStep(timeline, {
+                  kind: "tool",
+                  id: toolCallId ?? nextId("tool"),
+                  name: toolName,
+                  label: toolName,
+                  detail: extractToolDetail(toolName, toolArgs, toolResult?.content ?? toolResult?.error ?? ""),
+                  result: toolResult?.content ?? toolResult?.error,
+                  ok: toolResult?.ok !== false,
+                  state: "done",
+                });
+            if (planItems) {
+              timeline = foldPlanUpdate(timeline, planItems, lastPlanItems(timeline));
+            }
             return {
               ...m,
+              timeline,
               tools: [
                 ...(m.tools ?? []),
                 { id: nextId("tool"), name: toolName, args: toolArgs, result: toolResult, state: toolResult?.ok === false ? "error" : "done" },
@@ -424,6 +516,7 @@ export default function App(): React.JSX.Element {
         const p = payload as { content?: string };
         const start = sendStartedAtRef.current;
         const first = firstTokenAtRef.current;
+        const finishedAssistantId = activeAssistantRef.current;
         let usage: { rounds?: number; toolCalls?: number; totalTokens?: number } = {};
         let statusText = "完成";
         let interrupted: { status: string; reason: string } | undefined;
@@ -441,8 +534,14 @@ export default function App(): React.JSX.Element {
         } catch {
           // 保持默认
         }
-        setMessages((prev) =>
-          prev.map((m) => {
+        setMessages((prev) => {
+          const streaming = prev.find((m) => m.status === "streaming");
+          if (streaming?.timeline?.length && api) {
+            void api.chat
+              .saveTimeline({ sessionId: sessionIdRef.current ?? undefined, timeline: streaming.timeline })
+              .catch(() => {});
+          }
+          return prev.map((m) => {
             if (m.status !== "streaming") return m;
             return {
               ...m,
@@ -456,8 +555,29 @@ export default function App(): React.JSX.Element {
               },
               ...(interrupted ? { interrupted } : {}),
             };
-          }),
-        );
+          });
+        });
+        if (finishedAssistantId) {
+          // slime 口径：收尾后整块思考历程自动收起（用户可随时再展开）
+          // E2E/演示：?expandTimeline=1 时保持展开，便于验收时间线视觉
+          const params = new URLSearchParams(location.search);
+          const keepTimelineOpen = params.get("expandTimeline") === "1";
+          if (!keepTimelineOpen) setThinkingOpen((prev) => ({ ...prev, [finishedAssistantId]: false }));
+          // E2E/演示：?scrollTimeline=1 时把最后一条思考时间线滚到可视区顶部，便于截图验收
+          const scrollTarget = params.get("scrollTo");
+          if (params.get("scrollTimeline") === "1" || scrollTarget) {
+            setTimeout(() => {
+              const selector = scrollTarget === "plan"
+                ? ".chat-scroll .plan-card"
+                : scrollTarget === "todo"
+                  ? ".chat-scroll .todo-announce"
+                  : ".chat-scroll .think-card";
+              const nodes = document.querySelectorAll(selector);
+              const last = nodes[nodes.length - 1] as HTMLElement | undefined;
+              last?.scrollIntoView({ block: "center" });
+            }, 500);
+          }
+        }
         activeAssistantRef.current = null;
         firstTokenAtRef.current = 0;
         sendStartedAtRef.current = 0;
@@ -489,6 +609,22 @@ export default function App(): React.JSX.Element {
       for (const unsub of unsubscribers) unsub();
     };
   }, [api]);
+
+  /** E2E/演示：恢复会话后把最后一条时间线滚到可视区（只做一次） */
+  const restoredScrollDoneRef = useRef(false);
+  useEffect(() => {
+    if (restoredScrollDoneRef.current || messages.length === 0 || busy) return;
+    if (new URLSearchParams(location.search).get("scrollTimeline") !== "1") return;
+    const timer = setTimeout(() => {
+      const cards = document.querySelectorAll(".chat-scroll .think-card");
+      const last = cards[cards.length - 1] as HTMLElement | undefined;
+      if (last) {
+        restoredScrollDoneRef.current = true;
+        last.scrollIntoView({ block: "start" });
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [messages.length, busy]);
 
   const openSettings = useCallback((section?: string): void => {
     setSettingsSection(section ?? "general");
@@ -671,10 +807,18 @@ export default function App(): React.JSX.Element {
     setInput("");
     if (busy) {
       // 运行中：作为「转向提示」注入（轮次边界生效，不打断当前输出）
-      setMessages((prev) => [
-        ...prev,
-        { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
-      ]);
+      setMessages((prev) => {
+        const active = activeAssistantRef.current;
+        const appended = prev.map((m) =>
+          m.id === active
+            ? { ...m, timeline: appendTimelineStep(m.timeline ?? [], { kind: "steer", text }) }
+            : m,
+        );
+        return [
+          ...appended,
+          { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
+        ];
+      });
       void api.chat
         .steer({ message: text, sessionId: sessionIdRef.current ?? undefined })
         .then((r) => setNotice(r.accepted ? "转向已注入（下一轮生效）" : "转向未生效：当前没有运行中的回复"))
@@ -888,6 +1032,7 @@ export default function App(): React.JSX.Element {
           role: m.role === "user" ? ("user" as const) : ("assistant" as const),
           text: m.text,
           status: "done" as const,
+          timeline: Array.isArray(m.timeline) ? (m.timeline as TimelineStep[]) : undefined,
         })),
       );
       setSessionOpen(false);
@@ -911,6 +1056,7 @@ export default function App(): React.JSX.Element {
     if (new URLSearchParams(location.search).get("e2e") !== "chat") return;
     const message = "你好，请简单介绍一下你自己";
     const delay = Number(new URLSearchParams(location.search).get("chatDelay") ?? "900");
+    if (Number.isFinite(delay) && delay < 0) return;
     const timer = setTimeout(() => {
       sendText(message);
     }, Number.isFinite(delay) && delay >= 0 ? delay : 900);
@@ -1282,8 +1428,10 @@ export default function App(): React.JSX.Element {
             ) : (
               messages.map((m) => {
                 const mine = m.role === "user";
+                const timelineSteps = m.timeline ?? [];
+                const hasStructuredTimeline = timelineSteps.some((step) => step.kind !== "body");
                 const hasTimeline = Boolean(m.reasoning) || (m.tools?.length ?? 0) > 0;
-                const showThinking = m.status === "streaming" && !m.text && !hasTimeline;
+                const showThinking = m.status === "streaming" && !m.text && !hasTimeline && !hasStructuredTimeline;
                 const timeText = new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", {
                   hour: "2-digit",
                   minute: "2-digit",
@@ -1354,8 +1502,19 @@ export default function App(): React.JSX.Element {
                       </span>
                     </div>
                     <div style={styles.assistantMain}>
-                      {hasTimeline || m.status === "streaming" ? (
-                        <div className="think-timeline is-live" style={styles.timeline}>
+                      {hasStructuredTimeline ? (
+                        <Timeline
+                          steps={timelineSteps}
+                          liveStream={m.status === "streaming"}
+                          expandAll={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
+                          open={thinkingOpen[m.id] ?? true}
+                          onToggleOpen={() => setThinkingOpen((prev) => ({ ...prev, [m.id]: !(prev[m.id] ?? true) }))}
+                          Markdown={({ text }) => renderRich(text)}
+                          onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
+                        />
+                      ) : null}
+                      {hasTimeline && !hasStructuredTimeline ? (
+                        <div className="think-timeline" style={styles.timeline}>
                           {!m.reasoning && m.status === "streaming" ? (
                             <div className="think-step">
                               <span className="think-step-mark" />
@@ -1417,14 +1576,11 @@ export default function App(): React.JSX.Element {
                       ) : null}
                       {m.plan && m.plan.length > 0 ? <PlanCard steps={m.plan} /> : null}
                       <div className="msg-body-text" style={styles.assistantBody}>
-                        {m.tail && m.status === "streaming"
-                          ? renderRich(m.text.slice(0, m.text.length - m.tail.length))
-                          : renderRich(m.text)}
-                        {m.tail && m.status === "streaming" ? (
-                          <span key={m.tailSeq} className="stream-tail">
-                            {m.tail}
-                          </span>
-                        ) : null}
+                        {m.status === "streaming" && m.text ? (
+                          <StreamFadeText text={m.text} Markdown={({ text }) => renderRich(text)} />
+                        ) : (
+                          renderRich(m.text)
+                        )}
                         {m.status === "streaming" && m.text ? <span className="stream-caret" /> : null}
                       </div>
                       {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
@@ -1438,7 +1594,10 @@ export default function App(): React.JSX.Element {
                         <LiveStatus
                           startedAt={m.createdAt ?? Date.now()}
                           contextPct={contextPct}
-                          runningTool={(m.tools ?? []).some((t) => t.state === "running")}
+                          runningTool={
+                            (m.tools ?? []).some((t) => t.state === "running") ||
+                            (m.timeline ?? []).some((step) => step.kind === "tool" && step.state === "running")
+                          }
                           hasText={m.text.length > 0}
                         />
                       ) : null}

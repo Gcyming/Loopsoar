@@ -296,12 +296,15 @@ export interface ChatHistoryMessage {
   role: "user" | "assistant";
   text: string;
   ts: number;
+  /** 思考时间线（持久化恢复用） */
+  timeline?: unknown[];
 }
 
 export type LoopsoarEvent =
   | "chat:stream:chunk"
   | "chat:stream:reasoning"
   | "chat:stream:tool"
+  | "chat:stream:tool_start"
   | "chat:stream:progress"
   | "chat:stream:done"
   | "chat:stream:error"
@@ -329,6 +332,7 @@ export interface LoopsoarAPI {
     rollback(payload: { keepCount: number; sessionId?: string }): Promise<{ ok: boolean; session: unknown }>;
     steer(payload: { message: string; sessionId?: string }): Promise<{ accepted: boolean }>;
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
+    saveTimeline(payload: { sessionId?: string; timeline: unknown[] }): Promise<{ ok: boolean }>;
     sessions(): Promise<{ sessions: SessionMeta[]; currentId: string | null }>;
     newSession(): Promise<{ session: { sessionId: string } | null; sessions: SessionMeta[]; currentId: string | null }>;
     switchSession(payload: { sessionId: string }): Promise<{ ok: boolean; session: { sessionId: string; messages: ChatHistoryMessage[] } | null }>;

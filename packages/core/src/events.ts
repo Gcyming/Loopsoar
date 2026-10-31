@@ -8,6 +8,7 @@ export type LoopEventType =
   | "chunk"
   | "reasoning"
   | "tool"
+  | "tool_start"
   | "progress"
   | "done"
   | "error"

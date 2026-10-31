@@ -220,6 +220,13 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 args: tc.toolCall.args,
               };
 
+              // 工具开始执行：先发 tool_start（UI 用它在时间线里显示「执行中」呼吸状态）
+              emit("tool_start", {
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                args: toolCall.args,
+              });
+
               // 工具调用执行期间：设置心跳间隔（定时发送 heartbeat 事件）
               const heartbeatInterval = setInterval(() => {
                 if (!abortController.signal.aborted) {
@@ -263,6 +270,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
               // 工具调用完成后发送 tool 事件
               emit("tool", {
+                toolCallId: toolCall.id,
                 toolName: toolCall.name,
                 args: toolCall.args,
                 result: toolResult,

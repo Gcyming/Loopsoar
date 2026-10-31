@@ -121,6 +121,12 @@ export function registerChatDomain(deps: ChatDeps): void {
     return { accepted };
   });
 
+  handleTrusted(deps, "chat:saveTimeline", (payload) => {
+    const p = payload as { sessionId?: string; timeline?: unknown[] };
+    const ok = deps.sessions?.attachTimeline(p.sessionId ?? null, Array.isArray(p.timeline) ? p.timeline : []) ?? false;
+    return { ok };
+  });
+
   handleTrusted(deps, "chat:rollback", (payload) => {
     const p = payload as { keepCount: number; sessionId?: string };
     const session = deps.sessions?.truncate(p.sessionId ?? null, p.keepCount) ?? null;

@@ -13,6 +13,8 @@ export interface PersistedMessage {
   role: "user" | "assistant";
   text: string;
   ts: number;
+  /** 助手消息的交错时间线（思考/工具/规划/播报/引导）；用户消息无此字段。 */
+  timeline?: unknown[];
 }
 
 export interface PersistedSession {
@@ -110,6 +112,23 @@ export class SessionStore {
       preview: last.replace(/\s+/g, " ").slice(0, 80),
       messageCount: messages.length,
     };
+  }
+
+  /** 把时间线挂到最后一条助手消息（对话完成后由 UI 上报；失败静默不影响对话）。 */
+  attachTimeline(sessionId: string | null, timeline: unknown[]): boolean {
+    const id = sessionId ?? this.currentId();
+    if (!id) return false;
+    const file = path.join(this.dir, `${id}.json`);
+    const data = this.readJson<PersistedSession>(file);
+    if (!data) return false;
+    for (let i = data.messages.length - 1; i >= 0; i -= 1) {
+      if (data.messages[i].role === "assistant") {
+        data.messages[i] = { ...data.messages[i], timeline };
+        this.writeJson(file, data);
+        return true;
+      }
+    }
+    return false;
   }
 
   /** 截断到第 keepCount 条消息（保留 [0, keepCount)），用于消息回滚；返回截断后的会话。 */
