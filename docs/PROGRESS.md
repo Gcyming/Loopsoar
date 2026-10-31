@@ -22,7 +22,7 @@
 ### Agent 与工具
 - 工具循环：多轮工具对话（assistant(tool_calls)+tool 结果回灌），非正常收束带原因；
   上限可配置（设置→通用：Agent 请求轮数/工具调用次数，默认 40/100）
-- 内置工具：`file_read`
+- 内置工具：`file_read`、`terminal_run`（工作区执行命令；30s 超时、输出上限、terminal 权限确认）
 - 浏览器工具：`browser_snapshot`（URL/标题/正文/可交互元素编号）、`browser_navigate`、
   `browser_click`（编号/CSS/`text=`）、`browser_type`、`browser_scroll`、`web_fetch`
 - MCP：stdio + Streamable HTTP（`/mcp` JSON-RPC，兼容 SSE 响应、`mcp-session-id`），
@@ -68,8 +68,9 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
    但最后一次 E2E 截图停留在历史消息，未能拍到表格/卡片最终效果 —— 需要重跑：
    - 关闭"恢复上次会话"或用干净数据目录
    - `pnpm dev` 后发一条会触发工具的请求（或 mock `MOCK_TOOL_NAME=browser_snapshot`）
-2. **会话渲染继续对齐 slime**：终端输出卡（等宽终端样式）、网址卡细节、
-   展开/收起、渐入渐出、时间线完整度（slime `ChatPanel.tsx` 的 TimelineNode/PlanCard/LiveStatusLine 逐块对照）
+2. **会话渲染继续对齐 slime**：工具卡/表格/中断横幅已完成并有截图；剩余：
+   终端输出卡细节（目前复用工具卡等宽输出）、网址卡、展开/收起与渐入渐出的更细动画、
+   时间线完整度（逐块对照 slime `ChatPanel.tsx` 的 TimelineNode/PlanCard/LiveStatusLine）
 3. ~~扩展运行时~~：已完成（ADR-0008 + 单测 + 真机 E2E `gui-46-extension-runtime.png`）；
    下一步可做：扩展安装引导（zip/目录）、签名与版本校验、市场
 4. **打开技能/扩展目录报错修复未实测**：已在 shell 打开前 `mkdirSync`；
@@ -99,7 +100,9 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 打开技能/扩展目录改用 explorer.exe（绕开 shell.openPath 的 Windows 访问错误），失败回传 UI
 - 历史恢复竞态保护：只填充空会话，不覆盖实时消息
 - Markdown 表格渲染验证通过（`gui-45-tables.png`）；工具卡片验证通过（`gui-44` / `gui-46`）
-- 新增测试：`tests/shell/extensionRuntime.spec.ts`（3 用例，真实子进程）
+- 新增测试：`tests/shell/extensionRuntime.spec.ts`（3 用例，真实子进程）、`tests/shell/terminalTools.spec.ts`（3 用例）
+- 新增 `terminal_run` 终端工具（Agent 可执行命令；terminal 权限默认确认，输出以工具卡展示）
+- 截图：`gui-48-general-limits.png`（请求上限设置）、`gui-43-mcp-http.png`（MCP HTTP 表单）
 
 ## 六、第一轮存档对应改动
 - 请求上限可配置（contracts/core Preferences + ChatService getAgentLimits + 设置·通用）

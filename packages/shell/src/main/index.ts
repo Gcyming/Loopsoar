@@ -45,6 +45,7 @@ import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
+import { registerTerminalTools } from "./terminalTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
@@ -613,6 +614,7 @@ app.whenReady().then(async () => {
   });
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost);
+  registerTerminalTools(registry, () => workspaceRoot);
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
