@@ -47,6 +47,7 @@ import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
 import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
+import { registerFileTools } from "./fileTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
@@ -617,6 +618,7 @@ app.whenReady().then(async () => {
   registerBrowserTools(registry, () => browserHost);
   registerTerminalTools(registry, () => workspaceRoot);
   registerPlanTools(registry);
+  registerFileTools(registry, () => workspaceRoot);
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI

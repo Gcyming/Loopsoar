@@ -21,9 +21,9 @@ import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
 import LiveStatus from "./LiveStatus.js";
 import ContextRing from "./ContextRing.js";
-import PlanCard, { type PlanStep } from "./PlanCard.js";
-import ToolCard, { type ToolCardData } from "./ToolCard.js";
 import Timeline from "./TimelineView.js";
+import { ProductPanel } from "./ArtifactPanels.js";
+import { collectProducts, stripDiffMarkers } from "./artifacts.js";
 import StreamFadeText from "./StreamFade.js";
 import {
   appendTimelineStep,
@@ -46,6 +46,12 @@ import {
  *   · prefers-reduced-motion 下只保留不透明度渐入（去掉位移，避免"什么都看不到"）。
  */
 
+/** 计划类工具参数解析的中间形态（最终转成 TimelineStep 里的 PlanItem）。 */
+interface PlanStep {
+  content: string;
+  status: "pending" | "in_progress" | "done";
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "reasoning" | "tool" | "system";
@@ -55,10 +61,7 @@ interface ChatMessage {
   /** 尾巴序号：变化即重新触发动画（React key）。 */
   tailSeq?: number;
   status?: "streaming" | "done" | "error";
-  /** 推理内容（可折叠） */
-  reasoning?: string;
-  /** 工具调用轨迹（卡片数据） */
-  tools?: ToolCardData[];
+
   /** 非正常收束的中断原因（预算/轮次/中止/异常） */
   interrupted?: { status: string; reason: string };
   /** 耗时统计：首字 / 总耗时（毫秒） */
@@ -67,12 +70,8 @@ interface ChatMessage {
   createdAt?: number;
   /** 错误说明 */
   errorText?: string;
-  /** 任务规划（来自计划类工具调用参数） */
-  plan?: PlanStep[];
   /** 是否为运行中注入的转向提示 */
   steer?: boolean;
-  /** 待办播报（计划步骤开始/完成时追加一行） */
-  announces?: { id: string; kind: "start" | "done"; text: string }[];
   /** 交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导），对齐 slime。 */
   timeline?: TimelineStep[];
 }
@@ -216,7 +215,7 @@ export default function App(): React.JSX.Element {
   const contextUsage = useMemo(() => {
     const spec = provider?.models?.find((m) => m.id === provider.model);
     const cap = spec?.contextWindow && spec.contextWindow > 0 ? spec.contextWindow : 128000;
-    const chars = messages.reduce((n, m) => n + m.text.length + (m.reasoning?.length ?? 0), 0) + input.length;
+    const chars = messages.reduce((n, m) => n + m.text.length, 0) + input.length;
     const used = Math.round(chars / 4);
     return { used, cap, pct: Math.min(100, Math.round((used / cap) * 100)) };
   }, [messages, input, provider]);
@@ -338,11 +337,7 @@ export default function App(): React.JSX.Element {
             const at = activeAssistantRef.current;
             return prev.map((m) =>
               m.id === at
-                ? {
-                    ...m,
-                    reasoning: (m.reasoning ?? "") + reasoningDelta,
-                    timeline: appendTimelineStep(m.timeline ?? [], { kind: "think", text: reasoningDelta }),
-                  }
+                ? { ...m, timeline: appendTimelineStep(m.timeline ?? [], { kind: "think", text: reasoningDelta }) }
                 : m,
             );
           });
@@ -428,20 +423,6 @@ export default function App(): React.JSX.Element {
           if (!at) return prev;
           return prev.map((m) => {
             if (m.id !== at) return m;
-            const prevPlan = m.plan ?? [];
-            const announces = [...(m.announces ?? [])];
-            if (plan) {
-              for (const step of plan) {
-                const before = prevPlan.find((x) => x.content === step.content);
-                if (!before && step.status === "in_progress") {
-                  announces.push({ id: nextId("announce"), kind: "start", text: step.content });
-                } else if (before && before.status !== "done" && step.status === "done") {
-                  announces.push({ id: nextId("announce"), kind: "done", text: step.content });
-                } else if (!before && step.status === "done") {
-                  announces.push({ id: nextId("announce"), kind: "done", text: step.content });
-                }
-              }
-            }
             // 工具结果里的 checklist（todo_write 等）也可解析成规划
             let planItems: PlanItem[] | null = null;
             if (plan) {
@@ -478,16 +459,7 @@ export default function App(): React.JSX.Element {
             if (planItems) {
               timeline = foldPlanUpdate(timeline, planItems, lastPlanItems(timeline));
             }
-            return {
-              ...m,
-              timeline,
-              tools: [
-                ...(m.tools ?? []),
-                { id: nextId("tool"), name: toolName, args: toolArgs, result: toolResult, state: toolResult?.ok === false ? "error" : "done" },
-              ],
-              ...(plan ? { plan } : {}),
-              ...(announces.length > (m.announces ?? []).length ? { announces } : {}),
-            };
+            return { ...m, timeline };
           });
         });
       }),
@@ -547,7 +519,6 @@ export default function App(): React.JSX.Element {
               ...m,
               status: "done",
               tail: undefined,
-              tools: (m.tools ?? []).map((t) => ({ ...t, state: t.state === "running" ? "done" : t.state })),
               timing: {
                 firstTokenMs: first && start ? first - start : undefined,
                 totalMs: start ? Date.now() - start : undefined,
@@ -571,7 +542,11 @@ export default function App(): React.JSX.Element {
                 ? ".chat-scroll .plan-card"
                 : scrollTarget === "todo"
                   ? ".chat-scroll .todo-announce"
-                  : ".chat-scroll .think-card";
+                  : scrollTarget === "product"
+                    ? ".chat-scroll .product-panel"
+                    : scrollTarget === "diff"
+                      ? ".chat-scroll .think-diff-block"
+                      : ".chat-scroll .think-card";
               const nodes = document.querySelectorAll(selector);
               const last = nodes[nodes.length - 1] as HTMLElement | undefined;
               last?.scrollIntoView({ block: "center" });
@@ -1350,7 +1325,11 @@ export default function App(): React.JSX.Element {
                     .filter((m) => m.role === "user" || m.role === "assistant")
                     .map((m) => {
                       const who = m.role === "user" ? (m.steer ? "用户（转向）" : "用户") : "Loopsoar";
-                      const think = m.reasoning ? `> 思考过程：${m.reasoning.replace(/\n/g, "\n> ")}\n\n` : "";
+                      const thinkText = (m.timeline ?? [])
+                        .filter((step): step is Extract<TimelineStep, { kind: "think" }> => step.kind === "think")
+                        .map((step) => step.text)
+                        .join("\n");
+                      const think = thinkText ? `> 思考过程：${thinkText.replace(/\n/g, "\n> ")}\n\n` : "";
                       return `### ${who}\n\n${think}${m.text}`;
                     })
                     .join("\n\n---\n\n");
@@ -1430,8 +1409,9 @@ export default function App(): React.JSX.Element {
                 const mine = m.role === "user";
                 const timelineSteps = m.timeline ?? [];
                 const hasStructuredTimeline = timelineSteps.some((step) => step.kind !== "body");
-                const hasTimeline = Boolean(m.reasoning) || (m.tools?.length ?? 0) > 0;
-                const showThinking = m.status === "streaming" && !m.text && !hasTimeline && !hasStructuredTimeline;
+                const products = hasStructuredTimeline ? collectProducts(timelineSteps) : [];
+                const displayText = stripDiffMarkers(m.text);
+                const showThinking = m.status === "streaming" && !m.text && !hasStructuredTimeline;
                 const timeText = new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", {
                   hour: "2-digit",
                   minute: "2-digit",
@@ -1476,7 +1456,7 @@ export default function App(): React.JSX.Element {
                           type="button"
                           className="msg-action"
                           title="复制消息"
-                          onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
+                          onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
                         >
                           <Icon name="file" size={12} />
                         </button>
@@ -1489,7 +1469,7 @@ export default function App(): React.JSX.Element {
                     key={m.id}
                     className="msg-row"
                     style={styles.msgRowAssistant}
-                    data-rail-label={`Loopsoar：${(m.text || m.reasoning || "回复").slice(0, 26)}`}
+                    data-rail-label={`Loopsoar：${(stripDiffMarkers(m.text) || "回复").slice(0, 26)}`}
                     data-rail-role="assistant"
                   >
                     <div style={styles.assistantHead}>
@@ -1513,43 +1493,6 @@ export default function App(): React.JSX.Element {
                           onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
                         />
                       ) : null}
-                      {hasTimeline && !hasStructuredTimeline ? (
-                        <div className="think-timeline" style={styles.timeline}>
-                          {!m.reasoning && m.status === "streaming" ? (
-                            <div className="think-step">
-                              <span className="think-step-mark" />
-                              <span className="think-step-text" style={styles.toolStepText}>思考中…</span>
-                            </div>
-                          ) : null}
-                          {m.reasoning ? (
-                            <div className="think-step">
-                              <span className="think-step-mark" />
-                              <button
-                                type="button"
-                                className="think-step-toggle"
-                                onClick={() => setExpandedReasoning((prev) => ({ ...prev, [m.id]: !prev[m.id] }))}
-                                title={expandedReasoning[m.id] ? "收起思考过程" : "展开思考过程"}
-                              >
-                                <Icon name="bolt" size={12} style={{ color: BRAND.ochreHover, flex: "none" }} />
-                                <span style={styles.thinkToggleLabel}>{expandedReasoning[m.id] ? "收起思考过程" : "思考过程"}</span>
-                                <Icon
-                                  name="forward"
-                                  size={9}
-                                  style={{ transform: expandedReasoning[m.id] ? "rotate(-90deg)" : "rotate(90deg)", opacity: 0.7, flex: "none" }}
-                                />
-                              </button>
-                              {expandedReasoning[m.id] ? (
-                                <div className="think-step-text">{m.reasoning}</div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          <div className="tool-cards">
-                            {(m.tools ?? []).map((tool) => (
-                              <ToolCard key={tool.id} tool={tool} />
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
                       {showThinking ? (
                         <div style={styles.thinkingRow}>
                           <span className="text-scan-light">正在思考</span>
@@ -1560,29 +1503,17 @@ export default function App(): React.JSX.Element {
                           </span>
                         </div>
                       ) : null}
-                      {(m.announces ?? []).length > 0 ? (
-                        <div style={styles.announces}>
-                          {(m.announces ?? []).slice(-6).map((item) => (
-                            <div key={item.id} style={styles.announceRow}>
-                              <span style={{ ...styles.announceMark, color: item.kind === "done" ? "#4ade80" : BRAND.ochreHover }}>
-                                {item.kind === "done" ? "✓" : "▶"}
-                              </span>
-                              <span style={styles.announceText} title={item.text}>
-                                {item.kind === "done" ? "已完成：" : "开始："}{item.text}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {m.plan && m.plan.length > 0 ? <PlanCard steps={m.plan} /> : null}
                       <div className="msg-body-text" style={styles.assistantBody}>
-                        {m.status === "streaming" && m.text ? (
-                          <StreamFadeText text={m.text} Markdown={({ text }) => renderRich(text)} />
+                        {m.status === "streaming" && displayText ? (
+                          <StreamFadeText text={displayText} Markdown={({ text }) => renderRich(text)} />
                         ) : (
-                          renderRich(m.text)
+                          renderRich(displayText)
                         )}
-                        {m.status === "streaming" && m.text ? <span className="stream-caret" /> : null}
+                        {m.status === "streaming" && displayText ? <span className="stream-caret" /> : null}
                       </div>
+                      {products.length > 0 ? (
+                        <ProductPanel products={products} defaultOpen={new URLSearchParams(location.search).get("openProducts") === "1"} />
+                      ) : null}
                       {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
                       {m.interrupted ? (
                         <div style={styles.interruptBox}>
@@ -1594,10 +1525,7 @@ export default function App(): React.JSX.Element {
                         <LiveStatus
                           startedAt={m.createdAt ?? Date.now()}
                           contextPct={contextPct}
-                          runningTool={
-                            (m.tools ?? []).some((t) => t.state === "running") ||
-                            (m.timeline ?? []).some((step) => step.kind === "tool" && step.state === "running")
-                          }
+                          runningTool={(m.timeline ?? []).some((step) => step.kind === "tool" && step.state === "running")}
                           hasText={m.text.length > 0}
                         />
                       ) : null}
@@ -1620,7 +1548,7 @@ export default function App(): React.JSX.Element {
                             type="button"
                             className="msg-action"
                             title="复制回复"
-                            onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}
+                            onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
                           >
                             <Icon name="file" size={12} />
                           </button>

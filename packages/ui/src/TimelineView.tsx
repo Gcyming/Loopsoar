@@ -16,6 +16,9 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import StreamFadeText from "./StreamFade.js";
+import DiffBlock from "./DiffBlock.js";
+import { RefPanel, UrlPanel } from "./ArtifactPanels.js";
+import { collectReferences, diffStat, diffLines, parseDiffResult } from "./artifacts.js";
 import {
   groupTimeline,
   isToolFailure,
@@ -73,6 +76,7 @@ function toolLabel(name: string): string {
 
 export default function Timeline({ steps, liveStream = false, expandAll = false, open, onToggleOpen, Markdown, onOpenUrl }: TimelineProps): React.ReactElement | null {
   const groups = React.useMemo(() => groupTimeline(steps), [steps]);
+  const references = React.useMemo(() => collectReferences(steps), [steps]);
   if (steps.length === 0) return null;
   const toolCount = steps.filter((step) => step.kind === "tool").length;
   return (
@@ -86,6 +90,8 @@ export default function Timeline({ steps, liveStream = false, expandAll = false,
         </span>
       </button>
       <Collapse open={open}>
+        <UrlPanel urls={references.urls} onOpenUrl={onOpenUrl} />
+        <RefPanel files={references.files} />
         <div className={`think-timeline${liveStream ? " is-live" : ""}`}>
           {groups.map((group) => (
             <TimelineGroupBlock
@@ -297,7 +303,12 @@ function ToolNode({
   const status = running ? "执行中" : failed ? "失败" : "成功";
   const hasBody = Boolean(step.detail || step.result);
   const isUrl = Boolean(step.detail && /^https?:\/\//i.test(step.detail));
-  const resultText = (step.result ?? "").trim();
+  const parsedDiff = React.useMemo(() => parseDiffResult(step.result), [step.result]);
+  const resultText = parsedDiff.clean.trim();
+  const diffStats = React.useMemo(() => {
+    if (!parsedDiff.diff) return null;
+    return diffStat(diffLines(parsedDiff.diff.oldText, parsedDiff.diff.newText));
+  }, [parsedDiff.diff]);
   const isCommand = category === "执行命令";
   const urls = React.useMemo(() => {
     const found = (step.result ?? "").match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
@@ -324,6 +335,12 @@ function ToolNode({
         <span className="think-tool-glyph" aria-hidden>{glyphFor(category)}</span>
         <span className="think-tool-name" style={{ color: failed ? "#f87171" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
         {category ? <span className="think-tool-cat">{category}</span> : null}
+        {diffStats ? (
+          <span className="think-diff-inline">
+            <span className="think-diff-add">+{diffStats.add}</span>
+            <span className="think-diff-del">−{diffStats.del}</span>
+          </span>
+        ) : null}
         {step.detail ? (
           isUrl ? (
             <a
@@ -370,6 +387,9 @@ function ToolNode({
                 <span aria-hidden>{isUrl ? "🔗" : "↳"}</span>
                 <span className="think-tool-detail-text">{step.detail}</span>
               </div>
+            ) : null}
+            {parsedDiff.diff ? (
+              <DiffBlock oldText={parsedDiff.diff.oldText} newText={parsedDiff.diff.newText} path={parsedDiff.diff.path} />
             ) : null}
             {resultText ? (
               isCommand ? (

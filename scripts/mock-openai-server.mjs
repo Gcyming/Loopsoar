@@ -103,6 +103,7 @@ const server = createServer(async (req, res) => {
     }
     const lastTool = [...messages].reverse().find((msg) => msg.role === "tool");
     const toolText = typeof lastTool?.content === "string" ? lastTool.content : "";
+    console.log(`MOCK_TOOL_RESULT ${toolText.slice(0, 300).replace(/\s+/g, " ")}`);
     const reply = [
       `工具执行完成，我已拿到结果（回灌 ${toolText.length} 字符）：\n\n`,
       `${toolText.slice(0, 240)}\n\n`,

@@ -10,6 +10,7 @@
  *   ⑦ 按当前安全等级策略（DEFAULT_LEVEL_POLICY）：auto→allow / deny→deny / confirm→confirm
  *   ⑧ 兜底 → deny（fail-closed；未知工具名也是 deny，不抛错——「判不了≠不存在」在注册表层区分）
  */
+import path from "node:path";
 import { hardRuleCheck } from "./tools/hard_rules.js";
 
 export type SandboxLevel = 0 | 1 | 2 | 3 | 4 | 5;
@@ -103,9 +104,12 @@ export class SandboxManager {
 
   private isInsideWorkspace(p?: string): boolean {
     if (!p) return true;
-    const root = this.norm(this.workspaceRoot);
-    const target = this.norm(p);
-    return target === root || target.startsWith(root + "/");
+    const root = path.resolve(this.workspaceRoot);
+    // 相对路径按工作区根解析（工具参数通常给相对路径；不解析会永远判"越界"）
+    const target = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
+    const normRoot = this.norm(root);
+    const normTarget = this.norm(target);
+    return normTarget === normRoot || normTarget.startsWith(normRoot + "/");
   }
 
   private isWhitelistedDir(p?: string): boolean {

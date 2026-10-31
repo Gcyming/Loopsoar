@@ -810,6 +810,71 @@
     html[data-animations="off"] .think-tool-status,
     html[data-animations="off"] .todo-announce.is-done .todo-announce-text::after { transition: none; animation: none !important; }
 
+
+    /* ══ 参考内容 / 访问来源 / 产物 / diff（对齐 slime 的面板样式） ══ */
+    .ref-panel { margin: 4px 0 6px; }
+    .ref-panel-head {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11.5px; color: #a8a296; font-weight: 600;
+    }
+    .ref-panel-head.is-button { width: 100%; padding: 0; border: none; background: transparent; cursor: pointer; text-align: left; }
+    .ref-panel-head.is-button:hover { color: #d98a4f; }
+    .ref-panel-count {
+      font-size: 9.5px; font-weight: 500; color: #7c766a;
+      padding: 0 5px; border-radius: 999px; border: 1px solid #2c2c31;
+    }
+    .ref-panel-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+    .ref-chip {
+      font-size: 10.5px; color: #c9c3b6; background: #1a1d24;
+      border: 1px solid #2c2c31; border-radius: 6px; padding: 2px 7px;
+      max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      text-decoration: none; cursor: default;
+    }
+    a.ref-chip { color: #d98a4f; cursor: pointer; }
+    a.ref-chip:hover { border-color: #d98a4f; }
+
+    .product-panel { margin: 8px 0 2px; }
+    .product-panel-head { font-size: 11.5px; font-weight: 600; color: #a8a296; margin-bottom: 4px; }
+    .product-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+    .product-card {
+      border: 1px solid #2c2c31; border-radius: 8px; background: rgba(200, 118, 60, 0.04);
+      overflow: hidden; max-width: 100%;
+    }
+    .product-card.is-open { flex: 1 1 100%; }
+    .product-card-head {
+      display: flex; align-items: center; gap: 6px; width: 100%;
+      padding: 5px 8px; border: none; background: transparent; cursor: pointer;
+      color: #c9c3b6; font-size: 11.5px; text-align: left;
+    }
+    .product-card-head:hover { background: rgba(200, 118, 60, 0.08); }
+    .product-card-icon { font-size: 11px; }
+    .product-card-name { font-weight: 600; flex-shrink: 0; color: #d98a4f; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .product-card-stat { flex-shrink: 0; font-size: 10.5px; display: inline-flex; gap: 4px; }
+    .product-card-path { flex: 1; min-width: 0; font-size: 10px; color: #7c766a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .product-card-body { padding: 0 6px 6px; }
+
+    .think-diff-block { border: 1px solid #2c2c31; border-radius: 6px; overflow: hidden; margin-top: 6px; }
+    .think-diff-header {
+      display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+      border-bottom: 1px solid #2c2c31; background: #1a1d24;
+      font-size: 10.5px; color: #a8a296;
+    }
+    .think-diff-file { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .think-diff-stat { margin-left: auto; display: inline-flex; gap: 6px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+    .think-diff-add { color: #3fb950; }
+    .think-diff-del { color: #f85149; }
+    .think-diff-body { max-height: 260px; overflow: auto; background: #0c0e13; }
+    .think-diff-row { display: flex; align-items: flex-start; padding: 0 8px; white-space: pre; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; line-height: 1.55; }
+    .think-diff-row.diff-add { background: rgba(63, 185, 80, 0.14); }
+    .think-diff-row.diff-del { background: rgba(248, 81, 73, 0.14); }
+    .think-diff-row.diff-eq { opacity: 0.55; }
+    .think-diff-mark { flex-shrink: 0; width: 16px; user-select: none; font-weight: 700; color: #7c766a; }
+    .think-diff-row.diff-add .think-diff-mark { color: #3fb950; }
+    .think-diff-row.diff-del .think-diff-mark { color: #f85149; }
+    .think-diff-text { flex: 1; min-width: 0; word-break: break-all; }
+    .think-diff-foot { padding: 3px 8px; font-size: 9.5px; background: #1a1d24; border-top: 1px solid #2c2c31; }
+    .think-diff-inline { flex-shrink: 0; display: inline-flex; gap: 4px; font-size: 10px; font-variant-numeric: tabular-nums; }
+
   </style>
   </head>
   <body>
