@@ -366,7 +366,9 @@ export default function App(): React.JSX.Element {
                     ? ".chat-scroll .product-panel"
                     : scrollTarget === "diff"
                       ? ".chat-scroll .think-diff-block"
-                      : ".chat-scroll .think-card";
+                      : scrollTarget === "user"
+                        ? ".chat-scroll .msg-row[data-rail-role='user']"
+                        : ".chat-scroll .think-card";
               const nodes = document.querySelectorAll(selector);
               const last = nodes[nodes.length - 1] as HTMLElement | undefined;
               last?.scrollIntoView({ block: "center" });
@@ -831,7 +833,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!api || typeof location === "undefined") return;
     if (new URLSearchParams(location.search).get("e2e") !== "chat") return;
-    const message = "你好，请简单介绍一下你自己";
+    const message = new URLSearchParams(location.search).get("chatText") || "你好，请简单介绍一下你自己";
     const delay = Number(new URLSearchParams(location.search).get("chatDelay") ?? "900");
     if (Number.isFinite(delay) && delay < 0) return;
     const timer = setTimeout(() => {

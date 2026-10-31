@@ -37,6 +37,8 @@ export const TimelineStepSchema = z.object({
   })).max(100).optional(),
 });
 
+export const ReadImageSchema = z.object({ path: z.string().min(1).max(2000) });
+
 export const ChatSaveTimelineSchema = z.object({
   sessionId: z.string().max(120).optional(),
   timeline: z.array(TimelineStepSchema).max(600),
@@ -233,6 +235,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "rollback",
     request: ChatRollbackSchema,
+    sensitive: true,
+  },
+  "fs:readImage": {
+    domain: "fs",
+    method: "readImage",
+    request: ReadImageSchema,
     sensitive: true,
   },
   "chat:saveTimeline": {

@@ -469,6 +469,9 @@ export interface LoopsoarAPI {
     connect(payload: { id: string }): Promise<{ server: McpServerInfo | null; servers: McpServerInfo[] }>;
     disconnect(payload: { id: string }): Promise<{ ok: boolean; servers: McpServerInfo[] }>;
   };
+  fs: LoopsoarDomain & {
+    readImage(payload: { path: string }): Promise<{ ok: boolean; dataUrl?: string; mime?: string; error?: string }>;
+  };
   extensions: LoopsoarDomain & {
     list(): Promise<{
       extensions: InstalledExtension[];

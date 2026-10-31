@@ -17,6 +17,7 @@ import { collectProducts, stripDiffMarkers } from "./artifacts.js";
 import { baseName, splitAttachments } from "./attachments.js";
 import { renderRich } from "./Markdown.js";
 import type { ChatMessage } from "./chatStreamState.js";
+import type { LoopsoarAPI } from "./types.js";
 
 export interface ChatMessageViewProps {
   message: ChatMessage;
@@ -72,12 +73,16 @@ export default function ChatMessageView({
           {m.steer ? <span style={styles.steerBadge}>转向</span> : null}
           {docs.length > 0 ? (
             <div style={styles.attachRow}>
-              {docs.map((path) => (
-                <span key={path} style={styles.attachChip} title={path}>
-                  <Icon name="file" size={11} style={{ marginRight: 4 }} />
-                  {baseName(path)}
-                </span>
-              ))}
+              {docs.map((path) =>
+                /\.(png|jpe?g|webp|gif)$/i.test(path) ? (
+                  <AttachmentThumb key={path} path={path} />
+                ) : (
+                  <span key={path} style={styles.attachChip} title={path}>
+                    <Icon name="file" size={11} style={{ marginRight: 4 }} />
+                    {baseName(path)}
+                  </span>
+                ),
+              )}
             </div>
           ) : null}
           {body ? <span>{body}</span> : null}
@@ -191,6 +196,51 @@ export default function ChatMessageView({
   );
 }
 
+const thumbCache = new Map<string, string>();
+
+/** 图片附件缩略图：通过 fs:readImage 读 data URL（6MB/扩展名白名单在壳层兜底）。 */
+function AttachmentThumb({ path }: { path: string }): React.ReactElement {
+  const [src, setSrc] = React.useState<string | null>(thumbCache.get(path) ?? null);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    if (src || failed) return;
+    const api = (window as unknown as { loopsoarAPI?: LoopsoarAPI }).loopsoarAPI;
+    let alive = true;
+    void api?.fs
+      .readImage({ path })
+      .then((result) => {
+        if (!alive) return;
+        if (result.ok && result.dataUrl) {
+          thumbCache.set(path, result.dataUrl);
+          setSrc(result.dataUrl);
+        } else {
+          setFailed(true);
+        }
+      })
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [path, src, failed]);
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt={baseName(path)}
+        title={path}
+        style={styles.attachThumb}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <span style={styles.attachChip} title={failed ? `${path}（无法预览）` : path}>
+      <Icon name="file" size={11} style={{ marginRight: 4 }} />
+      {baseName(path)}
+    </span>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
   msgRowAssistant: { display: "flex", flexDirection: "column", marginBottom: 18 },
@@ -217,6 +267,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   attachRow: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 5 },
+  attachThumb: {
+    display: "block",
+    width: 108,
+    maxHeight: 76,
+    objectFit: "cover",
+    borderRadius: 6,
+    border: "1px solid rgba(0,0,0,0.2)",
+    marginBottom: 2,
+  },
   attachChip: {
     display: "inline-flex",
     alignItems: "center",

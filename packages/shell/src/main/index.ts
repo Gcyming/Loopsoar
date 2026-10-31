@@ -52,6 +52,7 @@ import { registerExtensionsDomain } from "./domains/extensions.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
+import { registerFsDomain } from "./domains/fs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -370,7 +371,8 @@ function createMainWindow(): void {
   } else {
     // E2E 直达：LOOPSOAR_E2E_OPEN=settings 时带 query 打开并自动展开设置面板
     const e2eOpen = process.env.LOOPSOAR_E2E_OPEN;
-    const query = e2eOpen ? `?e2e=${e2eOpen}` : "";
+    const chatText = process.env.LOOPSOAR_E2E_CHAT_TEXT;
+    const query = `${e2eOpen ? `?e2e=${e2eOpen}` : "?"}${chatText ? `&chatText=${encodeURIComponent(chatText)}` : ""}`;
     void mainWindow.loadURL(`${PROTOCOL}://app/index.html${query}`);
   }
   scheduleE2EScreenshot(mainWindow);
@@ -695,6 +697,7 @@ app.whenReady().then(async () => {
       return error === "";
     },
   });
+  registerFsDomain(deps);
   registerMcpDomain({
     ...deps,
     mcp,
