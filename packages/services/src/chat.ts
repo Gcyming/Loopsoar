@@ -12,6 +12,7 @@ import {
 } from "loopsoar-core/tool_loop";
 import { auditClaims, type ClaimFinding } from "loopsoar-core/claims";
 import { SteerBus } from "loopsoar-core/steerBus";
+import { compressConversation, historyBudgetChars } from "loopsoar-core/contextCompress";
 import type { ToolRegistry } from "loopsoar-core/tools/registry";
 import type { SandboxManager, PermissionKind } from "loopsoar-core/sandbox";
 import {
@@ -58,6 +59,8 @@ export interface ChatServiceOptions {
   getLlm?: () => LlmClient | undefined;
   /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
   getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
+  /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 12 万字符）。 */
+  getContextWindow?: () => number | undefined;
   /** Agent 循环上限（设置 · 通用可调；缺省使用 core 默认）。 */
   getAgentLimits?: () => { maxRounds?: number; maxToolCalls?: number };
   /** 会话历史（持久化消息，按时间正序）；缺省则单轮对话。 */
@@ -327,13 +330,20 @@ export class ChatService {
     const memoryText = this.opts.getMemoryFor?.(input.message) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
     const volatileContent = [segments.volatile, memoryText, skillText].filter((t) => t.trim()).join("\n\n");
-    const history = (this.opts.getHistory?.(sessionId) ?? []).map((m) => ({
+    const rawHistory = (this.opts.getHistory?.(sessionId) ?? []).map((m) => ({
       role: m.role,
       content: m.content,
     }));
+    // 上下文自动压缩：超预算时把早期消息压成确定性摘要（不额外请求模型，避免"失忆截断"）
+    const compression = compressConversation(rawHistory, {
+      budgetChars: historyBudgetChars(this.opts.getContextWindow?.()),
+    });
+    if (compression.compressed) {
+      emit("progress", { note: compression.summary, compressed: true, dropped: compression.droppedCount });
+    }
     const messages = [
       { role: "system" as const, content: stableContent },
-      ...history,
+      ...compression.messages,
       { role: "user" as const, content: `${input.message}\n\n${volatileContent}` },
     ];
 
@@ -389,6 +399,10 @@ export class ChatService {
       outcome = loopOutcome.status;
       reason = loopOutcome.reason;
       finalText = loopOutcome.finalText;
+      // 空正文兜底：任何非正常收束都必须给出可读原因（配合 UI 的中断横幅，避免"莫名空白"）
+      if (!finalText.trim()) {
+        finalText = outcome === "done" ? "（模型没有返回文本内容）" : `（任务未完成：${reason}）`;
+      }
       usage = loopOutcome.usage;
 
       // 声称核验：只报告「声称存在但实际不存在」的可疑项

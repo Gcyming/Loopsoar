@@ -20,15 +20,15 @@ export const ExtensionManifestSchema = z.object({
     .min(1)
     .max(120)
     .regex(/^[a-z0-9][a-z0-9._-]*$/i, "id 仅允许字母数字 . _ -"),
-  name: z.string().min(1).max(120),
+  name: z.string().min(1).max(200),
   version: z.string().min(1).max(40),
-  description: z.string().max(500).optional(),
-  author: z.string().max(120).optional(),
+  description: z.string().max(4000).optional(),
+  author: z.string().max(200).optional(),
   /** 入口文件（相对扩展目录）；留空表示纯声明式扩展（仅给 Agent 提供提示词/规则）。 */
   main: z.string().max(300).optional(),
   /** 声明的权限类别，安装时展示；实际执行仍走沙箱与确认流程。 */
   permissions: z.array(z.enum(["read", "write", "terminal", "network"])).max(4).optional(),
-  keywords: z.array(z.string().max(40)).max(20).optional(),
+  keywords: z.array(z.string().max(80)).max(50).optional(),
 });
 
 export type ExtensionManifest = z.infer<typeof ExtensionManifestSchema>;

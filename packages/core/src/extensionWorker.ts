@@ -8,8 +8,8 @@ import { z } from "zod";
 
 /** 扩展工具声明（worker 上报给父进程）。 */
 export const ExtensionToolDefSchema = z.object({
-  name: z.string().min(1).max(80),
-  description: z.string().max(2000).optional(),
+  name: z.string().min(1).max(200),
+  description: z.string().max(20_000).optional(),
   /** JSON Schema（OpenAI function parameters 形态；不合法时父进程降级为空对象）。 */
   parameters: z.unknown().optional(),
   permissions: z

@@ -583,7 +583,7 @@ app.whenReady().then(async () => {
     getLlm: () => llmRef,
     // 会话历史：每次 stream 读取持久化消息，让模型具备多轮上下文（回滚后同样生效）
     getHistory: () =>
-      (sessions.load()?.messages ?? []).slice(-40).map((m) => ({
+      (sessions.load()?.messages ?? []).slice(-400).map((m) => ({
         role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
         content: m.text,
       })),

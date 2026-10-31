@@ -93,6 +93,12 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   let seq = 0;
   /** 多轮工具对话上下文（首轮由 opts.messages 初始化，之后累积 assistant/tool 消息） */
   let conversation: LlmMessage[] | null = null;
+  /** 防循环：相同工具+参数的调用次数统计 */
+  const repeatCalls = new Map<string, number>();
+  const REPEAT_WARN_AT = 2;
+  const REPEAT_STOP_AT = 5;
+  /** 回灌给模型的单条工具结果上限（完整内容仍在 UI 工具卡/本地记录中） */
+  const MAX_TOOL_RESULT_IN_CONTEXT = 20_000;
 
   const emit = (type: LoopEvent["type"], data: unknown): void => {
     sink({ seq: seq++, type, data, ts: Date.now() });
@@ -268,6 +274,30 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 usage.totalTokens += chunk.tokens;
               }
 
+              // 防循环：相同工具+相同参数重复调用超过阈值 → 提示；超过硬阈值 → no-progress 停止
+              const callKey = `${toolCall.name}:${JSON.stringify(toolCall.args ?? {})}`;
+              const repeatCount = repeatCalls.get(callKey) ?? 0;
+              repeatCalls.set(callKey, repeatCount + 1);
+              if (repeatCount > 0 && toolResult.ok) {
+                toolResult = {
+                  ok: toolResult.ok,
+                  content: `${toolResult.content}
+[防循环提示] 该工具与参数已重复调用第 ${repeatCount + 1} 次；若结果没有变化，请停止重复并直接给出结论。`,
+                  error: toolResult.error,
+                };
+              }
+              if (repeatCount + 1 >= REPEAT_STOP_AT) {
+                emit("progress", {
+                  note: `工具 ${toolCall.name} 相同参数已调用 ${repeatCount + 1} 次，触发防循环停止`,
+                });
+                return {
+                  status: "no-progress",
+                  reason: `工具 ${toolCall.name} 以相同参数连续调用 ${repeatCount + 1} 次，触发防循环停止。`,
+                  finalText,
+                  usage,
+                };
+              }
+
               // 工具结果只进对话上下文，不混进助手正文（否则 UI 会把工具输出当回答显示）
               roundToolCalls.push({
                 id: toolCall.id,
@@ -337,13 +367,17 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             content: roundText,
             tool_calls: roundToolCalls.map((call) => ({ id: call.id, name: call.name, args: call.args })),
           },
-          ...roundToolCalls.map((call) => ({
-            role: "tool" as const,
-            tool_call_id: call.id,
-            content: call.result.ok
+          ...roundToolCalls.map((call) => {
+            const raw = call.result.ok
               ? (call.result.content ?? "")
-              : `[工具失败] ${call.result.error ?? call.result.content ?? "未知错误"}`,
-          })),
+              : `[工具失败] ${call.result.error ?? call.result.content ?? "未知错误"}`;
+            const clipped =
+              raw.length > MAX_TOOL_RESULT_IN_CONTEXT
+                ? `${raw.slice(0, MAX_TOOL_RESULT_IN_CONTEXT)}
+…（工具结果过长已截断，完整内容见会话中的工具卡片）`
+                : raw;
+            return { role: "tool" as const, tool_call_id: call.id, content: clipped };
+          }),
         ];
       } else if (sawDone) {
         emit("done", { finalText });

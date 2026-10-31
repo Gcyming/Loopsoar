@@ -13,9 +13,13 @@
 import { z } from "zod";
 
 export const SKILL_FILE_NAME = "SKILL.md";
-export const SKILL_MAX_BYTES = 32768;
-/** 命中后注入正文的最大字符数（防止大技能灌爆上下文）。 */
-export const SKILL_BODY_LIMIT = 4000;
+/**
+ * 单技能读取上限（2MB）。注意：这不是"超过就跳过"的限制——
+ * 超过时只读取前 2MB 并标记 warnings，技能仍然可用（用户明确要求不要因大小被拒）。
+ */
+export const SKILL_MAX_BYTES = 2 * 1024 * 1024;
+/** 命中后注入正文的最大字符数（防止单个超长技能灌爆上下文；未注入部分提示用 file_read 读原文件）。 */
+export const SKILL_BODY_LIMIT = 12000;
 /** 清单项描述截断长度。 */
 export const SKILL_DESCRIPTION_LIMIT = 120;
 /** 命中注入的最大技能数。 */
@@ -258,7 +262,10 @@ export class SkillRegistry {
       return ["## 可用技能（按需参考，未展开）", ...lines].join("\n");
     }
     const blocks = hits.map(({ record }) => {
-      const body = record.body.length > SKILL_BODY_LIMIT ? `${record.body.slice(0, SKILL_BODY_LIMIT)}\n…（正文已截断）` : record.body;
+      const body =
+        record.body.length > SKILL_BODY_LIMIT
+          ? `${record.body.slice(0, SKILL_BODY_LIMIT)}\n…（正文已截断；完整内容可用 file_read 读取：${record.path}）`
+          : record.body;
       return [`### 技能：${record.frontmatter.name}`, record.frontmatter.description, body].filter(Boolean).join("\n");
     });
     return ["## 已加载技能（与当前请求相关）", ...blocks].join("\n\n");

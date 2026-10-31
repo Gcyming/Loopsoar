@@ -64,6 +64,50 @@ describe("工具循环", () => {
     expect(events.some((e) => e.type === "heartbeat")).toBe(true);
   });
 
+
+  it("防循环：相同工具+相同参数重复调用到达阈值 → no-progress（原因明确）", async () => {
+    const client = {
+      async *invoke() {
+        yield { kind: "tool_call" as const, toolCall: { id: "repeat", name: "file_read", args: { path: "same.txt" } } };
+        yield { kind: "done" as const };
+      },
+    };
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      llm: client as never,
+      executeTool: { invoke: async () => ({ ok: true, content: "same result" }) },
+      sink: () => {},
+    });
+    expect(outcome.status).toBe("no-progress");
+    expect(outcome.reason).toContain("防循环");
+  });
+
+  it("超长工具结果回灌上下文时截断并标注（UI 仍保留完整结果）", async () => {
+    const requests: { messages: { role: string; content: string }[] }[] = [];
+    const client = {
+      async *invoke(req: { messages: { role: string; content: string }[] }) {
+        requests.push({ messages: req.messages.map((m) => ({ ...m })) });
+        if (requests.length === 1) {
+          yield { kind: "tool_call" as const, toolCall: { id: "big", name: "browser_snapshot", args: {} } };
+          yield { kind: "done" as const };
+          return;
+        }
+        yield { kind: "text" as const, text: "完成" };
+        yield { kind: "done" as const };
+      },
+    };
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      llm: client as never,
+      executeTool: { invoke: async () => ({ ok: true, content: "x".repeat(30000) }) },
+      sink: () => {},
+    });
+    expect(outcome.status).toBe("done");
+    const toolMessage = requests[1].messages.find((m) => m.role === "tool")!;
+    expect(toolMessage.content.length).toBeLessThan(25_000);
+    expect(toolMessage.content).toContain("完整内容见会话中的工具卡片");
+  });
+
   it("外部中止 → aborted", async () => {
     const llm = new MockLlmClient();
     llm.addScript([

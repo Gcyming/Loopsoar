@@ -76,7 +76,7 @@ describe("技能命中质量", () => {
 
   it("超长正文被截断（SKILL_BODY_LIMIT）", () => {
     const reg = new SkillRegistry();
-    const long = `---\nname: 大技能\ndescription: 很长的技能\n---\n\n${"内容".repeat(3000)}`;
+    const long = `---\nname: 大技能\ndescription: 很长的技能\n---\n\n${"内容".repeat(10000)}`;
     reg.install("big", "C:/skills/big/SKILL.md", parseSkillMarkdown(long, "big"));
     expect(reg.promptFor("大技能")).toContain("正文已截断");
   });

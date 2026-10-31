@@ -51,13 +51,30 @@ export class SkillHost {
           if (!fs.statSync(full).isDirectory()) continue;
           const file = path.join(full, SKILL_FILE_NAME);
           if (!fs.existsSync(file)) continue;
-          const raw = fs.readFileSync(file, "utf8");
-          const bytes = new TextEncoder().encode(raw).length;
+          const stat = fs.statSync(file);
+          const bytes = stat.size;
+          let raw: string;
+          let truncatedBytes = 0;
           if (bytes > SKILL_MAX_BYTES) {
-            skipped.push({ dir: full, reason: `SKILL.md 超过 ${SKILL_MAX_BYTES} 字节` });
-            continue;
+            // 超长技能：只读取前 SKILL_MAX_BYTES 字节（按 UTF-8 安全截断），仍然安装并可用
+            const fd = fs.openSync(file, "r");
+            try {
+              const buffer = Buffer.allocUnsafe(SKILL_MAX_BYTES);
+              const read = fs.readSync(fd, buffer, 0, SKILL_MAX_BYTES, 0);
+              raw = buffer.subarray(0, read).toString("utf8");
+            } finally {
+              fs.closeSync(fd);
+            }
+            truncatedBytes = bytes - SKILL_MAX_BYTES;
+          } else {
+            raw = fs.readFileSync(file, "utf8");
           }
           const parsed = SkillRegistry.parseMarkdown(raw, name);
+          if (truncatedBytes > 0) {
+            parsed.warnings.push(
+              `SKILL.md 过大（${bytes} 字节），已读取前 ${SKILL_MAX_BYTES} 字节（${truncatedBytes} 字节未载入；可用 file_read 读取原文件）`,
+            );
+          }
           this.registry.install(name, file, parsed, undefined, state.enabled[name] ?? true);
           if (!(name in state.enabled)) {
             state.enabled[name] = true;

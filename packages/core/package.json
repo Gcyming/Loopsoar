@@ -34,7 +34,8 @@
     "./extension": "./src/extension.js",
     "./skill": "./src/skill.js",
     "./mcp": "./src/mcp.js",
-    "./extensionWorker": "./src/extensionWorker.js"
+    "./extensionWorker": "./src/extensionWorker.js",
+    "./contextCompress": "./src/contextCompress.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
