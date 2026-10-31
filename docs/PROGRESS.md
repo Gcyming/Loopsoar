@@ -101,6 +101,15 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 新增测试：artifacts 3 用例、fileTools 2 用例、沙箱相对路径 3 用例；共 362+ 全绿
 - 证据：gui-56-diff-products.png
 
+## 二·八、2026-10-31 第六轮增量（架构债：事件层与渲染器拆分）
+- 新增 `chatStreamState.ts`：事件→消息状态的唯一纯函数层（applyChunk/Reasoning/ToolStart/ToolResult/
+  Steer/Done/restore），App 事件 handler 只做接线；新增 6 个单测
+- 新增 `Markdown.tsx`：唯一富文本渲染器（代码块/GFM 表格/列表/标题/引用/行内），App 删除第二份实现与样式
+- 新增 `attachments.ts`：附件文本协议解析单一产地
+- App.tsx：2863 → 2438 行；下一轮继续拆 `ChatMessageView`（目标 <1200 行红线）
+- 测试：chatStreamState 6 用例；全量 373 全绿
+- 证据：gui-57-architecture-refactor.png（重构后渲染无回归）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

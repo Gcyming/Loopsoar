@@ -25,16 +25,9 @@ import Timeline from "./TimelineView.js";
 import { ProductPanel } from "./ArtifactPanels.js";
 import { collectProducts, stripDiffMarkers } from "./artifacts.js";
 import StreamFadeText from "./StreamFade.js";
-import {
-  appendTimelineStep,
-  extractToolDetail,
-  foldPlanUpdate,
-  lastPlanItems,
-  parsePlanItems,
-  settleToolStep,
-  type PlanItem,
-  type TimelineStep,
-} from "./timeline.js";
+import { renderRich } from "./Markdown.js";
+import { baseName, splitAttachments } from "./attachments.js";
+import { type TimelineStep } from "./timeline.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -46,36 +39,17 @@ import {
  *   · prefers-reduced-motion 下只保留不透明度渐入（去掉位移，避免"什么都看不到"）。
  */
 
-/** 计划类工具参数解析的中间形态（最终转成 TimelineStep 里的 PlanItem）。 */
-interface PlanStep {
-  content: string;
-  status: "pending" | "in_progress" | "done";
-}
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "reasoning" | "tool" | "system";
-  text: string;
-  /** 流式尾巴：最近一次增量，用于逐单元渐入动画。 */
-  tail?: string;
-  /** 尾巴序号：变化即重新触发动画（React key）。 */
-  tailSeq?: number;
-  status?: "streaming" | "done" | "error";
-
-  /** 非正常收束的中断原因（预算/轮次/中止/异常） */
-  interrupted?: { status: string; reason: string };
-  /** 耗时统计：首字 / 总耗时（毫秒） */
-  timing?: { firstTokenMs?: number; totalMs?: number; rounds?: number; toolCalls?: number; tokens?: number };
-  /** 创建时间戳（显示 HH:mm） */
-  createdAt?: number;
-  /** 错误说明 */
-  errorText?: string;
-  /** 是否为运行中注入的转向提示 */
-  steer?: boolean;
-  /** 交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导），对齐 slime。 */
-  timeline?: TimelineStep[];
-}
-
+import {
+  applyChunk,
+  applyDone,
+  applyReasoning,
+  applySteer,
+  applyToolResult,
+  applyToolStart,
+  parseDone,
+  restoreMessages,
+  type ChatMessage,
+} from "./chatStreamState.js";
 
 const ROLE_LABEL: Record<ChatMessage["role"], string> = {
   user: "你",
@@ -254,13 +228,7 @@ export default function App(): React.JSX.Element {
           const history = await api.chat.history().catch(() => null);
           if (history?.session?.messages?.length) {
             sessionIdRef.current = history.session.sessionId;
-            const restored = history.session.messages.map((m) => ({
-                id: nextId(m.role),
-                role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-                text: m.text,
-                status: "done" as const,
-                timeline: Array.isArray(m.timeline) ? (m.timeline as TimelineStep[]) : undefined,
-              }));
+            const restored = restoreMessages(history.session.messages, nextId);
             // 只在界面仍为空时恢复：避免异步历史把用户刚发出的消息覆盖掉（曾导致"回复消失"）
             setMessages((prev) => (prev.length === 0 ? restored : prev));
           }
@@ -298,25 +266,7 @@ export default function App(): React.JSX.Element {
       activeAssistantRef.current = id;
       tailSeqRef.current += 1;
       const tailSeq = tailSeqRef.current;
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === id);
-        if (idx === -1) {
-          return [
-            ...prev,
-            { id, role: "assistant" as const, text: delta, tail: delta, tailSeq, status: "streaming" as const, createdAt: Date.now() },
-          ];
-        }
-        const next = [...prev];
-        next[idx] = {
-          ...next[idx],
-          text: next[idx].text + delta,
-          tail: delta,
-          tailSeq,
-          status: "streaming",
-          timeline: appendTimelineStep(next[idx].timeline ?? [], { kind: "body", text: delta }),
-        };
-        return next;
-      });
+      setMessages((prev) => applyChunk(prev, id, delta, { tailSeq }));
     };
 
     const pushTransient = (role: ChatMessage["role"], text: string): void => {
@@ -335,132 +285,23 @@ export default function App(): React.JSX.Element {
           if (firstTokenAtRef.current === 0) firstTokenAtRef.current = Date.now();
           setMessages((prev) => {
             const at = activeAssistantRef.current;
-            return prev.map((m) =>
-              m.id === at
-                ? { ...m, timeline: appendTimelineStep(m.timeline ?? [], { kind: "think", text: reasoningDelta }) }
-                : m,
-            );
+            return at ? applyReasoning(prev, at, reasoningDelta) : prev;
           });
         }
       }),
       api.on("chat:stream:tool_start", (payload) => {
-        let started: { toolCallId?: string; toolName?: string; args?: unknown } = {};
-        try {
-          started = JSON.parse(String((payload as { content?: string }).content ?? "{}"));
-        } catch {
-          return;
-        }
-        if (!started.toolCallId || !started.toolName) return;
+        const raw = String((payload as { content?: string }).content ?? "");
         setMessages((prev) => {
           const at = activeAssistantRef.current;
-          if (!at) return prev;
-          return prev.map((m) =>
-            m.id === at
-              ? {
-                  ...m,
-                  timeline: appendTimelineStep(m.timeline ?? [], {
-                    kind: "tool",
-                    id: started.toolCallId!,
-                    name: started.toolName!,
-                    label: started.toolName!,
-                    detail: extractToolDetail(started.toolName!, started.args),
-                    state: "running",
-                  }),
-                }
-              : m,
-          );
+          return at ? applyToolStart(prev, at, raw) : prev;
         });
       }),
       api.on("chat:stream:tool", (payload) => {
         const raw = String((payload as { content?: string }).content ?? "");
-        let toolName = "工具";
-        let toolArgs: unknown;
-        let toolResult: { ok?: boolean; content?: string; error?: string } | null = null;
-        let plan: PlanStep[] | null = null;
-        try {
-          const parsed = JSON.parse(raw) as {
-            toolName?: string;
-            name?: string;
-            tool?: string;
-            args?: unknown;
-            result?: { ok?: boolean; content?: string; error?: string };
-          };
-          toolName = parsed.toolName ?? parsed.name ?? parsed.tool ?? "工具";
-          toolArgs = typeof parsed.args === "string" ? (() => { try { return JSON.parse(parsed.args as string); } catch { return parsed.args; } })() : parsed.args;
-          toolResult = parsed.result ?? null;
-          const args = (toolArgs ?? {}) as Record<string, unknown>;
-          // 计划类工具：todo_write / plan / tasks ... 参数里带 steps/todos/items
-          if (/todo|plan|task/i.test(toolName) && args) {
-            const rawSteps = (args.steps ?? args.todos ?? args.items ?? args.plan ?? args.tasks) as unknown;
-            if (Array.isArray(rawSteps)) {
-              const statusOf = (value: unknown): PlanStep["status"] => {
-                const text = String(value ?? "").toLowerCase();
-                if (text === "done" || text === "completed" || text === "complete" || text === "success") return "done";
-                if (text === "in_progress" || text === "running" || text === "active" || text === "doing") return "in_progress";
-                return "pending";
-              };
-              plan = rawSteps
-                .map((step) => {
-                  if (typeof step === "string") return { content: step, status: "pending" as PlanStep["status"] };
-                  if (step && typeof step === "object") {
-                    const record = step as Record<string, unknown>;
-                    const text = String(record.content ?? record.text ?? record.title ?? record.task ?? "").trim();
-                    if (!text) return null;
-                    return { content: text, status: statusOf(record.status ?? record.state) };
-                  }
-                  return null;
-                })
-                .filter((step): step is PlanStep => step !== null)
-                .slice(0, 30);
-              if (plan.length === 0) plan = null;
-            }
-          }
-        } catch {
-          toolResult = { ok: false, content: raw.slice(0, 2000) };
-        }
         setMessages((prev) => {
           const at = activeAssistantRef.current;
           if (!at) return prev;
-          return prev.map((m) => {
-            if (m.id !== at) return m;
-            // 工具结果里的 checklist（todo_write 等）也可解析成规划
-            let planItems: PlanItem[] | null = null;
-            if (plan) {
-              planItems = plan.map((step, index) => ({
-                id: String(index + 1),
-                content: step.content,
-                status: step.status === "done" ? "completed" : step.status === "in_progress" ? "in_progress" : "pending",
-              }));
-            } else if (/todo|plan|task/i.test(toolName) && toolResult?.content) {
-              const parsedItems = parsePlanItems(toolResult.content);
-              if (parsedItems.length > 0) planItems = parsedItems;
-            }
-            const toolCallId = (() => {
-              try {
-                return (JSON.parse(raw) as { toolCallId?: string }).toolCallId;
-              } catch {
-                return undefined;
-              }
-            })();
-            let timeline = m.timeline ?? [];
-            const hasRunning = Boolean(toolCallId) && timeline.some((step) => step.kind === "tool" && step.id === toolCallId);
-            timeline = hasRunning
-              ? settleToolStep(timeline, toolCallId!, { ok: toolResult?.ok !== false, result: toolResult?.content ?? toolResult?.error })
-              : appendTimelineStep(timeline, {
-                  kind: "tool",
-                  id: toolCallId ?? nextId("tool"),
-                  name: toolName,
-                  label: toolName,
-                  detail: extractToolDetail(toolName, toolArgs, toolResult?.content ?? toolResult?.error ?? ""),
-                  result: toolResult?.content ?? toolResult?.error,
-                  ok: toolResult?.ok !== false,
-                  state: "done",
-                });
-            if (planItems) {
-              timeline = foldPlanUpdate(timeline, planItems, lastPlanItems(timeline));
-            }
-            return { ...m, timeline };
-          });
+          return applyToolResult(prev, at, raw, nextId("tool"));
         });
       }),
       api.on("chat:stream:progress", (payload) => {
@@ -489,23 +330,8 @@ export default function App(): React.JSX.Element {
         const start = sendStartedAtRef.current;
         const first = firstTokenAtRef.current;
         const finishedAssistantId = activeAssistantRef.current;
-        let usage: { rounds?: number; toolCalls?: number; totalTokens?: number } = {};
-        let statusText = "完成";
-        let interrupted: { status: string; reason: string } | undefined;
-        try {
-          const parsed = JSON.parse(p.content ?? "{}") as {
-            status?: string;
-            reason?: string;
-            usage?: { rounds?: number; toolCalls?: number; totalTokens?: number };
-          };
-          usage = parsed.usage ?? {};
-          if (parsed.status && parsed.status !== "done") {
-            interrupted = { status: parsed.status, reason: parsed.reason ?? "未提供原因" };
-            statusText = `已中断（${parsed.status}）：${parsed.reason ?? ""}`;
-          }
-        } catch {
-          // 保持默认
-        }
+        const info = parseDone(p.content);
+        const statusText = info.statusText;
         setMessages((prev) => {
           const streaming = prev.find((m) => m.status === "streaming");
           if (streaming?.timeline?.length && api) {
@@ -513,20 +339,7 @@ export default function App(): React.JSX.Element {
               .saveTimeline({ sessionId: sessionIdRef.current ?? undefined, timeline: streaming.timeline })
               .catch(() => {});
           }
-          return prev.map((m) => {
-            if (m.status !== "streaming") return m;
-            return {
-              ...m,
-              status: "done",
-              tail: undefined,
-              timing: {
-                firstTokenMs: first && start ? first - start : undefined,
-                totalMs: start ? Date.now() - start : undefined,
-                ...usage,
-              },
-              ...(interrupted ? { interrupted } : {}),
-            };
-          });
+          return applyDone(prev, info, { startedAt: start, firstTokenAt: first });
         });
         if (finishedAssistantId) {
           // slime 口径：收尾后整块思考历程自动收起（用户可随时再展开）
@@ -784,11 +597,7 @@ export default function App(): React.JSX.Element {
       // 运行中：作为「转向提示」注入（轮次边界生效，不打断当前输出）
       setMessages((prev) => {
         const active = activeAssistantRef.current;
-        const appended = prev.map((m) =>
-          m.id === active
-            ? { ...m, timeline: appendTimelineStep(m.timeline ?? [], { kind: "steer", text }) }
-            : m,
-        );
+        const appended = active ? applySteer(prev, active, text) : prev;
         return [
           ...appended,
           { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
@@ -1001,15 +810,7 @@ export default function App(): React.JSX.Element {
       setCurrentSession(sessionId);
       sessionIdRef.current = sessionId;
       const msgs = r.session?.messages ?? [];
-      setMessages(
-        msgs.map((m) => ({
-          id: nextId(m.role),
-          role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-          text: m.text,
-          status: "done" as const,
-          timeline: Array.isArray(m.timeline) ? (m.timeline as TimelineStep[]) : undefined,
-        })),
-      );
+      setMessages(restoreMessages(msgs, nextId));
       setSessionOpen(false);
     });
   }, [api]);
@@ -1883,184 +1684,6 @@ export default function App(): React.JSX.Element {
   );
 }
 
-/** 代码块：带语言标签与「复制」按钮（纯 UI）。 */
-function CodeBlock({ code, lang }: { code: string; lang: string }): React.ReactElement {
-  const [copied, setCopied] = React.useState(false);
-  const copy = (): void => {
-    void navigator.clipboard
-      ?.writeText(code)
-      .then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1400);
-      })
-      .catch(() => {});
-  };
-  return (
-    <div style={styles.codeWrap}>
-      <div style={styles.codeHead}>
-        <span style={styles.codeLang}>{lang || "code"}</span>
-        <button type="button" className="msg-action" title="复制代码" onClick={copy} style={styles.codeCopy}>
-          {copied ? "已复制" : "复制"}
-        </button>
-      </div>
-      <pre style={styles.codeBlock}>
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
-}
-
-/** 拆分「【附件】路径」：正文与附件路径分离（展示卡片，发送仍用原文）。 */
-function splitAttachments(text: string): { body: string; docs: string[] } {
-  const docs: string[] = [];
-  const re = /【附件】([^\n]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    const path = match[1].trim();
-    if (path) docs.push(path);
-  }
-  const body = text.replace(re, "").trim();
-  return { body, docs };
-}
-
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1] || path;
-}
-
-/** 轻量富文本：代码块 + 行内代码 + 粗体（不引入第三方依赖）。 */
-function renderRich(text: string): React.ReactNode {
-  if (!text) return null;
-  const blocks = text.split(/(```[\s\S]*?```)/g);
-  return blocks.map((block, bi) => {
-    if (block.startsWith("```")) {
-      const head = /^```([^\n]*)/.exec(block)?.[1]?.trim() ?? "";
-      const body = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
-      return <CodeBlock key={`code-${bi}`} code={body} lang={head} />;
-    }
-    return <React.Fragment key={`text-${bi}`}>{renderPlainLines(block, bi)}</React.Fragment>;
-  });
-}
-
-/** 行级渲染（支持 GFM 表格）。 */
-function renderPlainLines(block: string, bi: number): React.ReactNode[] {
-  const lines = block.split(/\n/);
-  const nodes: React.ReactNode[] = [];
-  let list: string[] = [];
-  let listKey = 0;
-  const splitRow = (line: string): string[] =>
-    line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-  const flushList = (): void => {
-    if (list.length === 0) return;
-    const items = list;
-    list = [];
-    nodes.push(
-      <ul key={`ul-${bi}-${listKey++}`} style={styles.richList}>
-        {items.map((item, ii) => (
-          <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
-        ))}
-      </ul>,
-    );
-  };
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i].replace(/\s+$/, "");
-    // 表格：| a | b |  +  分隔行
-    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
-      flushList();
-      const header = splitRow(line);
-      const rows: string[][] = [];
-      i += 2;
-      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
-        rows.push(splitRow(lines[i]));
-        i += 1;
-      }
-      nodes.push(
-        <div key={`tbl-${bi}-${nodes.length}`} style={styles.tableWrap}>
-          <table style={styles.table}>
-            <thead>
-              <tr>{header.map((cell, ci) => <th key={ci} style={styles.th}>{inlineRich(cell)}</th>)}</tr>
-            </thead>
-            <tbody>
-              {rows.map((row, ri) => (
-                <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={styles.td}>{inlineRich(cell)}</td>)}</tr>
-              ))}
-            </tbody>
-          </table>
-        </div>,
-      );
-      continue;
-    }
-    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
-    if (bullet) {
-      list.push(bullet[1]);
-      i += 1;
-      continue;
-    }
-    flushList();
-    if (!line.trim()) {
-      nodes.push(<div key={`gap-${bi}-${nodes.length}`} style={{ height: 6 }} />);
-      i += 1;
-      continue;
-    }
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-    if (heading) {
-      nodes.push(
-        <div key={`h-${bi}-${nodes.length}`} style={{ ...styles.richHeading, fontSize: heading[1].length <= 2 ? 16 : 14, marginTop: 10 }}>
-          {inlineRich(heading[2])}
-        </div>,
-      );
-      i += 1;
-      continue;
-    }
-    const quote = /^\s*>\s?(.*)$/.exec(line);
-    if (quote) {
-      nodes.push(<div key={`q-${bi}-${nodes.length}`} style={styles.richQuote}>{inlineRich(quote[1])}</div>);
-      i += 1;
-      continue;
-    }
-    nodes.push(<div key={`p-${bi}-${nodes.length}`} style={styles.richPara}>{inlineRich(line)}</div>);
-    i += 1;
-  }
-  flushList();
-  return nodes;
-}
-
-/** 行内：行内代码 / 粗体 / 斜体 / 链接。 */
-function inlineRich(text: string): React.ReactNode {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g);
-  return parts.map((part, pi) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={pi} style={styles.inlineCode}>{part.slice(1, -1)}</code>;
-    }
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={pi}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
-      return <em key={pi}>{part.slice(1, -1)}</em>;
-    }
-    const link = /^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/.exec(part);
-    if (link) {
-      return (
-        <a
-          key={pi}
-          href={link[2]}
-          rel="noreferrer"
-          style={styles.richLink}
-          onClick={(event) => {
-            event.preventDefault();
-            void window.loopsoarAPI?.browser.newTab({ url: link[2] }).catch(() => {});
-          }}
-        >
-          {link[1]}
-        </a>
-      );
-    }
-    return <React.Fragment key={pi}>{part}</React.Fragment>;
-  });
-}
-
 function fmtMs(ms: number): string {
   if (!ms || ms < 0) return "—";
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
@@ -2436,17 +2059,6 @@ const styles: Record<string, React.CSSProperties> = {
   sidebarTitle: { display: "inline-flex", alignItems: "center" },
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
   sidebarActions: { display: "inline-flex", alignItems: "center", gap: 6 },
-  codeWrap: { margin: "6px 0", border: `1px solid ${BRAND.border}`, borderRadius: 8, overflow: "hidden" },
-  codeHead: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "4px 8px",
-    background: "rgba(255,255,255,0.04)",
-    borderBottom: `1px solid ${BRAND.border}`,
-  },
-  codeLang: { fontSize: 9.5, color: BRAND.linenFaint, textTransform: "lowercase", letterSpacing: 0.4 },
-  codeCopy: { fontSize: 10, color: BRAND.linenMuted, width: "auto", padding: "0 6px", height: 18 },
   messageArea: { position: "relative", flex: 1, minHeight: 0, display: "flex" },
   messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   scrollRail: {
@@ -2575,18 +2187,6 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
-  tableWrap: { overflowX: "auto", margin: "8px 0", border: `1px solid ${BRAND.border}`, borderRadius: 8 },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
-  th: {
-    textAlign: "left",
-    padding: "6px 9px",
-    background: "rgba(255,255,255,0.04)",
-    borderBottom: `1px solid ${BRAND.border}`,
-    color: BRAND.linen,
-    fontWeight: 600,
-    whiteSpace: "nowrap",
-  },
-  td: { padding: "6px 9px", borderBottom: `1px solid ${BRAND.border}`, color: BRAND.linenMuted, verticalAlign: "top" },
   msgHover: {
     display: "flex",
     alignItems: "center",
@@ -2660,31 +2260,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   bubbleText: { fontSize: 12.5, lineHeight: 1.75, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
-  richPara: { margin: "2px 0" },
-  richHeading: { fontWeight: 700, marginBottom: 4 },
-  richList: { margin: "4px 0", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 3 },
-  richListItem: { lineHeight: 1.75 },
-  richQuote: { borderLeft: `2px solid ${BRAND.border}`, paddingLeft: 10, color: BRAND.linenMuted, margin: "4px 0" },
-  richLink: { color: BRAND.ochreHover, textDecoration: "underline" },
-  codeBlock: {
-    margin: 0,
-    padding: 8,
-    borderRadius: 7,
-    background: BRAND.ink,
-    border: `1px solid ${BRAND.border}`,
-    fontSize: 11,
-    lineHeight: 1.5,
-    overflowX: "auto",
-    fontFamily: "ui-monospace, Consolas, monospace",
-  },
-  inlineCode: {
-    padding: "0 4px",
-    borderRadius: 4,
-    background: BRAND.ink,
-    fontSize: 11,
-    fontFamily: "ui-monospace, Consolas, monospace",
-    color: "#d8c9a8",
-  },
   errBox: { fontSize: 11, color: "#f87171", background: "rgba(248,113,113,0.10)", padding: "5px 7px", borderRadius: 6 },
   bubbleFoot: { fontSize: 9.5, color: BRAND.linenFaint, marginTop: 2 },
   message: { display: "flex", flexDirection: "column", gap: 4 },

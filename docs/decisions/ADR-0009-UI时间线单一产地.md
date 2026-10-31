@@ -17,8 +17,10 @@ Loopsoar 的硬约束是：**架构干净、单一产地、易于修复排障，
    - 旧版 `ToolCard.tsx` / `PlanCard.tsx` 与回退渲染已删除（本次提交）。旧会话没有 timeline 就不渲染思考卡——
      **宁可缺功能，不保留第二套渲染路径**。
 2. **分层职责固定**
-   - 纯逻辑：`timeline.ts`（节点/合并/分组/分类）、`artifacts.ts`（diff 编解码/行 diff/产物与引用收集）、`StreamFade` 的切分；
-   - 展示：`TimelineView.tsx`（时间线）、`ArtifactPanels.tsx`（产物/参考/网址面板）、`DiffBlock.tsx`（diff 块）；
+   - 纯逻辑：`timeline.ts`（节点/合并/分组/分类）、`chatStreamState.ts`（事件→消息状态，纯函数）、
+     `artifacts.ts`（diff 编解码/行 diff/产物与引用收集）、`attachments.ts`；
+   - 展示：`Markdown.tsx`（唯一富文本渲染器）、`TimelineView.tsx`（时间线）、
+     `ArtifactPanels.tsx`（产物/参考/网址面板）、`DiffBlock.tsx`（diff 块）；
    - 编排：`App.tsx` 只做事件→时间线、布局、回调接线，不再内嵌工具/规划/播报的第二种渲染。
 3. **契约单产地**
    - 时间线持久化走 `packages/contracts` 的 `TimelineStepSchema` + `chat:saveTimeline`；
