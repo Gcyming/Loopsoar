@@ -19,14 +19,7 @@ import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
 import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
-import LiveStatus from "./LiveStatus.js";
-import ContextRing from "./ContextRing.js";
-import Timeline from "./TimelineView.js";
-import { ProductPanel } from "./ArtifactPanels.js";
-import { collectProducts, stripDiffMarkers } from "./artifacts.js";
-import StreamFadeText from "./StreamFade.js";
-import { renderRich } from "./Markdown.js";
-import { baseName, splitAttachments } from "./attachments.js";
+import ChatMessageView from "./ChatMessageView.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -1206,166 +1199,25 @@ export default function App(): React.JSX.Element {
             {messages.length === 0 ? (
               <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
             ) : (
-              messages.map((m) => {
-                const mine = m.role === "user";
-                const timelineSteps = m.timeline ?? [];
-                const hasStructuredTimeline = timelineSteps.some((step) => step.kind !== "body");
-                const products = hasStructuredTimeline ? collectProducts(timelineSteps) : [];
-                const displayText = stripDiffMarkers(m.text);
-                const showThinking = m.status === "streaming" && !m.text && !hasStructuredTimeline;
-                const timeText = new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                });
-                if (mine) {
-                  return (
-                    <div key={m.id} className="msg-row" style={styles.msgRowUser} data-rail-label={`你：${m.text.slice(0, 24)}`}
-                      data-rail-role="user">
-                      <div className="msg-user-bubble" style={{ ...styles.userBubble, ...(m.steer ? styles.userBubbleSteer : {}) }}>
-                        {m.steer ? <span style={styles.steerBadge}>转向</span> : null}
-                        {(() => {
-                          const { body, docs } = splitAttachments(m.text);
-                          return (
-                            <>
-                              {docs.length > 0 ? (
-                                <div style={styles.attachRow}>
-                                  {docs.map((path) => (
-                                    <span key={path} style={styles.attachChip} title={path}>
-                                      <Icon name="file" size={11} style={{ marginRight: 4 }} />
-                                      {baseName(path)}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : null}
-                              {body ? <span>{body}</span> : null}
-                            </>
-                          );
-                        })()}
-                      </div>
-                      <div className="msg-hover" style={styles.msgHover}>
-                        <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
-                        <span>· {timeText}</span>
-                        <button
-                          type="button"
-                          className="msg-action"
-                          title="回滚：撤销此消息及之后的对话（内容放回输入框）"
-                          onClick={() => rollbackTo(m.id)}
-                        >
-                          <Icon name="reload" size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          className="msg-action"
-                          title="复制消息"
-                          onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
-                        >
-                          <Icon name="file" size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                }
-                return (
-                  <div
-                    key={m.id}
-                    className="msg-row"
-                    style={styles.msgRowAssistant}
-                    data-rail-label={`Loopsoar：${(stripDiffMarkers(m.text) || "回复").slice(0, 26)}`}
-                    data-rail-role="assistant"
-                  >
-                    <div style={styles.assistantHead}>
-                      <span style={styles.avatar}>L</span>
-                      <span style={styles.assistantName}>Loopsoar</span>
-                      {provider?.model ? <span style={styles.assistantModel}>{provider.model}</span> : null}
-                      {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
-                      <span style={styles.assistantHeadRight}>
-                        <ContextRing used={contextUsage.used} cap={contextUsage.cap} loading={m.status === "streaming"} />
-                      </span>
-                    </div>
-                    <div style={styles.assistantMain}>
-                      {hasStructuredTimeline ? (
-                        <Timeline
-                          steps={timelineSteps}
-                          liveStream={m.status === "streaming"}
-                          expandAll={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
-                          open={thinkingOpen[m.id] ?? true}
-                          onToggleOpen={() => setThinkingOpen((prev) => ({ ...prev, [m.id]: !(prev[m.id] ?? true) }))}
-                          Markdown={({ text }) => renderRich(text)}
-                          onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
-                        />
-                      ) : null}
-                      {showThinking ? (
-                        <div style={styles.thinkingRow}>
-                          <span className="text-scan-light">正在思考</span>
-                          <span className="stream-dot-row">
-                            <span className="stream-dot" />
-                            <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
-                            <span className="stream-dot" style={{ animationDelay: "0.4s" }} />
-                          </span>
-                        </div>
-                      ) : null}
-                      <div className="msg-body-text" style={styles.assistantBody}>
-                        {m.status === "streaming" && displayText ? (
-                          <StreamFadeText text={displayText} Markdown={({ text }) => renderRich(text)} />
-                        ) : (
-                          renderRich(displayText)
-                        )}
-                        {m.status === "streaming" && displayText ? <span className="stream-caret" /> : null}
-                      </div>
-                      {products.length > 0 ? (
-                        <ProductPanel products={products} defaultOpen={new URLSearchParams(location.search).get("openProducts") === "1"} />
-                      ) : null}
-                      {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
-                      {m.interrupted ? (
-                        <div style={styles.interruptBox}>
-                          <span style={styles.interruptTag}>{m.interrupted.status}</span>
-                          <span>本轮已中断：{m.interrupted.reason}</span>
-                        </div>
-                      ) : null}
-                      {m.status === "streaming" ? (
-                        <LiveStatus
-                          startedAt={m.createdAt ?? Date.now()}
-                          contextPct={contextPct}
-                          runningTool={(m.timeline ?? []).some((step) => step.kind === "tool" && step.state === "running")}
-                          hasText={m.text.length > 0}
-                        />
-                      ) : null}
-                      <div className="msg-hover" style={styles.msgHover}>
-                        <span style={styles.msgHoverTag}>Loopsoar</span>
-                        {provider?.model ? <span>· {provider.model}</span> : null}
-                        <span>· {timeText}</span>
-                        {m.status !== "streaming" && m.text ? (
-                          <button
-                            type="button"
-                            className="msg-action"
-                            title="重新生成（回滚到上一条提问并重发）"
-                            onClick={() => regenerate(m.id)}
-                          >
-                            <Icon name="reload" size={12} />
-                          </button>
-                        ) : null}
-                        {m.text ? (
-                          <button
-                            type="button"
-                            className="msg-action"
-                            title="复制回复"
-                            onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
-                          >
-                            <Icon name="file" size={12} />
-                          </button>
-                        ) : null}
-                        {m.timing ? (
-                          <span style={styles.msgTiming}>
-                            首字 {fmtMs(m.timing.firstTokenMs ?? 0)} · 总耗时 {fmtMs(m.timing.totalMs ?? 0)}
-                            {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
-                            {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
+              messages.map((m) => (
+                <ChatMessageView
+                  key={m.id}
+                  message={m}
+                  mode={mode}
+                  providerModel={provider?.model ?? undefined}
+                  contextUsed={contextUsage.used}
+                  contextCap={contextUsage.cap}
+                  contextPct={contextPct}
+                  thinkingOpen={thinkingOpen[m.id] ?? true}
+                  expandAllGroups={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
+                  openProducts={new URLSearchParams(location.search).get("openProducts") === "1"}
+                  onToggleThinking={() => setThinkingOpen((prev) => ({ ...prev, [m.id]: !(prev[m.id] ?? true) }))}
+                  onRollback={rollbackTo}
+                  onRegenerate={regenerate}
+                  onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
+                />
+              ))
+
             )}
             </div>
             <TopicRail scroller={() => messageListRef.current} />
@@ -2092,115 +1944,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   scrollRailLine: { width: 14, height: 1, background: BRAND.border },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8 },
-  msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
-  msgRowAssistant: { display: "flex", flexDirection: "column", alignItems: "stretch", marginBottom: 18 },
-  assistantHead: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 },
-  avatar: {
-    width: 26,
-    height: 26,
-    borderRadius: 999,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "linear-gradient(135deg, rgba(200,118,60,0.85), rgba(217,138,79,0.45))",
-    border: `1px solid ${BRAND.borderStrong}`,
-    color: "#fff",
-    fontSize: 12.5,
-    fontWeight: 700,
-    flex: "none",
-  },
-  assistantName: { fontSize: 13.5, fontWeight: 700, color: BRAND.linen },
-  assistantModel: {
-    fontSize: 10.5,
-    color: BRAND.linenFaint,
-    padding: "0 6px",
-    borderRadius: 999,
-    border: `1px solid ${BRAND.border}`,
-  },
-  assistantMain: { paddingLeft: 34 },
-  assistantHeadRight: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 },
-  userBubble: {
-    maxWidth: "78%",
-    padding: "10px 14px",
-    borderRadius: "16px 16px 4px 16px",
-    background: BRAND.ochre,
-    color: "#ffffff",
-    lineHeight: 1.65,
-    fontSize: 14,
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-    userSelect: "text",
-  },
-  userBubbleSteer: {
-    background: "transparent",
-    border: `1px dashed ${BRAND.ochre}`,
-    color: BRAND.ochreHover,
-  },
-  steerBadge: {
-    display: "inline-block",
-    marginRight: 6,
-    padding: "0 5px",
-    borderRadius: 4,
-    fontSize: 9.5,
-    fontWeight: 700,
-    border: `1px solid ${BRAND.ochre}`,
-    color: BRAND.ochreHover,
-    verticalAlign: "1px",
-  },
-  attachRow: { display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 5 },
-  attachChip: {
-    display: "inline-flex",
-    alignItems: "center",
-    maxWidth: 220,
-    padding: "2px 7px",
-    borderRadius: 6,
-    fontSize: 10.5,
-    background: "rgba(255,255,255,0.10)",
-    border: "1px solid rgba(255,255,255,0.18)",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
   announces: { display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px" },
   announceRow: { display: "flex", alignItems: "baseline", gap: 6, fontSize: 11, color: BRAND.linenFaint, minWidth: 0 },
   announceMark: { width: 10, flex: "none", textAlign: "center", fontSize: 9.5 },
   announceText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 },
-  interruptBox: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 6,
-    margin: "4px 0",
-    padding: "5px 8px",
-    borderRadius: 6,
-    border: "1px solid rgba(242,184,85,0.35)",
-    background: "rgba(242,184,85,0.08)",
-    color: "#f2b855",
-    fontSize: 11,
-    lineHeight: 1.6,
-  },
-  interruptTag: {
-    flex: "none",
-    padding: "0 5px",
-    borderRadius: 4,
-    border: "1px solid rgba(242,184,85,0.5)",
-    fontSize: 9.5,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-  },
-  msgHover: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 4,
-    fontSize: 10.5,
-    color: BRAND.linenFaint,
-    minHeight: 18,
-  },
-  msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
-  msgTiming: { marginLeft: "auto" },
-  assistantBody: { fontSize: 14.5, lineHeight: 1.85, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
   thinkToggleLabel: { whiteSpace: "nowrap", flex: "none" },
-  thinkingRow: { display: "inline-flex", alignItems: "center", gap: 7, color: BRAND.linenMuted, fontSize: 13 },
   timeline: {
     position: "relative",
     borderLeft: `2px solid ${BRAND.border}`,
@@ -2226,13 +1974,6 @@ const styles: Record<string, React.CSSProperties> = {
   bubbleHead: { display: "flex", alignItems: "center", gap: 6 },
   bubbleTime: { fontSize: 9.5, color: BRAND.linenFaint },
   copyBtn: { width: 20, height: 20, opacity: 0.7 },
-  streamDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 999,
-    background: BRAND.ochre,
-    animation: "pulseDot 1.1s ease-in-out infinite",
-  },
   reasoningBlock: { borderLeft: `2px solid #5b5470`, paddingLeft: 8 },
   reasoningToggle: {
     border: "none",
@@ -2260,7 +2001,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   bubbleText: { fontSize: 12.5, lineHeight: 1.75, color: BRAND.linen, whiteSpace: "pre-wrap", wordBreak: "break-word" },
-  errBox: { fontSize: 11, color: "#f87171", background: "rgba(248,113,113,0.10)", padding: "5px 7px", borderRadius: 6 },
   bubbleFoot: { fontSize: 9.5, color: BRAND.linenFaint, marginTop: 2 },
   message: { display: "flex", flexDirection: "column", gap: 4 },
   roleTag: { fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6 },

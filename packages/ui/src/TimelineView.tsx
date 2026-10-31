@@ -29,7 +29,7 @@ import {
   type TimelineStep,
 } from "./timeline.js";
 
-type MarkdownFn = (props: { text: string; streaming?: boolean }) => React.ReactNode;
+type MarkdownFn = (props: { text: string; streaming?: boolean; compact?: boolean }) => React.ReactNode;
 
 export interface TimelineProps {
   steps: TimelineStep[];
@@ -198,7 +198,11 @@ function TimelineNode({
         </button>
         <Collapse open={expanded}>
           <div className="think-step-text">
-            {streamingTail ? <StreamFadeText text={clean} Markdown={Markdown} /> : Markdown({ text: clean })}
+            {streamingTail ? (
+              <StreamFadeText text={clean} Markdown={({ text }) => Markdown({ text, compact: true })} />
+            ) : (
+              Markdown({ text: clean, compact: true })
+            )}
           </div>
         </Collapse>
       </div>

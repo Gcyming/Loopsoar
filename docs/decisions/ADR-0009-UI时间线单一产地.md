@@ -19,9 +19,9 @@ Loopsoar 的硬约束是：**架构干净、单一产地、易于修复排障，
 2. **分层职责固定**
    - 纯逻辑：`timeline.ts`（节点/合并/分组/分类）、`chatStreamState.ts`（事件→消息状态，纯函数）、
      `artifacts.ts`（diff 编解码/行 diff/产物与引用收集）、`attachments.ts`；
-   - 展示：`Markdown.tsx`（唯一富文本渲染器）、`TimelineView.tsx`（时间线）、
-     `ArtifactPanels.tsx`（产物/参考/网址面板）、`DiffBlock.tsx`（diff 块）；
-   - 编排：`App.tsx` 只做事件→时间线、布局、回调接线，不再内嵌工具/规划/播报的第二种渲染。
+   - 展示：`Markdown.tsx`（唯一富文本渲染器，支持 compact 思考区字号）、`ChatMessageView.tsx`（单条消息）、
+     `TimelineView.tsx`（时间线）、`ArtifactPanels.tsx`（产物/参考/网址面板）、`DiffBlock.tsx`（diff 块）；
+   - 编排：`App.tsx` 只做事件接线与布局（已 2863→2178 行；继续拆到 <1200 行红线）。
 3. **契约单产地**
    - 时间线持久化走 `packages/contracts` 的 `TimelineStepSchema` + `chat:saveTimeline`；
    - 所有 IPC 必须 `pnpm gen` 生成、`pnpm check` 逐字节校验；UI 不直接拼事件名。

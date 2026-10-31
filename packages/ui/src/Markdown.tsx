@@ -8,7 +8,7 @@ import * as React from "react";
 import { BRAND } from "./theme.js";
 
 /** 代码块：带语言标签与「复制」按钮。 */
-function CodeBlock({ code, lang }: { code: string; lang: string }): React.ReactElement {
+function CodeBlock({ code, lang, compact = false }: { code: string; lang: string; compact?: boolean }): React.ReactElement {
   const [copied, setCopied] = React.useState(false);
   const copy = (): void => {
     void navigator.clipboard
@@ -27,7 +27,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }): React.ReactE
           {copied ? "已复制" : "复制"}
         </button>
       </div>
-      <pre style={styles.codeBlock}>
+      <pre style={{ ...styles.codeBlock, ...(compact ? styles.codeBlockCompact : null) }}>
         <code>{code}</code>
       </pre>
     </div>
@@ -69,7 +69,7 @@ function inlineRich(text: string): React.ReactNode {
 }
 
 /** 行级渲染（支持 GFM 表格）。 */
-function renderPlainLines(block: string, bi: number): React.ReactNode[] {
+function renderPlainLines(block: string, bi: number, compact = false): React.ReactNode[] {
   const lines = block.split(/\n/);
   const nodes: React.ReactNode[] = [];
   let list: string[] = [];
@@ -81,7 +81,7 @@ function renderPlainLines(block: string, bi: number): React.ReactNode[] {
     const items = list;
     list = [];
     nodes.push(
-      <ul key={`ul-${bi}-${listKey++}`} style={styles.richList}>
+      <ul key={`ul-${bi}-${listKey++}`} style={{ ...styles.richList, ...(compact ? styles.compactList : null) }}>
         {items.map((item, ii) => (
           <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
         ))}
@@ -103,7 +103,7 @@ function renderPlainLines(block: string, bi: number): React.ReactNode[] {
       }
       nodes.push(
         <div key={`tbl-${bi}-${nodes.length}`} style={styles.tableWrap}>
-          <table style={styles.table}>
+          <table style={{ ...styles.table, ...(compact ? styles.compactTable : null) }}>
             <thead>
               <tr>{header.map((cell, ci) => <th key={ci} style={styles.th}>{inlineRich(cell)}</th>)}</tr>
             </thead>
@@ -132,7 +132,15 @@ function renderPlainLines(block: string, bi: number): React.ReactNode[] {
     const heading = /^(#{1,4})\s+(.*)$/.exec(line);
     if (heading) {
       nodes.push(
-        <div key={`h-${bi}-${nodes.length}`} style={{ ...styles.richHeading, fontSize: heading[1].length <= 2 ? 16 : 14, marginTop: 10 }}>
+        <div
+          key={`h-${bi}-${nodes.length}`}
+          style={{
+            ...styles.richHeading,
+            ...(compact ? styles.compactHeading : null),
+            fontSize: heading[1].length <= 2 ? (compact ? 13.5 : 16) : compact ? 12.5 : 14,
+            marginTop: compact ? 7 : 10,
+          }}
+        >
           {inlineRich(heading[2])}
         </div>,
       );
@@ -141,11 +149,11 @@ function renderPlainLines(block: string, bi: number): React.ReactNode[] {
     }
     const quote = /^\s*>\s?(.*)$/.exec(line);
     if (quote) {
-      nodes.push(<div key={`q-${bi}-${nodes.length}`} style={styles.richQuote}>{inlineRich(quote[1])}</div>);
+      nodes.push(<div key={`q-${bi}-${nodes.length}`} style={{ ...styles.richQuote, ...(compact ? styles.compactQuote : null) }}>{inlineRich(quote[1])}</div>);
       i += 1;
       continue;
     }
-    nodes.push(<div key={`p-${bi}-${nodes.length}`} style={styles.richPara}>{inlineRich(line)}</div>);
+    nodes.push(<div key={`p-${bi}-${nodes.length}`} style={{ ...styles.richPara, ...(compact ? styles.compactPara : null) }}>{inlineRich(line)}</div>);
     i += 1;
   }
   flushList();
@@ -153,20 +161,26 @@ function renderPlainLines(block: string, bi: number): React.ReactNode[] {
 }
 
 /** 富文本入口：代码块与行级内容分段渲染。 */
-export function renderRich(text: string): React.ReactNode {
+export function renderRich(text: string, options: { compact?: boolean } = {}): React.ReactNode {
   if (!text) return null;
   const blocks = text.split(/(```[\s\S]*?```)/g);
   return blocks.map((block, bi) => {
     if (block.startsWith("```")) {
       const head = /^```([^\n]*)/.exec(block)?.[1]?.trim() ?? "";
       const body = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
-      return <CodeBlock key={`code-${bi}`} code={body} lang={head} />;
+      return <CodeBlock key={`code-${bi}`} code={body} lang={head} compact={options.compact} />;
     }
-    return <React.Fragment key={`text-${bi}`}>{renderPlainLines(block, bi)}</React.Fragment>;
+    return <React.Fragment key={`text-${bi}`}>{renderPlainLines(block, bi, options.compact)}</React.Fragment>;
   });
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  codeBlockCompact: { fontSize: 11, lineHeight: 1.55, padding: "6px 8px" },
+  compactHeading: { color: BRAND.linenMuted, fontWeight: 500 },
+  compactQuote: { fontSize: 12, borderLeftColor: BRAND.border },
+  compactPara: { fontSize: 12.5, lineHeight: 1.75, margin: "0.45em 0" },
+  compactList: { margin: "0.45em 0", paddingLeft: 18, fontSize: 12.5 },
+  compactTable: { fontSize: 11 },
   codeWrap: {
     margin: "8px 0",
     border: `1px solid ${BRAND.border}`,
