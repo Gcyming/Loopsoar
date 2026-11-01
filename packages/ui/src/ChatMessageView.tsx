@@ -22,7 +22,6 @@ import type { LoopsoarAPI } from "./types.js";
 export interface ChatMessageViewProps {
   message: ChatMessage;
   mode: "build" | "plan";
-  providerModel?: string;
   contextUsed: number;
   contextCap: number;
   contextPct: number;
@@ -43,7 +42,6 @@ function fmtMs(ms: number | undefined): string {
 export default function ChatMessageView({
   message: m,
   mode,
-  providerModel,
   contextUsed,
   contextCap,
   contextPct,
@@ -111,7 +109,7 @@ export default function ChatMessageView({
       <div style={styles.assistantHead}>
         <span style={styles.avatar}>L</span>
         <span style={styles.assistantName}>Loopsoar</span>
-        {providerModel ? <span style={styles.assistantModel}>{providerModel}</span> : null}
+        {m.model ? <span style={styles.assistantModel} title={m.provider ? `${m.provider} · ${m.model}` : m.model}>{m.model}</span> : null}
         {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
         <span style={styles.assistantHeadRight}>
           <ContextRing used={contextUsed} cap={contextCap} loading={m.status === "streaming"} />
@@ -179,7 +177,7 @@ export default function ChatMessageView({
         ) : null}
         <div className="msg-hover" style={styles.msgHover}>
           <span style={styles.msgHoverTag}>Loopsoar</span>
-          {providerModel ? <span>· {providerModel}</span> : null}
+          {m.model ? <span>· {m.model}</span> : null}
           <span>· {timeText}</span>
           {m.status !== "streaming" && m.text ? (
             <button type="button" className="msg-action" title="重新生成（回滚到上一条提问并重发）" onClick={() => onRegenerate(m.id)}>

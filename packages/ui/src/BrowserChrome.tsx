@@ -6,6 +6,7 @@ import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import Popover from "./AnchoredPopover.js";
 import type { TabState } from "./types.js";
 
 export interface BrowserChromeProps {
@@ -54,6 +55,8 @@ export default function BrowserChrome({
   onNewTab,
 }: BrowserChromeProps): React.ReactElement {
   const active = tabs.find((tab) => tab.active);
+  const historyButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const downloadsButtonRef = React.useRef<HTMLButtonElement | null>(null);
   return (
     <>
       <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
@@ -68,10 +71,12 @@ export default function BrowserChrome({
             <Icon name="reload" size={16} />
           </button>
           <span style={styles.anchor} data-popover-trigger>
-            <button type="button" className="icon-btn" title="历史记录" onClick={onToggleHistory}>
+            <button ref={historyButtonRef} type="button" className="icon-btn" title="历史记录" onClick={onToggleHistory}>
               <Icon name="history" size={16} />
             </button>
-            {historyOpen ? historyPanel : null}
+            <Popover anchorRef={historyButtonRef} open={historyOpen} onClose={onToggleHistory} width={380}>
+              {historyPanel}
+            </Popover>
           </span>
         </div>
 
@@ -95,11 +100,20 @@ export default function BrowserChrome({
 
         <div style={styles.topActions}>
           <span style={styles.anchor} data-popover-trigger>
-            <button type="button" className="icon-btn" title="下载" onClick={onToggleDownloads} style={{ position: "relative" }}>
+            <button
+              ref={downloadsButtonRef}
+              type="button"
+              className="icon-btn"
+              title="下载"
+              onClick={onToggleDownloads}
+              style={{ position: "relative" }}
+            >
               <Icon name="download" size={17} />
               {downloadsActive ? <span style={styles.dlDot} /> : null}
             </button>
-            {downloadsOpen ? downloadsPanel : null}
+            <Popover anchorRef={downloadsButtonRef} open={downloadsOpen} onClose={onToggleDownloads} width={420}>
+              {downloadsPanel}
+            </Popover>
           </span>
           <button type="button" className="icon-btn" title={currentUrl ? "页面快照" : "先打开一个网页"} onClick={onSnapshot} disabled={!currentUrl}>
             <Icon name="capture" size={17} />

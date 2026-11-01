@@ -147,7 +147,9 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
                   `(() => {
                     const wanted = ${JSON.stringify(wanted)};
                     const nodes = Array.from(document.querySelectorAll('button, [role="button"]'));
-                    const target = nodes.find((node) => (node.textContent || '').trim() === wanted);
+                    const target = nodes.find(
+                      (node) => (node.textContent || '').trim() === wanted || node.getAttribute('title') === wanted,
+                    );
                     if (!target) return false;
                     target.click();
                     return true;
@@ -708,6 +710,11 @@ app.whenReady().then(async () => {
     memory,
     sessions,
     shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
+    // 本轮回复模型快照（会话持久化用，历史悬停显示真实模型）
+    getModelInfo: () => {
+      const active = providers.active();
+      return active ? { provider: active.provider, model: active.model } : undefined;
+    },
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost, downloads });

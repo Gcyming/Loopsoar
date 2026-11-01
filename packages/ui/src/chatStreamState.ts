@@ -27,6 +27,9 @@ export interface ChatMessage {
   timing?: { firstTokenMs?: number; totalMs?: number; rounds?: number; toolCalls?: number; tokens?: number };
   createdAt?: number;
   errorText?: string;
+  /** 生成本条回复时使用的供应商/模型（历史消息按各自记录展示，不跟当前选择）。 */
+  provider?: string;
+  model?: string;
   /** 上下文自动压缩提示（来自 progress 事件，渲染在正文之前）。 */
   compressNote?: string;
   /** 压缩报告明细（条数/前后字符数；用于可展开的压缩报告）。 */
@@ -212,7 +215,13 @@ export function applyDone(
 
 /** 从持久化历史恢复消息（timeline 原样恢复，旧会话没有就不显示思考卡）。 */
 export function restoreMessages(
-  history: { role: "user" | "assistant"; text: string; timeline?: unknown[] }[],
+  history: {
+    role: "user" | "assistant";
+    text: string;
+    timeline?: unknown[];
+    provider?: string;
+    model?: string;
+  }[],
   newId: (role: string) => string,
 ): ChatMessage[] {
   return history.map((message) => ({
@@ -220,6 +229,8 @@ export function restoreMessages(
     role: message.role,
     text: message.text,
     status: "done" as const,
+    ...(message.provider ? { provider: message.provider } : {}),
+    ...(message.model ? { model: message.model } : {}),
     timeline: Array.isArray(message.timeline) ? (message.timeline as TimelineStep[]) : undefined,
   }));
 }

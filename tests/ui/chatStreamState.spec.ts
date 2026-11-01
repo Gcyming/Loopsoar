@@ -85,12 +85,13 @@ describe("会话流状态转换", () => {
     const messages = restoreMessages(
       [
         { role: "user", text: "你好" },
-        { role: "assistant", text: "回复", timeline: [{ kind: "think", text: "想想" }] },
+        { role: "assistant", text: "回复", timeline: [{ kind: "think", text: "想想" }], provider: "opencode-go", model: "glm-5.3" },
       ],
       (role) => `id-${role}`,
     );
     expect(messages).toHaveLength(2);
     expect(messages[1].timeline).toEqual([{ kind: "think", text: "想想" }]);
+    expect(messages[1]).toMatchObject({ provider: "opencode-go", model: "glm-5.3" });
     expect(messages[1].status).toBe("done");
   });
 });

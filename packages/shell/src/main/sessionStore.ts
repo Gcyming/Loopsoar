@@ -15,6 +15,9 @@ export interface PersistedMessage {
   ts: number;
   /** 助手消息的交错时间线（思考/工具/规划/播报/引导）；用户消息无此字段。 */
   timeline?: unknown[];
+  /** 生成本条回复的供应商/模型（用于悬停显示历史真实模型，而不是当前选择）。 */
+  provider?: string;
+  model?: string;
 }
 
 export interface PersistedSession {
@@ -208,12 +211,23 @@ export class SessionStore {
   }
 
   /** 追加一轮对话（用户消息 + 助手最终答复）。 */
-  append(sessionId: string, userMessage: string, assistantReply: string): PersistedSession {
+  append(
+    sessionId: string,
+    userMessage: string,
+    assistantReply: string,
+    meta?: { provider?: string; model?: string },
+  ): PersistedSession {
     const current = this.get(sessionId);
     const base: PersistedSession = current ?? { sessionId, updatedAt: Date.now(), messages: [] };
     base.messages.push({ role: "user", text: userMessage, ts: Date.now() });
     if (assistantReply.trim()) {
-      base.messages.push({ role: "assistant", text: assistantReply, ts: Date.now() });
+      base.messages.push({
+        role: "assistant",
+        text: assistantReply,
+        ts: Date.now(),
+        ...(meta?.provider ? { provider: meta.provider } : {}),
+        ...(meta?.model ? { model: meta.model } : {}),
+      });
     }
     base.updatedAt = Date.now();
     return this.save(base);

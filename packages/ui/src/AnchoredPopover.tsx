@@ -42,10 +42,13 @@ export default function Popover({ anchorRef, open, onClose, width, children }: P
       const spaceBelow = window.innerHeight - rect.bottom - gap;
       const placeAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow;
       const maxHeight = Math.max(160, (placeAbove ? spaceAbove : spaceBelow) - 8);
+      // 用 left 做视口内夹取：right 对齐会让靠左的触发按钮把浮层顶出屏幕外（历史/下载曾因此被裁切）
+      const estWidth = width ?? 300;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - estWidth - 8));
       if (placeAbove) {
-        setPosition({ bottom: window.innerHeight - rect.top + gap, right: window.innerWidth - rect.right, maxHeight });
+        setPosition({ bottom: window.innerHeight - rect.top + gap, left, maxHeight });
       } else {
-        setPosition({ top: rect.bottom + gap, right: window.innerWidth - rect.right, maxHeight });
+        setPosition({ top: rect.bottom + gap, left, maxHeight });
       }
     };
     update();

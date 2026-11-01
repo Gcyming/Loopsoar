@@ -204,6 +204,14 @@ export default function App(): React.JSX.Element {
   const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
 
+  // 提示自动消失：成功 4.5s、失败/中断 8s；避免每条提示都要手动点掉
+  useEffect(() => {
+    if (!notice) return;
+    const sticky = /(失败|错误|无法|中断)/.test(notice);
+    const timer = window.setTimeout(() => setNotice(""), sticky ? 8000 : 4500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   // 挂载：拉取状态 + 订阅流式事件（事件名来自契约 EVENTS 白名单）
   useEffect(() => {
     if (!api) {
@@ -625,7 +633,15 @@ export default function App(): React.JSX.Element {
       setMessages((prev) => [
         ...prev,
         { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() },
-        { id: assistantId, role: "assistant", text: "", status: "streaming", createdAt: Date.now() },
+        {
+          id: assistantId,
+          role: "assistant",
+          text: "",
+          status: "streaming",
+          createdAt: Date.now(),
+          provider: provider?.provider ?? undefined,
+          model: provider?.model ?? undefined,
+        },
       ]);
       activeAssistantRef.current = assistantId;
       sendStartedAtRef.current = Date.now();
@@ -637,7 +653,7 @@ export default function App(): React.JSX.Element {
           setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
         });
     },
-    [api, mode, reasoningEffort],
+    [api, mode, provider, reasoningEffort],
   );
 
   const send = useCallback((): void => {
@@ -978,7 +994,7 @@ export default function App(): React.JSX.Element {
 
   // 历史 / 下载面板（以点击的按钮为基点展开）
   const renderHistoryPanel = (): React.JSX.Element => (
-    <div className="pop-in" data-popover style={styles.popover}>
+    <div>
       <div style={styles.dropTitle}>历史记录（本标签）</div>
       {historyEntries.length === 0 ? (
         <div style={styles.dropEmpty}>暂无历史</div>
@@ -1008,7 +1024,7 @@ export default function App(): React.JSX.Element {
   );
 
   const renderDownloadsPanel = (): React.JSX.Element => (
-    <div className="pop-in" data-popover style={{ ...styles.popover, right: 0, left: "auto", width: 400 }}>
+    <div>
       <div style={styles.dropTitle}>下载</div>
       {downloads.length === 0 ? (
         <div style={styles.dropEmpty}>暂无下载</div>
@@ -1201,7 +1217,6 @@ export default function App(): React.JSX.Element {
           <MessageList
             messages={messages}
             mode={mode}
-            providerModel={provider?.model ?? undefined}
             contextUsed={contextUsage.used}
             contextCap={contextUsage.cap}
             contextPct={contextPct}

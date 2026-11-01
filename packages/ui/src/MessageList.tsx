@@ -12,7 +12,6 @@ import type { ChatMessage } from "./chatStreamState.js";
 export interface MessageListProps {
   messages: ChatMessage[];
   mode: "build" | "plan";
-  providerModel?: string;
   contextUsed: number;
   contextCap: number;
   contextPct: number;
@@ -28,7 +27,6 @@ export interface MessageListProps {
 export default function MessageList({
   messages,
   mode,
-  providerModel,
   contextUsed,
   contextCap,
   contextPct,
@@ -56,7 +54,6 @@ export default function MessageList({
               key={message.id}
               message={message}
               mode={mode}
-              providerModel={providerModel}
               contextUsed={contextUsed}
               contextCap={contextCap}
               contextPct={contextPct}

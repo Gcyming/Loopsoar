@@ -14,6 +14,8 @@ export interface ChatDeps extends TrustedIpcDeps {
   sessions?: SessionStore;
   /** 是否自动从会话抽取记忆（来自「通用」偏好）。 */
   shouldAutoCapture?: () => boolean;
+  /** 当前生成本轮回复的供应商/模型（流开始瞬间快照，避免中途切换污染历史）。 */
+  getModelInfo?: () => { provider?: string; model?: string } | undefined;
 }
 
 /** 错误清洗：解开多层 JSON 转义，提取 error.message，去控制字符并截断。 */
@@ -64,6 +66,7 @@ function startStream(
     deps.sessions?.newSession().sessionId ??
     `sess-${Date.now()}`;
   let assistantText = "";
+  const modelInfo = deps.getModelInfo?.();
 
   void deps.chatService
     .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort }, (item) => {
@@ -79,7 +82,7 @@ function startStream(
     .then(async (result) => {
       const finalText = result.finalText || assistantText;
       // 会话持久化（恢复上次会话的数据来源）
-      deps.sessions?.append(sessionId, payload.message, finalText);
+      deps.sessions?.append(sessionId, payload.message, finalText, modelInfo);
       // 记忆自动汇总：抽取候选 → 五门治理 → 落盘（失败不阻断对话）
       if (deps.memory && (deps.shouldAutoCapture?.() ?? true) && finalText.trim()) {
         try {

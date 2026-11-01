@@ -195,6 +195,13 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   （新增 `isSameProviderTarget` 纯函数 + 用例）
 - 测试：402 全绿；证据：gui-75（分组菜单）、gui-76（切到 opencode-go · glm-5.3）
 
+## 二·二十一、2026-11-01 第十八次增量（提示/历史模型/顶栏浮层）
+- 提示浮层自动消失：成功 4.5s、失败/中断 8s（不再需要手动点掉）
+- 回复模型按消息记录：发送时快照 provider/model → 会话持久化（PersistedMessage/ChatHistoryMessage）
+  → 历史恢复后再按各自模型展示；旧会话无记录则不显示（不再错误显示当前模型）
+- 历史记录/下载浮层改用 AnchoredPopover（Portal + fixed + left 视口夹取），不再出现贴顶/脱位/被裁切
+- 测试：404 全绿（session-model 2、chatStreamState 恢复模型断言）；证据：gui-77
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

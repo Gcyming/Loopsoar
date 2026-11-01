@@ -301,6 +301,9 @@ export interface ChatHistoryMessage {
   ts: number;
   /** 思考时间线（持久化恢复用） */
   timeline?: unknown[];
+  /** 生成本条回复的供应商/模型（历史消息按各自记录展示）。 */
+  provider?: string;
+  model?: string;
 }
 
 export type LoopsoarEvent =
