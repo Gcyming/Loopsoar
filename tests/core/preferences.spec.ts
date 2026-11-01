@@ -65,6 +65,8 @@ describe("权限策略", () => {
 describe("推理强度偏好", () => {
   it("缺省为空（模型默认），非法类型被拒绝，合法值保留", () => {
     expect(mergePreferences({}).reasoningEffort).toBe("");
+    expect(mergePreferences({}).agentRepeatToolWarn).toBe(5);
+    expect(mergePreferences({}).agentRepeatToolStop).toBe(30);
     const merged = mergePreferences({ reasoningEffort: "high" });
     expect(merged.reasoningEffort).toBe("high");
     expect(() => mergePreferences({ reasoningEffort: 123 })).toThrow(/偏好配置非法/);

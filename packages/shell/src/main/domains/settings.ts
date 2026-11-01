@@ -466,10 +466,10 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     // 关键：切模型时若目标就是当前活跃供应商，必须原地更新 model，
     // 否则每次换模型都会 upsert 出一条新供应商（模型菜单出现重复供应商）。
     if (deps.providers) {
-      const active = deps.providers.active();
-      const sameTarget = active !== null && isSameProviderTarget(active, cfg);
-      const item = sameTarget && active
-        ? deps.providers.upsert({ ...active, model: cfg.model })
+      // 命中任意已有供应商（不只 active）：保留其请求头/模型清单/apiFormat/rpm，只改 model
+      const existing = deps.providers.list().find((candidate) => isSameProviderTarget(candidate, cfg));
+      const item = existing
+        ? deps.providers.upsert({ ...existing, model: cfg.model })
         : deps.providers.upsert({ provider: cfg.provider, baseUrl: cfg.baseUrl, model: cfg.model });
       deps.providers.setActive(item.id);
       deps.onProvidersChanged?.();

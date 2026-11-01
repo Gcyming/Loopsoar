@@ -664,7 +664,12 @@ app.whenReady().then(async () => {
     // Agent 请求上限（设置 · 通用）
     getAgentLimits: () => {
       const prefs = loadPreferences(dirs.configDir);
-      return { maxRounds: prefs.agentMaxRounds, maxToolCalls: prefs.agentMaxToolCalls };
+      return {
+        maxRounds: prefs.agentMaxRounds,
+        maxToolCalls: prefs.agentMaxToolCalls,
+        repeatToolWarnAt: prefs.agentRepeatToolWarn,
+        repeatToolStopAt: prefs.agentRepeatToolStop,
+      };
     },
     // 模式：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单
     getToolAllowlist: (mode?: "build" | "plan") => {

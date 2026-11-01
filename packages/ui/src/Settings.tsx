@@ -371,6 +371,20 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               on={(x) => setPrefs({ ...prefs, agentMaxToolCalls: Math.max(1, Math.min(2000, Number(x) || 100)) })}
             />
           </Field>
+          <Field l="重复工具提醒" h="相同工具+参数重复调用到第 N 次时提醒模型停止（默认 5）">
+            <In
+              v={String(prefs.agentRepeatToolWarn ?? 5)}
+              ph="5"
+              on={(x) => setPrefs({ ...prefs, agentRepeatToolWarn: Math.max(2, Math.min(50, Number(x) || 5)) })}
+            />
+          </Field>
+          <Field l="重复工具停止" h="相同工具+参数重复调用到第 N 次时强制停止（默认 30；会先给出防循环提示）">
+            <In
+              v={String(prefs.agentRepeatToolStop ?? 30)}
+              ph="30"
+              on={(x) => setPrefs({ ...prefs, agentRepeatToolStop: Math.max(3, Math.min(200, Number(x) || 30)) })}
+            />
+          </Field>
           <Field l="自动记忆汇总" h="每轮对话结束自动抽取记忆"><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
           <div style={S.note}>以上设置修改后立即生效（自动保存）。</div>
         </div>) : <div style={S.muted}>读取失败</div>;

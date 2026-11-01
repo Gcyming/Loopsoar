@@ -101,8 +101,9 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
   // 关键：用户点网页里的链接不会经过外壳的 navigate()，必须靠 WebContents 事件
   // 把地址回传给外壳；否则会出现"地址栏与网页各说各话"（网址与网页割裂）。
   if (opts.onNavigate) {
-    wc.on("did-navigate", (...args) => opts.onNavigate?.(String(args[0] ?? "")));
-    wc.on("did-navigate-in-page", (...args) => opts.onNavigate?.(String(args[0] ?? "")));
+    // Electron 签名：(event, url, ...)；取 args[1]，否则地址栏会变成 [object Object]
+    wc.on("did-navigate", (...args) => opts.onNavigate?.(String(args[1] ?? "")));
+    wc.on("did-navigate-in-page", (...args) => opts.onNavigate?.(String(args[1] ?? "")));
   }
   // 页面缩放快捷键（Ctrl + =/-/0）：WebContentsView 有独立焦点，主窗口快捷键捕获不到，
   // 必须在每个标签自己的 webContents 上监听。

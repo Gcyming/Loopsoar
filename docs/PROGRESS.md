@@ -202,6 +202,17 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 历史记录/下载浮层改用 AnchoredPopover（Portal + fixed + left 视口夹取），不再出现贴顶/脱位/被裁切
 - 测试：404 全绿（session-model 2、chatStreamState 恢复模型断言）；证据：gui-77
 
+## 二·二十二、2026-11-01 第十九次增量（地址栏 object / 防循环阈值 / 持久化加固）
+- 地址栏 `[object Object]`：Electron did-navigate/did-navigate-in-page 参数为 (event, url)，
+  改为取 args[1]（此前把 event 转字符串）
+- 重复工具保护可配置：默认提醒 5、停止 30（原硬编码 2/5 过小）；设置·通用新增两项，
+  贯通 preferences → ChatService → tool_loop；tool_loop 增加配置用例
+- 持久化加固：
+  - ProviderStore 启动时合并历史重复供应商（同 provider+baseUrl），保留首条 id、并入 headers/models/apiFormat/rpm
+  - settings:setProvider 命中任意已有供应商时原地更新 model（不再丢请求头/模型清单/密钥关联）
+  - 新增重复合并与「更新保留 headers/models」用例
+- 测试：407 全绿；证据：gui-78（地址修复）、gui-79（阈值设置）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

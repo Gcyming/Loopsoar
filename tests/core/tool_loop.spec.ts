@@ -75,11 +75,40 @@ describe("工具循环", () => {
     const outcome = await runToolLoop({
       ...baseOpts(),
       llm: client as never,
+      // 阈值可配置：这里显式 5，验证计数与中断原因（默认 30 见下一条）
+      repeatToolStopAt: 5,
       executeTool: { invoke: async () => ({ ok: true, content: "same result" }) },
       sink: () => {},
     });
     expect(outcome.status).toBe("no-progress");
     expect(outcome.reason).toContain("防循环");
+  });
+
+  it("防循环阈值可配置：默认更宽松（30），自定义 7 时仍在第 7 次停止", async () => {
+    const client = {
+      async *invoke() {
+        yield { kind: "tool_call" as const, toolCall: { id: "repeat", name: "file_read", args: { path: "same.txt" } } };
+        yield { kind: "done" as const };
+      },
+    };
+    let calls = 0;
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      limits: { maxRounds: 40, maxToolCalls: 40 },
+      repeatToolWarnAt: 3,
+      repeatToolStopAt: 7,
+      llm: client as never,
+      executeTool: {
+        invoke: async () => {
+          calls += 1;
+          return { ok: true, content: "same result" };
+        },
+      },
+      sink: () => {},
+    });
+    expect(calls).toBe(7);
+    expect(outcome.status).toBe("no-progress");
+    expect(outcome.reason).toContain("7 次");
   });
 
   it("超长工具结果回灌上下文时截断并标注（UI 仍保留完整结果）", async () => {

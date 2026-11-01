@@ -63,3 +63,66 @@ describe("切模型目标识别", () => {
     expect(isSameProviderTarget(null, { provider: "x", baseUrl: "https://x.test" })).toBe(false);
   });
 });
+
+describe("供应商重复合并与请求设置保留", () => {
+  it("历史重复供应商自动合并，请求头/模型不丢，activeId 指向保留项", () => {
+    const dir = tempDir();
+    try {
+      fs.writeFileSync(
+        path.join(dir, "providers.json"),
+        JSON.stringify({
+          activeId: "opencode-go-2",
+          items: [
+            { id: "mock-1", provider: "mock", baseUrl: "http://127.0.0.1:19500/v1", model: "mock-chat" },
+            {
+              id: "opencode-go",
+              provider: "opencode-go",
+              baseUrl: "https://opencode.ai/inference/go/openai/v1",
+              model: "glm-5.3",
+              headers: { "x-opencode-session": "{{sessionId}}" },
+            },
+            {
+              id: "opencode-go-2",
+              provider: "opencode-go",
+              baseUrl: "https://opencode.ai/inference/go/openai/v1/",
+              model: "deepseek-v4.1-flash",
+              models: [{ id: "deepseek-v4.1-flash", selected: true }],
+            },
+          ],
+        }),
+        "utf8",
+      );
+      const store = new ProviderStore(dir);
+      const items = store.list();
+      expect(items.map((item) => item.id)).toEqual(["mock-1", "opencode-go"]);
+      const merged = items.find((item) => item.id === "opencode-go")!;
+      expect(merged.headers?.["x-opencode-session"]).toBe("{{sessionId}}");
+      expect(merged.models?.map((model) => model.id)).toContain("deepseek-v4.1-flash");
+      expect(store.active()?.id).toBe("opencode-go");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("更新已有供应商时保留 headers/models/apiFormat（不因切模型丢设置）", () => {
+    const dir = tempDir();
+    try {
+      const store = new ProviderStore(dir);
+      const created = store.upsert({
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/inference/go/openai/v1",
+        model: "glm-5.3",
+        apiFormat: "openai",
+        headers: { "x-opencode-session": "{{sessionId}}" },
+        models: [{ id: "glm-5.3", selected: true }],
+      });
+      const updated = store.upsert({ ...created, model: "kimi-k3" });
+      expect(updated.headers?.["x-opencode-session"]).toBe("{{sessionId}}");
+      expect(updated.apiFormat).toBe("openai");
+      expect(updated.models?.[0]?.id).toBe("glm-5.3");
+      expect(store.list()).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

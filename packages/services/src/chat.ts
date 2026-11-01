@@ -63,7 +63,12 @@ export interface ChatServiceOptions {
   /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 12 万字符）。 */
   getContextWindow?: () => number | undefined;
   /** Agent 循环上限（设置 · 通用可调；缺省使用 core 默认）。 */
-  getAgentLimits?: () => { maxRounds?: number; maxToolCalls?: number };
+  getAgentLimits?: () => {
+    maxRounds?: number;
+    maxToolCalls?: number;
+    repeatToolWarnAt?: number;
+    repeatToolStopAt?: number;
+  };
   /** 会话历史（持久化消息，按时间正序）；缺省则单轮对话。 */
   getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string }[];
   /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
@@ -388,11 +393,17 @@ export class ChatService {
           }))
         : [];
 
+      const agentLimits = this.opts.getAgentLimits?.() ?? {};
       const loopOutcome = await runToolLoop({
         llm,
         tools: () => toolList,
         executeTool: executor,
-        limits: this.opts.getAgentLimits?.() ?? {},
+        limits: {
+          maxRounds: agentLimits.maxRounds,
+          maxToolCalls: agentLimits.maxToolCalls,
+        },
+        repeatToolWarnAt: agentLimits.repeatToolWarnAt,
+        repeatToolStopAt: agentLimits.repeatToolStopAt,
         budget: { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
         sink: (event) => {
           // LoopEvent → ChatEventType（type 同名，data 原样传递）

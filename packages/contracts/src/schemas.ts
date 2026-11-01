@@ -158,6 +158,10 @@ export const PreferencesSchema = z.object({
   agentMaxRounds: z.number().int().min(1).max(500).optional(),
   /** Agent 单次任务最多工具调用次数。 */
   agentMaxToolCalls: z.number().int().min(1).max(2000).optional(),
+  /** 相同工具+参数重复调用的提醒阈值（默认 5）。 */
+  agentRepeatToolWarn: z.number().int().min(2).max(50).optional(),
+  /** 相同工具+参数重复调用的停止阈值（默认 30）。 */
+  agentRepeatToolStop: z.number().int().min(3).max(200).optional(),
   /** 推理强度（空 = 模型默认；取值随模型，持久化到偏好以便重启保持）。 */
   reasoningEffort: z.string().max(64).optional(),
 });

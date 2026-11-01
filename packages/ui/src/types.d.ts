@@ -57,6 +57,8 @@ export interface Preferences {
   sidebarWidth: number;
   agentMaxRounds?: number;
   agentMaxToolCalls?: number;
+  agentRepeatToolWarn?: number;
+  agentRepeatToolStop?: number;
   reasoningEffort?: string;
 }
 

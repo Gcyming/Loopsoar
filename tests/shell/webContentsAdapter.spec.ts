@@ -34,7 +34,8 @@ describe("WebContentsView 适配器", () => {
     const navigated: string[] = [];
     const titles: string[] = [];
     createWebContentsViewAdapter({ view, onNavigate: (url) => navigated.push(url), onTitle: (title) => titles.push(title) });
-    handlers.get("did-navigate")?.("https://example.com/next");
+    // Electron 签名：(event, url, ...)
+    handlers.get("did-navigate")?.({}, "https://example.com/next");
     handlers.get("page-title-updated")?.(new Event("x"), "真实标题");
     expect(navigated).toEqual(["https://example.com/next"]);
     expect(titles).toEqual(["真实标题"]);

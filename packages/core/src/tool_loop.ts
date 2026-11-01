@@ -37,6 +37,10 @@ export interface ToolLoopOpts {
   budget: BudgetUsage;                               // 初始预算使用量
   sink: EventSink;                                   // 事件沉降
   heartbeatMs?: number;                              // 心跳间隔（默认用 LOOP_HEALTH.HEARTBEAT_MS）
+  /** 相同工具+参数的提醒阈值（默认 5；达到后向模型回灌防循环提示）。 */
+  repeatToolWarnAt?: number;
+  /** 相同工具+参数的停止阈值（默认 30；太大会浪费额度，太小会打断正常重试）。 */
+  repeatToolStopAt?: number;
   steers: SteerBus;                                  // 转向总线
   signal?: AbortSignal;                              // 外部中止信号
   noProgressRounds?: number;                         // 无进度检测阈值（默认 5 轮）
@@ -79,6 +83,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   } = opts;
 
   const clamped = clampLimits(limits);
+  const repeatWarnAt = Math.max(2, Math.floor(opts.repeatToolWarnAt ?? 5));
+  const repeatStopAt = Math.max(repeatWarnAt + 1, Math.floor(opts.repeatToolStopAt ?? 30));
   const maxRounds = clamped.maxRounds;
   const maxToolCalls = clamped.maxToolCalls;
   const maxTotalTokens = clamped.maxTotalTokens;
@@ -95,8 +101,6 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   let conversation: LlmMessage[] | null = null;
   /** 防循环：相同工具+参数的调用次数统计 */
   const repeatCalls = new Map<string, number>();
-  const REPEAT_WARN_AT = 2;
-  const REPEAT_STOP_AT = 5;
   /** 回灌给模型的单条工具结果上限（完整内容仍在 UI 工具卡/本地记录中） */
   const MAX_TOOL_RESULT_IN_CONTEXT = 20_000;
 
@@ -286,7 +290,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               const callKey = `${toolCall.name}:${JSON.stringify(toolCall.args ?? {})}`;
               const repeatCount = repeatCalls.get(callKey) ?? 0;
               repeatCalls.set(callKey, repeatCount + 1);
-              if (repeatCount > 0 && toolResult.ok) {
+              if (repeatCount + 1 >= repeatWarnAt && repeatCount > 0 && toolResult.ok) {
                 toolResult = {
                   ok: toolResult.ok,
                   content: `${toolResult.content}
@@ -294,7 +298,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                   error: toolResult.error,
                 };
               }
-              if (repeatCount + 1 >= REPEAT_STOP_AT) {
+              if (repeatCount + 1 >= repeatStopAt) {
                 emit("progress", {
                   note: `工具 ${toolCall.name} 相同参数已调用 ${repeatCount + 1} 次，触发防循环停止`,
                 });

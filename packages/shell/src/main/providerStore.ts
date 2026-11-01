@@ -78,11 +78,20 @@ export class ProviderStore {
   private load(): ProvidersFile {
     const raw = this.readJson<Partial<ProvidersFile>>(this.file);
     if (raw && Array.isArray(raw.items)) {
-      const items = raw.items
+      const filtered = raw.items
         .filter((x): x is ProviderItem => !!x && typeof x.id === "string" && typeof x.baseUrl === "string")
-        .slice(0, 50)
-        .map((item) => ({ ...item, headers: this.sanitizeHeaders(item.headers) }));
-      const activeId = raw.activeId && items.some((i) => i.id === raw.activeId) ? raw.activeId : (items[0]?.id ?? null);
+        .slice(0, 50);
+      const { items, alias } = this.dedupe(filtered);
+      const wantedActive = raw.activeId ? (alias.get(raw.activeId) ?? raw.activeId) : null;
+      const activeId = wantedActive && items.some((i) => i.id === wantedActive) ? wantedActive : (items[0]?.id ?? null);
+      // 修复历史重复（旧版每次切模型都会 upsert 新供应商）：写回一次，避免用户重启后选中无请求头/无密钥的副本
+      if (items.length !== filtered.length || wantedActive !== raw.activeId) {
+        try {
+          this.writeJson({ activeId, items });
+        } catch {
+          // 写回失败不影响本次读取
+        }
+      }
       return { activeId, items };
     }
     // 旧版单配置迁移
@@ -109,6 +118,38 @@ export class ProviderStore {
       .map(([key, value]) => [key.trim(), value] as const)
       .slice(0, 30);
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
+  /**
+   * 合并重复供应商（同 provider + 同 baseUrl）。
+   * 旧版切模型会 upsert 新记录，导致副本丢 headers/models/密钥关联；这里保留首条 id，
+   * 把后续副本的请求头/模型/协议等字段并入，密钥仍挂在首条 id 上。
+   */
+  private dedupe(items: ProviderItem[]): { items: ProviderItem[]; alias: Map<string, string> } {
+    const kept: ProviderItem[] = [];
+    const byKey = new Map<string, ProviderItem>();
+    const alias = new Map<string, string>();
+    for (const item of items) {
+      const key = `${item.provider}@@${item.baseUrl.replace(/\/+$/, "")}`;
+      const existing = byKey.get(key);
+      const sanitized = { ...item, headers: this.sanitizeHeaders(item.headers) };
+      if (!existing) {
+        byKey.set(key, sanitized);
+        kept.push(sanitized);
+        alias.set(item.id, item.id);
+        continue;
+      }
+      alias.set(item.id, existing.id);
+      existing.headers = { ...(existing.headers ?? {}), ...(sanitized.headers ?? {}) };
+      if (!existing.apiFormat && sanitized.apiFormat) existing.apiFormat = sanitized.apiFormat;
+      if (existing.rpm === undefined && sanitized.rpm !== undefined) existing.rpm = sanitized.rpm;
+      const models = new Map<string, ProviderModel>();
+      for (const model of [...(existing.models ?? []), ...(sanitized.models ?? [])]) {
+        if (!models.has(model.id) || model.selected !== undefined) models.set(model.id, model);
+      }
+      existing.models = models.size > 0 ? [...models.values()] : existing.models;
+    }
+    return { items: kept, alias };
   }
 
   private slug(base: string, existingIds: string[]): string {

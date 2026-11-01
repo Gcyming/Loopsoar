@@ -204,7 +204,8 @@ describe("BrowserHost（地址与网页强绑定）", () => {
   it("网页内点击链接（did-navigate）→ 标签 URL/历史/地址同步数据更新", async () => {
     const { host, handlers } = makeHostWithEvents();
     await host.navigate("https://example.com/");
-    handlers.get("did-navigate")?.("https://example.com/next");
+    // Electron 签名：(event, url, ...)
+    handlers.get("did-navigate")?.({}, "https://example.com/next");
     const tab = host.listTabs()[0];
     expect(tab.url).toBe("https://example.com/next");
     expect(tab.canBack).toBe(true);
