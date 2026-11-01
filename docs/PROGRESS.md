@@ -237,6 +237,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 侧栏分隔条：原生网页视图宽度让出 `SPLITTER_WIDTH=6px`（此前视图盖住分隔条，打开网页后无法拖拽）
 - E2E：session-switch 模式（长流中切新会话再切回）证据 gui-84；停止 gui-85
 
+## 二·二十五、2026-11-01 第二十二次增量（架构检查/整理）
+- 新增 ADR-0013：会话流按会话隔离 + 会话 UI 纯模块化（含现状与下一轮准备清单）
+- 抽出 `TitleBar.tsx`、`useLoopsoarApi.ts`；`SessionStreamMeta` 与工厂移入 `chatStreamState.ts`
+- 删除未使用 ROLE_LABEL/roleColor 与遗留全局流 ref；App 1883 → 约 1760 行（仍高于 1200 红线，已登记下一步）
+- 会话流元信息新增单测；全量 418 用例待跑
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

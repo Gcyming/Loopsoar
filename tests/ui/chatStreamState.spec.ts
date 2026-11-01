@@ -10,6 +10,7 @@ import {
   applySteer,
   applyToolResult,
   applyToolStart,
+  createSessionStreamMeta,
   parseDone,
   restoreMessages,
   type ChatMessage,
@@ -93,5 +94,18 @@ describe("会话流状态转换", () => {
     expect(messages[1].timeline).toEqual([{ kind: "think", text: "想想" }]);
     expect(messages[1]).toMatchObject({ provider: "opencode-go", model: "glm-5.3" });
     expect(messages[1].status).toBe("done");
+  });
+});
+
+
+describe("会话流元信息", () => {
+  it("默认空闲，且不同会话互不影响", () => {
+    const a = createSessionStreamMeta();
+    const b = createSessionStreamMeta();
+    expect(a).toMatchObject({ activeId: null, busy: false, stopping: false, startedAt: 0 });
+    a.busy = true;
+    a.activeId = "assistant-1";
+    expect(b.busy).toBe(false);
+    expect(b.activeId).toBeNull();
   });
 });

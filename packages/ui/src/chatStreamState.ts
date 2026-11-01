@@ -269,3 +269,17 @@ function parsePlanArgs(toolName: string, toolArgs: unknown): PlanItem[] | null {
     .slice(0, 30);
   return items.length > 0 ? items : null;
 }
+
+
+/** 每个会话独立的流状态：切走/切回时按会话恢复，不串台。 */
+export interface SessionStreamMeta {
+  activeId: string | null;
+  startedAt: number;
+  firstTokenAt: number;
+  busy: boolean;
+  stopping: boolean;
+}
+
+export function createSessionStreamMeta(): SessionStreamMeta {
+  return { activeId: null, startedAt: 0, firstTokenAt: 0, busy: false, stopping: false };
+}

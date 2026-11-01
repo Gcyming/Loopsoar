@@ -15,7 +15,7 @@ import type {
   SessionMeta,
   TabState,
 } from "./types.js";
-import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
+import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import Settings from "./Settings.js";
 import TopicRail from "./TopicRail.js";
@@ -23,6 +23,8 @@ import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
+import TitleBar from "./TitleBar.js";
+import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 import { type TimelineStep } from "./timeline.js";
 
@@ -45,106 +47,15 @@ import {
   applyToolStart,
   parseDone,
   restoreMessages,
+  createSessionStreamMeta,
   type ChatMessage,
+  type SessionStreamMeta,
 } from "./chatStreamState.js";
 
-/** 每个会话独立的流状态（切走/切回不串台）。 */
-interface SessionStreamMeta {
-  activeId: string | null;
-  startedAt: number;
-  firstTokenAt: number;
-  busy: boolean;
-  stopping: boolean;
-}
 
-const ROLE_LABEL: Record<ChatMessage["role"], string> = {
-  user: "你",
-  assistant: "Loopsoar",
-  reasoning: "推理",
-  tool: "工具",
-  system: "系统",
-};
-
-function roleColor(role: ChatMessage["role"]): string {
-  switch (role) {
-    case "user":
-      return BRAND.linen;
-    case "assistant":
-      return BRAND.ochreHover;
-    case "reasoning":
-      return "#9a8fb8";
-    case "tool":
-      return "#c9a227";
-    default:
-      return BRAND.linenMuted;
-  }
-}
-
-function useLoopsoarApi(): LoopsoarAPI | null {
-  if (typeof window === "undefined") return null;
-  return (window as unknown as { loopsoarAPI?: LoopsoarAPI }).loopsoarAPI ?? null;
-}
 
 function nextId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-/* ---------------------------------- 标题栏 ---------------------------------- */
-
-function TitleBar({ maximized }: { maximized: boolean }): React.JSX.Element {
-  const api = useLoopsoarApi();
-  return (
-    <div style={styles.titleBar}>
-      <div
-        style={{ ...styles.titleDrag, ...DRAG_REGION }}
-        onDoubleClick={() => void api?.window.maximize()}
-      >
-        <img src="./logo.png" alt="" width={18} height={18} style={styles.titleLogo} />
-        <span style={styles.titleText}>Loopsoar</span>
-      </div>
-      <div style={{ ...styles.windowControls, ...NO_DRAG_REGION }}>
-        <button
-          type="button"
-          aria-label="最小化"
-          title="最小化"
-          className="win-btn"
-          style={styles.windowButton}
-          onClick={() => void api?.window.minimize()}
-        >
-          <Icon name="minimize" size={12} />
-        </button>
-        <button
-          type="button"
-          aria-label={maximized ? "还原" : "最大化"}
-          title={maximized ? "还原" : "最大化"}
-          className="win-btn"
-          style={styles.windowButton}
-          onClick={() => void api?.window.maximize()}
-        >
-          <span
-            style={{
-              display: "block",
-              width: 10,
-              height: 10,
-              border: `1.2px solid currentColor`,
-              borderRadius: maximized ? 0 : 1,
-              boxShadow: maximized ? "inset 0 -2px 0 -1px currentColor" : "none",
-            }}
-          />
-        </button>
-        <button
-          type="button"
-          aria-label="关闭"
-          title="关闭"
-          className="win-btn win-close"
-          style={styles.windowButton}
-          onClick={() => void api?.window.close()}
-        >
-          <Icon name="close" size={12} />
-        </button>
-      </div>
-    </div>
-  );
 }
 
 /* ---------------------------------- 主界面 ---------------------------------- */
@@ -220,7 +131,7 @@ export default function App(): React.JSX.Element {
   const metaFor = React.useCallback((sessionId: string): SessionStreamMeta => {
     let meta = sessionMetaRef.current.get(sessionId);
     if (!meta) {
-      meta = { activeId: null, startedAt: 0, firstTokenAt: 0, busy: false, stopping: false };
+      meta = createSessionStreamMeta();
       sessionMetaRef.current.set(sessionId, meta);
     }
     return meta;
@@ -1507,40 +1418,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif",
     boxSizing: "border-box",
     overflow: "hidden",
-  },
-  // 自定义标题栏
-  titleBar: {
-    display: "flex",
-    alignItems: "center",
-    height: LAYOUT.TITLE_BAR_HEIGHT,
-    background: BRAND.ink,
-    borderBottom: `1px solid ${BRAND.border}`,
-    flexShrink: 0,
-    userSelect: "none",
-  },
-  titleDrag: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    flex: 1,
-    height: "100%",
-    paddingLeft: 12,
-    minWidth: 0,
-  },
-  titleLogo: { borderRadius: 4, display: "block" },
-  titleText: { fontSize: 12, fontWeight: 600, letterSpacing: 0.6, color: BRAND.linenMuted },
-  windowControls: { display: "flex", alignItems: "stretch", height: "100%", flexShrink: 0 },
-  windowButton: {
-    width: 46,
-    height: "100%",
-    border: "none",
-    background: "transparent",
-    color: BRAND.linenMuted,
-    fontSize: 12,
-    lineHeight: 1,
-    cursor: "pointer",
-    display: "grid",
-    placeItems: "center",
   },
   // 顶部操作栏
   primaryButton: {
