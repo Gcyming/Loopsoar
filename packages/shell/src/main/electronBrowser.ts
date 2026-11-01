@@ -7,13 +7,21 @@
 import path from "node:path";
 import { app, BrowserWindow, session, shell, WebContentsView } from "electron";
 import { SESSION_PARTITION } from "../shared/brand.js";
-import { BrowserHost, type HostView } from "./browserHost.js";
+import { BrowserHost, type HostView, type PersistedBrowserState } from "./browserHost.js";
+
+export interface ElectronBrowserHostOptions {
+  initialSessionId?: string;
+  onSessionStateChanged?: (sessionId: string, state: PersistedBrowserState) => void;
+}
 
 export function createElectronBrowserHost(
   getWindow: () => BrowserWindow | null,
   openInNewTab: (url: string) => void,
+  options: ElectronBrowserHostOptions = {},
 ): BrowserHost {
   return new BrowserHost({
+    initialSessionId: options.initialSessionId,
+    onSessionStateChanged: options.onSessionStateChanged,
     createView: () => {
       const view = new WebContentsView({
         webPreferences: {

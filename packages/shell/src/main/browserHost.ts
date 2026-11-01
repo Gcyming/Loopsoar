@@ -1,10 +1,13 @@
 /**
- * BrowserHost（多标签）：每个标签一个 WebContentsView，只有活动标签可见。
- * 关键修复：
- *  ① 网页里的 target=_blank / window.open 不再由 Electron 弹独立窗口，而是经 openInNewTab
- *     在应用内新建标签（与主流浏览器一致）；
- *  ② 打开应用内浮层（设置等）时隐藏原生视图，避免 WebContentsView 盖住 HTML 浮层；
- *  ③ 原生视图几何来自 contracts/layout（标题栏 + 顶栏 + 标签栏 + 状态条）。
+ * BrowserHost（会话级多标签）：每个会话拥有自己的标签集合，只有**当前会话**的活动标签可见。
+ *
+ * 会话即"文件夹"：切换会话 = 换一组标签与页面；后台会话的标签仍然存活，
+ * Agent 工具按 ctx.sessionId 直接操作自己会话的标签（不会串到用户正在看的会话）。
+ *
+ * 其他既有约束保持不变：
+ *  ① 网页 target=_blank/window.open 由宿主转为应用内新标签；
+ *  ② 浮层打开时隐藏原生视图；
+ *  ③ 几何来自 contracts/layout（含分隔条宽度让位）。
  */
 import {
   computeBrowserViewBounds,
@@ -18,6 +21,9 @@ import {
   type WebContentsViewLike,
 } from "../browserAdapter/backends/webContentsView.js";
 import type { BrowserAdapter, BrowserSnapshot } from "../browserAdapter/types.js";
+import { sanitizeBrowserState, type PersistedBrowserState, type PersistedBrowserTab } from "./browserSessionState.js";
+
+export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
 
 export interface HostView extends WebContentsViewLike {
   setBounds(bounds: BrowserViewBounds): void;
@@ -29,10 +35,14 @@ export interface BrowserHostDeps {
   attachView: (view: HostView) => void;
   detachView: (view: HostView) => void;
   getWindowSize: () => WindowSize;
-  /** 标签变化推送（UI 标签栏）。 */
+  /** 当前会话标签变化推送（UI 标签栏）。 */
   onTabsChanged?: (tabs: TabState[]) => void;
+  /** 任一会话的标签状态变化（持久化用）；index 侧做防抖落盘。 */
+  onSessionStateChanged?: (sessionId: string, state: PersistedBrowserState) => void;
   /** 网页请求新窗口时由宿主转为新标签。 */
   openInNewTab?: (url: string) => void;
+  /** 初始会话（默认 default）。 */
+  initialSessionId?: string;
 }
 
 export interface TabState {
@@ -56,24 +66,50 @@ interface TabEntry {
   navigating?: boolean;
 }
 
+interface SessionGroup {
+  tabs: Map<string, TabEntry>;
+  activeId: string | null;
+}
+
 export type NavigateOutcome = { ok: true; url: string; tabId: string } | { ok: false; error: string };
 
 export class BrowserHost {
-  private tabs = new Map<string, TabEntry>();
-  private activeId: string | null = null;
+  private groups = new Map<string, SessionGroup>();
+  private activeSession: string;
   private overlayOpen = false;
   /** 侧栏当前宽度（用户可拖拽；偏好持久化在 UI 层）。 */
   private sidebarWidth: number = LAYOUT.SIDEBAR_WIDTH;
   private seq = 0;
 
-  constructor(private deps: BrowserHostDeps) {}
+  constructor(private deps: BrowserHostDeps) {
+    this.activeSession = deps.initialSessionId?.trim() || "default";
+    this.ensureGroup(this.activeSession);
+  }
+
+  private ensureGroup(sessionId: string): SessionGroup {
+    let group = this.groups.get(sessionId);
+    if (!group) {
+      group = { tabs: new Map(), activeId: null };
+      this.groups.set(sessionId, group);
+    }
+    return group;
+  }
+
+  private group(sessionId?: string): SessionGroup {
+    return this.ensureGroup(sessionId ?? this.activeSession);
+  }
 
   private nextId(): string {
     this.seq += 1;
     return `tab-${this.seq}`;
   }
 
-  private createTab(): TabEntry {
+  /** 当前可见会话（UI 的"文件夹"）。 */
+  currentSessionId(): string {
+    return this.activeSession;
+  }
+
+  private createTab(sessionId: string): TabEntry {
     const view = this.deps.createView();
     this.deps.attachView(view);
     const id = this.nextId();
@@ -81,7 +117,7 @@ export class BrowserHost {
     const adapter = createWebContentsViewAdapter({
       view,
       onNavigate: (url: string): void => {
-        const entry = this.tabs.get(id);
+        const entry = this.group(sessionId).tabs.get(id);
         if (!entry || entry.navigating || !url || entry.url === url) return;
         entry.url = url;
         const current = entry.index >= 0 ? entry.history[entry.index] : undefined;
@@ -90,31 +126,30 @@ export class BrowserHost {
           entry.history.push(url);
           entry.index = entry.history.length - 1;
         }
-        this.applyLayout();
-        this.emitTabs();
+        this.emitTabs(sessionId);
       },
       onTitle: (title: string): void => {
-        const entry = this.tabs.get(id);
+        const entry = this.group(sessionId).tabs.get(id);
         if (!entry) return;
         const next = title.trim().slice(0, 80) || this.hostnameOf(entry.url);
         if (next === entry.title) return;
         entry.title = next;
-        this.emitTabs();
+        this.emitTabs(sessionId);
       },
     });
     const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1 };
-    this.tabs.set(id, entry);
-    // 新标签必须立即成为活动标签；否则 newTab 里 `id = activeId` 会拿到旧标签，
-    // 导致「新建标签」实际在旧标签里导航、新标签永远空白（也吞掉新建页上的鼠标事件）。
-    this.activeId = id;
+    const group = this.group(sessionId);
+    group.tabs.set(id, entry);
+    // 新标签必须立即成为该会话的活动标签
+    group.activeId = id;
     return entry;
   }
 
-  private activeEntry(): TabEntry | null {
-    return this.activeId ? this.tabs.get(this.activeId) ?? null : null;
+  private activeEntry(sessionId?: string): TabEntry | null {
+    const group = this.group(sessionId);
+    return group.activeId ? group.tabs.get(group.activeId) ?? null : null;
   }
 
-  /** 几何与可见性统一收敛：所有标签同一区域，只有活动标签可见且非浮层态。 */
   /** 侧栏拖拽调宽：原生视图区域随之重算。 */
   setSidebarWidth(width: number): void {
     this.sidebarWidth = Math.max(240, Math.min(720, Math.round(width)));
@@ -126,77 +161,87 @@ export class BrowserHost {
       ...LAYOUT,
       SIDEBAR_WIDTH: this.sidebarWidth,
     } as unknown as typeof LAYOUT);
-    for (const [id, entry] of this.tabs) {
-      entry.view.setBounds(bounds);
-      // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
-      const visible = id === this.activeId && !this.overlayOpen && Boolean(entry.url);
-      entry.view.setVisible?.(visible);
+    for (const [sessionId, group] of this.groups) {
+      for (const [id, entry] of group.tabs) {
+        entry.view.setBounds(bounds);
+        // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
+        const visible =
+          sessionId === this.activeSession && id === group.activeId && !this.overlayOpen && Boolean(entry.url);
+        entry.view.setVisible?.(visible);
+      }
     }
   }
 
-  private emitTabs(): void {
-    this.deps.onTabsChanged?.(this.listTabs());
+  private emitTabs(sessionId: string = this.activeSession): void {
+    this.applyLayout();
+    // 持久化回调覆盖所有会话（后台 Agent 在自己会话里导航也要落盘）
+    this.deps.onSessionStateChanged?.(sessionId, this.snapshotSession(sessionId));
+    if (sessionId === this.activeSession) {
+      this.deps.onTabsChanged?.(this.listTabs(sessionId));
+    }
   }
 
-  listTabs(): TabState[] {
-    return [...this.tabs.entries()].map(([id, entry]) => ({
+  listTabs(sessionId?: string): TabState[] {
+    const group = this.group(sessionId);
+    return [...group.tabs.entries()].map(([id, entry]) => ({
       id,
       url: entry.url,
       title: entry.title,
-      active: id === this.activeId,
+      active: id === group.activeId,
       canBack: entry.index > 0,
       canForward: entry.index >= 0 && entry.index < entry.history.length - 1,
     }));
   }
 
-  /** 指定标签（缺省=活动标签）。 */
-  private resolveTab(tabId?: string): [string, TabEntry] | null {
-    const id = tabId ?? this.activeId;
+  /** 指定标签（缺省=该会话语种的活动标签）。 */
+  private resolveTab(tabId?: string, sessionId?: string): [string, TabEntry] | null {
+    const group = this.group(sessionId);
+    const id = tabId ?? group.activeId;
     if (!id) return null;
-    const entry = this.tabs.get(id);
+    const entry = group.tabs.get(id);
     return entry ? [id, entry] : null;
   }
 
   /** 后退 / 前进 / 刷新：基于本地历史栈（应用内导航）。 */
-  async goBack(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
-    const resolved = this.resolveTab(tabId);
+  async goBack(tabId?: string, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId, sessionId);
     if (!resolved) return { ok: false, error: "无标签页" };
     const [id, entry] = resolved;
     if (entry.index <= 0) return { ok: false, error: "没有可后退的历史" };
     entry.index -= 1;
-    return this.navigateRecorded(entry.history[entry.index], id, false);
+    return this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
   }
 
-  async goForward(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
-    const resolved = this.resolveTab(tabId);
+  async goForward(tabId?: string, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId, sessionId);
     if (!resolved) return { ok: false, error: "无标签页" };
     const [id, entry] = resolved;
     if (entry.index >= entry.history.length - 1) return { ok: false, error: "没有可前进的历史" };
     entry.index += 1;
-    return this.navigateRecorded(entry.history[entry.index], id, false);
+    return this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
   }
 
-  async reload(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
-    const resolved = this.resolveTab(tabId);
+  async reload(tabId?: string, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId, sessionId);
     if (!resolved) return { ok: false, error: "无标签页" };
     const [id, entry] = resolved;
     if (!entry.url) return { ok: false, error: "当前标签没有页面" };
-    return this.navigateRecorded(entry.url, id, false);
+    return this.navigateRecorded(entry.url, id, false, sessionId);
   }
 
-  history(tabId?: string): { url: string; index: number; current: boolean }[] {
-    const resolved = this.resolveTab(tabId);
+  history(tabId?: string, sessionId?: string): { url: string; index: number; current: boolean }[] {
+    const resolved = this.resolveTab(tabId, sessionId);
     if (!resolved) return [];
     const [, entry] = resolved;
     return entry.history.map((url, i) => ({ url, index: i, current: i === entry.index }));
   }
 
-  activeTabId(): string | null {
-    return this.activeId;
+  activeTabId(sessionId?: string): string | null {
+    return this.group(sessionId).activeId;
   }
 
-  hasAnyTab(): boolean {
-    return this.tabs.size > 0;
+  hasAnyTab(sessionId?: string): boolean {
+    return this.group(sessionId).tabs.size > 0;
   }
 
   /** 修复 ②：应用内浮层打开时隐藏原生视图。 */
@@ -209,23 +254,29 @@ export class BrowserHost {
     this.applyLayout();
   }
 
-  /** 导航：默认在活动标签内；无标签则先建一个（记录历史）。 */
-  async navigate(rawUrl: string, tabId?: string): Promise<NavigateOutcome> {
-    return this.navigateRecorded(rawUrl, tabId, true);
+  /** 导航：默认在当前会话的活动标签内；无标签则先建一个（记录历史）。 */
+  async navigate(rawUrl: string, tabId?: string, sessionId?: string): Promise<NavigateOutcome> {
+    return this.navigateRecorded(rawUrl, tabId, true, sessionId);
   }
 
-  private async navigateRecorded(rawUrl: string, tabId?: string, record = true): Promise<NavigateOutcome> {
+  private async navigateRecorded(
+    rawUrl: string,
+    tabId?: string,
+    record = true,
+    sessionId?: string,
+  ): Promise<NavigateOutcome> {
     const normalized = normalizeNavigateUrl(rawUrl);
     if (!normalized.ok) return { ok: false, error: normalized.reason };
+    const sid = sessionId ?? this.activeSession;
+    const group = this.group(sid);
 
-    let id = tabId ?? this.activeId;
-    if (!id || !this.tabs.has(id)) {
-      const entry = this.createTab();
-      id = this.activeId!;
-      void entry;
+    let id = tabId ?? group.activeId;
+    if (!id || !group.tabs.has(id)) {
+      this.createTab(sid);
+      id = group.activeId!;
     }
-    this.activeId = id;
-    const entry = this.tabs.get(id)!;
+    group.activeId = id;
+    const entry = group.tabs.get(id)!;
     entry.navigating = true;
     try {
       const result = await entry.adapter.navigate(normalized.url);
@@ -244,8 +295,7 @@ export class BrowserHost {
       } catch {
         entry.title = this.hostnameOf(result.url);
       }
-      this.applyLayout();
-      this.emitTabs();
+      this.emitTabs(sid);
       return { ok: true, url: result.url, tabId: id };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -262,83 +312,161 @@ export class BrowserHost {
     }
   }
 
-  /** 新建标签（可带初始 URL）并切为活动标签；同 URL 已存在时复用（防重复标签）。 */
-  async newTab(rawUrl?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+  /** 新建标签（可带初始 URL）并切为该会话的活动标签；同 URL 已存在时复用。 */
+  async newTab(rawUrl?: string, sessionId?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+    const sid = sessionId ?? this.activeSession;
+    const group = this.group(sid);
     if (rawUrl) {
       const normalized = normalizeNavigateUrl(rawUrl);
       if (normalized.ok) {
-        for (const [id, tab] of this.tabs) {
+        for (const [id, tab] of group.tabs) {
           if (tab.url === normalized.url) {
-            this.activeId = id;
-            this.applyLayout();
-            this.emitTabs();
+            group.activeId = id;
+            this.emitTabs(sid);
             return { tabId: id, ok: true, url: tab.url };
           }
         }
       }
     }
-    const entry = this.createTab();
-    const id = this.activeId!;
-    this.activeId = id;
-    this.applyLayout();
-    this.emitTabs();
+    this.createTab(sid);
+    const id = group.activeId!;
+    this.emitTabs(sid);
     if (!rawUrl) return { tabId: id, ok: true };
-    const outcome = await this.navigate(rawUrl, id);
+    const outcome = await this.navigate(rawUrl, id, sid);
     if (!outcome.ok) return { tabId: id, ok: false, error: outcome.error };
-    void entry;
     return { tabId: id, ok: true, url: outcome.url };
   }
 
-  selectTab(tabId: string): boolean {
-    if (!this.tabs.has(tabId)) return false;
-    this.activeId = tabId;
-    this.applyLayout();
-    this.emitTabs();
+  selectTab(tabId: string, sessionId?: string): boolean {
+    const group = this.group(sessionId);
+    if (!group.tabs.has(tabId)) return false;
+    group.activeId = tabId;
+    this.emitTabs(sessionId ?? this.activeSession);
     return true;
   }
 
-  async closeTab(tabId: string): Promise<boolean> {
-    const entry = this.tabs.get(tabId);
+  async closeTab(tabId: string, sessionId?: string): Promise<boolean> {
+    const group = this.group(sessionId);
+    const entry = group.tabs.get(tabId);
     if (!entry) return false;
-    this.tabs.delete(tabId);
+    group.tabs.delete(tabId);
     try {
       await entry.adapter.close();
     } finally {
       this.deps.detachView(entry.view);
     }
-    if (this.activeId === tabId) {
-      this.activeId = this.tabs.keys().next().value ?? null;
+    if (group.activeId === tabId) {
+      group.activeId = group.tabs.keys().next().value ?? null;
     }
-    this.applyLayout();
-    this.emitTabs();
+    this.emitTabs(sessionId ?? this.activeSession);
     return true;
   }
 
   async closeAll(): Promise<void> {
-    for (const id of [...this.tabs.keys()]) await this.closeTab(id);
+    for (const [sessionId, group] of [...this.groups.entries()]) {
+      for (const id of [...group.tabs.keys()]) await this.closeTab(id, sessionId);
+    }
   }
 
-  /** 在活动标签执行 JS（Agent 工具用；返回 JSON-safe 结果）。 */
-  async executeScript(script: string): Promise<unknown> {
-    const entry = this.activeEntry();
-    if (!entry) throw new Error("当前没有打开的网页标签");
+  /** 在指定会话的活动标签执行 JS（Agent 工具用；返回 JSON-safe 结果）。 */
+  async executeScript(script: string, sessionId?: string): Promise<unknown> {
+    const entry = this.activeEntry(sessionId);
+    if (!entry) throw new Error("当前会话没有打开的网页标签");
     return entry.adapter.executeJs(script);
   }
 
-  async snapshot(): Promise<BrowserSnapshot | null> {
-    return this.activeEntry()?.adapter.snapshot() ?? null;
+  async snapshot(sessionId?: string): Promise<BrowserSnapshot | null> {
+    return this.activeEntry(sessionId)?.adapter.snapshot() ?? null;
   }
 
-  /** 页面缩放：0.5～2.0，按活动标签生效（Ctrl + +/-/0）。 */
-  setZoom(nextFactor: number): { ok: boolean; factor?: number; error?: string } {
-    const entry = this.activeEntry();
+  /** 页面缩放：0.5～2.0，按会话的活动标签生效（Ctrl + +/-/0）。 */
+  setZoom(nextFactor: number, sessionId?: string): { ok: boolean; factor?: number; error?: string } {
+    const entry = this.activeEntry(sessionId);
     if (!entry || !entry.url) return { ok: false, error: "当前没有打开的网页" };
     const factor = Math.max(0.5, Math.min(2, Math.round(nextFactor * 10) / 10));
     entry.adapter.setZoom?.(factor);
     return { ok: true, factor };
   }
 
-  async screenshot(): Promise<string | null> {
-    return this.activeEntry()?.adapter.screenshot() ?? null;
+  async screenshot(sessionId?: string): Promise<string | null> {
+    return this.activeEntry(sessionId)?.adapter.screenshot() ?? null;
+  }
+
+  /** 当前/指定会话的标签快照（持久化用）。空白标签不写入。 */
+  snapshotSession(sessionId: string = this.activeSession): PersistedBrowserState {
+    const group = this.group(sessionId);
+    const tabs: PersistedBrowserTab[] = [];
+    let activeIndex = 0;
+    for (const [id, entry] of group.tabs) {
+      if (!entry.url) continue;
+      if (id === group.activeId) activeIndex = tabs.length;
+      tabs.push({
+        url: entry.url,
+        ...(entry.title ? { title: entry.title } : {}),
+        history: entry.history.slice(),
+        index: entry.index,
+      });
+    }
+    return { tabs, activeIndex };
+  }
+
+  /** 切换到某个会话；restore 只在该会话还没有任何标签时使用（不覆盖内存里的活页面）。 */
+  async switchSession(sessionId: string, restore?: PersistedBrowserState): Promise<TabState[]> {
+    const sid = sessionId.trim();
+    if (!sid) return this.listTabs();
+    if (sid !== this.activeSession) {
+      // 先把旧会话的页面状态交给持久化层，再换可见会话
+      this.deps.onSessionStateChanged?.(this.activeSession, this.snapshotSession(this.activeSession));
+      this.activeSession = sid;
+    }
+    const group = this.ensureGroup(sid);
+    if (restore && group.tabs.size === 0 && restore.tabs.length > 0) {
+      await this.restoreInto(sid, restore);
+    }
+    this.emitTabs(sid);
+    return this.listTabs(sid);
+  }
+
+  private async restoreInto(sessionId: string, restore: PersistedBrowserState): Promise<void> {
+    // 持久化文件可能被手工改过/旧版本残留：只接受净化后的 http(s) 标签
+    const safe = sanitizeBrowserState(restore);
+    if (!safe) return;
+    const group = this.ensureGroup(sessionId);
+    const ids: string[] = [];
+    for (const tab of safe.tabs) {
+      const entry = this.createTab(sessionId);
+      const id = group.activeId!;
+      ids.push(id);
+      entry.title = tab.title ?? this.hostnameOf(tab.url);
+      entry.history = Array.isArray(tab.history) && tab.history.length > 0 ? tab.history.slice() : [tab.url];
+      entry.index =
+        typeof tab.index === "number" ? Math.max(0, Math.min(tab.index, entry.history.length - 1)) : entry.history.length - 1;
+      entry.navigating = true;
+      try {
+        const result = await entry.adapter.navigate(tab.url);
+        entry.url = result.url;
+      } catch {
+        // 加载失败保留空白标签，用户可重试
+      } finally {
+        entry.navigating = false;
+      }
+    }
+    const active = ids[Math.max(0, Math.min(safe.activeIndex, ids.length - 1))];
+    if (active) group.activeId = active;
+  }
+
+  /** 删除会话时销毁它的全部标签（页面/内存），不影响其它会话。 */
+  async deleteSession(sessionId: string): Promise<void> {
+    const group = this.groups.get(sessionId);
+    if (group) {
+      for (const id of [...group.tabs.keys()]) await this.closeTab(id, sessionId);
+      this.groups.delete(sessionId);
+    }
+    if (this.activeSession === sessionId) {
+      const next = this.groups.keys().next().value as string | undefined;
+      this.activeSession = next ?? "default";
+      this.ensureGroup(this.activeSession);
+      this.emitTabs(this.activeSession);
+    }
   }
 }

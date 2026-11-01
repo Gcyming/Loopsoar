@@ -243,6 +243,18 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 删除未使用 ROLE_LABEL/roleColor 与遗留全局流 ref；App 1883 → 约 1760 行（仍高于 1200 红线，已登记下一步）
 - 会话流元信息新增单测；全量 418 用例待跑
 
+## 二·二十六、2026-11-01 第二十三次增量（会话即浏览器文件夹 + 持久化查证）
+- 新增 ADR-0014：会话 = 浏览器的"文件夹"
+  · BrowserHost 改为 sessionId → 标签组；只有当前会话的活动标签可见，其它会话页面保留但隐藏
+  · 所有 browser_* 工具按 ToolContext.sessionId 操作自己会话的标签（后台 Agent 不串台）
+  · 切会话只换可见组；新会话空标签；地址栏随会话清空/恢复
+- 本地持久化：SessionStore 增加 browser: { tabs, activeIndex }（URL/标题/历史，不存正文）
+  · 标签变化防抖落盘、退出前全量落盘；重启恢复最近会话的页面/活动标签（gui-88）
+  · 启动改用 shell 的真实 currentId，修复"幽灵会话 ID"（之前 useRef 随机初始化）
+- 测试：browserSessionHost（隔离/工具 sessionId/恢复/删除）、browserSessionState（净化），全量 423
+- 研究文档 `docs/research/session-browser-persistence-cloudflare.md`：Cloudflare 免费可做，推荐 Workers+D1+GitHub OAuth Device Flow+客户端加密；Pages 只做静态/部署，不建议 GitHub 仓库当数据库。本轮只查证不实施。
+- 证据 gui-87（切回 A 会话恢复页面）、gui-88（重启恢复）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

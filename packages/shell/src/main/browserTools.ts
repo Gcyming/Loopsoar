@@ -49,7 +49,7 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
     execute: async (ctx): Promise<ToolResult> => {
       try {
         const params = (ctx.params ?? {}) as { maxChars?: number };
-        const snapshot = (await needHost().snapshot()) as {
+        const snapshot = (await needHost().snapshot(ctx.sessionId)) as {
           url: string;
           title: string;
           text: string;
@@ -83,7 +83,7 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
       try {
         const params = ctx.params as { url?: string };
         if (!params?.url) return { ok: false, content: "[错误] 缺少 url" };
-        const result = await needHost().navigate(params.url);
+        const result = await needHost().navigate(params.url, undefined, ctx.sessionId);
         return result.ok
           ? { ok: true, content: `已打开：${result.url ?? params.url}` }
           : { ok: false, content: `[错误] 导航失败：${result.error ?? "未知"}` };
@@ -117,7 +117,7 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
           el.click();
           return { ok: true };
         })()`;
-        const out = (await host.executeScript(script)) as { ok?: boolean; reason?: string };
+        const out = (await host.executeScript(script, ctx.sessionId)) as { ok?: boolean; reason?: string };
         return out?.ok
           ? { ok: true, content: `已点击：${target}` }
           : { ok: false, content: `[错误] ${out?.reason ?? "点击失败"}` };
@@ -146,7 +146,7 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
           el.dispatchEvent(new Event('change', { bubbles: true }));
           return { ok: true };
         })()`;
-        const out = (await needHost().executeScript(script)) as { ok?: boolean; reason?: string };
+        const out = (await needHost().executeScript(script, ctx.sessionId)) as { ok?: boolean; reason?: string };
         return out?.ok ? { ok: true, content: `已输入到 ${params.target}` } : { ok: false, content: `[错误] ${out?.reason ?? "输入失败"}` };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
@@ -170,7 +170,7 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
             : direction === "bottom"
               ? "window.scrollTo({ top: document.body.scrollHeight }); 'ok'"
               : `window.scrollBy({ top: ${direction === "up" ? -amount : amount} }); 'ok'`;
-        await needHost().executeScript(script);
+        await needHost().executeScript(script, ctx.sessionId);
         return { ok: true, content: `已滚动：${direction}` };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };

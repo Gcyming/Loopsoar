@@ -98,7 +98,9 @@ export default function App(): React.JSX.Element {
   usePopover("app-history", historyOpen, setHistoryOpen);
   usePopover("app-downloads", downloadsOpen, setDownloadsOpen);
 
-  const sessionIdRef = useRef<string>(nextId("sess"));
+  // 启动时先为空：真实会话 ID 必须来自 shell（恢复历史或 chat:sessions 的 currentId），
+  // 否则未恢复历史的冷启动会拿一个假 ID 发送，消息落到索引外的"幽灵会话"。
+  const sessionIdRef = useRef<string>("");
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   /** 最近一次同步到地址栏的 URL（仅活动标签 URL 变化时才覆盖，避免打断用户输入）。 */
   const lastSyncedUrlRef = useRef<string>("");
@@ -204,6 +206,10 @@ export default function App(): React.JSX.Element {
       if (sessionResult) {
         setSessions(sessionResult.sessions);
         setCurrentSession(sessionResult.currentId);
+        // 没恢复历史（restoreSession=false 或历史为空）时，也必须采用 shell 的真实当前会话
+        if (!sessionIdRef.current && sessionResult.currentId) {
+          sessionIdRef.current = sessionResult.currentId;
+        }
       }
       const dlResult = await api.browser.downloads().catch(() => null);
       if (dlResult) setDownloads(dlResult.downloads);
@@ -342,6 +348,7 @@ export default function App(): React.JSX.Element {
         setTabs(p.tabs);
         // 地址栏与活动网页强绑定：用户点链接 / AI 导航 / 页面重定向 / 切标签都走这里。
         const active = p.tabs.find((tab) => tab.active);
+        // 会话即"文件夹"：切到没有网页的会话时，地址栏/当前页面必须一起清空，不能残留上一个会话的 URL
         const nextUrl = active?.url ?? "";
         if (nextUrl !== lastSyncedUrlRef.current) {
           lastSyncedUrlRef.current = nextUrl;
@@ -887,6 +894,17 @@ export default function App(): React.JSX.Element {
       setBusy(false);
       setSessionOpen(false);
       setNotice("已新建会话");
+      void api.browser
+        .listTabs()
+        .then((r) => {
+          setTabs(r.tabs);
+          const active = r.tabs.find((tab) => tab.active);
+          const url = active?.url ?? "";
+          lastSyncedUrlRef.current = url;
+          setAddress(url);
+          setCurrentUrl(url);
+        })
+        .catch(() => undefined);
     });
   }, [api, writeSessionMessages]);
 
@@ -904,6 +922,17 @@ export default function App(): React.JSX.Element {
       setBusy(meta.busy);
       setSessionOpen(false);
       setNotice("");
+      void api.browser
+        .listTabs()
+        .then((r) => {
+          setTabs(r.tabs);
+          const active = r.tabs.find((tab) => tab.active);
+          const url = active?.url ?? "";
+          lastSyncedUrlRef.current = url;
+          setAddress(url);
+          setCurrentUrl(url);
+        })
+        .catch(() => undefined);
     });
   }, [api, metaFor, writeSessionMessages]);
 
@@ -941,7 +970,8 @@ export default function App(): React.JSX.Element {
       mode !== "menus-overlap" &&
       mode !== "set-effort" &&
       mode !== "steer-choice" &&
-      mode !== "session-switch"
+      mode !== "session-switch" &&
+      mode !== "session-tabs"
     ) {
       return;
     }
@@ -953,6 +983,22 @@ export default function App(): React.JSX.Element {
     const timer = setTimeout(() => {
       if (mode === "model-menu") {
         openModelMenu();
+        return;
+      }
+      if (mode === "session-tabs") {
+        // E2E：A 会话打开页面 → 新建 B（空）→ 切回 A，左侧应恢复 A 的页面；
+        // 再次启动（不带此模式）应恢复上次退出时的页面（会话即文件夹）。
+        const begin = (): void => {
+          const origin = sessionIdRef.current;
+          if (!origin) {
+            window.setTimeout(begin, 150);
+            return;
+          }
+          void api.browser.navigate({ url: "http://127.0.0.1:19443/?session=a" }).catch(() => undefined);
+          window.setTimeout(() => void newSession(), 1500);
+          window.setTimeout(() => switchSession(origin), 3200);
+        };
+        begin();
         return;
       }
       if (mode === "session-switch") {
@@ -1255,7 +1301,11 @@ export default function App(): React.JSX.Element {
                         void api?.chat.deleteSession({ sessionId: x.id }).then((r) => {
                           setSessions(r.sessions);
                           setCurrentSession(r.currentId);
-                          if (x.id === currentSession) setMessages([]);
+                          // 删除当前会话：右侧不能只清空，必须连同左侧标签一起切到下一个会话
+                          if (x.id === currentSession) {
+                            setMessages([]);
+                            if (r.currentId) switchSession(r.currentId);
+                          }
                         })
                       }
                     >

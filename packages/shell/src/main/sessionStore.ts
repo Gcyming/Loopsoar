@@ -8,6 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import type { PersistedBrowserState } from "./browserSessionState.js";
 
 export interface PersistedMessage {
   role: "user" | "assistant";
@@ -24,6 +25,8 @@ export interface PersistedSession {
   sessionId: string;
   updatedAt: number;
   messages: PersistedMessage[];
+  /** 该会话最后打开的网页（会话即"文件夹"；重启后恢复左侧页面）。 */
+  browser?: PersistedBrowserState;
 }
 
 export interface SessionMeta {
@@ -115,6 +118,21 @@ export class SessionStore {
       preview: last.replace(/\s+/g, " ").slice(0, 80),
       messageCount: messages.length,
     };
+  }
+
+  /** 保存某会话的浏览器标签快照（不触发 updatedAt/列表元信息变化）。 */
+  saveBrowserState(sessionId: string, state: PersistedBrowserState): boolean {
+    const file = this.sessionFile(sessionId);
+    const data = this.readJson<PersistedSession>(file);
+    if (!data) return false;
+    data.browser = state.tabs.length > 0 ? state : undefined;
+    this.writeJson(file, data);
+    return true;
+  }
+
+  /** 读取某会话的浏览器标签快照（旧文件无此字段时返回 null）。 */
+  getBrowserState(sessionId: string): PersistedBrowserState | null {
+    return this.get(sessionId)?.browser ?? null;
   }
 
   /** 把时间线挂到最后一条助手消息（对话完成后由 UI 上报；失败静默不影响对话）。 */

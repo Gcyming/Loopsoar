@@ -16,6 +16,10 @@ export interface ChatDeps extends TrustedIpcDeps {
   shouldAutoCapture?: () => boolean;
   /** 当前生成本轮回复的供应商/模型（流开始瞬间快照，避免中途切换污染历史）。 */
   getModelInfo?: () => { provider?: string; model?: string } | undefined;
+  /** 会话被打开/新建（壳层据此切换浏览器标签"文件夹"）。可等待：返回前完成标签组切换。 */
+  onSessionOpened?: (sessionId: string) => void | Promise<void>;
+  /** 会话被删除（壳层据此销毁对应标签组并切到 nextId）。 */
+  onSessionDeleted?: (sessionId: string, nextSessionId: string | null) => void | Promise<void>;
 }
 
 /** 错误清洗：解开多层 JSON 转义，提取 error.message，去控制字符并截断。 */
@@ -60,11 +64,11 @@ function startStream(
   payload: { message: string; sessionId?: string; mode?: "build" | "plan"; reasoningEffort?: string },
 ): { accepted: boolean; sessionId: string } {
   // 会话解析：显式 > 当前会话 > 新建会话（多会话列表）
-  const sessionId =
-    payload.sessionId ??
-    deps.sessions?.currentId() ??
-    deps.sessions?.newSession().sessionId ??
-    `sess-${Date.now()}`;
+  let sessionId = payload.sessionId ?? deps.sessions?.currentId() ?? null;
+  if (!sessionId) {
+    sessionId = deps.sessions?.newSession().sessionId ?? `sess-${Date.now()}`;
+    deps.onSessionOpened?.(sessionId);
+  }
   let assistantText = "";
   const modelInfo = deps.getModelInfo?.();
 
@@ -165,20 +169,23 @@ export function registerChatDomain(deps: ChatDeps): void {
     currentId: deps.sessions?.currentId() ?? null,
   }));
 
-  handleTrusted(deps, "chat:newSession", () => {
+  handleTrusted(deps, "chat:newSession", async () => {
     const session = deps.sessions?.newSession() ?? null;
+    if (session?.sessionId) await deps.onSessionOpened?.(session.sessionId);
     return { session, sessions: deps.sessions?.list() ?? [], currentId: session?.sessionId ?? null };
   });
 
-  handleTrusted(deps, "chat:switchSession", (payload) => {
+  handleTrusted(deps, "chat:switchSession", async (payload) => {
     const p = payload as { sessionId: string };
     const ok = deps.sessions?.switchTo(p.sessionId) ?? false;
+    if (ok) await deps.onSessionOpened?.(p.sessionId);
     return { ok, session: ok ? deps.sessions?.load() ?? null : null };
   });
 
-  handleTrusted(deps, "chat:deleteSession", (payload) => {
+  handleTrusted(deps, "chat:deleteSession", async (payload) => {
     const p = payload as { sessionId: string };
     const removed = deps.sessions?.remove(p.sessionId) ?? false;
+    if (removed) await deps.onSessionDeleted?.(p.sessionId, deps.sessions?.currentId() ?? null);
     return { removed, sessions: deps.sessions?.list() ?? [], currentId: deps.sessions?.currentId() ?? null };
   });
 }

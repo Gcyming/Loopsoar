@@ -32,6 +32,7 @@ import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createElectronBrowserHost, DownloadsBridge } from "./electronBrowser.js";
 import { withProviderDefaults } from "./providerDefaults.js";
 import type { BrowserHost } from "./browserHost.js";
+import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
@@ -702,18 +703,54 @@ app.whenReady().then(async () => {
     onPermissionRequest: (request) => pushToRenderer("perm:request", request),
   });
 
-  // 浏览器宿主：WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
-  browserHost = createElectronBrowserHost(() => mainWindow, (url) => {
-    // 只把真实网页转为新标签：about:blank/空地址等（弹窗占位）直接忽略，避免凭空多出「新标签页」
-    if (!/^https?:\/\//i.test(url)) return;
-    void browserHost?.newTab(url);
-  });
+  // 浏览器宿主：会话级标签组；WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
+  // 初始会话 = 最近一次使用的会话（重启后左右两侧一起恢复）；没有会话时建一个，保证"文件夹"存在。
+  const initialSessionId = sessions.currentId() ?? sessions.newSession().sessionId;
+  const tabSaveTimers = new Map<string, NodeJS.Timeout>();
+  const queueBrowserStateSave = (sessionId: string, state: PersistedBrowserState): void => {
+    const prev = tabSaveTimers.get(sessionId);
+    if (prev) clearTimeout(prev);
+    tabSaveTimers.set(
+      sessionId,
+      setTimeout(() => {
+        tabSaveTimers.delete(sessionId);
+        sessions.saveBrowserState(sessionId, state);
+      }, 400),
+    );
+  };
+  browserHost = createElectronBrowserHost(
+    () => mainWindow,
+    (url) => {
+      // 只把真实网页转为新标签：about:blank/空地址等（弹窗占位）直接忽略，避免凭空多出「新标签页」
+      if (!/^https?:\/\//i.test(url)) return;
+      void browserHost?.newTab(url);
+    },
+    { initialSessionId, onSessionStateChanged: queueBrowserStateSave },
+  );
+  // 启动即恢复当前会话上次的网页（标题/URL/活动标签）
+  const bootBrowserState = sessions.getBrowserState(initialSessionId);
+  if (bootBrowserState) {
+    void browserHost
+      .switchSession(initialSessionId, bootBrowserState)
+      .then((tabs) => pushToRenderer("browser:tabs", { tabs }))
+      .catch(() => undefined);
+  }
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost);
   registerTerminalTools(registry, () => workspaceRoot);
   registerPlanTools(registry);
   registerFileTools(registry, () => workspaceRoot);
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
+
+  // 退出前把每个会话的标签状态落盘（防抖队列可能还没触发）
+  app.on("before-quit", () => {
+    for (const timer of tabSaveTimers.values()) clearTimeout(timer);
+    tabSaveTimers.clear();
+    for (const meta of sessions.list()) {
+      const state = browserHost?.snapshotSession(meta.id);
+      if (state && state.tabs.length > 0) sessions.saveBrowserState(meta.id, state);
+    }
+  });
 
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
   const downloads = new DownloadsBridge(
@@ -736,6 +773,22 @@ app.whenReady().then(async () => {
     getModelInfo: () => {
       const active = providers.active();
       return active ? { provider: active.provider, model: active.model } : undefined;
+    },
+    // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
+    onSessionOpened: async (sessionId) => {
+      if (!browserHost) return;
+      const tabs = await browserHost.switchSession(sessionId, sessions.getBrowserState(sessionId) ?? undefined);
+      pushToRenderer("browser:tabs", { tabs });
+    },
+    onSessionDeleted: async (sessionId, nextSessionId) => {
+      if (!browserHost) return;
+      await browserHost.deleteSession(sessionId).catch(() => undefined);
+      if (nextSessionId) {
+        await browserHost
+          .switchSession(nextSessionId, sessions.getBrowserState(nextSessionId) ?? undefined)
+          .catch(() => undefined);
+      }
+      pushToRenderer("browser:tabs", { tabs: browserHost.listTabs() });
     },
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
