@@ -8,10 +8,8 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
-import ContextRing from "./ContextRing.js";
 import LiveStatus from "./LiveStatus.js";
 import Timeline from "./TimelineView.js";
-import StreamFadeText from "./StreamFade.js";
 import { ProductPanel } from "./ArtifactPanels.js";
 import { collectProducts, stripDiffMarkers } from "./artifacts.js";
 import { baseName, splitAttachments } from "./attachments.js";
@@ -99,27 +97,64 @@ export default function ChatMessageView({
     );
   }
 
+  const runningTool = timelineSteps.some((step) => step.kind === "tool" && step.state === "running");
+  const streaming = m.status === "streaming";
   return (
     <div
-      className="msg-row"
+      className="msg-row msg-row-assistant"
       style={styles.msgRowAssistant}
       data-rail-label={`Loopsoar：${(displayText || "回复").slice(0, 26)}`}
       data-rail-role="assistant"
     >
-      <div style={styles.assistantHead}>
-        <span style={styles.avatar}>L</span>
-        <span style={styles.assistantName}>Loopsoar</span>
-        {m.model ? <span style={styles.assistantModel} title={m.provider ? `${m.provider} · ${m.model}` : m.model}>{m.model}</span> : null}
-        {m.status === "streaming" ? <span style={styles.streamDot} /> : null}
-        <span style={styles.assistantHeadRight}>
-          <ContextRing used={contextUsed} cap={contextCap} loading={m.status === "streaming"} />
-        </span>
-      </div>
+      <span style={styles.avatar}>L</span>
       <div style={styles.assistantMain}>
+        <div style={styles.assistantHead}>
+          <span style={styles.assistantName}>Loopsoar</span>
+          {streaming ? <span style={styles.streamDot} /> : null}
+        </div>
+        {/* 悬停元信息：复制 / 模式 / 模型 / 耗时 / 思考开关（与 slime 一样位于正文之前） */}
+        <div className="msg-hover" style={styles.msgHover}>
+          <button
+            type="button"
+            className="msg-action"
+            title="复制回复"
+            onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
+          >
+            <Icon name="file" size={12} />
+          </button>
+          <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
+          {m.model ? <span title={m.provider ? `${m.provider} · ${m.model}` : m.model}>· {m.model}</span> : null}
+          {m.timing ? (
+            <span style={styles.msgTiming}>
+              · 回复耗时 {fmtMs(m.timing.totalMs)}
+              {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
+              {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
+            </span>
+          ) : (
+            <span>· {timeText}</span>
+          )}
+          {hasStructuredTimeline ? (
+            <button
+              type="button"
+              className={`msg-think-toggle${thinkingOpen ? " is-open" : ""}`}
+              title={thinkingOpen ? "收起思考过程" : "展开思考过程"}
+              onClick={onToggleThinking}
+            >
+              <Icon name="notes" size={11} />
+              <span>思考</span>
+            </button>
+          ) : null}
+          {!streaming && m.text ? (
+            <button type="button" className="msg-action" title="重新生成（回滚到上一条提问并重发）" onClick={() => onRegenerate(m.id)}>
+              <Icon name="reload" size={12} />
+            </button>
+          ) : null}
+        </div>
+
         {hasStructuredTimeline ? (
           <Timeline
             steps={timelineSteps}
-            liveStream={m.status === "streaming"}
+            liveStream={streaming}
             expandAll={expandAllGroups}
             open={thinkingOpen}
             onToggleOpen={onToggleThinking}
@@ -127,16 +162,7 @@ export default function ChatMessageView({
             onOpenUrl={onOpenUrl}
           />
         ) : null}
-        {showThinking ? (
-          <div style={styles.thinkingRow}>
-            <span className="text-scan-light">正在思考</span>
-            <span className="stream-dot-row">
-              <span className="stream-dot" />
-              <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
-              <span className="stream-dot" style={{ animationDelay: "0.4s" }} />
-            </span>
-          </div>
-        ) : null}
+
         {m.compressNote ? (
           <div className="compress-note" title={m.compressNote}>
             <span className="compress-note-mark" aria-hidden>⤵</span>
@@ -151,14 +177,28 @@ export default function ChatMessageView({
             {m.compressStats ? <span style={styles.compressHint}>已保留最近原文，早期内容为确定性摘要</span> : null}
           </div>
         ) : null}
+
+        {/* 思考与正文之间的分隔线（slime 同款；折叠展开时也保持稳定） */}
+        <div className="msg-body-divider" />
+
         <div className="msg-body-text" style={styles.assistantBody}>
-          {m.status === "streaming" && displayText ? (
-            <StreamFadeText text={displayText} Markdown={({ text }) => renderRich(text)} />
+          {m.errorText ? null : streaming ? (
+            /* 正文后置闸门：本轮结束前正文不开闸，只显示阶段占位；
+               期间穿插正文由时间线的 body 节点（13.5px）承载，避免"正文抢跑" */
+            <span className="stream-gate">
+              <span className="text-scan-light">{runningTool ? "思考与工具调用进行中" : "正在思考"}</span>
+              <span className="stream-dot-row">
+                <span className="stream-dot" />
+                <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
+                <span className="stream-dot" style={{ animationDelay: "0.4s" }} />
+              </span>
+            </span>
           ) : (
             renderRich(displayText)
           )}
-          {m.status === "streaming" && displayText ? <span className="stream-caret" /> : null}
+          {streaming ? <span className="stream-cursor" aria-hidden /> : null}
         </div>
+
         {products.length > 0 ? <ProductPanel products={products} defaultOpen={openProducts} /> : null}
         {m.errorText ? <div style={styles.errBox}>{m.errorText}</div> : null}
         {m.interrupted ? (
@@ -167,36 +207,7 @@ export default function ChatMessageView({
             <span>本轮已中断：{m.interrupted.reason}</span>
           </div>
         ) : null}
-        {m.status === "streaming" ? (
-          <LiveStatus
-            startedAt={m.createdAt ?? Date.now()}
-            contextPct={contextPct}
-            runningTool={timelineSteps.some((step) => step.kind === "tool" && step.state === "running")}
-            hasText={m.text.length > 0}
-          />
-        ) : null}
-        <div className="msg-hover" style={styles.msgHover}>
-          <span style={styles.msgHoverTag}>Loopsoar</span>
-          {m.model ? <span>· {m.model}</span> : null}
-          <span>· {timeText}</span>
-          {m.status !== "streaming" && m.text ? (
-            <button type="button" className="msg-action" title="重新生成（回滚到上一条提问并重发）" onClick={() => onRegenerate(m.id)}>
-              <Icon name="reload" size={12} />
-            </button>
-          ) : null}
-          {m.text ? (
-            <button type="button" className="msg-action" title="复制回复" onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
-              <Icon name="file" size={12} />
-            </button>
-          ) : null}
-          {m.timing ? (
-            <span style={styles.msgTiming}>
-              首字 {fmtMs(m.timing.firstTokenMs)} · 总耗时 {fmtMs(m.timing.totalMs)}
-              {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
-              {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
-            </span>
-          ) : null}
-        </div>
+        {streaming ? <LiveStatus startedAt={m.createdAt ?? Date.now()} contextPct={contextPct} runningTool={runningTool} hasText={m.text.length > 0} /> : null}
       </div>
     </div>
   );
@@ -249,7 +260,7 @@ function AttachmentThumb({ path }: { path: string }): React.ReactElement {
 
 const styles: Record<string, React.CSSProperties> = {
   msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
-  msgRowAssistant: { display: "flex", flexDirection: "column", marginBottom: 18 },
+  msgRowAssistant: { display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 18 },
   userBubble: {
     maxWidth: "82%",
     padding: "8px 12px",
@@ -297,42 +308,27 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  msgHover: { display: "flex", alignItems: "center", gap: 7, minHeight: 16, marginTop: 2, fontSize: 10.5, color: BRAND.linenFaint },
+  msgHover: { display: "flex", alignItems: "center", gap: 7, minHeight: 18, margin: "1px 0 6px", fontSize: 10.5, color: BRAND.linenFaint },
   msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
   msgTiming: { color: BRAND.linenFaint, fontSize: 10 },
-  assistantHead: { display: "flex", alignItems: "center", gap: 7, marginBottom: 4 },
+  assistantHead: { display: "flex", alignItems: "center", gap: 6, minHeight: 20 },
   avatar: {
-    width: 22,
-    height: 22,
+    width: 32,
+    height: 32,
+    marginTop: 2,
     borderRadius: "50%",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     background: BRAND.ochreSoft,
     color: BRAND.ochreHover,
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: 700,
     flexShrink: 0,
   },
-  assistantName: { fontSize: 12.5, fontWeight: 650, color: BRAND.linen },
-  assistantModel: {
-    fontSize: 10,
-    padding: "1px 6px",
-    borderRadius: 999,
-    border: `1px solid ${BRAND.border}`,
-    color: BRAND.linenMuted,
-  },
-  assistantHeadRight: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 },
-  streamDot: {
-    width: 6,
-    height: 6,
-    borderRadius: "50%",
-    background: BRAND.ochreHover,
-    animation: "pulse 1.2s ease-in-out infinite",
-  },
-  assistantMain: { paddingLeft: 34 },
-  assistantBody: { marginTop: 4 },
-  thinkingRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: BRAND.linenMuted, margin: "4px 0" },
+  assistantName: { fontSize: 12, fontWeight: 700, color: BRAND.linenMuted },
+  assistantMain: { flex: 1, minWidth: 0 },
+  assistantBody: { fontSize: 15, lineHeight: 1.75, color: BRAND.linen, wordBreak: "break-word" },
   errBox: {
     marginTop: 6,
     padding: "6px 9px",

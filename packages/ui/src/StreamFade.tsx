@@ -1,11 +1,9 @@
 /**
- * 流式正文渲染（稳定版）：
- *   · 旧实现把文本按"尾部窗口"切成 settled + 逐字单元，随着文本增长，字符会从尾部
- *     搬回 Markdown 前缀，造成行宽重新排版（末行文字被挤回上一行的 slime 老问题）；
- *   · 现在整段交给同一个 Markdown 渲染器，DOM 结构稳定，只保留光标和 CSS 渐入；
- *   · 接口保持不变，调用方无需感知实现变化。
+ * 流式吐字渐入（单一产地）：已定型前缀走 Markdown，最后一行尾部逐单元渐入。
+ * 切分规则见 streamFade.ts（只对最后一行做渐入，换行处一次性转入 settled）。
  */
 import * as React from "react";
+import { splitStreamFade, visibleTailUnits } from "./streamFadeSplit.js";
 
 export interface StreamFadeProps {
   text: string;
@@ -13,9 +11,26 @@ export interface StreamFadeProps {
 }
 
 export default function StreamFadeText({ text, Markdown }: StreamFadeProps): React.ReactElement {
+  const maxAtRef = React.useRef(-1);
+  const prevTextRef = React.useRef("");
+  const fade = splitStreamFade(text);
+  if (!text.startsWith(prevTextRef.current)) maxAtRef.current = -1;
+  prevTextRef.current = text;
+
+  const units = visibleTailUnits(fade.units).filter((unit) => unit.text);
+  const seenAt = maxAtRef.current;
+  for (const unit of units) {
+    if (unit.at > maxAtRef.current) maxAtRef.current = unit.at;
+  }
   return (
-    <div className="streaming-markdown">
-      {Markdown({ text, streaming: true })}
-    </div>
+    <>
+      {fade.settled ? Markdown({ text: fade.settled, streaming: true }) : null}
+      {fade.linePrefix}
+      {units.map((unit) => (
+        <span key={unit.at} className={unit.at > seenAt ? "stream-fade-unit" : undefined}>
+          {unit.text}
+        </span>
+      ))}
+    </>
   );
 }

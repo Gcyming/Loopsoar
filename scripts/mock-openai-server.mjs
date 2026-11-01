@@ -152,7 +152,7 @@ const server = createServer(async (req, res) => {
   if (firstDelay > 0) await sleep(firstDelay);
   for (const chunk of REPLY_CHUNKS) {
     sse(res, { choices: [{ delta: { content: chunk } }] });
-    await sleep(140);
+    await sleep(Number(process.env.MOCK_CHUNK_DELAY_MS ?? 140));
   }
   sse(res, { usage: { total_tokens: 420 } });
   writeDone(res);

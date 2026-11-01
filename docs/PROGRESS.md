@@ -213,6 +213,19 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   - 新增重复合并与「更新保留 headers/models」用例
 - 测试：407 全绿；证据：gui-78（地址修复）、gui-79（阈值设置）
 
+## 二·二十三、2026-11-01 第二十次增量（会话 UI 对齐 slime）
+- 移植 slime 的「锁定最新」滚动跟随（去屎山、抽纯判据）：`scrollFollow.ts`
+  · 滚轮上滚立即解锁（不受程序贴底抵消）；距离滞回 8/48px；内层代码块滚动不打扰外层
+  · ResizeObserver + MutationObserver 驱动 rAF 贴底循环（折叠展开/图片增高也跟随）
+  · 上翻后出现「回到最新」按钮，回底自动恢复；顶部/底部渐变遮罩
+- 移植 slime 吐字切分：`streamFadeSplit.ts`（settled 止于换行、尾行渐入、未闭合代码回退）
+  修复此前"末行被挤回上一行"的重排；原 StreamFade 换为 slime 同款三段行内流
+- 助手回复布局对齐：32px 头像左列 + 名称行 + 悬停元信息（复制/模式/模型/耗时/思考开关）
+  位于正文之前；思考与正文之间 `msg-body-divider` 分隔线；正文 15px
+- 正文后置闸门：流式期间正文不开闸，只显示「正在思考/思考与工具调用进行中」+ 2px 光标；
+  思考与穿插正文（13.5px）照常实时显示，轮次结束才揭晓完整正文（对齐 slime 的 GatedBody）
+- 测试：415 全绿（scrollFollow 3、streamFadeSplit 5）；证据 gui-80/81/82
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

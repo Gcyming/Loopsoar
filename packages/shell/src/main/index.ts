@@ -163,6 +163,23 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             await new Promise((r) => setTimeout(r, 500));
           }
 
+          // E2E：向上滚动离开底部，验证「锁定最新」不会把用户拽回去，且出现回到最新按钮
+          if (process.env.LOOPSOAR_E2E_SCROLL_UP) {
+            const top = await win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const el = document.querySelector('.chat-scroll');
+                  if (!el) return -1;
+                  el.scrollBy(0, -700);
+                  return el.scrollTop;
+                })()`,
+                true,
+              )
+              .catch(() => -1);
+            console.log("E2E_SCROLL_UP", top);
+            await new Promise((r) => setTimeout(r, 900));
+          }
+
           // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
           const anyWin = win as unknown as { capturePage?: () => Promise<{ toPNG(): Buffer }> };
           const image =
