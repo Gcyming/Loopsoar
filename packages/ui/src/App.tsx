@@ -48,6 +48,15 @@ import {
   type ChatMessage,
 } from "./chatStreamState.js";
 
+/** 每个会话独立的流状态（切走/切回不串台）。 */
+interface SessionStreamMeta {
+  activeId: string | null;
+  startedAt: number;
+  firstTokenAt: number;
+  busy: boolean;
+  stopping: boolean;
+}
+
 const ROLE_LABEL: Record<ChatMessage["role"], string> = {
   user: "你",
   assistant: "Loopsoar",
@@ -182,8 +191,6 @@ export default function App(): React.JSX.Element {
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   /** 最近一次同步到地址栏的 URL（仅活动标签 URL 变化时才覆盖，避免打断用户输入）。 */
   const lastSyncedUrlRef = useRef<string>("");
-  const sendStartedAtRef = useRef<number>(0);
-  const firstTokenAtRef = useRef<number>(0);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   /** 时间线「思考过程」卡的开合（按消息 id；流式中默认展开，收尾后自动收起）。 */
   const [thinkingOpen, setThinkingOpen] = useState<Record<string, boolean>>({});
@@ -201,8 +208,42 @@ export default function App(): React.JSX.Element {
   const [compactUi, setCompactUi] = useState(false);
   const composerBoxRef = useRef<HTMLDivElement | null>(null);
   const measureRowRef = useRef<HTMLDivElement | null>(null);
-  const activeAssistantRef = useRef<string | null>(null);
   const tailSeqRef = useRef<number>(0);
+  /** 消息按会话缓存：切走再切回时恢复该会话的实时状态（含后台仍在跑的流）。 */
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const sessionCacheRef = useRef(new Map<string, ChatMessage[]>());
+  const sessionMetaRef = useRef(new Map<string, SessionStreamMeta>());
+  React.useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const metaFor = React.useCallback((sessionId: string): SessionStreamMeta => {
+    let meta = sessionMetaRef.current.get(sessionId);
+    if (!meta) {
+      meta = { activeId: null, startedAt: 0, firstTokenAt: 0, busy: false, stopping: false };
+      sessionMetaRef.current.set(sessionId, meta);
+    }
+    return meta;
+  }, []);
+
+  const readSessionMessages = React.useCallback((sessionId: string): ChatMessage[] => {
+    return sessionCacheRef.current.get(sessionId) ?? (sessionId === sessionIdRef.current ? messagesRef.current : []);
+  }, []);
+
+  const writeSessionMessages = React.useCallback((sessionId: string, next: ChatMessage[]): void => {
+    sessionCacheRef.current.set(sessionId, next);
+    if (sessionId === sessionIdRef.current) {
+      messagesRef.current = next;
+      setMessages(next);
+    }
+  }, []);
+
+  const updateSessionMessages = React.useCallback(
+    (sessionId: string, updater: (prev: ChatMessage[]) => ChatMessage[]): void => {
+      writeSessionMessages(sessionId, updater(readSessionMessages(sessionId)));
+    },
+    [readSessionMessages, writeSessionMessages],
+  );
 
   // 提示自动消失：成功 4.5s、失败/中断 8s；避免每条提示都要手动点掉
   useEffect(() => {
@@ -242,6 +283,7 @@ export default function App(): React.JSX.Element {
             const restored = restoreMessages(history.session.messages, nextId);
             // 只在界面仍为空时恢复：避免异步历史把用户刚发出的消息覆盖掉（曾导致"回复消失"）
             setMessages((prev) => (prev.length === 0 ? restored : prev));
+            sessionCacheRef.current.set(history.session.sessionId, restored);
           }
         }
       }
@@ -279,52 +321,60 @@ export default function App(): React.JSX.Element {
     window.addEventListener("resize", syncMaximized);
 
     /** 追加流式增量：text 累积 + tail 标记（触发逐单元渐入动画）。 */
-    const upsertAssistant = (delta: string): void => {
-      if (firstTokenAtRef.current === 0) firstTokenAtRef.current = Date.now();
-      const id = activeAssistantRef.current ?? nextId("a");
-      activeAssistantRef.current = id;
+    const upsertAssistant = (sessionId: string, delta: string): void => {
+      const meta = metaFor(sessionId);
+      if (meta.firstTokenAt === 0) meta.firstTokenAt = Date.now();
+      const id = meta.activeId ?? nextId("a");
+      meta.activeId = id;
       tailSeqRef.current += 1;
       const tailSeq = tailSeqRef.current;
-      setMessages((prev) => applyChunk(prev, id, delta, { tailSeq }));
+      updateSessionMessages(sessionId, (prev) => applyChunk(prev, id, delta, { tailSeq }));
     };
 
-    const pushTransient = (role: ChatMessage["role"], text: string): void => {
-      setMessages((prev) => [...prev, { id: nextId(role), role, text, status: "done" }]);
+    const pushTransient = (sessionId: string, role: ChatMessage["role"], text: string): void => {
+      updateSessionMessages(sessionId, (prev) => [...prev, { id: nextId(role), role, text, status: "done" }]);
     };
 
     const unsubscribers = [
       api.on("chat:stream:chunk", (payload) => {
-        const p = payload as { content?: string };
-        if (typeof p.content === "string" && p.content.length > 0) upsertAssistant(p.content);
+        const p = payload as { content?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
+        if (typeof p.content === "string" && p.content.length > 0) upsertAssistant(sid, p.content);
       }),
       api.on("chat:stream:reasoning", (payload) => {
-        const p = payload as { content?: string };
+        const p = payload as { content?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
         const reasoningDelta = typeof p.content === "string" ? p.content : "";
-        if (reasoningDelta.length > 0) {
-          if (firstTokenAtRef.current === 0) firstTokenAtRef.current = Date.now();
-          setMessages((prev) => {
-            const at = activeAssistantRef.current;
-            return at ? applyReasoning(prev, at, reasoningDelta) : prev;
-          });
-        }
+        if (reasoningDelta.length === 0) return;
+        const meta = metaFor(sid);
+        if (meta.firstTokenAt === 0) meta.firstTokenAt = Date.now();
+        const at = meta.activeId;
+        if (at) updateSessionMessages(sid, (prev) => applyReasoning(prev, at, reasoningDelta));
       }),
       api.on("chat:stream:tool_start", (payload) => {
-        const raw = String((payload as { content?: string }).content ?? "");
-        setMessages((prev) => {
-          const at = activeAssistantRef.current;
-          return at ? applyToolStart(prev, at, raw) : prev;
-        });
+        const p = payload as { content?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
+        const raw = String(p.content ?? "");
+        const at = metaFor(sid).activeId;
+        if (at) updateSessionMessages(sid, (prev) => applyToolStart(prev, at, raw));
       }),
       api.on("chat:stream:tool", (payload) => {
-        const raw = String((payload as { content?: string }).content ?? "");
-        setMessages((prev) => {
-          const at = activeAssistantRef.current;
-          if (!at) return prev;
-          return applyToolResult(prev, at, raw, nextId("tool"));
-        });
+        const p = payload as { content?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
+        const raw = String(p.content ?? "");
+        const at = metaFor(sid).activeId;
+        if (!at) return;
+        updateSessionMessages(sid, (prev) => applyToolResult(prev, at, raw, nextId("tool")));
       }),
       api.on("chat:stream:progress", (payload) => {
-        const raw = String((payload as { content?: string }).content ?? "");
+        const p = payload as { content?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
+        const raw = String(p.content ?? "");
         let parsed: {
           note?: string;
           compressed?: boolean;
@@ -339,8 +389,9 @@ export default function App(): React.JSX.Element {
         }
         if (parsed.compressed) {
           const note = parsed.note ?? `已自动压缩 ${parsed.dropped ?? 0} 条早期消息`;
-          setMessages((prev) => {
-            const at = activeAssistantRef.current;
+          const at = metaFor(sid).activeId;
+          if (!at) return;
+          updateSessionMessages(sid, (prev) => {
             return prev.map((m) =>
               m.id === at
                 ? {
@@ -361,7 +412,7 @@ export default function App(): React.JSX.Element {
           });
           return;
         }
-        if (parsed.note) pushTransient("system", parsed.note);
+        if (parsed.note) pushTransient(sid, "system", parsed.note);
       }),
       api.on("chat:stream:heartbeat", () => {}),
       api.on("perm:request", (payload) => {
@@ -391,67 +442,91 @@ export default function App(): React.JSX.Element {
         /* 记忆条目在设置面板中查看；主界面保持安静 */
       }),
       api.on("chat:stream:done", (payload) => {
-        const p = payload as { content?: string };
-        const start = sendStartedAtRef.current;
-        const first = firstTokenAtRef.current;
-        const finishedAssistantId = activeAssistantRef.current;
+        const p = payload as { content?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
+        const meta = metaFor(sid);
+        const wasStopping = meta.stopping;
         const info = parseDone(p.content);
-        const statusText = info.statusText;
-        setMessages((prev) => {
+        let finishedId: string | null = null;
+        updateSessionMessages(sid, (prev) => {
           const streaming = prev.find((m) => m.status === "streaming");
+          finishedId = streaming?.id ?? null;
           if (streaming?.timeline?.length && api) {
-            void api.chat
-              .saveTimeline({ sessionId: sessionIdRef.current ?? undefined, timeline: streaming.timeline })
-              .catch(() => {});
+            void api.chat.saveTimeline({ sessionId: sid, timeline: streaming.timeline }).catch(() => {});
           }
-          return applyDone(prev, info, { startedAt: start, firstTokenAt: first });
+          return applyDone(prev, info, { startedAt: meta.startedAt, firstTokenAt: meta.firstTokenAt });
         });
-        if (finishedAssistantId) {
-          // slime 口径：收尾后整块思考历程自动收起（用户可随时再展开）
-          // E2E/演示：?expandTimeline=1 时保持展开，便于验收时间线视觉
-          const params = new URLSearchParams(location.search);
-          const keepTimelineOpen = params.get("expandTimeline") === "1";
-          if (!keepTimelineOpen) setThinkingOpen((prev) => ({ ...prev, [finishedAssistantId]: false }));
-          // E2E/演示：?scrollTimeline=1 时把最后一条思考时间线滚到可视区顶部，便于截图验收
-          const scrollTarget = params.get("scrollTo");
-          if (params.get("scrollTimeline") === "1" || scrollTarget) {
-            setTimeout(() => {
-              const selector = scrollTarget === "plan"
-                ? ".chat-scroll .plan-card"
-                : scrollTarget === "todo"
-                  ? ".chat-scroll .todo-announce"
-                  : scrollTarget === "product"
-                    ? ".chat-scroll .product-panel"
-                    : scrollTarget === "diff"
-                      ? ".chat-scroll .think-diff-block"
-                      : scrollTarget === "user"
-                        ? ".chat-scroll .msg-row[data-rail-role='user']"
-                        : ".chat-scroll .think-card";
-              const nodes = document.querySelectorAll(selector);
-              const last = nodes[nodes.length - 1] as HTMLElement | undefined;
-              last?.scrollIntoView({ block: "center" });
-            }, 500);
-          }
+        meta.busy = false;
+        meta.stopping = false;
+        meta.activeId = null;
+        meta.startedAt = 0;
+        meta.firstTokenAt = 0;
+        if (sid !== sessionIdRef.current) return; // 后台会话收尾：缓存里已是完成态，切回时展示
+        const params = new URLSearchParams(location.search);
+        if (finishedId && params.get("expandTimeline") !== "1") {
+          setThinkingOpen((prev) => ({ ...prev, [finishedId as string]: false }));
         }
-        activeAssistantRef.current = null;
-        firstTokenAtRef.current = 0;
-        sendStartedAtRef.current = 0;
+        const scrollTarget = params.get("scrollTo");
+        if (params.get("scrollTimeline") === "1" || scrollTarget) {
+          setTimeout(() => {
+            const selector = scrollTarget === "plan"
+              ? ".chat-scroll .plan-card"
+              : scrollTarget === "todo"
+                ? ".chat-scroll .todo-announce"
+                : scrollTarget === "product"
+                  ? ".chat-scroll .product-panel"
+                  : scrollTarget === "diff"
+                    ? ".chat-scroll .think-diff-block"
+                    : scrollTarget === "user"
+                      ? ".chat-scroll .msg-row[data-rail-role='user']"
+                      : ".chat-scroll .think-card";
+            const nodes = document.querySelectorAll(selector);
+            const last = nodes[nodes.length - 1] as HTMLElement | undefined;
+            last?.scrollIntoView({ block: "center" });
+          }, 500);
+        }
         setBusy(false);
-        setNotice(statusText);
+        setNotice(wasStopping ? "已停止" : info.statusText);
       }),
       api.on("chat:stream:error", (payload) => {
-        const p = payload as { content?: string; message?: string };
+        const p = payload as { content?: string; message?: string; sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid) return;
+        const meta = metaFor(sid);
         const text = p.message ?? p.content ?? "未知错误";
-        activeAssistantRef.current = null;
-        setBusy(false);
-        setNotice("回复失败");
-        setMessages((prev) => {
-          if (prev.some((m) => m.status === "streaming")) {
-            return prev.map((m) =>
-              m.status === "streaming" ? { ...m, status: "error", tail: undefined, errorText: text } : m,
-            );
+        if (meta.stopping) {
+          // 用户主动停止：abort 会以 error 形式冒泡，这里统一收束为「已停止」，不显示红色报错
+          updateSessionMessages(sid, (prev) =>
+            prev.map((m) =>
+              m.status === "streaming"
+                ? { ...m, status: "done", tail: undefined, interrupted: { status: "stopped", reason: "用户已停止" } }
+                : m,
+            ),
+          );
+          meta.busy = false;
+          meta.stopping = false;
+          meta.activeId = null;
+          meta.startedAt = 0;
+          meta.firstTokenAt = 0;
+          if (sid === sessionIdRef.current) {
+            setBusy(false);
+            setNotice("已停止");
           }
-          // 首字之前就失败：没有流式气泡 → 补一条错误消息，否则错误被吞掉
+          return;
+        }
+        meta.busy = false;
+        meta.activeId = null;
+        meta.startedAt = 0;
+        meta.firstTokenAt = 0;
+        if (sid === sessionIdRef.current) {
+          setBusy(false);
+          setNotice("回复失败");
+        }
+        updateSessionMessages(sid, (prev) => {
+          if (prev.some((m) => m.status === "streaming")) {
+            return prev.map((m) => (m.status === "streaming" ? { ...m, status: "error", tail: undefined, errorText: text } : m));
+          }
           return [
             ...prev,
             { id: nextId("assistant"), role: "assistant" as const, text: "", status: "error" as const, errorText: text, createdAt: Date.now() },
@@ -627,10 +702,16 @@ export default function App(): React.JSX.Element {
     (raw: string): void => {
       const text = raw.trim();
       if (!text || !api) return;
-      setBusy(true);
-      setNotice("");
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const meta = metaFor(sid);
       const assistantId = nextId("assistant");
-      setMessages((prev) => [
+      meta.activeId = assistantId;
+      meta.startedAt = Date.now();
+      meta.firstTokenAt = 0;
+      meta.busy = true;
+      meta.stopping = false;
+      updateSessionMessages(sid, (prev) => [
         ...prev,
         { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() },
         {
@@ -643,17 +724,19 @@ export default function App(): React.JSX.Element {
           model: provider?.model ?? undefined,
         },
       ]);
-      activeAssistantRef.current = assistantId;
-      sendStartedAtRef.current = Date.now();
-      firstTokenAtRef.current = 0;
+      setBusy(true);
+      setNotice("");
       void api.chat
-        .stream({ message: text, sessionId: sessionIdRef.current, mode, reasoningEffort: reasoningEffort || undefined })
+        .stream({ message: text, sessionId: sid, mode, reasoningEffort: reasoningEffort || undefined })
         .catch((err: unknown) => {
-          setBusy(false);
-          setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
+          meta.busy = false;
+          if (sid === sessionIdRef.current) {
+            setBusy(false);
+            setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
+          }
         });
     },
-    [api, mode, provider, reasoningEffort],
+    [api, metaFor, mode, provider, reasoningEffort, updateSessionMessages],
   );
 
   const send = useCallback((): void => {
@@ -662,14 +745,17 @@ export default function App(): React.JSX.Element {
     setInput("");
     if (busy) {
       // 运行中：作为「转向提示」注入（轮次边界生效，不打断当前输出）
-      setMessages((prev) => {
-        const active = activeAssistantRef.current;
-        const appended = active ? applySteer(prev, active, text) : prev;
-        return [
-          ...appended,
-          { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
-        ];
-      });
+      const sid = sessionIdRef.current;
+      if (sid) {
+        const active = metaFor(sid).activeId;
+        updateSessionMessages(sid, (prev) => {
+          const appended = active ? applySteer(prev, active, text) : prev;
+          return [
+            ...appended,
+            { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
+          ];
+        });
+      }
       void api.chat
         .steer({ message: text, sessionId: sessionIdRef.current ?? undefined })
         .then((r) => setNotice(r.accepted ? "转向已注入（下一轮生效）" : "转向未生效：当前没有运行中的回复"))
@@ -677,7 +763,7 @@ export default function App(): React.JSX.Element {
       return;
     }
     sendText(text);
-  }, [api, busy, input, sendText]);
+  }, [api, busy, input, metaFor, sendText, updateSessionMessages]);
 
   /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
   const rollbackTo = useCallback(
@@ -689,12 +775,13 @@ export default function App(): React.JSX.Element {
       const keepCount = messages
         .slice(0, idx)
         .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
-      setMessages((prev) => prev.slice(0, idx));
+      const sid = sessionIdRef.current;
+      if (sid) updateSessionMessages(sid, (prev) => prev.slice(0, idx));
       setInput(target.text);
       setNotice("已回滚到该消息，内容已放回输入框");
       void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
     },
-    [api, messages],
+    [api, messages, updateSessionMessages],
   );
 
   /** 重新生成：回滚到上一条用户消息并重发（复用现有 rollback + sendText 通道）。 */
@@ -714,17 +801,35 @@ export default function App(): React.JSX.Element {
       const keepCount = messages
         .slice(0, userIdx)
         .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
-      setMessages((prev) => prev.slice(0, userIdx));
+      const sid = sessionIdRef.current;
+      if (sid) updateSessionMessages(sid, (prev) => prev.slice(0, userIdx));
       void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
       window.setTimeout(() => sendText(text), 80);
     },
-    [api, messages, sendText],
+    [api, messages, sendText, updateSessionMessages],
   );
 
   const stop = useCallback((): void => {
     if (!api) return;
-    void api.chat.stop({ sessionId: sessionIdRef.current });
-  }, [api]);
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    // 标记「用户主动停止」：abort 的 error 事件被 UI 收束为已停止，而不是红色报错
+    const meta = metaFor(sid);
+    meta.stopping = true;
+    setNotice("正在停止…");
+    void api.chat
+      .stop({ sessionId: sid })
+      .then((r) => {
+        if (r.stopped) return;
+        meta.stopping = false;
+        meta.busy = false;
+        setBusy(false);
+        setNotice("当前没有正在运行的回复");
+      })
+      .catch(() => {
+        meta.stopping = false;
+      });
+  }, [api, metaFor]);
 
   const navigate = useCallback(
     (raw?: string): void => {
@@ -861,24 +966,35 @@ export default function App(): React.JSX.Element {
     void api.chat.newSession().then((r) => {
       setSessions(r.sessions);
       setCurrentSession(r.currentId);
-      setMessages([]);
-      if (r.session?.sessionId) sessionIdRef.current = r.session.sessionId;
+      const nextIdValue = r.session?.sessionId;
+      if (nextIdValue) {
+        sessionIdRef.current = nextIdValue;
+        writeSessionMessages(nextIdValue, []);
+      } else {
+        setMessages([]);
+      }
+      setBusy(false);
       setSessionOpen(false);
       setNotice("已新建会话");
     });
-  }, [api]);
+  }, [api, writeSessionMessages]);
 
   const switchSession = useCallback((sessionId: string): void => {
     if (!api) return;
     void api.chat.switchSession({ sessionId }).then((r) => {
       if (!r.ok) return;
-      setCurrentSession(sessionId);
       sessionIdRef.current = sessionId;
-      const msgs = r.session?.messages ?? [];
-      setMessages(restoreMessages(msgs, nextId));
+      setCurrentSession(sessionId);
+      // 优先恢复该会话的实时缓存（后台可能仍在跑）；否则用持久化历史
+      const cached = sessionCacheRef.current.get(sessionId);
+      const msgs = cached ?? restoreMessages(r.session?.messages ?? [], nextId);
+      writeSessionMessages(sessionId, msgs);
+      const meta = metaFor(sessionId);
+      setBusy(meta.busy);
       setSessionOpen(false);
+      setNotice("");
     });
-  }, [api]);
+  }, [api, metaFor, writeSessionMessages]);
 
   const snapshot = useCallback((): void => {
     if (!api) return;
@@ -908,7 +1024,16 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!api || typeof location === "undefined") return;
     const mode = new URLSearchParams(location.search).get("e2e");
-    if (mode !== "model-menu" && mode !== "perm-menu" && mode !== "menus-overlap" && mode !== "set-effort" && mode !== "steer-choice") return;
+    if (
+      mode !== "model-menu" &&
+      mode !== "perm-menu" &&
+      mode !== "menus-overlap" &&
+      mode !== "set-effort" &&
+      mode !== "steer-choice" &&
+      mode !== "session-switch"
+    ) {
+      return;
+    }
     const clickPermissionChip = (): void => {
       // 权限菜单的开关属于 Composer：深链只负责点击它的触发 chip（避免 App 再维护一份状态）。
       const chips = Array.from(document.querySelectorAll<HTMLElement>(".chip"));
@@ -917,6 +1042,22 @@ export default function App(): React.JSX.Element {
     const timer = setTimeout(() => {
       if (mode === "model-menu") {
         openModelMenu();
+        return;
+      }
+      if (mode === "session-switch") {
+        // E2E：长流式期间切到新会话再切回，验证不串台/不丢流/停止可用。
+        // 等会话 ID 就绪再开始（否则启动恢复尚未完成，origin 为空导致切不回来）。
+        const begin = (): void => {
+          const origin = sessionIdRef.current;
+          if (!origin) {
+            window.setTimeout(begin, 200);
+            return;
+          }
+          sendText("请做一次较长的回答，用于验证切换会话后流仍可恢复");
+          window.setTimeout(() => void newSession(), 1200);
+          window.setTimeout(() => switchSession(origin), 3200);
+        };
+        begin();
         return;
       }
       if (mode === "steer-choice") {
@@ -946,7 +1087,7 @@ export default function App(): React.JSX.Element {
       clickPermissionChip();
     }, 900);
     return () => clearTimeout(timer);
-  }, [api, openModelMenu, sendText]);
+  }, [api, newSession, openModelMenu, sendText, switchSession]);
 
   // E2E 深链：?e2e=settings&section=xxx 直接打开对应设置分区
   useEffect(() => {

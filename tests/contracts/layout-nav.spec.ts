@@ -17,7 +17,7 @@ describe("布局契约", () => {
     expect(computeBrowserViewBounds({ width: 1280, height: 800 })).toEqual({
       x: 0,
       y: 118,
-      width: 920,
+      width: 914,
       height: 650,
     });
   });

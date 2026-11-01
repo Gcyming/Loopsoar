@@ -138,8 +138,9 @@ export function registerChatDomain(deps: ChatDeps): void {
 
   handleTrusted(deps, "chat:stop", (payload) => {
     const p = payload as { sessionId: string };
+    // 只调用 stop：ChatService 的 stream 收尾会 emit 唯一的 done（aborted）。
+    // 这里若再手工 push done，UI 会收到两次 done，表现为「看起来结束了但实际还在跑」。
     const stopped = deps.chatService.stop(p.sessionId);
-    deps.push("chat:stream:done", { sessionId: p.sessionId, stopped });
     return { stopped };
   });
 

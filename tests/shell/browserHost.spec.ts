@@ -74,7 +74,7 @@ describe("BrowserHost（多标签）", () => {
     expect(host.listTabs()[0].active).toBe(true);
     expect(created[0].navigated[0]).toBe("https://example.com/");
     // 1360x860：y = 36+48+34 = 118，height = 860-36-34-48-32 = 710
-    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 1000, height: 710 });
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
   });
 
   it("新建标签并切换：同一时刻只有一个活动标签可见", async () => {
@@ -168,7 +168,7 @@ describe("BrowserHost（多标签）", () => {
     state.width = 1000;
     state.height = 700;
     host.syncBounds();
-    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 640, height: 550 });
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 634, height: 550 });
   });
 });
 

@@ -226,6 +226,17 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   思考与穿插正文（13.5px）照常实时显示，轮次结束才揭晓完整正文（对齐 slime 的 GatedBody）
 - 测试：415 全绿（scrollFollow 3、streamFadeSplit 5）；证据 gui-80/81/82
 
+## 二·二十四、2026-11-01 第二十一次增量（切换会话修复 / 分隔条修复）
+- 会话流按会话隔离（slime 同思路的本土化实现）：
+  · App 增加 per-session 消息缓存与流元信息（activeId/startedAt/firstTokenAt/busy/stopping）
+  · chat:stream:* 事件按 payload.sessionId 路由；后台会话继续写入自己的缓存，切回即恢复实时态
+  · 切换会话/新建会话不再清空或串台；回切后流式状态、模型、停止按钮均正确
+- 停止语义修复：
+  · 删除 shell stop 里重复的 `done` 推送（服务自身已 emit 唯一 done）——「看似结束却仍在跑」的根因
+  · UI 标记用户主动停止：abort 的 error 事件收束为「已停止」+ 中断原因，不再出现红色报错
+- 侧栏分隔条：原生网页视图宽度让出 `SPLITTER_WIDTH=6px`（此前视图盖住分隔条，打开网页后无法拖拽）
+- E2E：session-switch 模式（长流中切新会话再切回）证据 gui-84；停止 gui-85
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

@@ -14,6 +14,8 @@ export const LAYOUT = {
   TOP_BAR_HEIGHT: 48,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
   SIDEBAR_WIDTH: 360,
+  /** 侧栏拖拽分隔条宽度：原生网页视图必须让出这 6px，否则分隔条被视图盖住无法拖拽。 */
+  SPLITTER_WIDTH: 6,
   /** 底部状态条高度。 */
   STATUS_BAR_HEIGHT: 32,
 } as const;
@@ -40,7 +42,7 @@ export function computeBrowserViewBounds(
   size: WindowSize,
   layout: typeof LAYOUT = LAYOUT,
 ): BrowserViewBounds {
-  const width = Math.max(0, size.width - layout.SIDEBAR_WIDTH);
+  const width = Math.max(0, size.width - layout.SIDEBAR_WIDTH - layout.SPLITTER_WIDTH);
   const height = Math.max(
     0,
     size.height -
