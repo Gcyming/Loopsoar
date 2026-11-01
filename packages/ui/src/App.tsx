@@ -14,6 +14,7 @@ import type {
   ProviderStatus,
   SessionMeta,
   TabState,
+  WorkspaceRecord,
 } from "./types.js";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
@@ -24,6 +25,7 @@ import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import TitleBar from "./TitleBar.js";
+import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 import { type TimelineStep } from "./timeline.js";
@@ -66,6 +68,9 @@ export default function App(): React.JSX.Element {
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [maximized, setMaximized] = useState(false);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [address, setAddress] = useState("");
@@ -210,6 +215,11 @@ export default function App(): React.JSX.Element {
         if (!sessionIdRef.current && sessionResult.currentId) {
           sessionIdRef.current = sessionResult.currentId;
         }
+      }
+      const workspaceResult = await api.workspace.list().catch(() => null);
+      if (workspaceResult) {
+        setWorkspaces(workspaceResult.workspaces);
+        setActiveWorkspaceId(workspaceResult.activeId);
       }
       const dlResult = await api.browser.downloads().catch(() => null);
       if (dlResult) setDownloads(dlResult.downloads);
@@ -971,7 +981,8 @@ export default function App(): React.JSX.Element {
       mode !== "set-effort" &&
       mode !== "steer-choice" &&
       mode !== "session-switch" &&
-      mode !== "session-tabs"
+      mode !== "session-tabs" &&
+      mode !== "workspace"
     ) {
       return;
     }
@@ -983,6 +994,11 @@ export default function App(): React.JSX.Element {
     const timer = setTimeout(() => {
       if (mode === "model-menu") {
         openModelMenu();
+        return;
+      }
+      if (mode === "workspace") {
+        // E2E：打开工作区面板（挂载项目 / Git 状态 / 当前会话 worktree）
+        setWorkspacePanelOpen(true);
         return;
       }
       if (mode === "session-tabs") {
@@ -1059,11 +1075,12 @@ export default function App(): React.JSX.Element {
   // 修复遮挡：应用内浮层（设置）打开时隐藏原生 WebContentsView
   useEffect(() => {
     if (!api) return;
-    void api.browser.setOverlay({ open: settingsOpen }).catch(() => {});
+    const overlay = settingsOpen || workspacePanelOpen;
+    void api.browser.setOverlay({ open: overlay }).catch(() => {});
     return () => {
       void api.browser.setOverlay({ open: false }).catch(() => {});
     };
-  }, [api, settingsOpen]);
+  }, [api, settingsOpen, workspacePanelOpen]);
 
   // 动效强度偏好 → 根节点 data 属性（CSS 里统一降级，避免各处手写判断）
   useEffect(() => {
@@ -1260,6 +1277,23 @@ export default function App(): React.JSX.Element {
               <span style={styles.sidebarAgent}>{agentLabel}</span>
             </span>
           </div>
+          <div style={styles.workspaceBar}>
+            <button
+              type="button"
+              className="chip"
+              style={{ ...styles.chip, ...styles.workspaceChip }}
+              title="工作区：挂载项目文件夹 / 会话 worktree"
+              onClick={() => setWorkspacePanelOpen(true)}
+            >
+              <Icon name="folder" size={12} style={{ marginRight: 5 }} />
+              <span style={styles.workspaceChipName}>
+                {workspaces.find((workspace) => workspace.id === (sessions.find((x) => x.id === currentSession)?.workspaceId ?? activeWorkspaceId))?.name ?? "工作区"}
+              </span>
+            </button>
+            <button type="button" className="icon-btn" title="管理工作区" onClick={() => setWorkspacePanelOpen(true)}>
+              <Icon name="plus" size={12} />
+            </button>
+          </div>
           <div style={styles.sessionBar}>
             <span style={styles.anchor} data-popover-trigger>
               <button
@@ -1398,6 +1432,25 @@ export default function App(): React.JSX.Element {
         <span style={{ ...styles.statusItem, ...styles.statusUrl }}>{currentUrl || "about:start"}</span>
       </footer>
 
+      <WorkspacePanel
+        open={workspacePanelOpen}
+        onClose={() => setWorkspacePanelOpen(false)}
+        currentSessionId={currentSession}
+        currentSessionTitle={sessions.find((item) => item.id === currentSession)?.title ?? "当前会话"}
+        sessionWorkspaceId={sessions.find((item) => item.id === currentSession)?.workspaceId ?? activeWorkspaceId}
+        onChanged={(text) => {
+          if (text) setNotice(text);
+          void api?.chat.sessions().then((r) => {
+            setSessions(r.sessions);
+            setCurrentSession(r.currentId);
+          }).catch(() => {});
+          void api?.workspace.list().then((r) => {
+            setWorkspaces(r.workspaces);
+            setActiveWorkspaceId(r.activeId);
+          }).catch(() => {});
+        }}
+        onNotice={setNotice}
+      />
       {settingsOpen ? (
         <Settings
           key={settingsSection || "settings"}
@@ -1583,6 +1636,14 @@ const styles: Record<string, React.CSSProperties> = {
   dlName: { fontSize: 11.5, color: BRAND.linen, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 240 },
   dlState: { fontSize: 10.5, color: BRAND.linenFaint },
   dlActions: { display: "inline-flex", gap: 2, flexShrink: 0 },
+  workspaceBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "0 12px 6px",
+  },
+  workspaceChip: { flex: 1, minWidth: 0, justifyContent: "flex-start", fontSize: 11.5 },
+  workspaceChipName: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   sessionBar: { position: "relative", display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderBottom: `1px solid ${BRAND.border}` },
   sessionMenu: {
     position: "absolute",

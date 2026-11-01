@@ -442,6 +442,69 @@
       "hasRequest": true
     },
     {
+      "channel": "workspace:list",
+      "domain": "workspace",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "workspace:create",
+      "domain": "workspace",
+      "method": "create",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "workspace:select",
+      "domain": "workspace",
+      "method": "select",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "workspace:remove",
+      "domain": "workspace",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "workspace:status",
+      "domain": "workspace",
+      "method": "status",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "worktree:create",
+      "domain": "worktree",
+      "method": "create",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "worktree:remove",
+      "domain": "worktree",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "worktree:diff",
+      "domain": "worktree",
+      "method": "diff",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "worktree:merge",
+      "domain": "worktree",
+      "method": "merge",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "extensions:list",
       "domain": "extensions",
       "method": "list",

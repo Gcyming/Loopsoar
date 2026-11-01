@@ -16,8 +16,12 @@ export interface ChatDeps extends TrustedIpcDeps {
   shouldAutoCapture?: () => boolean;
   /** 当前生成本轮回复的供应商/模型（流开始瞬间快照，避免中途切换污染历史）。 */
   getModelInfo?: () => { provider?: string; model?: string } | undefined;
+  /** 新建会话归属的当前工作区。 */
+  getActiveWorkspaceId?: () => string | null;
   /** 会话被打开/新建（壳层据此切换浏览器标签"文件夹"）。可等待：返回前完成标签组切换。 */
   onSessionOpened?: (sessionId: string) => void | Promise<void>;
+  /** 删除会话前清理它的 worktree（会话文件删除后拿不到路径）。 */
+  onSessionDeleting?: (sessionId: string) => void | Promise<void>;
   /** 会话被删除（壳层据此销毁对应标签组并切到 nextId）。 */
   onSessionDeleted?: (sessionId: string, nextSessionId: string | null) => void | Promise<void>;
 }
@@ -66,7 +70,8 @@ function startStream(
   // 会话解析：显式 > 当前会话 > 新建会话（多会话列表）
   let sessionId = payload.sessionId ?? deps.sessions?.currentId() ?? null;
   if (!sessionId) {
-    sessionId = deps.sessions?.newSession().sessionId ?? `sess-${Date.now()}`;
+    sessionId =
+      deps.sessions?.newSession(deps.getActiveWorkspaceId?.() ?? null).sessionId ?? `sess-${Date.now()}`;
     deps.onSessionOpened?.(sessionId);
   }
   let assistantText = "";
@@ -170,7 +175,7 @@ export function registerChatDomain(deps: ChatDeps): void {
   }));
 
   handleTrusted(deps, "chat:newSession", async () => {
-    const session = deps.sessions?.newSession() ?? null;
+    const session = deps.sessions?.newSession(deps.getActiveWorkspaceId?.() ?? null) ?? null;
     if (session?.sessionId) await deps.onSessionOpened?.(session.sessionId);
     return { session, sessions: deps.sessions?.list() ?? [], currentId: session?.sessionId ?? null };
   });
@@ -184,6 +189,7 @@ export function registerChatDomain(deps: ChatDeps): void {
 
   handleTrusted(deps, "chat:deleteSession", async (payload) => {
     const p = payload as { sessionId: string };
+    if (deps.sessions?.get(p.sessionId)) await deps.onSessionDeleting?.(p.sessionId);
     const removed = deps.sessions?.remove(p.sessionId) ?? false;
     if (removed) await deps.onSessionDeleted?.(p.sessionId, deps.sessions?.currentId() ?? null);
     return { removed, sessions: deps.sessions?.list() ?? [], currentId: deps.sessions?.currentId() ?? null };

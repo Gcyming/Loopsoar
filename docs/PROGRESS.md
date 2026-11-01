@@ -255,6 +255,16 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 研究文档 `docs/research/session-browser-persistence-cloudflare.md`：Cloudflare 免费可做，推荐 Workers+D1+GitHub OAuth Device Flow+客户端加密；Pages 只做静态/部署，不建议 GitHub 仓库当数据库。本轮只查证不实施。
 - 证据 gui-87（切回 A 会话恢复页面）、gui-88（重启恢复）
 
+## 二·二十七、2026-11-01 第二十四次增量（工作区 + 会话级 worktree）
+- 新增 ADR-0015：工作区（挂载项目文件夹）+ 会话级 Git Worktree
+- 工作区：WorkspaceStore（挂载/切换/删除/持久化）；会话 workspaceId；新会话继承活动工作区，切会话活动工作区跟随；旧会话自动补绑
+- 会话工作根单一解析：worktree > 会话工作区 > 活动工作区；file_write / terminal_run / 沙箱权限按 ctx.sessionId 解析，后台会话不串根
+- Worktree：`git worktree add -b loopsoar/<session>` 到 dataDir/worktrees；面板支持创建/diff/合并/清理；合并前主仓必须干净、冲突自动 abort；删除会话时自动清理 worktree
+- UI：Agent 栏新增工作区 chip + 工作区面板（挂载文件夹、Git 状态、项目会话、当前会话 worktree、diff/合并/清理）；按钮全部使用主题样式
+- 测试：workspaceStore / gitWorktree / workspaceRoot / fileTools 按会话根；全量 432 绿
+- 查证 `docs/research/worktree-cloudflare.md`：Cloudflare Sandboxes 仅 Workers Paid，本地 worktree 不依赖云；云端执行器后置
+- 证据 gui-89（工作区面板）、gui-90（worktree 创建）
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 高优先

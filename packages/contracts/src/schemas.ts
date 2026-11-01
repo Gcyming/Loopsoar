@@ -85,6 +85,24 @@ export const ProviderItemSchema = z.object({
 });
 export const ProviderItemIdSchema = z.object({ id: z.string().min(1).max(64) });
 export const SessionRefSchema = z.object({ sessionId: z.string().min(1).max(120) });
+/** 工作区：挂载一个本地项目文件夹；会话归属于工作区，工具根目录取自会话工作区/worktree。 */
+export const WorkspaceIdSchema = z.object({ id: z.string().min(1).max(64) });
+export const WorkspaceCreateSchema = z.object({
+  /** 不传则弹系统选择文件夹对话框。 */
+  root: z.string().min(1).max(1024).optional(),
+  name: z.string().min(1).max(60).optional(),
+});
+export const WorkspaceStatusSchema = z.object({ id: z.string().min(1).max(64).optional() });
+export const WorktreeSessionSchema = z.object({ sessionId: z.string().min(1).max(120) });
+export const WorktreeRemoveSchema = z.object({
+  sessionId: z.string().min(1).max(120),
+  force: z.boolean().optional(),
+  deleteBranch: z.boolean().optional(),
+});
+export const WorktreeMergeSchema = z.object({
+  sessionId: z.string().min(1).max(120),
+  message: z.string().max(500).optional(),
+});
 export const ExtensionToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
 export const ExtensionIdSchema = z.object({ id: z.string().min(1).max(120) });
 export const SkillIdSchema = z.object({ id: z.string().min(1).max(120) });
@@ -607,6 +625,60 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "deleteSession",
     request: SessionRefSchema,
+    sensitive: true,
+  },
+  "workspace:list": {
+    domain: "workspace",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "workspace:create": {
+    domain: "workspace",
+    method: "create",
+    request: WorkspaceCreateSchema,
+    sensitive: true,
+  },
+  "workspace:select": {
+    domain: "workspace",
+    method: "select",
+    request: WorkspaceIdSchema,
+    sensitive: true,
+  },
+  "workspace:remove": {
+    domain: "workspace",
+    method: "remove",
+    request: WorkspaceIdSchema,
+    sensitive: true,
+  },
+  "workspace:status": {
+    domain: "workspace",
+    method: "status",
+    request: WorkspaceStatusSchema,
+    sensitive: true,
+  },
+  "worktree:create": {
+    domain: "worktree",
+    method: "create",
+    request: WorktreeSessionSchema,
+    sensitive: true,
+  },
+  "worktree:remove": {
+    domain: "worktree",
+    method: "remove",
+    request: WorktreeRemoveSchema,
+    sensitive: true,
+  },
+  "worktree:diff": {
+    domain: "worktree",
+    method: "diff",
+    request: WorktreeSessionSchema,
+    sensitive: true,
+  },
+  "worktree:merge": {
+    domain: "worktree",
+    method: "merge",
+    request: WorktreeMergeSchema,
     sensitive: true,
   },
   "extensions:list": {

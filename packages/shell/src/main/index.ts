@@ -43,6 +43,9 @@ import { loadProviderConfig, registerSettingsDomain, currentRulesPrompt } from "
 import { registerMemoryDomain } from "./domains/memory.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
+import { WorkspaceStore } from "./workspaceStore.js";
+import { resolveSessionRoot as resolveRoot } from "./workspaceRoot.js";
+import { removeWorktree } from "./gitWorktree.js";
 import { ProviderStore } from "./providerStore.js";
 import { SecretStore } from "./secretStore.js";
 import { ExtensionHost } from "./extensions.js";
@@ -162,6 +165,10 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
               await new Promise((r) => setTimeout(r, 500));
             }
             await new Promise((r) => setTimeout(r, 500));
+            const postClick = Number(process.env.LOOPSOAR_E2E_POST_CLICK_MS ?? 0);
+            if (Number.isFinite(postClick) && postClick > 0) {
+              await new Promise((r) => setTimeout(r, postClick));
+            }
           }
 
           // E2E：向上滚动离开底部，验证「锁定最新」不会把用户拽回去，且出现回到最新按钮
@@ -598,6 +605,33 @@ app.whenReady().then(async () => {
   const memory = new MemoryService({ platform, filePath: memoryFile });
   await memory.load();
   const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
+  // 工作区：挂载项目文件夹。旧偏好里的 workspaceRoot 作为默认工作区，兼容升级用户。
+  const workspaces = new WorkspaceStore(
+    path.join(dirs.dataDir, "workspaces.json"),
+    initialPrefs.workspaceRoot?.trim() || process.cwd(),
+  );
+  const worktreesRoot = path.join(dirs.dataDir, "worktrees");
+  /** 会话工作根：会话 worktree > 会话工作区 > 活动工作区。 */
+  const resolveSessionRoot = (sessionId?: string): string => {
+    const worktree = sessionId ? sessions.getWorktree(sessionId) : null;
+    const workspaceId = sessionId ? sessions.get(sessionId)?.workspaceId : null;
+    const bound = workspaceId ? workspaces.get(workspaceId) : null;
+    return resolveRoot({
+      worktreePath: worktree?.path ?? null,
+      sessionWorkspaceRoot: bound?.root ?? null,
+      activeWorkspaceRoot: workspaces.active()?.root ?? null,
+      fallback: workspaceRoot,
+      isDirectory: (dir) => {
+        try {
+          return fs.statSync(dir).isDirectory();
+        } catch {
+          return false;
+        }
+      },
+    });
+  };
+  // 沙箱根跟随活动工作区（逐个工具执行前还会按会话根覆盖，见 ChatService.resolveWorkspaceRoot）
+  sandbox.setWorkspaceRoot(workspaces.active()?.root ?? workspaceRoot);
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
   const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
   const mcp = new McpHost(
@@ -671,6 +705,8 @@ app.whenReady().then(async () => {
     getSkillPrompt: (text: string) => skills.promptFor(text),
     // 权限策略：设置面板保存后即时生效
     permissionPolicy: () => loadPermissions(dirs.configDir),
+    // 工具执行前按会话切换沙箱根（工作区 / worktree，后台会话也不串根）
+    resolveWorkspaceRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
     // 供应商：设置面板保存后即时生效
     getLlm: (sessionId?: string) => buildLlmFromActive(sessionId) ?? llmRef,
     // 会话历史：每次 stream 读取持久化消息，让模型具备多轮上下文（回滚后同样生效）
@@ -706,6 +742,10 @@ app.whenReady().then(async () => {
   // 浏览器宿主：会话级标签组；WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
   // 初始会话 = 最近一次使用的会话（重启后左右两侧一起恢复）；没有会话时建一个，保证"文件夹"存在。
   const initialSessionId = sessions.currentId() ?? sessions.newSession().sessionId;
+  // 启动即把当前会话补绑活动工作区（旧会话/首启会话都落进"文件夹"）
+  if (!sessions.get(initialSessionId)?.workspaceId && workspaces.activeId()) {
+    sessions.setWorkspaceId(initialSessionId, workspaces.activeId());
+  }
   const tabSaveTimers = new Map<string, NodeJS.Timeout>();
   const queueBrowserStateSave = (sessionId: string, state: PersistedBrowserState): void => {
     const prev = tabSaveTimers.get(sessionId);
@@ -737,9 +777,9 @@ app.whenReady().then(async () => {
   }
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost);
-  registerTerminalTools(registry, () => workspaceRoot);
+  registerTerminalTools(registry, resolveSessionRoot);
   registerPlanTools(registry);
-  registerFileTools(registry, () => workspaceRoot);
+  registerFileTools(registry, resolveSessionRoot);
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
   // 退出前把每个会话的标签状态落盘（防抖队列可能还没触发）
@@ -759,7 +799,20 @@ app.whenReady().then(async () => {
   );
 
   registerRuntimeDomain(deps);
-  registerWorkspaceDomain({ ...deps, platform });
+  registerWorkspaceDomain({
+    ...deps,
+    platform,
+    workspaces,
+    sessions,
+    worktreesRoot,
+    pickFolder: async () => {
+      const result = await dialog.showOpenDialog(mainWindow ?? undefined!, {
+        title: "选择工作区文件夹",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    },
+  });
   registerAgentsDomain({ ...deps, agents });
   registerSettingsDomain(settingsDeps);
   registerChatDomain({
@@ -769,6 +822,7 @@ app.whenReady().then(async () => {
     memory,
     sessions,
     shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
+    getActiveWorkspaceId: () => workspaces.activeId(),
     // 本轮回复模型快照（会话持久化用，历史悬停显示真实模型）
     getModelInfo: () => {
       const active = providers.active();
@@ -776,9 +830,32 @@ app.whenReady().then(async () => {
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
     onSessionOpened: async (sessionId) => {
+      // 旧会话补绑工作区：首次打开时归属当前活动工作区
+      const sessionData = sessions.get(sessionId);
+      if (!sessionData?.workspaceId && workspaces.activeId()) {
+        sessions.setWorkspaceId(sessionId, workspaces.activeId());
+      }
+      // 当前会话的工作区成为活动工作区：新会话默认落在同一"文件夹"
+      const boundWorkspaceId = sessions.get(sessionId)?.workspaceId;
+      if (boundWorkspaceId && workspaces.activeId() !== boundWorkspaceId) {
+        workspaces.select(boundWorkspaceId);
+      }
       if (!browserHost) return;
       const tabs = await browserHost.switchSession(sessionId, sessions.getBrowserState(sessionId) ?? undefined);
       pushToRenderer("browser:tabs", { tabs });
+    },
+    onSessionDeleting: async (sessionId) => {
+      const worktree = sessions.getWorktree(sessionId);
+      if (!worktree) return;
+      await removeWorktree({
+        repoRoot: worktree.repoRoot,
+        worktreesRoot,
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+        force: true,
+        deleteBranch: true,
+      }).catch(() => undefined);
+      sessions.setWorktree(sessionId, null);
     },
     onSessionDeleted: async (sessionId, nextSessionId) => {
       if (!browserHost) return;

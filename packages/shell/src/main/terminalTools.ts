@@ -27,7 +27,7 @@ function killTree(pid: number | undefined): void {
   }
 }
 
-export function registerTerminalTools(registry: ToolRegistry, workspaceRoot: () => string): void {
+export function registerTerminalTools(registry: ToolRegistry, workspaceRoot: (sessionId?: string) => string): void {
   registry.register({
     name: "terminal_run",
     description: "在工作区执行一条命令行命令并返回输出（非交互；超时 30s；输出上限 12KB）",
@@ -39,7 +39,7 @@ export function registerTerminalTools(registry: ToolRegistry, workspaceRoot: () 
     execute: async (ctx): Promise<ToolResult> => {
       const params = (ctx.params ?? {}) as { command?: string; timeoutMs?: number };
       if (!params.command?.trim()) return { ok: false, content: "[错误] 缺少 command" };
-      const cwd = workspaceRoot() || process.cwd();
+      const cwd = workspaceRoot(ctx.sessionId) || process.cwd();
       const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT;
       const isWin = process.platform === "win32";
       return await new Promise<ToolResult>((resolve) => {

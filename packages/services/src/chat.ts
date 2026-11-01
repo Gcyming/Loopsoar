@@ -56,6 +56,8 @@ export interface ChatServiceOptions {
   getSkillPrompt?: (userText: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
   permissionPolicy?: () => Permissions;
+  /** 当前会话的工作根目录（工作区 / worktree）；工具执行前用于切换沙箱根。 */
+  resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
   /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
   getLlm?: (sessionId?: string) => LlmClient | undefined;
   /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
@@ -186,6 +188,8 @@ export class InternalToolExecutor {
       platform?: LoopsoarPlatform;
       agentId: string;
       sessionId: string;
+      /** 当前会话的工作根目录（工作区/ worktree）；权限校验前切换沙箱根。 */
+      resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
     },
   ) {}
 
@@ -218,6 +222,9 @@ export class InternalToolExecutor {
       ? String((toolCall.args as { path?: unknown }).path)
       : undefined;
 
+    // 按会话切换沙箱工作根：会话所属工作区 / 会话 worktree（后台会话也不串根）
+    const sessionRoot = this.opts.resolveWorkspaceRoot?.(this.opts.sessionId);
+    if (sessionRoot) sandbox.setWorkspaceRoot(sessionRoot);
     const decision = sandbox.checkPermission({
       agentId: this.opts.agentId,
       toolName: toolCall.name,
@@ -376,6 +383,7 @@ export class ChatService {
       platform,
       agentId: agent?.name ?? "loopsoar",
       sessionId,
+      resolveWorkspaceRoot: this.opts.resolveWorkspaceRoot,
     });
 
     let outcome: LoopRunStatus = "error";

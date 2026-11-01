@@ -192,6 +192,59 @@ export interface SessionMeta {
   updatedAt: number;
   preview: string;
   messageCount: number;
+  /** 会话归属的工作区（旧会话可能没有）。 */
+  workspaceId?: string | null;
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  name: string;
+  root: string;
+  createdAt: number;
+  lastUsedAt: number;
+}
+
+export interface WorkspaceGitStatus {
+  isRepo: boolean;
+  root: string | null;
+  branch: string | null;
+  head: string | null;
+  dirty: boolean;
+  changedFiles: number;
+}
+
+export interface SessionWorktree {
+  path: string;
+  branch: string;
+  baseBranch: string;
+  repoRoot: string;
+  createdAt: number;
+}
+
+export interface WorktreeFileChange {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked" | "unknown";
+  additions: number;
+  deletions: number;
+}
+
+export interface WorktreeDiff {
+  branch: string;
+  baseBranch: string;
+  files: WorktreeFileChange[];
+  commits: { hash: string; subject: string }[];
+  dirty: boolean;
+  ahead: number;
+}
+
+export interface WorkspaceStatusResult {
+  ok: boolean;
+  workspace?: WorkspaceRecord;
+  git?: WorkspaceGitStatus;
+  sessions?: { id: string; title: string; updatedAt: number }[];
+  worktrees?: { sessionId: string; title: string; worktree: SessionWorktree | null }[];
+  activeId?: string | null;
+  error?: string;
 }
 
 export interface ProviderModel {
@@ -348,6 +401,42 @@ export interface LoopsoarAPI {
   };
   perm: LoopsoarDomain;
   file: LoopsoarDomain;
+  workspace: LoopsoarDomain & {
+    list(): Promise<{ workspaces: WorkspaceRecord[]; activeId: string | null }>;
+    create(payload?: { root?: string; name?: string }): Promise<{
+      ok: boolean;
+      workspace?: WorkspaceRecord;
+      workspaces: WorkspaceRecord[];
+      activeId: string | null;
+      error?: string;
+    }>;
+    select(payload: { id: string }): Promise<{
+      ok: boolean;
+      workspace?: WorkspaceRecord;
+      workspaces: WorkspaceRecord[];
+      activeId: string | null;
+      error?: string;
+    }>;
+    remove(payload: { id: string }): Promise<{
+      ok: boolean;
+      workspaces: WorkspaceRecord[];
+      activeId: string | null;
+      error?: string;
+    }>;
+    status(payload?: { id?: string }): Promise<WorkspaceStatusResult>;
+  };
+  worktree: LoopsoarDomain & {
+    create(payload: { sessionId: string }): Promise<{ ok: boolean; worktree?: SessionWorktree; error?: string }>;
+    remove(payload: { sessionId: string; force?: boolean; deleteBranch?: boolean }): Promise<{ ok: boolean; error?: string }>;
+    diff(payload: { sessionId: string }): Promise<{ ok: boolean; diff?: WorktreeDiff; worktree?: SessionWorktree; error?: string }>;
+    merge(payload: { sessionId: string; message?: string }): Promise<{
+      ok: boolean;
+      committed?: boolean;
+      mergeCommit?: string;
+      conflicts?: string[];
+      error?: string;
+    }>;
+  };
   agents: LoopsoarDomain & { list(): Promise<{ agents: AgentSummary[] }> };
   runtime: LoopsoarDomain & {
     status(): Promise<BootStatus>;

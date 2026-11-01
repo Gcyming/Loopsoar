@@ -21,12 +21,24 @@ export interface PersistedMessage {
   model?: string;
 }
 
+export interface PersistedWorktree {
+  path: string;
+  branch: string;
+  baseBranch: string;
+  repoRoot: string;
+  createdAt: number;
+}
+
 export interface PersistedSession {
   sessionId: string;
   updatedAt: number;
   messages: PersistedMessage[];
   /** 该会话最后打开的网页（会话即"文件夹"；重启后恢复左侧页面）。 */
   browser?: PersistedBrowserState;
+  /** 会话归属的工作区（WorkpsaceStore 的 id）。 */
+  workspaceId?: string | null;
+  /** 该会话的隔离 git worktree；存在时 Agent 的工作根目录取它。 */
+  worktree?: PersistedWorktree | null;
 }
 
 export interface SessionMeta {
@@ -35,6 +47,8 @@ export interface SessionMeta {
   updatedAt: number;
   preview: string;
   messageCount: number;
+  /** 会话归属的工作区 id（旧会话可能没有）。 */
+  workspaceId?: string | null;
 }
 
 interface SessionIndex {
@@ -108,7 +122,12 @@ export class SessionStore {
     });
   }
 
-  private metaOf(id: string, messages: PersistedMessage[], updatedAt: number): SessionMeta {
+  private metaOf(
+    id: string,
+    messages: PersistedMessage[],
+    updatedAt: number,
+    workspaceId?: string | null,
+  ): SessionMeta {
     const firstUser = messages.find((m) => m.role === "user")?.text ?? "新会话";
     const last = messages[messages.length - 1]?.text ?? "";
     return {
@@ -117,6 +136,7 @@ export class SessionStore {
       updatedAt,
       preview: last.replace(/\s+/g, " ").slice(0, 80),
       messageCount: messages.length,
+      ...(workspaceId ? { workspaceId } : {}),
     };
   }
 
@@ -200,7 +220,7 @@ export class SessionStore {
     };
     this.writeJson(this.sessionFile(session.sessionId), trimmed);
     const index = this.index();
-    const meta = this.metaOf(session.sessionId, trimmed.messages, trimmed.updatedAt);
+    const meta = this.metaOf(session.sessionId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId);
     const at = index.items.findIndex((i) => i.id === session.sessionId);
     if (at >= 0) index.items[at] = meta;
     else index.items.push(meta);
@@ -209,15 +229,48 @@ export class SessionStore {
     return trimmed;
   }
 
-  newSession(): PersistedSession {
+  newSession(workspaceId?: string | null): PersistedSession {
     const id = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const session: PersistedSession = { sessionId: id, updatedAt: Date.now(), messages: [] };
+    const session: PersistedSession = {
+      sessionId: id,
+      updatedAt: Date.now(),
+      messages: [],
+      ...(workspaceId ? { workspaceId } : {}),
+    };
     this.writeJson(this.sessionFile(id), session);
     const index = this.index();
-    index.items.push(this.metaOf(id, [], Date.now()));
+    index.items.push(this.metaOf(id, [], Date.now(), workspaceId));
     index.currentId = id;
     this.saveIndex(index);
     return session;
+  }
+
+  /** 会话归属工作区（旧会话可补绑）。 */
+  setWorkspaceId(sessionId: string, workspaceId: string | null): boolean {
+    const data = this.get(sessionId);
+    if (!data) return false;
+    data.workspaceId = workspaceId;
+    this.writeJson(this.sessionFile(sessionId), data);
+    const index = this.index();
+    const meta = index.items.find((item) => item.id === sessionId);
+    if (meta) {
+      if (workspaceId) meta.workspaceId = workspaceId;
+      else delete meta.workspaceId;
+      this.saveIndex(index);
+    }
+    return true;
+  }
+
+  getWorktree(sessionId: string): PersistedWorktree | null {
+    return this.get(sessionId)?.worktree ?? null;
+  }
+
+  setWorktree(sessionId: string, worktree: PersistedWorktree | null): boolean {
+    const data = this.get(sessionId);
+    if (!data) return false;
+    data.worktree = worktree;
+    this.writeJson(this.sessionFile(sessionId), data);
+    return true;
   }
 
   switchTo(id: string): boolean {

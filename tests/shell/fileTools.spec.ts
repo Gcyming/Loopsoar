@@ -15,6 +15,12 @@ function makeTool(root: string) {
   return registry.get("file_write")!;
 }
 
+function makeSessionTool(roots: Record<string, string>) {
+  const registry = new ToolRegistry();
+  registerFileTools(registry, (sessionId) => roots[sessionId ?? ""] ?? roots.default ?? "");
+  return registry.get("file_write")!;
+}
+
 describe("file_write 工具", () => {
   it("写入新文件并带可解析 diff 标记；覆盖时包含旧内容", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-file-"));
@@ -45,6 +51,24 @@ describe("file_write 工具", () => {
       expect(result.content).toContain("越界");
     } finally {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 20000);
+});
+
+
+describe("file_write 按会话根目录", () => {
+  it("不同会话写入各自工作区/worktree，不串根", async () => {
+    const rootA = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-sess-a-"));
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-sess-b-"));
+    const tool = makeSessionTool({ "sess-a": rootA, "sess-b": rootB, default: rootA });
+    try {
+      await tool.execute({ agentId: "a", sessionId: "sess-a", params: { path: "same.txt", content: "A" }, platform: {} });
+      await tool.execute({ agentId: "a", sessionId: "sess-b", params: { path: "same.txt", content: "B" }, platform: {} });
+      expect(fs.readFileSync(path.join(rootA, "same.txt"), "utf8")).toBe("A");
+      expect(fs.readFileSync(path.join(rootB, "same.txt"), "utf8")).toBe("B");
+    } finally {
+      fs.rmSync(rootA, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      fs.rmSync(rootB, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 20000);
 });

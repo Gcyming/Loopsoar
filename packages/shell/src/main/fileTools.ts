@@ -42,7 +42,7 @@ function resolveInside(root: string, relative: string): { ok: true; target: stri
   return { ok: true, target, rel: path.relative(rootResolved, target) || path.basename(target) };
 }
 
-export function registerFileTools(registry: ToolRegistry, workspaceRoot: () => string): void {
+export function registerFileTools(registry: ToolRegistry, workspaceRoot: (sessionId?: string) => string): void {
   registry.register({
     name: "file_write",
     description: "在工作区内新建/覆盖文件（自动建父目录）；返回改动摘要与可视化 diff 数据",
@@ -51,7 +51,7 @@ export function registerFileTools(registry: ToolRegistry, workspaceRoot: () => s
     execute: async (ctx): Promise<ToolResult> => {
       const params = (ctx.params ?? {}) as { path?: string; content?: string };
       if (!params.path) return { ok: false, content: "[错误] 缺少 path" };
-      const root = workspaceRoot() || process.cwd();
+      const root = workspaceRoot(ctx.sessionId) || process.cwd();
       const resolved = resolveInside(root, params.path);
       if (!resolved.ok) return { ok: false, content: `[错误] ${resolved.reason}` };
       const next = params.content ?? "";
