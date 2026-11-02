@@ -320,7 +320,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   - 首次启动向导（3 步：欢迎→供应商设置→技能/工作区/终端；可跳过；设置·关于可重开）
   - Composer 增强：剪贴板图片粘贴（新增 `fs:saveImage` 主进程落盘 6MB/白名单）、`@`/Ctrl+U 文件引用、斜杠命令面板（/new /clear /stop /settings /compact /help）
 - **质量/发布门**：新增分层依赖守卫、浏览器桥四攻击路径守卫、插件权限生命周期端到端守卫；补 planTools/attachments/railParams/pastedImage 测试；新增 `docs/E2E-SMOKE.md`（真机冒烟清单）
-- **真机冒烟**：Electron 启动通过（E2E 截图自动退出）；新标签页/书签/保存/快照/状态栏终端入口/Composer 提示均正常（截图 `.loopsoar-data-smoke/shot-main.png`）
+- **真机冒烟**：Electron 启动通过（E2E 截图自动退出）；新标签页/书签/保存/快照/状态栏终端入口/Composer 提示均正常；设置·通用可见语言切换、广告拦截开关、Agent Loop 选择器（证据：`docs/screenshots/e2e-round3-main.png`、`e2e-round3-settings.png`）
 - 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 114 文件 / 915 tests 全绿**
 
 ## 三、未完成 / 已知问题（下次继续）
