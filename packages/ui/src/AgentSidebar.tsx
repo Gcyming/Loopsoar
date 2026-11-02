@@ -9,6 +9,7 @@ import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
+import Popover from "./AnchoredPopover.js";
 import { useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import type { SessionMeta, WorkspaceRecord } from "./types.js";
@@ -76,6 +77,8 @@ export default function AgentSidebar({
   children,
 }: AgentSidebarProps): React.JSX.Element {
   const tr = useT();
+  /** 会话下拉的锚点（Portal 浮层按它的实际位置定位，靠窗口底部/右侧时自动翻转夹取）。 */
+  const sessionAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   const copyConversation = (): void => {
     const markdown = conversationToMarkdown(messages, tr);
     if (!markdown.trim()) {
@@ -122,7 +125,7 @@ export default function AgentSidebar({
         </button>
       </div>
       <div style={styles.sessionBar}>
-        <span style={styles.anchor} data-popover-trigger>
+        <span ref={sessionAnchorRef} style={styles.anchor} data-popover-trigger>
           <button
             type="button"
             className="chip"
@@ -140,29 +143,28 @@ export default function AgentSidebar({
         <button type="button" className="icon-btn" title={tr("chat.newSession")} onClick={onNewSession}>
           <Icon name="plus" size={13} />
         </button>
-        {sessionOpen ? (
-          <div data-popover style={styles.sessionMenu}>
-            <div style={menuStyles.dropTitle}>{tr("chat.sessionHistory")}</div>
-            {sessions.length === 0 ? <div style={menuStyles.dropEmpty}>{tr("chat.noSessions")}</div> : null}
-            {sessions.map((x) => (
-              <div key={x.id} style={styles.sessionRow}>
-                <button
-                  type="button"
-                  className="model-item"
-                  style={{ ...styles.sessionItem, ...(x.id === currentSession ? menuStyles.dropItemActive : {}) }}
-                  onClick={() => onSwitchSession(x.id)}
-                  title={x.preview}
-                >
-                  <span style={styles.sessionTitle}>{x.title}</span>
-                  <span style={styles.sessionMeta}>{new Date(x.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                </button>
-                <button type="button" className="icon-btn" title={tr("chat.deleteSession")} onClick={() => onDeleteSession(x.id)}>
-                  <Icon name="close" size={11} />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        {/* 会话历史下拉：Portal + placePopover 定位（原 absolute 在窗口边缘会被裁切） */}
+        <Popover anchorRef={sessionAnchorRef} open={sessionOpen} onClose={() => undefined} width={300}>
+          <div style={menuStyles.dropTitle}>{tr("chat.sessionHistory")}</div>
+          {sessions.length === 0 ? <div style={menuStyles.dropEmpty}>{tr("chat.noSessions")}</div> : null}
+          {sessions.map((x) => (
+            <div key={x.id} style={styles.sessionRow}>
+              <button
+                type="button"
+                className="model-item"
+                style={{ ...styles.sessionItem, ...(x.id === currentSession ? menuStyles.dropItemActive : {}) }}
+                onClick={() => onSwitchSession(x.id)}
+                title={x.preview}
+              >
+                <span style={styles.sessionTitle}>{x.title}</span>
+                <span style={styles.sessionMeta}>{new Date(x.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+              </button>
+              <button type="button" className="icon-btn" title={tr("chat.deleteSession")} onClick={() => onDeleteSession(x.id)}>
+                <Icon name="close" size={11} />
+              </button>
+            </div>
+          ))}
+        </Popover>
       </div>
       {children}
     </aside>
@@ -217,20 +219,6 @@ const styles: Record<string, React.CSSProperties> = {
   chipCompact: { width: 24, padding: 0, justifyContent: "center" },
   sessionBar: { position: "relative", display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderBottom: `1px solid ${BRAND.border}` },
   anchor: { position: "relative", display: "inline-flex" },
-  sessionMenu: {
-    position: "absolute",
-    top: "100%",
-    left: 10,
-    width: 300,
-    maxHeight: 320,
-    overflowY: "auto",
-    borderRadius: 10,
-    border: `1px solid ${BRAND.borderStrong}`,
-    background: BRAND.inkRaised,
-    boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
-    padding: 6,
-    zIndex: 30,
-  },
   sessionRow: { display: "flex", alignItems: "center", gap: 2 },
   sessionItem: {
     flex: 1,

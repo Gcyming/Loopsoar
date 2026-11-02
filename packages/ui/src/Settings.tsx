@@ -78,10 +78,15 @@ function loopKindOf(loop: LoopInfo): "builtin" | "declarative" | "script" | "cus
   return "custom";
 }
 
-export default function Settings({ api, onClose, onPreferencesSaved, initialSection, onOpenOnboarding }: {
+export default function Settings({ api, onClose, onPreferencesSaved, initialSection, onOpenOnboarding, fullPage = false }: {
   api: LoopsoarAPI | null; onClose: () => void; onPreferencesSaved?: (p: Preferences) => void; initialSection?: SectionId;
   /** 「关于」分区重新打开新手引导（由 App 接线；缺省则不显示入口）。 */
   onOpenOnboarding?: () => void;
+  /**
+   * 整页模式（ChromePage「设置」页）：去掉居中模态外壳与自身标题栏并铺满父容器，
+   * 分区导航与全部功能保持不变（标题与返回按钮由 ChromePage 顶栏提供）。
+   */
+  fullPage?: boolean;
 }): React.JSX.Element {
   const tr = useT();
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
@@ -1403,9 +1408,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
 
   return (
-    <div className="settings-overlay" style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="settings-panel" style={S.panel}>
-        <div style={S.header}><span style={S.title}>{tr("settings.title")}</span><button type="button" className="icon-btn" onClick={onClose} title={tr("settings.close")}><Icon name="close" size={14} /></button></div>
+    <div
+      className={fullPage ? "settings-fullpage" : "settings-overlay"}
+      style={fullPage ? S.fullPageRoot : S.overlay}
+      onClick={fullPage ? undefined : (e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className={fullPage ? "settings-fullpage-panel" : "settings-panel"} style={fullPage ? S.fullPagePanel : S.panel}>
+        {/* 整页模式：标题与「返回」由 ChromePage 顶栏提供，避免双标题栏 */}
+        {fullPage ? null : (
+          <div style={S.header}><span style={S.title}>{tr("settings.title")}</span><button type="button" className="icon-btn" onClick={onClose} title={tr("settings.close")}><Icon name="close" size={14} /></button></div>
+        )}
         <div style={S.bodyRow}>
           <nav style={S.nav}>
             {SECTIONS.map((s, index) => (
@@ -1523,6 +1535,9 @@ function Kv({ k, v }: { k: string; v: string }) {
 const S: Record<string, React.CSSProperties> = {
   overlay: { position: "fixed", inset: 0, background: "rgba(8,9,12,0.62)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, animation: "fadeOnly 140ms ease both" },
   panel: { width: "min(960px, 94vw)", height: "min(690px, 90vh)", display: "flex", flexDirection: "column", background: BRAND.inkRaised, border: `1px solid ${BRAND.border}`, borderRadius: 12, overflow: "hidden", boxShadow: "0 24px 60px rgba(0,0,0,0.55)" },
+  /** 整页模式（ChromePage）：无模态背景/圆角/阴影，铺满父容器。 */
+  fullPageRoot: { position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: BRAND.inkRaised, overflow: "hidden" },
+  fullPagePanel: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: BRAND.inkRaised, overflow: "hidden" },
   header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: `1px solid ${BRAND.border}`, background: BRAND.ink },
   title: { fontSize: 13, fontWeight: 700, letterSpacing: 0.5 },
   bodyRow: { display: "flex", flex: 1, minHeight: 0 },

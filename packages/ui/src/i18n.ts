@@ -14,6 +14,7 @@
 import * as React from "react";
 import { SETTINGS_I18N } from "./i18nSettings.js";
 import { BROWSER_I18N } from "./i18nBrowser.js";
+import { CHROME_PAGE_I18N } from "./i18nChrome.js";
 
 export type Lang = "zh-CN" | "en-US";
 
@@ -388,7 +389,7 @@ const DICT: Record<Lang, Record<string, string>> = {
  * 合并按归属拆分的词典（Settings 与浏览器/通用组件各自维护自己的文件，
  * 避免多人同时改本文件冲突）。key 同名时后者覆盖前者（以拆分文件为准）。
  */
-for (const [key, entry] of Object.entries({ ...SETTINGS_I18N, ...BROWSER_I18N })) {
+for (const [key, entry] of Object.entries({ ...SETTINGS_I18N, ...BROWSER_I18N, ...CHROME_PAGE_I18N })) {
   DICT["zh-CN"][key] = entry.zh;
   DICT["en-US"][key] = entry.en;
 }

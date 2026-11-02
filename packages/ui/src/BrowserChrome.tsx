@@ -1,63 +1,45 @@
 /**
- * 浏览器顶栏（精简版）：后退/前进/刷新 + 地址搜索框（内嵌收藏星标）+ 快照/更多 + 标签栏。
+ * 浏览器顶栏（极简版）：后退/前进/刷新 + 地址搜索框（内嵌收藏星标）+ 快照/更多 + 标签栏。
  *
- * 布局约定（用户反馈「太杂乱」后收敛）：
- *   · 左侧只留导航三键；地址栏内右侧只留收藏星标；
- *   · 右侧只留「快照」和「更多（⋯）」；原下载/保存页面/设置/书签列表全部收进「更多」菜单；
- *   · 历史记录/下载仍由 App 持有开合状态（onToggleHistory / onToggleDownloads），
- *     其浮层仍在本组件渲染，锚点改为「更多」按钮。
+ * 浮层策略（M3 之后）：工具栏不再自己渲染任何菜单/浮层——
+ * 收藏星标与「更多」按钮**悬停 250ms**（或点击）时调用 `api.ui.openPopover({kind,anchor,lang})`，
+ * 由主进程弹出独立透明子窗口（PopoverApp 渲染预览、限条数、「查看更多」）。
+ * 这样浮层永远浮在原生 WebContentsView 之上，也不再需要「打开浮层时隐藏网页」的回调。
  *
- * 遮挡修复：本组件任何浮层（更多/收藏夹，以及 App 持有的历史/下载浮层）打开时
- * 通过 onOverlayChange(true) 通知 App 隐藏原生 WebContentsView，关闭时再通知 false
- * （关闭通知做 150ms 合并，避免菜单项触发历史/下载时「先关假、后开真」的闪烁）。
+ * 收藏星标：点击仍执行原收藏/取消收藏（bookmarks.add/remove），hover 打开收藏夹预览。
+ * 快照：保持点击行为。
  */
 import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
-import Popover from "./AnchoredPopover.js";
-import { usePopover } from "./popover.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
-import { useT } from "./i18n.js";
-import type { BookmarkItem, TabState } from "./types.js";
+import { getLanguage, useT } from "./i18n.js";
+import type { BookmarkItem, ChromePopoverKind, TabState } from "./types.js";
 
 export interface BrowserChromeProps {
   tabs: TabState[];
   address: string;
   currentUrl: string;
   omniboxRef?: React.RefObject<HTMLInputElement | null>;
-  historyOpen: boolean;
-  downloadsOpen: boolean;
-  downloadsActive: boolean;
-  historyPanel: React.ReactNode;
-  downloadsPanel: React.ReactNode;
   onAddressChange: (value: string) => void;
   onNavigate: () => void;
   onBack: () => void;
   onForward: () => void;
   /** 刷新当前页（走 browser:reload，不是重新导航）。 */
   onReload: () => void;
-  onToggleHistory: () => void;
-  onToggleDownloads: () => void;
-  /** 保存当前页面 HTML 全页（App 负责 toast 路径）。 */
-  onSavePage: () => void;
   onSnapshot: () => void;
-  /** 「更多 → 设置」；未接入时该菜单项禁用（可选，便于逐步接线）。 */
-  onOpenSettings?: () => void;
-  /** 打开一条书签（当前标签导航）。 */
-  onOpenBookmark: (url: string) => void;
-  /** 面板内操作提示（收藏/删除结果）。 */
+  /** 工具条内操作提示（收藏/取消收藏结果）。 */
   onNotice: (text: string) => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
-  /**
-   * 本组件浮层开合通知：任一浮层（更多/收藏夹/历史/下载）打开 → true，
-   * 全部关闭 → false。App 用它调 browser.setOverlay 隐藏原生 WebContentsView，
-   * 否则菜单会被网页区域盖住。
-   */
-  onOverlayChange?: (open: boolean) => void;
+
 }
+
+
+/** 悬停触发延迟：太快误触、太慢像没反应（用户要求「悬停即弹出」）。 */
+const HOVER_DELAY_MS = 250;
 
 /** 书签同一性判据：忽略 URL hash 与末尾斜杠（同页锚点不产生第二条书签）。 */
 function pageKey(url: string): string {
@@ -70,82 +52,25 @@ export default function BrowserChrome({
   address,
   currentUrl,
   omniboxRef,
-  historyOpen,
-  downloadsOpen,
-  downloadsActive,
-  historyPanel,
-  downloadsPanel,
   onAddressChange,
   onNavigate,
   onBack,
   onForward,
   onReload,
-  onToggleHistory,
-  onToggleDownloads,
-  onSavePage,
   onSnapshot,
-  onOpenSettings,
-  onOpenBookmark,
   onNotice,
   onSelectTab,
   onCloseTab,
   onNewTab,
-  onOverlayChange,
 }: BrowserChromeProps): React.ReactElement {
   const api = useLoopsoarApi();
   const tr = useT();
   const active = tabs.find((tab) => tab.active);
-  /** 「更多」按钮：同时作为菜单 / 历史 / 下载 / 收藏夹浮层的锚点（精简后都收在这里）。 */
+  const starButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const moreButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const menuRef = React.useRef<HTMLDivElement | null>(null);
+  const hoverTimerRef = React.useRef<number | null>(null);
 
   const [bookmarks, setBookmarks] = React.useState<BookmarkItem[]>([]);
-  const [bookmarksOpen, setBookmarksOpen] = React.useState(false);
-  const [moreOpen, setMoreOpen] = React.useState(false);
-  // 与历史/下载/输入区菜单共用全局浮层仲裁：同一时刻只展开一个
-  usePopover("browser-bookmarks", bookmarksOpen, setBookmarksOpen);
-  usePopover("browser-more", moreOpen, setMoreOpen);
-
-  /** 用 ref 转存回调：App 传内联箭头函数时也不会让下面的 effect 反复重建/抖动。 */
-  const overlayChangeRef = React.useRef(onOverlayChange);
-  overlayChangeRef.current = onOverlayChange;
-
-  /** 本组件全部浮层：任一打开都需要 App 隐藏原生 WebContentsView（否则菜单被网页盖住）。 */
-  const overlayOpen = moreOpen || bookmarksOpen || historyOpen || downloadsOpen;
-  const hideOverlayTimerRef = React.useRef<number | null>(null);
-  React.useEffect(() => {
-    if (overlayOpen) {
-      if (hideOverlayTimerRef.current !== null) {
-        window.clearTimeout(hideOverlayTimerRef.current);
-        hideOverlayTimerRef.current = null;
-      }
-      overlayChangeRef.current?.(true);
-      return undefined;
-    }
-    // 关闭合并 150ms：菜单项「关菜单 → 开历史/下载」的连续状态只通知一次 true
-    if (hideOverlayTimerRef.current !== null) window.clearTimeout(hideOverlayTimerRef.current);
-    hideOverlayTimerRef.current = window.setTimeout(() => {
-      hideOverlayTimerRef.current = null;
-      overlayChangeRef.current?.(false);
-    }, 150);
-    return () => {
-      if (hideOverlayTimerRef.current !== null) {
-        window.clearTimeout(hideOverlayTimerRef.current);
-        hideOverlayTimerRef.current = null;
-      }
-    };
-  }, [overlayOpen]);
-
-  // 「更多」菜单键盘可达：打开聚焦第一项，关闭把焦点还给触发按钮
-  React.useEffect(() => {
-    if (!moreOpen) return undefined;
-    window.requestAnimationFrame(() => {
-      menuRef.current?.querySelector<HTMLButtonElement>(".browser-more-item:not(:disabled)")?.focus();
-    });
-    return () => {
-      moreButtonRef.current?.focus();
-    };
-  }, [moreOpen]);
 
   const refreshBookmarks = React.useCallback(async (): Promise<void> => {
     if (!api?.bookmarks) {
@@ -160,13 +85,17 @@ export default function BrowserChrome({
     }
   }, [api]);
 
-  // 挂载 / 页面切换时刷新（决定星标高亮）；浮层展开时再拉一次（别处可能新增过）
+  // 挂载 / 页面切换时刷新（决定星标高亮）
   React.useEffect(() => {
     void refreshBookmarks();
   }, [refreshBookmarks, currentUrl]);
+
+  // 卸载清理悬停定时器
   React.useEffect(() => {
-    if (bookmarksOpen) void refreshBookmarks();
-  }, [bookmarksOpen, refreshBookmarks]);
+    return () => {
+      if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
 
   /** 仅 http/https 页面可收藏（书签 store 也只接受这两种协议）。 */
   const canBookmark = /^https?:\/\//i.test(currentUrl);
@@ -200,44 +129,45 @@ export default function BrowserChrome({
     }
   }, [api, active?.title, canBookmark, currentBookmark, currentUrl, onNotice, refreshBookmarks, tr]);
 
-  const removeBookmark = React.useCallback(
-    async (item: BookmarkItem): Promise<void> => {
-      if (!api?.bookmarks) return;
-      try {
-        const result = await api.bookmarks.remove({ id: item.id });
-        setBookmarks((prev) => prev.filter((x) => x.id !== item.id));
-        onNotice(result?.ok ? tr("browser.bookmarkRemoved") : tr("browser.bookmarkMissing"));
-      } catch (err) {
-        onNotice(tr("browser.bookmarkRemoveFailed", { error: err instanceof Error ? err.message : String(err) }));
-      }
+  /* ------------------------- 独立浮层窗口（主进程） ------------------------- */
+
+  /** 调主进程弹出独立浮层窗口；anchor 用按钮在内容区的 CSS px 矩形（主进程换算屏幕坐标）。 */
+  const openPopover = React.useCallback(
+    (kind: ChromePopoverKind, element: HTMLElement | null): void => {
+      const ui = api?.ui;
+      if (!ui?.openPopover || !element) return;
+      const rect = element.getBoundingClientRect();
+      void ui
+        .openPopover({
+          kind,
+          anchor: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+          lang: getLanguage(),
+        })
+        .catch(() => {
+          // 旧 shell / 主进程未接线：静默降级为无预览（按钮本身仍然可用）
+        });
     },
-    [api, onNotice, tr],
+    [api],
   );
 
-  /** 菜单项动作：先收起菜单再执行（历史/下载浮层复用「更多」按钮做锚点）。 */
-  const runMenuAction = (action: () => void): void => {
-    setMoreOpen(false);
-    action();
-  };
-  const openBookmarksFromMenu = (): void => {
-    setMoreOpen(false);
-    setBookmarksOpen(true);
-  };
+  const cancelHover = React.useCallback((): void => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
 
-  /** 菜单键盘导航：↑↓ 循环、Home/End 跳首尾（Esc/外部点击由 usePopover 统一处理）。 */
-  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
-    event.preventDefault();
-    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>(".browser-more-item:not(:disabled)") ?? []);
-    if (items.length === 0) return;
-    const current = items.findIndex((item) => item === document.activeElement);
-    let next = current;
-    if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = items.length - 1;
-    else if (event.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
-    else next = current <= 0 ? items.length - 1 : current - 1;
-    items[next]?.focus();
-  };
+  /** 悬停 250ms 后打开预览；离开按钮即取消（鼠标进入浮层由主进程命中测试处理）。 */
+  const scheduleHover = React.useCallback(
+    (kind: ChromePopoverKind, element: HTMLElement | null): void => {
+      cancelHover();
+      hoverTimerRef.current = window.setTimeout(() => {
+        hoverTimerRef.current = null;
+        openPopover(kind, element);
+      }, HOVER_DELAY_MS);
+    },
+    [cancelHover, openPopover],
+  );
 
   return (
     <>
@@ -269,6 +199,7 @@ export default function BrowserChrome({
           />
           <span style={styles.starWrap}>
             <button
+              ref={starButtonRef}
               type="button"
               className={`icon-btn${currentBookmark ? " is-bookmarked" : ""}`}
               style={styles.omniboxStar}
@@ -282,6 +213,11 @@ export default function BrowserChrome({
               aria-label={currentBookmark ? tr("browser.bookmarkRemove") : tr("browser.bookmarkAdd")}
               aria-pressed={Boolean(currentBookmark)}
               disabled={!canBookmark}
+              onMouseEnter={() => {
+                if (!canBookmark) return;
+                scheduleHover("bookmarks", starButtonRef.current);
+              }}
+              onMouseLeave={cancelHover}
               onClick={() => void toggleBookmark()}
             >
               <Icon name={currentBookmark ? "star-filled" : "star"} size={15} />
@@ -300,110 +236,24 @@ export default function BrowserChrome({
           >
             <Icon name="capture" size={17} />
           </button>
-          <span style={styles.anchor} data-popover-trigger>
-            <button
-              ref={moreButtonRef}
-              type="button"
-              className="icon-btn"
-              title={tr("browser.more")}
-              aria-label={tr("browser.more")}
-              aria-haspopup="menu"
-              aria-expanded={moreOpen}
-              onClick={() => setMoreOpen((value) => !value)}
-            >
-              <Icon name="more" size={17} />
-            </button>
-            <Popover anchorRef={moreButtonRef} open={moreOpen} onClose={() => setMoreOpen(false)} width={240}>
-              <div ref={menuRef} className="browser-more-menu" role="menu" aria-label={tr("browser.more")} onKeyDown={onMenuKeyDown}>
-                <button type="button" role="menuitem" className="browser-more-item" onClick={() => runMenuAction(onToggleHistory)}>
-                  <Icon name="history" size={14} className="browser-more-icon" />
-                  <span className="browser-more-label">{tr("browser.menuHistory")}</span>
-                  {historyOpen ? <span className="browser-more-dot" aria-hidden /> : null}
-                </button>
-                <button type="button" role="menuitem" className="browser-more-item" onClick={() => runMenuAction(onToggleDownloads)}>
-                  <Icon name="download" size={14} className="browser-more-icon" />
-                  <span className="browser-more-label">{tr("browser.menuDownloads")}</span>
-                  {downloadsActive ? <span className="browser-more-dot" aria-hidden /> : null}
-                </button>
-                <button type="button" role="menuitem" className="browser-more-item" onClick={openBookmarksFromMenu}>
-                  <Icon name="star" size={14} className="browser-more-icon" />
-                  <span className="browser-more-label">{tr("browser.menuBookmarks")}</span>
-                </button>
-                <div className="browser-more-sep" role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="browser-more-item"
-                  disabled={!currentUrl}
-                  title={!currentUrl ? tr("browser.openPageFirst") : tr("browser.menuSavePage")}
-                  onClick={() => runMenuAction(onSavePage)}
-                >
-                  <Icon name="file" size={14} className="browser-more-icon" />
-                  <span className="browser-more-label">{tr("browser.menuSavePage")}</span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="browser-more-item"
-                  disabled={!onOpenSettings}
-                  onClick={() => runMenuAction(() => onOpenSettings?.())}
-                >
-                  <Icon name="settings" size={14} className="browser-more-icon" />
-                  <span className="browser-more-label">{tr("browser.menuSettings")}</span>
-                </button>
-              </div>
-            </Popover>
-          </span>
+          <button
+            ref={moreButtonRef}
+            type="button"
+            className="icon-btn"
+            title={tr("browser.more")}
+            aria-label={tr("browser.more")}
+            aria-haspopup="menu"
+            onMouseEnter={() => scheduleHover("more", moreButtonRef.current)}
+            onMouseLeave={cancelHover}
+            onClick={() => {
+              cancelHover();
+              openPopover("more", moreButtonRef.current);
+            }}
+          >
+            <Icon name="more" size={17} />
+          </button>
         </div>
       </header>
-
-      {/* 历史 / 下载浮层：开合状态仍由 App 持有，锚点统一到「更多」按钮（App 已用 usePopover 仲裁） */}
-      <Popover anchorRef={moreButtonRef} open={historyOpen} onClose={onToggleHistory} width={380}>
-        {historyPanel}
-      </Popover>
-      <Popover anchorRef={moreButtonRef} open={downloadsOpen} onClose={onToggleDownloads} width={420}>
-        {downloadsPanel}
-      </Popover>
-      {/* 收藏夹浮层：从「更多」菜单打开，列表与删除逻辑不变 */}
-      <Popover anchorRef={moreButtonRef} open={bookmarksOpen} onClose={() => setBookmarksOpen(false)} width={340}>
-        <div className="bookmark-panel">
-          <div className="bookmark-head">
-            <span>{tr("browser.bookmarks")}</span>
-            <span className="bookmark-count">{bookmarks.length}</span>
-          </div>
-          {bookmarks.length === 0 ? (
-            <div className="bookmark-empty">{tr("browser.bookmarkEmpty")}</div>
-          ) : (
-            <div className="bookmark-list" aria-label={tr("browser.bookmarkList")}>
-              {bookmarks.map((item) => (
-                <div key={item.id} className="bookmark-row">
-                  <button
-                    type="button"
-                    className="bookmark-open"
-                    title={item.url}
-                    onClick={() => {
-                      onOpenBookmark(item.url);
-                      setBookmarksOpen(false);
-                    }}
-                  >
-                    <span className="bookmark-title">{item.title || item.url}</span>
-                    <span className="bookmark-url">{item.url}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn bookmark-del"
-                    title={tr("browser.bookmarkDelete")}
-                    aria-label={tr("browser.bookmarkDeleteAria", { label: item.title || item.url })}
-                    onClick={() => void removeBookmark(item)}
-                  >
-                    <Icon name="close" size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Popover>
 
       <div style={{ ...styles.tabBar, height: LAYOUT.TAB_BAR_HEIGHT }}>
         {tabs.map((tab) => (
@@ -448,7 +298,6 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   navGroup: { display: "flex", gap: 2, flexShrink: 0 },
-  anchor: { position: "relative", display: "inline-flex" },
   omniboxWrap: {
     flex: 1,
     display: "flex",

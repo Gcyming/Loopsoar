@@ -27,6 +27,8 @@ import { registerBookmarksDomain } from "../../packages/shell/src/main/domains/b
 import { BookmarksStore } from "../../packages/shell/src/main/bookmarksStore.ts";
 import { registerPageSaveDomain } from "../../packages/shell/src/main/domains/pageSave.ts";
 import { registerCompactDomain } from "../../packages/shell/src/main/domains/compact.ts";
+import { registerChromePopoverDomain } from "../../packages/shell/src/main/domains/chromePopover.ts";
+import type { ChromePopoverManager } from "../../packages/shell/src/main/chromePopover.ts";
 import { SessionStore } from "../../packages/shell/src/main/sessionStore.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
@@ -102,6 +104,17 @@ function assemble(): void {
     sessions: new SessionStore("C:/tmp/loopsoar-data-test/sessions"),
     push: () => {},
   });
+  const fakeChromePopover: ChromePopoverManager = {
+    open: () => ({ ok: true }),
+    close: () => {},
+    handleAction: () => {},
+    isOpen: () => false,
+    dispose: () => {},
+  };
+  registerChromePopoverDomain(
+    { ...deps, push: () => {}, getMainWebContentsId: () => 1 },
+    fakeChromePopover,
+  );
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,

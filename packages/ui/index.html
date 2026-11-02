@@ -2222,6 +2222,244 @@
     html[data-animations="off"] .browser-more-item {
       transition: none !important;
     }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       独立浮层窗口（PopoverApp）：index.html?popover=<kind>&lang=<lang>
+       主进程用透明子 BrowserWindow 加载同一页面，只显示内部圆角卡片。
+       颜色对齐 BRAND：inkRaised #17191e / border #262a31 / linen #f4efe6 /
+       linenMuted #a8a29a / linenFaint #6f6a63 / ochre #c8763c。
+       ══════════════════════════════════════════════════════════════════════ */
+    /* 浮层模式整页透明：窗口透出网页，只剩卡片（PopoverApp 模块加载时打上 data-popover） */
+    html[data-popover],
+    html[data-popover] body {
+      background: transparent !important;
+      overflow: hidden;
+    }
+    html[data-popover] #root {
+      height: auto;
+      min-height: 100vh;
+    }
+    .chrome-pop-shell {
+      padding: 8px;
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      outline: none;
+    }
+    .chrome-pop-card {
+      display: flex;
+      flex-direction: column;
+      min-width: 220px;
+      max-height: calc(100vh - 16px);
+      border-radius: 12px;
+      border: 1px solid #333842;
+      background: #17191e;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+      color: #f4efe6;
+      overflow: hidden;
+      animation: popIn 120ms ease both;
+    }
+    .chrome-pop-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      flex: none;
+      padding: 8px 12px 6px;
+      border-bottom: 1px solid #262a31;
+    }
+    .chrome-pop-title {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #f4efe6;
+    }
+    .chrome-pop-count {
+      font-size: 10px;
+      color: #6f6a63;
+      white-space: nowrap;
+    }
+    .chrome-pop-menu {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 6px;
+    }
+    .chrome-pop-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      min-height: 30px;
+      padding: 5px 9px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: #a8a29a;
+      font-family: inherit;
+      font-size: 12.5px;
+      text-align: left;
+      cursor: pointer;
+      transition: background 100ms, color 100ms;
+    }
+    .chrome-pop-item:hover:not(:disabled),
+    .chrome-pop-item:focus-visible {
+      background: rgba(200, 118, 60, 0.12);
+      color: #f4efe6;
+      outline: none;
+    }
+    .chrome-pop-item:focus-visible {
+      box-shadow: inset 0 0 0 1px rgba(200, 118, 60, 0.55);
+    }
+    .chrome-pop-item:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .chrome-pop-item-two-line {
+      align-items: flex-start;
+    }
+    .chrome-pop-item-static {
+      cursor: default;
+    }
+    .chrome-pop-icon {
+      flex: none;
+      color: #7c766a;
+      margin-top: 1px;
+    }
+    .chrome-pop-item:hover:not(:disabled) .chrome-pop-icon,
+    .chrome-pop-item:focus-visible .chrome-pop-icon {
+      color: #d98a4f;
+    }
+    .chrome-pop-main {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      flex: 1;
+      min-width: 0;
+    }
+    .chrome-pop-label {
+      font-size: 12.5px;
+      color: inherit;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chrome-pop-sub {
+      font-size: 10px;
+      color: #6f6a63;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chrome-pop-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 6px;
+      overflow-y: auto;
+      max-height: calc(100vh - 96px);
+      scrollbar-width: thin;
+      scrollbar-color: #333842 transparent;
+    }
+    .chrome-pop-list::-webkit-scrollbar {
+      width: 8px;
+    }
+    .chrome-pop-list::-webkit-scrollbar-thumb {
+      border-radius: 4px;
+      background: #333842;
+    }
+    .chrome-pop-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .chrome-pop-actions {
+      display: inline-flex;
+      gap: 2px;
+      flex: none;
+      margin-left: 4px;
+    }
+    .chrome-pop-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: #6f6a63;
+      cursor: pointer;
+    }
+    .chrome-pop-action:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: #f4efe6;
+    }
+    .chrome-pop-action:focus-visible {
+      outline: 1px solid rgba(200, 118, 60, 0.6);
+      outline-offset: 1px;
+    }
+    .chrome-pop-sep {
+      height: 1px;
+      margin: 4px 6px;
+      background: #262a31;
+    }
+    .chrome-pop-empty,
+    .chrome-pop-error {
+      padding: 10px 12px;
+      font-size: 11.5px;
+      line-height: 1.6;
+      color: #6f6a63;
+    }
+    .chrome-pop-error {
+      color: #f87171;
+      word-break: break-word;
+    }
+    .chrome-pop-footer {
+      flex: none;
+      padding: 6px;
+      border-top: 1px solid #262a31;
+    }
+    .chrome-pop-viewmore {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      width: 100%;
+      height: 28px;
+      border: none;
+      border-radius: 7px;
+      background: rgba(200, 118, 60, 0.1);
+      color: #d98a4f;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 100ms, color 100ms;
+    }
+    .chrome-pop-viewmore:hover {
+      background: rgba(200, 118, 60, 0.18);
+      color: #f4efe6;
+    }
+    .chrome-pop-viewmore:focus-visible {
+      outline: 2px solid rgba(200, 118, 60, 0.6);
+      outline-offset: 1px;
+    }
+    .chrome-pop-viewmore-icon {
+      color: inherit;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .chrome-pop-card {
+        animation: fadeOnly 100ms ease both;
+      }
+      .chrome-pop-item,
+      .chrome-pop-viewmore {
+        transition: none;
+      }
+    }
+    html[data-animations="off"] .chrome-pop-card {
+      animation: none !important;
+    }
+    html[data-animations="off"] .chrome-pop-item,
+    html[data-animations="off"] .chrome-pop-more {
+      transition: none !important;
+    }
   </style>
   </head>
   <body>

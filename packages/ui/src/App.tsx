@@ -17,6 +17,7 @@ import type {
 } from "./types.js";
 import { BRAND } from "./theme.js";
 import Settings from "./Settings.js";
+import ChromePage from "./ChromePage.js";
 import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
@@ -28,6 +29,7 @@ import Composer from "./Composer.js";
 import TerminalPanel from "./TerminalPanel.js";
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
 import { setLanguage } from "./i18n.js";
+import type { ChromePageKind } from "./types.js";
 import AskUserDialog from "./AskUserDialog.js";
 import SnapshotPanel from "./SnapshotPanel.js";
 import AgentSidebar from "./AgentSidebar.js";
@@ -35,7 +37,6 @@ import StatusBar from "./StatusBar.js";
 import PermissionDialog from "./PermissionDialog.js";
 import Toast from "./Toast.js";
 import StartPage from "./StartPage.js";
-import { DownloadsPanel, HistoryPanel } from "./BrowserMenus.js";
 import { useBootstrapData, useChatStreamEvents } from "./useChatStreamEvents.js";
 import {
   useE2eChatAutoSend,
@@ -112,6 +113,8 @@ export default function App(): React.JSX.Element {
     return new URLSearchParams(location.search).get("e2e") === "settings";
   });
   const [preferences, setPreferences] = useState<Preferences | null>(null);
+  // 浏览器管理整页（历史/下载/收藏夹/设置）：由浮层「查看更多」或动作打开
+  const [chromePage, setChromePage] = useState<ChromePageKind | null>(null);
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => !isOnboardingDone());
   const [tabs, setTabs] = useState<TabState[]>([]);
@@ -131,12 +134,9 @@ export default function App(): React.JSX.Element {
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
-  const [downloadsOpen, setDownloadsOpen] = useState(false);
-  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
+  const [, setDownloads] = useState<DownloadItem[]>([]);
   // 浏览器工具栏浮层（更多/收藏夹/历史/下载）打开：需隐藏原生 WebContentsView，否则菜单被网页遮挡
-  const [chromeOverlayOpen, setChromeOverlayOpen] = useState(false);
   // 页面快照面板：null=关闭；非空时隐藏原生浏览器视图并渲染可读浮层
   const [snapshotData, setSnapshotData] = useState<BrowserSnapshotResult | null>(null);
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -145,8 +145,6 @@ export default function App(): React.JSX.Element {
   const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
   // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc 收起（含 Composer 内菜单）。
   usePopover("app-session", sessionOpen, setSessionOpen);
-  usePopover("app-history", historyOpen, setHistoryOpen);
-  usePopover("app-downloads", downloadsOpen, setDownloadsOpen);
 
   // 启动时先为空：真实会话 ID 必须来自 shell（恢复历史或 chat:sessions 的 currentId），
   // 否则未恢复历史的冷启动会拿一个假 ID 发送，消息落到索引外的"幽灵会话"。
@@ -600,6 +598,24 @@ export default function App(): React.JSX.Element {
     [address, api, preferences],
   );
 
+  // 浮层动作（独立子窗口经主进程转发）：打开整页管理 / 主窗口导航 / 保存页面
+  const savePageRef = React.useRef<null | (() => void)>(null);
+  React.useEffect(() => {
+    if (!api) return;
+    return api.on("chrome:popoverAction", (payload) => {
+      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string } };
+      if (p?.action === "openPage" && p.payload?.kind) {
+        setChromePage(p.payload.kind);
+        return;
+      }
+      if (p?.action === "navigate" && p.payload?.url) {
+        navigate(p.payload.url);
+        return;
+      }
+      if (p?.action === "savePage") savePageRef.current?.();
+    });
+  }, [api, navigate]);
+
   const newTab = useCallback((): void => {
     if (!api) return;
     // 已是空白新建页：不再叠一个空标签，聚焦地址栏即可
@@ -663,53 +679,6 @@ export default function App(): React.JSX.Element {
       }
       void api.browser.listTabs().then((x) => setTabs(x.tabs)).catch(() => {});
     });
-  }, [api]);
-
-  const toggleHistory = useCallback((): void => {
-    if (!api) return;
-    if (historyOpen) {
-      setHistoryOpen(false);
-      return;
-    }
-    void api.browser.history({}).then((r) => {
-      setHistoryEntries(r.entries);
-      setHistoryOpen(true);
-      setDownloadsOpen(false);
-      setModelMenuOpen(false);
-    });
-  }, [api, historyOpen]);
-
-  /** 点击历史条目：先收起浮层再导航（原内联逻辑外置为回调）。 */
-  const selectHistory = useCallback(
-    (url: string): void => {
-      setHistoryOpen(false);
-      void api?.browser.navigate({ url }).then((r) => {
-        if (r.ok) {
-          setCurrentUrl(r.url ?? url);
-          setAddress(r.url ?? url);
-        }
-      });
-    },
-    [api],
-  );
-
-  const toggleDownloads = useCallback((): void => {
-    if (!api) return;
-    if (downloadsOpen) {
-      setDownloadsOpen(false);
-      return;
-    }
-    void api.browser.downloads().then((r) => {
-      setDownloads(r.downloads);
-      setDownloadsOpen(true);
-      setHistoryOpen(false);
-      setModelMenuOpen(false);
-    });
-  }, [api, downloadsOpen]);
-
-  /** 下载面板刷新（移除记录后拉一次列表）。 */
-  const refreshDownloads = useCallback((): void => {
-    void api?.browser.downloads().then((r) => setDownloads(r.downloads)).catch(() => {});
   }, [api]);
 
   const refreshSessions = useCallback((): void => {
@@ -903,6 +872,10 @@ export default function App(): React.JSX.Element {
       })
       .catch((err: unknown) => setNotice(`保存失败：${err instanceof Error ? err.message : String(err)}`));
   }, [api]);
+  // 供「浮层动作」稳定引用最新的 savePage（避免把整个回调塞进事件 effect 依赖）
+  React.useEffect(() => {
+    savePageRef.current = savePage;
+  }, [savePage]);
 
   const snapshot = useCallback((): void => {
     if (!api) return;
@@ -936,12 +909,12 @@ export default function App(): React.JSX.Element {
   // 修复遮挡：应用内浮层（设置 / 工作区 / 快照面板 / 首次向导）打开时隐藏原生 WebContentsView
   useEffect(() => {
     if (!api) return;
-    const overlay = settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen || chromeOverlayOpen;
+    const overlay = settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen || chromePage !== null;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
     return () => {
       void api.browser.setOverlay({ open: false }).catch(() => {});
     };
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromeOverlayOpen]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage]);
 
   // 语言：偏好（启动加载 / 设置里修改）同步到 i18n store；已接入 i18n 的组件即时重渲染
   useEffect(() => {
@@ -993,23 +966,12 @@ export default function App(): React.JSX.Element {
         address={address}
         currentUrl={currentUrl}
         omniboxRef={omniboxRef}
-        historyOpen={historyOpen}
-        downloadsOpen={downloadsOpen}
-        downloadsActive={downloads.some((d) => d.state === "progressing")}
-        historyPanel={<HistoryPanel entries={historyEntries} onSelect={selectHistory} />}
-        onOverlayChange={setChromeOverlayOpen}
-        downloadsPanel={<DownloadsPanel downloads={downloads} api={api} onRefresh={refreshDownloads} />}
         onAddressChange={setAddress}
         onNavigate={() => navigate()}
         onBack={goBack}
         onForward={goForward}
         onReload={reloadPage}
-        onToggleHistory={toggleHistory}
-        onToggleDownloads={toggleDownloads}
-        onSavePage={savePage}
         onSnapshot={() => void snapshot()}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenBookmark={(url) => navigate(url)}
         onNotice={setNotice}
         onSelectTab={selectTab}
         onCloseTab={closeTab}
@@ -1162,6 +1124,22 @@ export default function App(): React.JSX.Element {
           }}
           onPreferencesSaved={(next) => setPreferences(next)}
           onOpenOnboarding={() => setOnboardingOpen(true)}
+        />
+      ) : null}
+
+      {/* 浏览器管理整页（浮层「查看更多」跳转）：历史/下载/收藏夹/设置 */}
+      {chromePage ? (
+        <ChromePage
+          kind={chromePage}
+          api={api}
+          onClose={() => setChromePage(null)}
+          onNavigate={(url) => {
+            setChromePage(null);
+            navigate(url);
+          }}
+          onSavePage={savePage}
+          onOpenSettings={() => setChromePage("settings")}
+          onNotice={setNotice}
         />
       ) : null}
 

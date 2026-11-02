@@ -28,6 +28,8 @@ export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessio
 export interface HostView extends WebContentsViewLike {
   setBounds(bounds: BrowserViewBounds): void;
   setVisible?(visible: boolean): void;
+  /** 真实视图几何（Electron WebContentsView.getBounds；假 View 可不实现）。 */
+  getBounds?(): { x: number; y: number; width: number; height: number };
 }
 
 export interface BrowserHostDeps {
@@ -174,6 +176,54 @@ export class BrowserHost {
   setSidebarWidth(width: number): void {
     this.sidebarWidth = Math.max(240, Math.min(720, Math.round(width)));
     this.applyLayout();
+  }
+
+  /**
+   * E2E/诊断：当前窗口尺寸、**计算出的** bounds 与**活动视图真实 getBounds()**。
+   * 三者对比才能定位「网页不随窗口自适应」的真实断点：
+   *   window 变 / bounds 变 / actual 不变 → setBounds 没生效（视图未挂载/不可见）；
+   *   actual 也变、但页面 innerWidth 不变 → 内容层问题（DPR/缩放/页面自身）。
+   */
+  debugBounds(): {
+    window: WindowSize;
+    bounds: BrowserViewBounds | null;
+    actual: { x: number; y: number; width: number; height: number } | null;
+    sessionId: string;
+    tabId: string | null;
+  } {
+    const windowSize = this.deps.getWindowSize();
+    const bounds = computeBrowserViewBounds(windowSize, {
+      ...LAYOUT,
+      SIDEBAR_WIDTH: this.sidebarWidth,
+    } as unknown as typeof LAYOUT);
+    const entry = this.activeEntry();
+    let actual: { x: number; y: number; width: number; height: number } | null = null;
+    try {
+      actual = entry?.view.getBounds?.() ?? null;
+    } catch {
+      actual = null;
+    }
+    return { window: windowSize, bounds, actual, sessionId: this.activeSession, tabId: this.activeEntryId() };
+  }
+
+  private activeEntryId(sessionId?: string): string | null {
+    const group = this.group(sessionId);
+    return group.activeId ?? null;
+  }
+
+  /**
+   * E2E/诊断：在**活动标签**里执行一段 JS 并取回 JSON-safe 结果（无活动标签返回 null）。
+   * 为什么单独加而不是让 E2E 调 executeScript：executeScript 在无标签时抛错，
+   * 而 E2E 的目标是「打印现状用于对比」，不应因为没标签而中断整个截图/验收流程。
+   */
+  async debugEval(script: string, sessionId?: string): Promise<unknown> {
+    const entry = this.activeEntry(sessionId);
+    if (!entry) return null;
+    try {
+      return await entry.adapter.executeJs(script);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   private applyLayout(): void {
@@ -491,4 +541,36 @@ export class BrowserHost {
       this.emitTabs(this.activeSession);
     }
   }
+}
+
+/**
+ * 窗口几何变化的重排防抖器（默认 50ms，纯定时器、不依赖 electron，可单测）。
+ *
+ * 为什么需要：一次窗口变化会连发多个事件——拖拽缩放连续 resize；maximize/unmaximize 在部分
+ * 平台先发「中间尺寸」的 resize 再定格；全屏切换甚至可能不伴随 resize。每次都 applyLayout
+ * 会让原生视图抖动并可能把旧尺寸设为最终值，因此统一「最后一次事件后 50ms 再重排」。
+ */
+export function createDebouncedRunner(
+  run: () => void,
+  delayMs = 50,
+): { schedule(): void; cancel(): void; pending(): boolean } {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    schedule(): void {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        run();
+      }, Math.max(0, delayMs));
+    },
+    cancel(): void {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+    pending(): boolean {
+      return timer !== null;
+    },
+  };
 }

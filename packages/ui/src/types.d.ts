@@ -608,7 +608,14 @@ export type LoopsoarEvent =
   | "ask:user"
   | "loop:changed"
   | "loop:fallback"
+  | "chrome:popoverAction"
   | "chat:compacted";
+
+/** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads";
+
+/** 浏览器管理整页种类（更多菜单「查看更多」/设置打开）。 */
+export type ChromePageKind = "history" | "downloads" | "bookmarks" | "settings";
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
@@ -634,6 +641,12 @@ export interface LoopsoarAPI {
   ask: LoopsoarDomain & {
     /** 回答/取消挂起中的 ask_user 问题；received=false 表示问题已过期或会话已结束。 */
     respond(payload: { requestId: string; answer?: string; cancelled?: boolean }): Promise<AskRespondResult>;
+  };
+  /** 浏览器工具栏浮层（独立子窗口渲染）。 */
+  ui: LoopsoarDomain & {
+    openPopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US" }): Promise<{ ok: boolean; error?: string }>;
+    closePopover(): Promise<{ ok: boolean }>;
+    popoverAction(payload: { action: string; payload?: unknown }): Promise<{ ok: boolean }>;
   };
   loop: LoopsoarDomain & {
     /** 可运行的 Agent-Loop 列表 + 当前选择 + 回退历史。 */

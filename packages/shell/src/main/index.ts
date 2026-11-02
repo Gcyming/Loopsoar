@@ -31,7 +31,7 @@ import {
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createElectronBrowserHost, DownloadsBridge } from "./electronBrowser.js";
 import { withProviderDefaults } from "./providerDefaults.js";
-import type { BrowserHost } from "./browserHost.js";
+import { createDebouncedRunner, type BrowserHost } from "./browserHost.js";
 import { BrowserHistoryStore } from "./browserHistoryStore.js";
 import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
@@ -78,6 +78,8 @@ import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
+import { createChromePopoverManager } from "./chromePopover.js";
+import { registerChromePopoverDomain } from "./domains/chromePopover.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
@@ -222,6 +224,52 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             }
           }
 
+          // E2E：窗口自适应验证（LOOPSOAR_E2E_RESIZE=1100x760）——
+          // 依次量 contentSize / 原生视图 bounds / 活动页 window.innerWidth，确认三者同步变化；
+          // 另跑 maximize/unmaximize（LOOPSOAR_E2E_FULLSCREEN=1 时再跑全屏），覆盖「事件不伴随 resize」路径。
+          if (process.env.LOOPSOAR_E2E_RESIZE) {
+            const [w, h] = process.env.LOOPSOAR_E2E_RESIZE.split("x").map((v) => Number(v));
+            const host = browserHost;
+            const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+            const pageMetrics = async (): Promise<unknown> =>
+              (await host?.debugEval(
+                "(() => ({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, dpr: window.devicePixelRatio, vv: window.visualViewport ? Math.round(window.visualViewport.width) : null }))()",
+              )) ?? null;
+            const steps: { step: string; contentSize: number[]; browser: unknown; page: unknown }[] = [];
+            const probe = async (step: string): Promise<void> => {
+              const browser = host ? host.debugBounds() : null;
+              steps.push({ step, contentSize: win.getContentSize(), browser, page: await pageMetrics() });
+              console.log("E2E_RESIZE_STEP", JSON.stringify(steps[steps.length - 1]));
+            };
+            await probe("baseline");
+            if (Number.isFinite(w) && Number.isFinite(h) && w > 400 && h > 400) {
+              win.setContentSize(Math.round(w), Math.round(h));
+              await sleep(900);
+              await probe("setContentSize");
+            }
+            // maximize/unmaximize：Windows 上可能先发中间尺寸 resize 再定格，验证防抖后的最终几何
+            win.maximize();
+            await sleep(900);
+            await probe("maximize");
+            win.unmaximize();
+            await sleep(900);
+            await probe("unmaximize");
+            // 全屏：F11 类切换在部分平台不伴随 resize，仅显式开关时验证（避免影响常规截图）
+            if (process.env.LOOPSOAR_E2E_FULLSCREEN === "1") {
+              win.setFullScreen(true);
+              await sleep(1200);
+              await probe("fullscreen");
+              win.setFullScreen(false);
+              await sleep(1200);
+              await probe("exitFullScreen");
+            }
+            if (Number.isFinite(w) && Number.isFinite(h) && w > 400 && h > 400) {
+              win.setContentSize(Math.round(w), Math.round(h));
+              await sleep(600);
+            }
+            console.log("E2E_RESIZE", JSON.stringify({ steps }));
+          }
+
           // E2E：向上滚动离开底部，验证「锁定最新」不会把用户拽回去，且出现回到最新按钮
           if (process.env.LOOPSOAR_E2E_SCROLL_UP) {
             const top = await win.webContents
@@ -237,6 +285,120 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
               .catch(() => -1);
             console.log("E2E_SCROLL_UP", top);
             await new Promise((r) => setTimeout(r, 900));
+          }
+
+          // E2E：悬停预览（LOOPSOAR_E2E_HOVER_TITLE=更多）——真实 mouseMove 触发 250ms hover 打开浮层
+          if (process.env.LOOPSOAR_E2E_HOVER_TITLE) {
+            const target = process.env.LOOPSOAR_E2E_HOVER_TITLE;
+            const rect = await win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const nodes = Array.from(document.querySelectorAll('button, [role="button"]'));
+                  const el = nodes.find((n) => (n.getAttribute('title') || '') === ${JSON.stringify(target)});
+                  if (!el) return null;
+                  const r = el.getBoundingClientRect();
+                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                })()`,
+                true,
+              )
+              .catch(() => null);
+            if (rect) {
+              win.webContents.sendInputEvent({ type: "mouseMove", x: rect.x, y: rect.y });
+              await new Promise((r) => setTimeout(r, 900));
+              console.log("E2E_HOVER", JSON.stringify({ target, at: rect, windows: BrowserWindow.getAllWindows().length }));
+            } else {
+              console.log("E2E_HOVER_TARGET_NOT_FOUND", target);
+            }
+          }
+
+          // E2E：浮层内点击（LOOPSOAR_E2E_POPOVER_CLICK=.chrome-pop-viewmore）→ 验证整页管理界面打开
+          if (process.env.LOOPSOAR_E2E_POPOVER_CLICK) {
+            const selector = process.env.LOOPSOAR_E2E_POPOVER_CLICK;
+            const popWin = BrowserWindow.getAllWindows().find((w) => w !== win);
+            if (popWin) {
+              const clicked = await popWin.webContents
+                .executeJavaScript(
+                  `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true; })()`,
+                  true,
+                )
+                .catch(() => false);
+              await new Promise((r) => setTimeout(r, 900));
+              const page = await win.webContents
+                .executeJavaScript(
+                  `(() => { const el = document.querySelector('.chrome-page'); return el ? (el.textContent || '').slice(0, 80) : null; })()`,
+                  true,
+                )
+                .catch(() => null);
+              console.log("E2E_POPOVER_CLICK", JSON.stringify({ clicked, chromePage: page }));
+            } else {
+              console.log("E2E_POPOVER_CLICK_NO_WINDOW");
+            }
+          }
+
+          // E2E：浮层独立子窗口验证（LOOPSOAR_E2E_CAPTURE_POPOVER=1）
+          if (process.env.LOOPSOAR_E2E_CAPTURE_POPOVER) {
+            const others = BrowserWindow.getAllWindows().filter((w) => w !== win);
+            console.log(
+              "E2E_POPOVER_WINDOWS",
+              others.length,
+              JSON.stringify(
+                others.map((w) => ({ bounds: w.getBounds(), title: w.getTitle(), visible: w.isVisible() })),
+              ),
+            );
+            if (others[0]) {
+              await new Promise((r) => setTimeout(r, 500));
+              try {
+                const popWin = others[0];
+                console.log("E2E_POPOVER_URL", popWin.webContents.getURL());
+                const info = await popWin.webContents.executeJavaScript(
+                  `JSON.stringify({
+                    qs: location.search,
+                    sheets: document.styleSheets.length,
+                    bodyBg: getComputedStyle(document.body).backgroundColor,
+                    card: (() => { const el = document.querySelector('.chrome-pop-card'); if (!el) return null; const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); return { bg: cs.backgroundColor, w: r.width, h: r.height, top: r.top, left: r.left, display: cs.display }; })(),
+                    shellBg: (() => { const el = document.querySelector('.chrome-pop-shell'); return el ? getComputedStyle(el).backgroundColor : null; })(),
+                    rootRect: (() => { const el = document.getElementById('root'); const r = el.getBoundingClientRect(); return { w: r.width, h: r.height }; })(),
+                    cardHtml: (() => { const el = document.querySelector('.chrome-pop-card'); return el ? el.outerHTML.slice(0, 240) : null; })(),
+                    cardKids: (() => { const el = document.querySelector('.chrome-pop-card'); return el ? el.children.length : null; })(),
+                    cssRules: (() => { try { const sheet = document.styleSheets[0]; const rules = sheet ? sheet.cssRules : []; const hits = []; for (const r of rules) if (r.cssText && r.cssText.includes('chrome-pop-card')) hits.push(r.cssText.slice(0, 120)); return { total: rules.length, hits }; } catch (e) { return String(e); } })(),
+                    cardStyle: (() => { const el = document.querySelector('.chrome-pop-card'); if (!el) return null; const cs = getComputedStyle(el); return { height: cs.height, minHeight: cs.minHeight, maxHeight: cs.maxHeight, overflow: cs.overflow, position: cs.position, flex: cs.flex }; })(),
+                    items: Array.from(document.querySelectorAll('.chrome-pop-item')).slice(0, 6).map((el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { text: (el.textContent || '').slice(0, 8), h: Math.round(r.height), w: Math.round(r.width), display: cs.display, visible: cs.visibility, color: cs.color }; }),
+                    menuRect: (() => { const el = document.querySelector('.chrome-pop-menu'); if (!el) return null; const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; })(),
+                  })`,
+                  true,
+                );
+                console.log("E2E_POPOVER_DOM", info);
+              } catch (err) {
+                console.warn("E2E_POPOVER_DOM_FAILED", err instanceof Error ? err.message : String(err));
+              }
+              try {
+                const img = await others[0].capturePage();
+                const popPath = shotPath.replace(/.png$/, "-popover.png");
+                fs.writeFileSync(popPath, img.toPNG());
+                console.log("POPOVER_SHOT_SAVED", popPath);
+              } catch (err) {
+                console.warn("POPOVER_SHOT_SKIPPED", err instanceof Error ? err.message : String(err));
+              }
+            }
+          }
+
+          // E2E：整屏截图（用于验证独立浮层窗口真实浮在网页之上）
+          if (process.env.LOOPSOAR_E2E_DESKTOP_SHOT) {
+            const { desktopCapturer } = await import("electron");
+            try {
+              const sources = await desktopCapturer.getSources({
+                types: ["screen"],
+                thumbnailSize: { width: 1920, height: 1200 },
+              });
+              const img = sources[0]?.thumbnail;
+              if (img && !img.isEmpty()) {
+                const deskPath = shotPath.replace(/.png$/, "-desktop.png");
+                fs.writeFileSync(deskPath, img.toPNG());
+                console.log("DESKTOP_SHOT_SAVED", deskPath);
+              }
+            } catch (err) {
+              console.warn("DESKTOP_SHOT_SKIPPED", err instanceof Error ? err.message : String(err));
+            }
           }
 
           // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
@@ -468,9 +630,19 @@ function createMainWindow(): void {
   mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
     console.error("DID_FAIL_LOAD", code, desc, url);
   });
-  // 窗口缩放 → 原生浏览器视图重新对齐（几何来源：contracts/layout）
-  mainWindow.on("resize", () => browserHost?.syncBounds());
+  // 窗口几何变化 → 原生浏览器视图重新对齐（几何来源：contracts/layout）。
+  // 为什么要 50ms 防抖 + 监听全部事件：拖拽缩放会连发 resize；maximize/unmaximize 在部分平台
+  // 先发「中间尺寸」的 resize 再定格；全屏切换甚至可能不伴随 resize —— 只挂 resize 会让
+  // WebContentsView 停在旧 bounds，表现就是「窗口变大了但网页没跟着自适应」。
+  const scheduleBoundsSync = createDebouncedRunner(() => browserHost?.syncBounds(), 50);
+  mainWindow.on("resize", () => scheduleBoundsSync.schedule());
+  mainWindow.on("maximize", () => scheduleBoundsSync.schedule());
+  mainWindow.on("unmaximize", () => scheduleBoundsSync.schedule());
+  mainWindow.on("restore", () => scheduleBoundsSync.schedule());
+  mainWindow.on("enter-full-screen", () => scheduleBoundsSync.schedule());
+  mainWindow.on("leave-full-screen", () => scheduleBoundsSync.schedule());
   mainWindow.on("closed", () => {
+    scheduleBoundsSync.cancel();
     mainWindow = null;
   });
 
@@ -889,6 +1061,17 @@ app.whenReady().then(async () => {
   // 全局浏览器历史（跨标签/跨会话共享）：持久化 <dataDir>/browser-history.json；
   // 上限 500、按 URL 去重合并；每次成功访问即原子落盘（退出前无需额外 flush）。
   const browserHistory = new BrowserHistoryStore(path.join(dirs.dataDir, "browser-history.json"));
+  // 浏览器工具栏浮层：独立子窗口渲染（天然浮在原生网页视图之上，不再需要隐藏网页）
+  const chromePopover = createChromePopoverManager({
+    getMainWindow: () => mainWindow,
+    loadUrlFor: (kind, lang) =>
+      `${PROTOCOL}://app/index.html?popover=${kind}${lang ? `&lang=${encodeURIComponent(lang)}` : ""}`,
+    preloadPath: preloadPath(),
+    additionalArguments: [
+      `--loopsoar-bindings=${JSON.stringify(buildBindings())}`,
+      `--loopsoar-events=${JSON.stringify(EVENTS)}`,
+    ],
+  });
   browserHost = createElectronBrowserHost(
     () => mainWindow,
     (url) => {
@@ -918,6 +1101,15 @@ app.whenReady().then(async () => {
       .switchSession(initialSessionId, bootBrowserState)
       .then((tabs) => pushToRenderer("browser:tabs", { tabs }))
       .catch(() => undefined);
+  }
+  // 全局历史补记：会话恢复被有意设计为「不计访问」（否则每次重启都把旧页面算成新访问），
+  // 但全局历史面板只读 browser-history.json —— 不补记的话老用户升级后看到的是空面板（用户反馈）。
+  // backfill 只补缺失 URL（visitedAt=启动时刻、visitCount=1）；已存在条目不改计数/排序，只按需补标题。
+  if (bootBrowserState && bootBrowserState.tabs.length > 0) {
+    const backfill = browserHistory.backfill(bootBrowserState.tabs);
+    if (backfill.added > 0 || backfill.merged > 0 || backfill.skipped > 0) {
+      console.log(`[Loopsoar] 浏览器历史补记 ${JSON.stringify(backfill)}`);
+    }
   }
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost, resolveSessionRoot);
@@ -1031,6 +1223,11 @@ app.whenReady().then(async () => {
   registerTerminalDomain(deps, terminals);
   registerLoopDomain(deps, loopRuntime);
   registerAskDomain(deps, askBus);
+  // 浮层域：ui:openPopover/closePopover/popoverAction（仅主窗口可打开；动作转发主窗口执行）
+  registerChromePopoverDomain(
+    { ...deps, push: pushToRenderer, getMainWebContentsId: () => mainWindow?.webContents.id ?? null },
+    chromePopover,
+  );
   // /compact：真实压缩并写回持久化（预览/应用由 UI 决定；生成中拒绝，避免与落盘竞态）
   registerCompactDomain({
     ...deps,
@@ -1121,6 +1318,7 @@ app.whenReady().then(async () => {
     closeTerminals: () => {
       terminals.closeAll();
       askBus.clearAll("应用退出，按取消处理");
+      chromePopover.dispose();
     },
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });

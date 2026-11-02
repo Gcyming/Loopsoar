@@ -255,6 +255,31 @@
 
 ---
 
+## ADR-0018 浏览器工具栏浮层 / 管理整页 / 窗口自适应（用户反馈整理轮）
+
+- **背景**：用户实机反馈四个问题：① 点「更多」时网页界面消失（此前方案是浮层打开即隐藏原生 WebContentsView——治标且体验不可接受）；② 靠上/下/左/右的展开菜单靠近窗口边缘必被截断；③ 历史记录面板为空；④ 所有网页不随窗口缩放自适应、只能手动拖拽。
+- **根因**（代码级定位）：
+  1. 主窗口 DOM 永远渲染在原生 WebContentsView 之下，凡是渲染在主窗口里的浮层都必然被网页遮挡；「隐藏网页」只是绕过遮挡，用户看到的就是网页消失；
+  2. 历史为空：记录逻辑本身正常（新导航会写 `<dataDir>/browser-history.json`），但启动时**恢复的旧标签走 restoreInto（navigating=true 抑制记录）**，升级用户在新导航前打开面板必然为空；
+  3. 不随窗口缩放：只有 `resize` 单事件直连 syncBounds；Windows maximize/unmaximize 有过渡动画（末次 resize 取到中间尺寸）且 enter/leave-full-screen 常不伴随 resize → 原生视图停在旧 bounds（非几何公式错误）；
+  4. 边缘截断：各菜单各自算 absolute 位置，无翻转/夹取。
+- **决策**：
+  1. **工具栏浮层改为独立子 BrowserWindow**（parent=主窗口、frame:false、transparent、resizable/movable:false、skipTaskbar、sandbox/contextIsolation、与主窗口同 preload 白名单注入）。浮层窗口天然浮在原生网页之上：**不再隐藏 WebContentsView，网页始终可见**；从根上消除「点开菜单网页消失」类问题；
+  2. 定位纯函数 `computePopoverBounds(anchorScreenRect, size, workArea, gap=6)`：默认下方右对齐 → 底部越界翻转上方 → 最终四边 clamp 到工作区、超工作区收缩尺寸；**任何边缘都不截断**；
+  3. 交互：按钮 hover 250ms 打开预览浮层（限条数：书签/历史 8 条、下载 5 条）+ 底部「查看更多」；主进程 120ms 光标轮询，光标离开「浮层外扩 8px + 锚点外扩 24px」且浮层未聚焦才关闭（支持按钮→浮层移动路径）；Esc/blur/主窗口 resize/move/close 关闭；
+  4. 「查看更多」跳转**整页管理界面**（ChromePage：历史/下载/收藏夹/设置，覆盖内容区、顶部返回栏；设置复用 Settings fullPage 模式），不再用小弹窗塞长列表；
+  5. 应用内其它锚定菜单统一改用 `placePopover`（下方优先/翻转/夹取/maxHeight），窗口 resize/scroll/内容尺寸变化自动重定位；
+  6. 历史全局化 + 恢复标签 backfill（启动恢复后补记 URL+标题；已存在条目**不增 visitCount、不刷时间**，只按需补空标题）；
+  7. 窗口自适应：`resize` 50ms 防抖 + `maximize/unmaximize/restore/enter-full-screen/leave-full-screen` 六事件统一 `syncBounds()`；新增 `debugBounds(actual)/debugEval` 与 E2E 探针（baseline→setContentSize→maximize→unmaximize→fullscreen→exit）验证 `actual == bounds == page.innerWidth`。
+- **理由**：独立浮层窗口是 Electron 下「自定义菜单浮在原生视图之上」的正解（VS Code/浏览器类应用同思路），一次性解决遮挡与网页消失，且不牺牲原生网页性能与安全边界；整页管理符合用户「像其他浏览器一样」的诉求；六事件+防抖修的是「最终几何未生效」而非公式。
+- **替代方案**：继续用「打开浮层就隐藏网页」——被否（用户明确否决）；把网页换成 `<webview>`/iframe 让 DOM 可覆盖——被否（架构/安全/性能代价大，且 D0 已冻结 WebContentsView 方案）；全部菜单改用系统原生 Menu——被否（无品牌样式、无法做列表预览/查看更多）。
+- **验证方式**：`tests/shell/chromePopover.spec.ts`（37）、`tests/ui/popoverPosition.spec.ts`（18）、`tests/shell/browserHistoryBackfill.spec.ts`（13）、全量 129 文件 / 1130 tests；真机 E2E：桌面截图证明网页保持可见且浮层浮于其上（`docs/screenshots/e2e-round5-popover-main-desktop.png`）、hover 打开浮层、浮层内「查看更多」打开整页、历史补记日志 `{"added":0,"merged":1}`、resize 六步探针 `actual==bounds==innerWidth`（995→734→1682→734→1682→734）。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：透明子窗口在目标机器出现点击穿透/闪烁 → 改为 backgroundColor 不透明 + hasShadow，或回退到「原生 Menu + 隐藏视图」组合（不推荐）。
+- **复核时间**：打包阶段（多显示器/多 DPI/全屏组合回归）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -275,4 +300,5 @@
 | ADR-0014 | 会话 = 浏览器文件夹（标签按会话隔离 + 本地恢复） | ✅ 已验证（云端待批准） |
 | ADR-0015 | 工作区（挂载项目文件夹）+ 会话级 Git Worktree | ✅ 本地已实现（云端后置） |
 | ADR-0016 | P0 安全门加固 + 持久多环境终端 + 工具参数单一转换 | ✅ 已验证（真机 E2E：6 终端档/C++ vcvars/广告拦截/书签/页面保存/快照/ask_user/顶部整理/全局历史） |
-| ADR-0017 | 浏览器功能面：书签/广告拦截/页面保存/快照面板 | ✅ 已验证（E2E 待跑） |
+| ADR-0017 | 浏览器功能面：书签/广告拦截/页面保存/快照面板 | ✅ 已验证（真机 E2E 已跑） |
+| ADR-0018 | 工具栏浮层独立窗口 / 管理整页 / 窗口自适应 / 全局历史 | ✅ 已验证（自动化 + 真机 E2E） |

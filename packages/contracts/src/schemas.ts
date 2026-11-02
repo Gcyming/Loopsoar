@@ -193,6 +193,32 @@ export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 
 /* ───────────────────────── 会话压缩（/compact） ───────────────────────── */
 
+/* ───────────────────────── 浏览器工具栏浮层（独立窗口渲染） ───────────────────────── */
+
+/** 浮层种类：更多菜单 / 收藏夹 / 历史记录 / 下载。 */
+export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads"]);
+
+/** 锚点矩形（相对主窗口内容区的 CSS px；主进程换算为屏幕坐标并做边缘翻转/夹取）。 */
+export const PopoverAnchorSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  width: z.number().finite().min(1).max(4000),
+  height: z.number().finite().min(1).max(4000),
+});
+
+export const OpenChromePopoverSchema = z.object({
+  kind: PopoverKindSchema,
+  anchor: PopoverAnchorSchema,
+  /** 界面语言（浮层独立窗口直接按该语言渲染，避免再等偏好异步加载）。 */
+  lang: z.enum(["zh-CN", "en-US"]).optional(),
+});
+
+/** 浮层内动作：由主进程转发给主窗口渲染层执行（openPage/navigate/savePage/openSettings…）。 */
+export const ChromePopoverActionSchema = z.object({
+  action: z.string().min(1).max(40),
+  payload: z.unknown().optional(),
+});
+
 export const ChatCompactSchema = z.object({
   sessionId: SessionIdSchema.optional(),
   /** false=只预览（默认）；true=真的把压缩结果写回会话持久化。 */
@@ -927,6 +953,26 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     sensitive: true,
   },
 
+  /* ── 浏览器工具栏浮层（独立子窗口渲染；不遮挡原生网页视图） ── */
+  "ui:openPopover": {
+    domain: "ui",
+    method: "openPopover",
+    request: OpenChromePopoverSchema,
+    sensitive: true,
+  },
+  "ui:closePopover": {
+    domain: "ui",
+    method: "closePopover",
+    request: null,
+    sensitive: true,
+  },
+  "ui:popoverAction": {
+    domain: "ui",
+    method: "popoverAction",
+    request: ChromePopoverActionSchema,
+    sensitive: true,
+  },
+
   /* ── 会话压缩（/compact，真实压缩持久化） ── */
   "chat:compact": {
     domain: "chat",
@@ -1017,6 +1063,7 @@ export const EVENTS = [
   "ask:user",
   "loop:fallback",
   "loop:changed",
+  "chrome:popoverAction",
   "chat:compacted",
 ] as const;
 

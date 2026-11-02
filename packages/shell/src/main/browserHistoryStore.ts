@@ -52,6 +52,22 @@ function normalizeTitle(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** 补记输入：会话恢复出来的旧标签（只关心 URL 与已知标题）。 */
+export interface BackfillVisit {
+  url?: unknown;
+  title?: unknown;
+}
+
+/** 补记结果（日志/诊断用）。 */
+export interface BackfillStats {
+  /** 新补进历史面板的条目数。 */
+  added: number;
+  /** 已存在、只按需补了标题的条目数（不动 visitCount/排序）。 */
+  merged: number;
+  /** 非法 URL / 同批次重复地址（未写入）。 */
+  skipped: number;
+}
+
 export class BrowserHistoryStore {
   private entries: GlobalHistoryEntry[] = [];
 
@@ -111,6 +127,55 @@ export class BrowserHistoryStore {
     entry.title = normalizedTitle;
     this.save();
     return true;
+  }
+
+  /**
+   * 补记（会话恢复专用）：把「开机恢复出来的旧标签」补进全局历史，但**不伪造一次新访问**：
+   *   · URL 不存在 → 新增一条（visitedAt = 补记时刻、visitCount = 1，按传入顺序排在列表最前）；
+   *   · URL 已存在 → 只按需补标题（原条目无标题、本次有），**不改 visitedAt、不增 visitCount、
+   *     不改变排序**——恢复不是"用户刚看过"，用它抬高最近排序或访问次数会污染历史信号；
+   *   · 同批次重复 URL / 非 http(s) / 空地址 → 跳过。
+   *
+   * 为什么需要它：会话恢复被有意设计为「不记录访问」（否则每次重启都把旧页面当成新访问）。
+   * 但老用户升级到「全局历史」后，历史面板唯一数据来源是这张表，恢复的标签又不会写进来 →
+   * 面板看起来是空的（用户反馈）。补记正好填上这个缺口，同时保留"恢复不计访问"的语义。
+   */
+  backfill(visits: readonly BackfillVisit[]): BackfillStats {
+    const stats: BackfillStats = { added: 0, merged: 0, skipped: 0 };
+    if (!Array.isArray(visits) || visits.length === 0) return stats;
+    const now = Date.now();
+    const seen = new Set<string>();
+    const pending: GlobalHistoryEntry[] = [];
+    let titleChanged = false;
+
+    for (const visit of visits) {
+      const url = typeof visit?.url === "string" ? visit.url.trim() : "";
+      if (!url || !isHttpUrl(url) || seen.has(url)) {
+        stats.skipped += 1;
+        continue;
+      }
+      seen.add(url);
+      const title = normalizeTitle(visit?.title);
+      const existing = this.entries.find((entry) => entry.url === url);
+      if (existing) {
+        stats.merged += 1;
+        // 只补空标题：已有标题更可信（用户实际看到过的页面标题），不被恢复态覆盖
+        if (!existing.title && title) {
+          existing.title = title;
+          titleChanged = true;
+        }
+        continue;
+      }
+      pending.push({ url, ...(title ? { title } : {}), visitedAt: now, visitCount: 1 });
+    }
+
+    if (pending.length > 0) {
+      // 传入顺序 = 恢复时的标签顺序：整体保持顺序放在最前（首个标签排第一），旧的已存在条目顺延在后
+      this.entries = pending.concat(this.entries).slice(0, MAX_GLOBAL_HISTORY);
+      stats.added = pending.length;
+    }
+    if (stats.added > 0 || titleChanged) this.save();
+    return stats;
   }
 
   /** 清空历史（设置/隐私操作用）。 */

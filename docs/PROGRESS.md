@@ -344,6 +344,15 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 真机 E2E：更多菜单浮于网页之上、全局历史面板跨会话显示 3 条（含标题）、顶部新布局截图
 - 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5（gateway 已删）、vitest 126 文件 / 1062 tests 全绿、bundle 711KB**
 
+## 二·三十四、2026-11-03 第三十一次增量（用户反馈整理轮：浮层架构 / 整页管理 / 自适应 / 历史）
+- **工具栏浮层改独立子窗口（根除网页消失/遮挡）**：新增 `chromePopover.ts`（独立 BrowserWindow：parent/透明/无边框/跳过任务栏/同 preload 白名单；同一时刻一个；主窗口 resize/move/close、blur、Esc 自动关闭；hover 120ms 光标轮询关闭）+ `computePopoverBounds`（下方优先→翻转→四边 clamp，永不截断）+ `domains/chromePopover.ts`（ui:openPopover/closePopover/popoverAction，仅主窗口可开、动作转发 chrome:popoverAction）+ 37 测试；UI 侧 PopoverApp（more/bookmarks/history/downloads 预览，限 8/8/5 条 + 固定「查看更多」footer，键盘可达）；BrowserChrome 只保留 13 props，收藏星标/更多按钮 hover 250ms 或点击即弹出；**不再隐藏原生网页视图**
+- **整页管理界面（ChromePage）**：历史/下载/收藏夹/设置四类整页（顶部返回栏、加载/空/错误态、下载实时刷新、书签删除、设置复用 Settings fullPage）；「查看更多」从浮层跳转整页，替代小弹窗塞长列表
+- **应用内弹窗边缘截断修复**：`popoverPosition.ts` 纯函数 placePopover（翻转/夹取/maxHeight）+ AnchoredPopover 接入 + resize/scroll/ResizeObserver 重定位；AgentSidebar 会话菜单改 Portal + Popover；Composer 4 个菜单自动升级；18 用例矩阵（四边永不越界）
+- **窗口自适应根因修复**：原只有 resize 单事件直连；补齐 50ms 防抖 + maximize/unmaximize/restore/enter/leave-full-screen 六事件统一 syncBounds；E2E 六步探针实测 `actual==bounds==page.innerWidth`（995→734→1682→734→1682→734，DPR 1.25）
+- **历史记录为空根因修复**：记录逻辑本身正常；空是因启动恢复的旧标签有意不记录。新增 `BrowserHistoryStore.backfill`（启动恢复后补记；已有条目不增 visitCount/不刷时间、只补空标题）+ 13 测试；真机 E2E 日志 `{"added":0,"merged":1,"skipped":0}`，历史整页可见恢复的页面
+- **清理**：BrowserChrome 11 个过渡 shim props 删除；旧历史/下载浮层调用链从 App 移除；layering 守卫白名单补 chromePopover（合法 Electron 子窗口管理器）
+- 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5、vitest 129 文件 / 1130 tests 全绿、bundle 736KB**；真机 E2E 证据：`e2e-round5-popover-main-desktop.png`（网页可见+浮层浮于其上）、`e2e-round5-viewmore-page.png`（查看更多→整页）、`e2e-round5-global-history-page.png`（全局历史整页）、`e2e-round5-resize.png`
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

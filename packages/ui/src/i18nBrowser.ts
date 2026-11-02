@@ -76,6 +76,13 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "browser.menuBookmarks": { zh: "收藏夹", en: "Bookmarks" },
   "browser.menuSavePage": { zh: "保存页面", en: "Save page" },
   "browser.menuSettings": { zh: "设置", en: "Settings" },
+  /* 独立浮层（PopoverApp，悬停预览 + 查看更多） */
+  "browser.popover.viewMore": { zh: "查看更多", en: "View all" },
+  "browser.popover.loading": { zh: "加载中…", en: "Loading…" },
+  "browser.popover.loadFailed": { zh: "加载失败：{error}", en: "Failed to load: {error}" },
+  "browser.popover.count": { zh: "{count} 项", en: "{count} items" },
+  "browser.popover.downloading": { zh: "下载中", en: "Downloading" },
+  "browser.popover.downloadInterrupted": { zh: "已中断", en: "Interrupted" },
   "browser.tagline": { zh: "浏览器优先的本地 AI Agent", en: "A browser-first local AI agent" },
   "browser.startSubtitle": {
     zh: "在顶部输入网址或搜索内容，回车开始",

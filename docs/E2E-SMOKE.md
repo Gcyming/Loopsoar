@@ -127,6 +127,18 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 插件与扩展合并后：设置仅「扩展」一个分区 | ✅（分区 12 个，无「插件」） | 设置截图 |
 | Gateway 已彻底删除 | ✅ 包/通道/分区/菜单均不存在；守卫断言防复活 | `tests/guards/project-isolation.spec.ts` |
 
+## 10. 2026-11-03 用户反馈整理轮真机验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 点「更多」时**网页不再消失**、浮层浮在网页之上 | ✅ 浮层为独立子窗口（桌面截图可见网页内容仍完整显示，菜单浮于其上） | `e2e-round5-popover-main-desktop.png` + `-popover.png` |
+| 浮层不被窗口边缘截断（翻转/夹取） | ✅ 主进程 computePopoverBounds；桌面截图菜单完整可见 | 同上 |
+| 悬停「更多」/收藏星标 250ms 自动弹出预览 | ✅ E2E hover（windows 2）→ 浮层打开 | `e2e-round5-hover-viewmore-popover.png` |
+| 浮层「查看更多」→ 整页管理界面 | ✅ ChromePage 打开（文本「收藏夹 共 0 条…」/「历史记录 共 1 条…」） | `e2e-round5-viewmore-page.png`、`e2e-round5-global-history-page.png` |
+| 历史全局（跨会话）+ 恢复标签补记 | ✅ 补记日志 `{"added":0,"merged":1}`；历史整页显示恢复的页面 | 主进程日志 + 历史整页截图 |
+| 网页随窗口缩放自适应（resize/maximize/unmaximize/fullscreen/恢复） | ✅ 六步探针 `actual==bounds==page.innerWidth`（995→734→1682→734→1682→734） | `E2E_RESIZE_STEP` 日志 |
+| 应用内其它下拉菜单边缘不截断 | ✅ placePopover 翻转/夹取 + resize/scroll 重定位 | 18 用例矩阵 + 真机 |
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
