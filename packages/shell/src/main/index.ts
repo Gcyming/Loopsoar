@@ -1056,7 +1056,8 @@ app.whenReady().then(async () => {
       return error === "";
     },
   });
-  registerFsDomain(deps);
+  // 图片域：读取（附件缩略图）+ 剪贴板图片落盘（写 <dataDir>/pasted-images/）
+  registerFsDomain({ ...deps, dataDir: dirs.dataDir });
   registerMcpDomain({
     ...deps,
     mcp,

@@ -2,31 +2,40 @@
  * 守卫：UI 与契约一致（事件白名单 / 布局单一产地 / 会话通道对齐）。
  * 为什么守卫：UI 里写错的字符串不会被类型系统拦住（事件名、域方法名都走字符串），
  * 只能在构建期扫源码兜底，否则表现为「点了没反应」。
+ *
+ * 2026-11-02 更新：App.tsx 拆分后事件订阅移动到 useChatStreamEvents.ts 等模块，
+ * 扫描目标改为「ui/src 全部源码」，避免拆分后守卫失效（此前只扫 App+Settings）。
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { EVENTS, CHANNEL_BINDINGS } from "../../packages/contracts/src/schemas.ts";
 import { LAYOUT } from "../../packages/contracts/src/layout.ts";
 
 const ROOT = process.cwd();
-const APP_TSX = path.join(ROOT, "packages/ui/src/App.tsx");
-const SETTINGS_TSX = path.join(ROOT, "packages/ui/src/Settings.tsx");
+const UI_SRC = path.join(ROOT, "packages/ui/src");
 
-function readApp(): string {
-  return readFileSync(APP_TSX, "utf8");
+function walkUiFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) walkUiFiles(full, out);
+    else if (/\.(ts|tsx)$/.test(entry)) out.push(full);
+  }
+  return out;
 }
 
-/** UI 全部界面源码（主界面 + 设置面板）。 */
+/** UI 全部界面源码（主界面 + 拆分组件 + 钩子 + 设置面板）。 */
 function readAllUi(): string {
-  return `${readApp()}
-${readFileSync(SETTINGS_TSX, "utf8")}`;
+  return walkUiFiles(UI_SRC)
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n");
 }
 
 describe("守卫：UI ↔ 契约一致", () => {
   it("UI 订阅的事件全部在契约 EVENTS 白名单内", () => {
-    const src = readApp();
-    const used = [...src.matchAll(/api\.on\("([^"]+)"/g)].map((m) => m[1]);
+    const src = readAllUi();
+    const used = [...src.matchAll(/api\??\.on\("([^"]+)"/g)].map((m) => m[1]);
     expect(used.length).toBeGreaterThan(0);
     for (const event of used) {
       expect(EVENTS as readonly string[], `UI 订阅了契约外事件 ${event}`).toContain(event);
@@ -35,8 +44,8 @@ describe("守卫：UI ↔ 契约一致", () => {
 
   it("UI 调用的 IPC 域方法在契约通道中存在", () => {
     const src = readAllUi();
-    // api.<domain>.<method>(  → 映射为 domain:method（runtime.bootStatus 的特例由契约 boot:status 提供）
-    const calls = [...src.matchAll(/api\.([a-zA-Z]+)\.([a-zA-Z]+)\(/g)].map((m) => `${m[1]}.${m[2]}`);
+    // api.<domain>.<method>( / api?.<domain>.<method>( → domain:method
+    const calls = [...src.matchAll(/api\??\.([a-zA-Z]+)\.([a-zA-Z]+)\(/g)].map((m) => `${m[1]}.${m[2]}`);
     expect(calls.length).toBeGreaterThan(0);
     const methodMap: Record<string, string> = {
       "runtime.status": "boot:status",
@@ -61,9 +70,8 @@ describe("守卫：UI ↔ 契约一致", () => {
   });
 
   it("布局数字只来自契约（UI 不硬编码侧栏/顶栏尺寸）", () => {
-    const src = readApp();
+    const src = readAllUi();
     expect(src).toContain("LAYOUT");
-    // 硬编码的关键尺寸不允许出现在 UI 里（320/48/32 只应该来自 LAYOUT 引用）
     expect(src).not.toMatch(/SIDEBAR_WIDTH\s*=\s*360/);
     expect(src).not.toMatch(/TOP_BAR_HEIGHT\s*=\s*48/);
     expect(LAYOUT.SIDEBAR_WIDTH).toBe(360);
@@ -103,9 +111,7 @@ describe("守卫：图标与动效资源", () => {
     for (const keyframe of ["spin", "blink", "streamUnitIn", "pulseDot", "toastIn"]) {
       expect(html, `缺少动画 ${keyframe}`).toContain(`@keyframes ${keyframe}`);
     }
-    // 按下回弹反馈（借鉴 slime：active scale）
     expect(html).toMatch(/\.icon-btn:active[^{]*\{[^}]*scale\(0\.88\)/);
-    // 减动效必须保留不透明度渐入（去掉位移），而不是整块关掉动画
     expect(html).toContain("prefers-reduced-motion: reduce");
     expect(html).toContain("fadeOnly");
   });

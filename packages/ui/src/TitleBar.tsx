@@ -7,6 +7,7 @@ import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
+import { useT } from "./i18n.js";
 
 export interface TitleBarProps {
   maximized: boolean;
@@ -14,6 +15,7 @@ export interface TitleBarProps {
 
 export default function TitleBar({ maximized }: TitleBarProps): React.ReactElement {
   const api = useLoopsoarApi();
+  const tr = useT();
   return (
     <div style={styles.titleBar}>
       <div style={{ ...styles.titleDrag, ...DRAG_REGION }} onDoubleClick={() => void api?.window.maximize()}>
@@ -23,8 +25,8 @@ export default function TitleBar({ maximized }: TitleBarProps): React.ReactEleme
       <div style={{ ...styles.windowControls, ...NO_DRAG_REGION }}>
         <button
           type="button"
-          aria-label="最小化"
-          title="最小化"
+          aria-label={tr("titlebar.minimize")}
+          title={tr("titlebar.minimize")}
           className="win-btn"
           style={styles.windowButton}
           onClick={() => void api?.window.minimize()}
@@ -33,8 +35,8 @@ export default function TitleBar({ maximized }: TitleBarProps): React.ReactEleme
         </button>
         <button
           type="button"
-          aria-label={maximized ? "还原" : "最大化"}
-          title={maximized ? "还原" : "最大化"}
+          aria-label={maximized ? tr("titlebar.restore") : tr("titlebar.maximize")}
+          title={maximized ? tr("titlebar.restore") : tr("titlebar.maximize")}
           className="win-btn"
           style={styles.windowButton}
           onClick={() => void api?.window.maximize()}
@@ -52,8 +54,8 @@ export default function TitleBar({ maximized }: TitleBarProps): React.ReactEleme
         </button>
         <button
           type="button"
-          aria-label="关闭"
-          title="关闭"
+          aria-label={tr("titlebar.close")}
+          title={tr("titlebar.close")}
           className="win-btn win-close"
           style={styles.windowButton}
           onClick={() => void api?.window.close()}

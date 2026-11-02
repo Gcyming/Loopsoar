@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
   "chat:steer": { domain: "chat", method: "steer", sensitive: true, hasRequest: true },
   "chat:rollback": { domain: "chat", method: "rollback", sensitive: true, hasRequest: true },
   "fs:readImage": { domain: "fs", method: "readImage", sensitive: true, hasRequest: true },
+  "fs:saveImage": { domain: "fs", method: "saveImage", sensitive: true, hasRequest: true },
   "chat:saveTimeline": { domain: "chat", method: "saveTimeline", sensitive: true, hasRequest: true },
   "chat:stop": { domain: "chat", method: "stop", sensitive: true, hasRequest: true },
   "chat:send": { domain: "chat", method: "send", sensitive: true, hasRequest: true },
@@ -139,7 +140,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
     "chat": ["stream", "steer", "rollback", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
-    "fs": ["readImage"],
+    "fs": ["readImage", "saveImage"],
     "perm": ["respond"],
     "workspace": ["read", "write", "list", "create", "select", "remove", "status"],
     "agents": ["list"],

@@ -21,6 +21,7 @@ import type {
 } from "./types.js";
 import { decideFollow } from "./scrollFollow.js";
 import { limitLines, normalizeTerminalText, stripAnsi, TERMINAL_MAX_LINES } from "./terminalAnsi.js";
+import { useT } from "./i18n.js";
 
 export interface TerminalPanelProps {
   /** 当前会话 ID：终端按会话隔离（切换会话时自动刷新标签）。 */
@@ -41,13 +42,6 @@ const FLUSH_INTERVAL_MS = 48;
 const HEIGHT_KEY_STEP = 16;
 /** 提示自动消失时间（与 App 的 toast 节奏一致）。 */
 const NOTICE_TTL_MS = 4500;
-
-const STATE_LABEL: Record<TerminalSessionState, string> = {
-  starting: "启动中",
-  ready: "就绪",
-  exited: "已退出",
-  error: "错误",
-};
 
 /** 高度夹紧到契约范围（App 从 localStorage 恢复的旧值可能越界）。 */
 export function clampTerminalHeight(value: number): number {
@@ -92,6 +86,9 @@ export default function TerminalPanel({
   onHeightChange,
 }: TerminalPanelProps): React.JSX.Element | null {
   const api = useLoopsoarApi();
+  const tr = useT();
+  /** 终端状态文案（随语言切换即时更新）。 */
+  const stateLabelOf = (state: TerminalSessionState): string => tr(`terminal.state.${state}`);
   const [profiles, setProfiles] = React.useState<TerminalProfileInfo[]>([]);
   const [terminals, setTerminals] = React.useState<TerminalSessionInfo[]>([]);
   const [activeId, setActiveId] = React.useState<string | null>(null);
@@ -204,9 +201,13 @@ export default function TerminalPanel({
         );
         const code = typeof p.code === "number" ? p.code : null;
         const signal = typeof p.signal === "string" && p.signal ? p.signal : "";
-        const reason = signal ? `被信号 ${signal} 终止` : code === null ? "被信号终止" : `退出码 ${code}`;
+        const reason = signal
+          ? tr("terminal.exit.bySignal", { signal })
+          : code === null
+            ? tr("terminal.exit.bySignalUnknown")
+            : tr("terminal.exit.byCode", { code });
         // 本地留一行墓碑，避免用户以为终端「卡住了」
-        appendRaw(terminalId, `\n[进程已退出（${reason}）]\n`);
+        appendRaw(terminalId, `\n${tr("terminal.exit.tombstone", { reason })}\n`);
       }),
     );
 
@@ -228,14 +229,14 @@ export default function TerminalPanel({
           ),
         );
         // error 态带中文原因：同时用面板提示条展示（输出区里也会有一行 [终端错误]）
-        if (typeof p.error === "string" && p.error) showNotice(`终端错误：${p.error}`);
+        if (typeof p.error === "string" && p.error) showNotice(tr("terminal.errorNotice", { error: p.error }));
       }),
     );
 
     return () => {
       for (const off of offs) off();
     };
-  }, [api, appendRaw, showNotice]);
+  }, [api, appendRaw, showNotice, tr]);
 
   // 卸载清理节流器，避免定时器泄漏（组件通常常驻，但测试/热更新会卸载）
   React.useEffect(() => {
@@ -256,7 +257,7 @@ export default function TerminalPanel({
       if (profilesResult.status === "fulfilled") {
         setProfiles(readList<TerminalProfileInfo>(profilesResult.value, "profiles"));
       } else {
-        showNotice("终端环境探测失败");
+        showNotice(tr("terminal.probeFailed"));
       }
       if (listResult.status === "fulfilled") {
         const all = readList<TerminalSessionInfo>(listResult.value, "terminals");
@@ -270,7 +271,7 @@ export default function TerminalPanel({
     } finally {
       setProfilesLoading(false);
     }
-  }, [api, sessionId, showNotice]);
+  }, [api, sessionId, showNotice, tr]);
 
   React.useEffect(() => {
     if (!open || !api) return;
@@ -345,15 +346,15 @@ export default function TerminalPanel({
   const createTerminal = React.useCallback(
     async (profile: TerminalProfileInfo | null): Promise<void> => {
       if (!api) {
-        showNotice("未在 Electron shell 中运行，无法打开终端");
+        showNotice(tr("terminal.notInShell"));
         return;
       }
       if (!profile) {
-        showNotice("没有可用的终端配置档");
+        showNotice(tr("terminal.noProfilesAvailable"));
         return;
       }
       if (!profile.available) {
-        showNotice(profile.detail ?? `配置档「${profile.label}」不可用`);
+        showNotice(profile.detail ?? tr("terminal.profileUnavailable", { label: profile.label }));
         return;
       }
       setPending(true);
@@ -362,7 +363,7 @@ export default function TerminalPanel({
           ...(sessionId ? { sessionId } : {}),
           profile: profile.key,
         });
-        if (!info || typeof info.terminalId !== "string") throw new Error("主进程未返回终端实例");
+        if (!info || typeof info.terminalId !== "string") throw new Error(tr("terminal.openMissingInfo"));
         setTerminals((prev) =>
           prev.some((item) => item.terminalId === info.terminalId) ? prev : [...prev, info],
         );
@@ -380,12 +381,12 @@ export default function TerminalPanel({
         inputRef.current?.focus();
       } catch (err) {
         // 契约：open 失败走 Promise reject（超限 / 不可用 / cwd 越界 / 启动失败）
-        showNotice(`新建终端失败：${err instanceof Error ? err.message : String(err)}`);
+        showNotice(tr("terminal.openFailed", { error: err instanceof Error ? err.message : String(err) }));
       } finally {
         setPending(false);
       }
     },
-    [api, sessionId, showNotice, loadHistory],
+    [api, sessionId, showNotice, loadHistory, tr],
   );
 
   const selectTerminal = React.useCallback(
@@ -420,8 +421,12 @@ export default function TerminalPanel({
     const hit = await api.terminal.interrupt({ terminalId: activeId }).catch(() => false);
     // Windows 下管道 stdin 发不出控制台 ^C，主进程会结束整棵进程树 → 终端随后进入 exited；
     // 这里只提示语义，状态由 terminal:exit/state 事件驱动（标签变「已退出」、输入自动禁用）。
-    showNotice(hit ? "已发送中断；若进程被结束，终端会显示「已退出」，可关闭后重开" : "终端已退出或不存在");
-  }, [api, activeId, showNotice]);
+    showNotice(
+      hit
+        ? tr("terminal.interruptSent")
+        : tr("terminal.interruptMiss"),
+    );
+  }, [api, activeId, showNotice, tr]);
 
   const closeActive = React.useCallback(async (): Promise<void> => {
     if (!api || !activeId) return;
@@ -439,15 +444,15 @@ export default function TerminalPanel({
     rawBuffersRef.current.set(activeId, "");
     dirtyRef.current.delete(activeId);
     setTexts((prev) => ({ ...prev, [activeId]: "" }));
-    showNotice("已清屏（只清显示，主进程回放缓冲不变）");
-  }, [activeId, showNotice]);
+    showNotice(tr("terminal.cleared"));
+  }, [activeId, showNotice, tr]);
 
   /** 提交命令 / 原始输入；appendNewline 只对原始输入模式生效（严格由用户控制）。 */
   const submit = React.useCallback(
     async (appendNewline: boolean): Promise<void> => {
       if (!api || !activeTerminal) return;
       if (!canType) {
-        showNotice("终端已退出，请关闭后新建");
+        showNotice(tr("terminal.exitedCannotType"));
         return;
       }
       const terminalId = activeTerminal.terminalId;
@@ -462,7 +467,7 @@ export default function TerminalPanel({
           ok: false,
           error: err instanceof Error ? err.message : String(err),
         }));
-        if (!result?.ok) showNotice(result?.error ?? "原始输入发送失败");
+        if (!result?.ok) showNotice(result?.error ?? tr("terminal.inputFailed"));
         return;
       }
       const text = command.trim();
@@ -473,9 +478,9 @@ export default function TerminalPanel({
         ok: false,
         error: err instanceof Error ? err.message : String(err),
       }));
-      if (!result?.ok) showNotice(result?.error ?? "命令执行失败");
+      if (!result?.ok) showNotice(result?.error ?? tr("terminal.runFailed"));
     },
-    [api, activeTerminal, canType, command, rawMode, appendRaw, showNotice],
+    [api, activeTerminal, canType, command, rawMode, appendRaw, showNotice, tr],
   );
 
   /* -------------------------------- 高度拖拽 -------------------------------- */
@@ -561,32 +566,32 @@ export default function TerminalPanel({
   if (!open) return null;
 
   const clampedHeight = clampTerminalHeight(height);
-  const stateLabel = activeTerminal ? (STATE_LABEL[activeTerminal.state] ?? activeTerminal.state) : "";
+  const stateLabel = activeTerminal ? stateLabelOf(activeTerminal.state) : "";
 
   return (
     <section
       className="terminal-panel"
       style={{ ...styles.panel, height: clampedHeight }}
-      aria-label="终端面板"
+      aria-label={tr("terminal.panelLabel")}
     >
       {/* 高度拖拽条：鼠标拖动 / 上下方向键 / Home·End；行内角色做无障碍语义 */}
       <div
         className="terminal-resizer"
         role="separator"
         aria-orientation="horizontal"
-        aria-label="调整终端面板高度：拖动或方向键，Home 最小、End 最大"
+        aria-label={tr("terminal.resizeLabel")}
         aria-valuemin={LAYOUT.TERMINAL_PANEL_MIN_HEIGHT}
         aria-valuemax={LAYOUT.TERMINAL_PANEL_MAX_HEIGHT}
         aria-valuenow={clampedHeight}
-        aria-valuetext={`${clampedHeight} 像素`}
+        aria-valuetext={tr("terminal.resizeValueText", { height: clampedHeight })}
         tabIndex={0}
-        title="拖动调整终端高度"
+        title={tr("terminal.resizeTitle")}
         onMouseDown={startHeightDrag}
         onKeyDown={onResizerKeyDown}
       />
       <div className="terminal-toolbar">
-        <div className="terminal-profiles" role="group" aria-label="终端配置档（点击新建对应终端）">
-          {profilesLoading && profiles.length === 0 ? <span className="terminal-hint">探测终端环境…</span> : null}
+        <div className="terminal-profiles" role="group" aria-label={tr("terminal.profilesGroup")}>
+          {profilesLoading && profiles.length === 0 ? <span className="terminal-hint">{tr("terminal.probing")}</span> : null}
           {profiles.map((profile) => (
             <button
               key={profile.key}
@@ -597,29 +602,42 @@ export default function TerminalPanel({
               disabled={!profile.available || pending}
               title={
                 profile.available
-                  ? `${profile.description}${profile.version ? ` · ${profile.version}` : ""}（点击新建终端）`
-                  : `${profile.label} 不可用：${profile.detail ?? "未检测到安装"}`
+                  ? tr("terminal.profileTip", {
+                      description: `${profile.description}${profile.version ? ` · ${profile.version}` : ""}`,
+                    })
+                  : tr("terminal.profileTipUnavailable", {
+                      label: profile.label,
+                      detail: profile.detail ?? tr("terminal.notInstalled"),
+                    })
               }
-              aria-label={`新建 ${profile.label} 终端${profile.available ? "" : "（不可用）"}`}
+              aria-label={
+                profile.available
+                  ? tr("terminal.profileNewAria", { label: profile.label })
+                  : tr("terminal.profileNewAriaDisabled", { label: profile.label })
+              }
               onClick={() => void createTerminal(profile)}
             >
               {profile.label}
             </button>
           ))}
           {!profilesLoading && profiles.length === 0 ? (
-            <span className="terminal-hint">未探测到终端配置档</span>
+            <span className="terminal-hint">{tr("terminal.noProfiles")}</span>
           ) : null}
         </div>
         {activeTerminal ? (
-          <span className="terminal-state" data-state={activeTerminal.state} title={`终端状态：${stateLabel}`}>
+          <span
+            className="terminal-state"
+            data-state={activeTerminal.state}
+            title={tr("terminal.stateTitle", { state: stateLabel })}
+          >
             {stateLabel}
           </span>
         ) : null}
         <button
           type="button"
           className="icon-btn terminal-close-btn"
-          title="关闭终端面板"
-          aria-label="关闭终端面板"
+          title={tr("terminal.closePanel")}
+          aria-label={tr("terminal.closePanel")}
           onClick={onClose}
         >
           <Icon name="close" size={12} />
@@ -632,7 +650,7 @@ export default function TerminalPanel({
       ) : null}
       {terminals.length > 0 ? (
         <div className="terminal-tabbar">
-          <div className="terminal-tabs" role="tablist" aria-label="终端标签">
+          <div className="terminal-tabs" role="tablist" aria-label={tr("terminal.tabsLabel")}>
             {terminals.map((item) => (
               <button
                 key={item.terminalId}
@@ -640,9 +658,11 @@ export default function TerminalPanel({
                 role="tab"
                 aria-selected={item.terminalId === activeId}
                 className={`terminal-tab${item.terminalId === activeId ? " is-active" : ""}`}
-                title={`${item.label || profileLabel(profiles, item.profile)} · ${item.cwd}（${
-                  STATE_LABEL[item.state] ?? item.state
-                }）`}
+                title={tr("terminal.tabTitle", {
+                  label: item.label || profileLabel(profiles, item.profile),
+                  cwd: item.cwd,
+                  state: stateLabelOf(item.state),
+                })}
                 onClick={() => selectTerminal(item.terminalId)}
               >
                 <span className="terminal-tab-dot" data-state={item.state} aria-hidden="true" />
@@ -652,8 +672,12 @@ export default function TerminalPanel({
             <button
               type="button"
               className="terminal-tab-add"
-              title={`新建终端${defaultProfile ? `（${defaultProfile.label}）` : ""}`}
-              aria-label="新建终端"
+              title={
+                defaultProfile
+                  ? tr("terminal.newTerminalWith", { profile: defaultProfile.label })
+                  : tr("terminal.newTerminal")
+              }
+              aria-label={tr("terminal.newTerminal")}
               disabled={pending || !defaultProfile}
               onClick={() => void createTerminal(defaultProfile)}
             >
@@ -664,29 +688,29 @@ export default function TerminalPanel({
             <button
               type="button"
               className="terminal-action"
-              title="中断当前前台进程（Ctrl+C）"
+              title={tr("terminal.interruptTitle")}
               onClick={() => void interruptActive()}
               disabled={!canType}
             >
-              中断
+              {tr("terminal.interrupt")}
             </button>
             <button
               type="button"
               className="terminal-action"
-              title="清屏（只清显示，主进程回放缓冲不变）"
+              title={tr("terminal.clearTitle")}
               onClick={clearOutput}
               disabled={!activeTerminal}
             >
-              清屏
+              {tr("terminal.clear")}
             </button>
             <button
               type="button"
               className="terminal-action"
-              title="关闭当前终端（结束子进程树）"
+              title={tr("terminal.closeTerminalTitle")}
               onClick={() => void closeActive()}
               disabled={!activeTerminal || pending}
             >
-              关闭
+              {tr("terminal.closeTerminal")}
             </button>
           </span>
         </div>
@@ -694,13 +718,13 @@ export default function TerminalPanel({
       {terminals.length === 0 ? (
         <div className="terminal-empty">
           <Icon name="terminal" size={22} style={styles.emptyIcon} />
-          <div className="terminal-empty-title">当前会话还没有终端</div>
+          <div className="terminal-empty-title">{tr("terminal.emptyTitle")}</div>
           <div className="terminal-empty-hint">
             {profilesLoading && profiles.length === 0
-              ? "正在探测终端环境（首次探测可能需要几秒）…"
+              ? tr("terminal.emptyHintLoading")
               : defaultProfile
-                ? `选择上方配置档新建，或直接新建 ${defaultProfile.label} 终端`
-                : "本机未探测到可用终端环境（Windows 一般至少有 cmd / PowerShell）"}
+                ? tr("terminal.emptyHintAvailable", { profile: defaultProfile.label })
+                : tr("terminal.emptyHintNone")}
           </div>
           <button
             type="button"
@@ -708,7 +732,7 @@ export default function TerminalPanel({
             onClick={() => void createTerminal(defaultProfile)}
             disabled={!defaultProfile || pending}
           >
-            新建终端
+            {tr("terminal.newTerminal")}
           </button>
         </div>
       ) : (
@@ -718,13 +742,13 @@ export default function TerminalPanel({
             className="terminal-output"
             onScroll={handleOutputScroll}
             tabIndex={0}
-            aria-label="终端输出（可滚动，上滚暂停自动跟随）"
+            aria-label={tr("terminal.outputLabel")}
           >
             {activeText}
           </pre>
           {!follow ? (
             <button type="button" className="terminal-jump" onClick={jumpToLatest}>
-              ↓ 回到最新
+              {tr("terminal.jumpLatest")}
             </button>
           ) : null}
         </div>
@@ -741,14 +765,14 @@ export default function TerminalPanel({
           onKeyDown={onCommandKeyDown}
           placeholder={
             !activeTerminal
-              ? "先新建终端"
+              ? tr("terminal.placeholderNoTerminal")
               : !canType
-                ? "终端已退出，请关闭后新建"
+                ? tr("terminal.placeholderExited")
                 : rawMode
-                  ? "原始输入：Enter 原样发送，Ctrl+Enter 追加换行"
-                  : "输入命令，Enter 执行"
+                  ? tr("terminal.placeholderRaw")
+                  : tr("terminal.placeholderRun")
           }
-          aria-label={rawMode ? "终端原始输入（写入进程 stdin）" : "终端命令输入"}
+          aria-label={rawMode ? tr("terminal.ariaInputRaw") : tr("terminal.ariaInputRun")}
           disabled={!canType}
           spellCheck={false}
           autoComplete="off"
@@ -757,19 +781,19 @@ export default function TerminalPanel({
           type="button"
           className={`terminal-raw-toggle${rawMode ? " is-on" : ""}`}
           aria-pressed={rawMode}
-          title="原始输入模式：直接写入进程 stdin（REPL 交互）。Enter 不自动追加换行，Ctrl+Enter / Shift+Enter 追加 \n"
+          title={tr("terminal.rawTitle")}
           onClick={() => {
             setRawMode((prev) => !prev);
             inputRef.current?.focus();
           }}
         >
-          原始
+          {tr("terminal.raw")}
         </button>
         <button
           type="button"
           className="terminal-send"
-          title={rawMode ? "发送原始输入（Enter）" : "执行命令（Enter）"}
-          aria-label={rawMode ? "发送原始输入" : "执行命令"}
+          title={rawMode ? tr("terminal.sendRaw") : tr("terminal.sendRun")}
+          aria-label={rawMode ? tr("terminal.sendRaw") : tr("terminal.sendRun")}
           onClick={() => void submit(false)}
           disabled={!canType || pending}
         >

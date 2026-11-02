@@ -7,6 +7,7 @@ import {
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { Icon } from "./Icon.js";
+import { setLanguage, useT } from "./i18n.js";
 import type {
   AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo, LoopListResult, LoopsoarAPI, McpServerInfo, MemoryListResult,
   PermissionsState, Preferences, ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
@@ -51,9 +52,12 @@ interface DraftRule {
   enabled: boolean; content: string; persisted: boolean; path: string;
 }
 
-export default function Settings({ api, onClose, onPreferencesSaved, initialSection }: {
+export default function Settings({ api, onClose, onPreferencesSaved, initialSection, onOpenOnboarding }: {
   api: LoopsoarAPI | null; onClose: () => void; onPreferencesSaved?: (p: Preferences) => void; initialSection?: SectionId;
+  /** 「关于」分区重新打开新手引导（由 App 接线；缺省则不显示入口）。 */
+  onOpenOnboarding?: () => void;
 }): React.JSX.Element {
+  const tr = useT();
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -438,7 +442,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       case "general":
         return prefs ? (<div>
           <Head t="通用" h="外观、搜索与启动行为（config/preferences.json）" />
-          <Field l="语言"><Seg v={prefs.language} opts={[["zh-CN", "简体中文"], ["en-US", "English"]]} on={(x) => setPrefs({ ...prefs, language: x as Preferences["language"] })} /></Field>
+          <Field l="语言"><Seg v={prefs.language} opts={[["zh-CN", "简体中文"], ["en-US", "English"]]} on={(x) => { setPrefs({ ...prefs, language: x as Preferences["language"] }); setLanguage(x); }} /></Field>
           <Field l="动效强度" h="关闭后全局停用动画与过渡"><Seg v={prefs.animations} opts={[["full", "完整"], ["reduced", "弱化"], ["off", "关闭"]]} on={(x) => setPrefs({ ...prefs, animations: x as Preferences["animations"] })} /></Field>
           <Field l="默认搜索引擎"><Seg v={prefs.searchEngine} opts={[["bing", "Bing"], ["google", "Google"], ["duckduckgo", "DuckDuckGo"]]} on={(x) => setPrefs({ ...prefs, searchEngine: x as Preferences["searchEngine"] })} /></Field>
           <Field l="广告拦截" h="拦截广告与追踪请求（请求层过滤，默认开启）；若网站因拦截出现异常可关闭">
@@ -1256,9 +1260,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Kv k="Node" v={about.node} /><Kv k="品牌资产" v={about.brandAssetSource} />
           </div>
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
+          {onOpenOnboarding ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.about.onboarding")}</div>
+              <div style={S.note}>{tr("settings.about.onboardingHint")}</div>
+              {/* 先关设置再开向导：向导 z-index 低于设置（从向导跳设置时要能被设置盖住） */}
+              <SaveBtn onClick={() => { onClose(); onOpenOnboarding(); }} label={tr("settings.about.onboarding")} />
+            </div>
+          ) : null}
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, onOpenOnboarding, tr]);
 
   return (
     <div className="settings-overlay" style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>

@@ -13,6 +13,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 import type { AskUserRequest } from "./types.js";
 
 export interface AskUserDialogProps {
@@ -23,6 +24,7 @@ export interface AskUserDialogProps {
 }
 
 export default function AskUserDialog({ request, onRespond }: AskUserDialogProps): React.JSX.Element {
+  const tr = useT();
   const titleId = React.useId();
   const questionId = React.useId();
   const textRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -115,21 +117,21 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
         <div className="ask-head">
           <Icon name="bulb" size={15} style={{ color: BRAND.ochreHover }} />
           <span id={titleId} className="ask-title">
-            Agent 需要你的回答
+            {tr("ask.title")}
           </span>
         </div>
         <div id={questionId} className="ask-question">
           {request.question}
         </div>
         {options.length > 0 ? (
-          <div className="ask-options" role="group" aria-label="可选回答">
+          <div className="ask-options" role="group" aria-label={tr("ask.ariaOptions")}>
             {options.map((option, index) => (
               <button
                 key={`${index}-${option}`}
                 ref={index === 0 ? firstOptionRef : undefined}
                 type="button"
                 className="ask-option"
-                title="点击即用此选项回答"
+                title={tr("ask.optionTitle")}
                 onClick={() => onRespond(option)}
               >
                 {option}
@@ -147,24 +149,24 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
               // 契约 AskRespondSchema.answer 上限 4000 字符：输入侧先拦住，避免提交被 schema 拒绝
               maxLength={4000}
               onChange={(event) => setText(event.target.value)}
-              placeholder={options.length > 0 ? "或输入自定义回答…" : "输入你的回答…"}
-              aria-label="自由文本回答（Ctrl+Enter 提交）"
+              placeholder={options.length > 0 ? tr("ask.placeholderOptions") : tr("ask.placeholderFree")}
+              aria-label={tr("ask.ariaFree")}
               spellCheck={false}
             />
-            <div className="ask-hint">Ctrl+Enter 提交 · Esc 取消</div>
+            <div className="ask-hint">{tr("ask.hintCtrl")}</div>
           </div>
         ) : options.length === 0 ? (
-          <div className="ask-hint">Agent 本次未开放自由文本，也没有给出选项：只能取消。</div>
+          <div className="ask-hint">{tr("ask.hintOnlyCancel")}</div>
         ) : (
-          <div className="ask-hint">点击上方选项回答 · Esc 取消</div>
+          <div className="ask-hint">{tr("ask.hintOptions")}</div>
         )}
         <div className="ask-actions">
           <button type="button" className="ask-cancel" onClick={() => onRespond(null)}>
-            取消回答
+            {tr("ask.cancel")}
           </button>
           {allowFreeText ? (
             <button type="button" className="ask-submit" onClick={submitText} disabled={!text.trim()} title="Ctrl+Enter">
-              提交回答
+              {tr("ask.submit")}
             </button>
           ) : null}
         </div>

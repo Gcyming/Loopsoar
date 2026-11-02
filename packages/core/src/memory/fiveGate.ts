@@ -112,6 +112,42 @@ export function gateLink(
 }
 
 /**
+ * 第 5 闸：跨 agent 指针。
+ * 同内容（相似度 ≥ 去重阈值）但归属不同 agent → 不合并、不去重，而是双向建立 crossAgentLinks 指针。
+ * 为什么不能合并：合并会抹掉「谁记住的」这一等身份信息（影响权限/人格隔离/召回过滤）；
+ * 指针既避免正文重复堆叠，又保留各自归属，召回时可按 agent 维度展开关联条目。
+ */
+export function gateCrossAgent(
+  existing: MemoryFact[],
+  incoming: MemoryFact,
+  agentId: string = DEFAULT_AGENT_ID,
+  threshold = THRESHOLD_DEDUPE
+): { crossAgent: boolean; pointers: MemoryFact[] } {
+  const incomingAgent = normalAgent(agentId);
+  const pointers: MemoryFact[] = [];
+  for (const fact of existing) {
+    if (agentOf(fact) === incomingAgent) continue; // 同 agent 交给去重/合并闸处理
+    if (jaccardCJK(incoming.content, fact.content) >= threshold) {
+      pointers.push(fact);
+    }
+  }
+  return { crossAgent: pointers.length > 0, pointers };
+}
+
+/** 默认 agent 归属（单 Agent / 旧数据归一后的身份）。 */
+export const DEFAULT_AGENT_ID = "loopsoar";
+
+/** 归一化 fact 的 agentId：旧数据（无字段/空串）视为默认 agent，保证向后兼容。 */
+export function agentOf(fact: MemoryFact): string {
+  return normalAgent(fact.agentId);
+}
+
+function normalAgent(agentId: string | undefined): string {
+  const value = typeof agentId === "string" ? agentId.trim() : "";
+  return value.length > 0 ? value : DEFAULT_AGENT_ID;
+}
+
+/**
  * effectiveWeight — 时间衰减 τ=5.0 + 重要性归一化。
  * 为什么 (1 + 0)：相似度项由调用方在外部加（例如与参照记忆的 jaccard），
  * 本函数只负责时间/重要性维度，避免把相似度混入基础权重（职责分离）。

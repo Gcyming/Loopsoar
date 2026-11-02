@@ -10,6 +10,8 @@ import { Icon } from "./Icon.js";
 import type { PermissionsState, ProviderStatus } from "./types.js";
 import type { ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
+import { useLoopsoarApi } from "./useLoopsoarApi.js";
+import { useT } from "./i18n.js";
 import Popover from "./AnchoredPopover.js";
 
 export interface ComposerProps {
@@ -42,14 +44,51 @@ export interface ComposerProps {
   permissionLabel: (state: PermissionsState) => string;
   onPickAttachment: () => void;
   notice: string;
+  /** 斜杠命令执行入口（App 负责 /new /clear /stop /settings /compact /help 的实际动作）。 */
+  onCommand?: (command: string) => void;
+  /** 组件内异步操作（粘贴图片/选文件/命令）的提示出口；缺省则静默。 */
+  onNotice?: (text: string) => void;
 }
 
 const PERMISSION_CATEGORIES = [
-  { key: "read", label: "读取文件" },
-  { key: "write", label: "写入文件" },
-  { key: "terminal", label: "执行命令" },
-  { key: "network", label: "网络访问" },
+  { key: "read", labelKey: "composer.perm.read" },
+  { key: "write", labelKey: "composer.perm.write" },
+  { key: "terminal", labelKey: "composer.perm.terminal" },
+  { key: "network", labelKey: "composer.perm.network" },
 ] as const;
+
+interface SlashCommand {
+  cmd: string;
+  descKey: string;
+}
+
+/** 本地斜杠命令清单：解析在 Composer，执行交 onCommand（App 接线）。 */
+const SLASH_COMMANDS: SlashCommand[] = [
+  { cmd: "/new", descKey: "composer.command.new.desc" },
+  { cmd: "/clear", descKey: "composer.command.clear.desc" },
+  { cmd: "/stop", descKey: "composer.command.stop.desc" },
+  { cmd: "/settings", descKey: "composer.command.settings.desc" },
+  { cmd: "/compact", descKey: "composer.command.compact.desc" },
+  { cmd: "/help", descKey: "composer.command.help.desc" },
+];
+
+/** File → base64（去掉 dataURL 前缀，只留纯 base64 给 fs.saveImage）。 */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const comma = result.indexOf(",");
+      if (comma < 0) {
+        reject(new Error("读取图片失败"));
+        return;
+      }
+      resolve(result.slice(comma + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("读取图片失败"));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function Composer({
   value,
@@ -80,6 +119,8 @@ export default function Composer({
   permissionLabel,
   onPickAttachment,
   notice,
+  onCommand,
+  onNotice,
 }: ComposerProps): React.ReactElement {
   // 权限/模型菜单互斥：同一时刻只开一个（打开另一个会自动收起）。
   const [openMenu, setOpenMenu] = React.useState<"perm" | "model" | null>(null);
@@ -88,6 +129,191 @@ export default function Composer({
   const modelAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   const sendAnchorRef = React.useRef<HTMLButtonElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const api = useLoopsoarApi();
+  const tr = useT();
+  /** 斜杠命令面板：当前选中项 + 是否被 Esc 手动关闭（继续输入会重新展开）。 */
+  const [commandIndex, setCommandIndex] = React.useState(0);
+  const [commandDismissed, setCommandDismissed] = React.useState(false);
+
+  // 斜杠命令：仅当输入以 / 开头且尚未出现空格/换行时展开（/new、/settings 等）
+  const slashActive = value.startsWith("/") && !/[\s\n]/.test(value);
+  const commandQuery = slashActive ? value.slice(1).toLowerCase() : "";
+  const commandItems =
+    slashActive && !commandDismissed
+      ? SLASH_COMMANDS.filter((command) => command.cmd.slice(1).startsWith(commandQuery))
+      : [];
+  const commandOpen = slashActive && !commandDismissed;
+  const activeCommandIndex = commandItems.length === 0 ? 0 : Math.min(commandIndex, commandItems.length - 1);
+
+  usePopover("composer-command", commandOpen, (next) => {
+    if (!next) setCommandDismissed(true);
+  });
+
+  /** 面板提示出口（App 的 toast）；未接线则静默。 */
+  const notify = (text: string): void => {
+    onNotice?.(text);
+  };
+
+  /** 在光标处插入文本；必要时补换行，插入后恢复焦点与光标。 */
+  const insertText = (text: string): void => {
+    const el = textareaRef.current;
+    const current = el?.value ?? value;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? current.length;
+    const before = current.slice(0, start);
+    const after = current.slice(end);
+    const prefix = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
+    const snippet = `${prefix}${text}`;
+    onChange(`${before}${snippet}${after}`);
+    window.requestAnimationFrame(() => {
+      el?.focus();
+      const position = before.length + snippet.length;
+      el?.setSelectionRange(position, position);
+    });
+  };
+
+  /** 剪贴板图片：File → base64 → fs.saveImage（主进程限 6MB/图片白名单）→ 插入附件路径。 */
+  const savePastedImages = async (files: File[]): Promise<void> => {
+    if (!api?.fs?.saveImage) {
+      notify(tr("composer.imageUnavailable"));
+      return;
+    }
+    const errors: string[] = [];
+    let saved = 0;
+    for (const file of files) {
+      try {
+        const dataBase64 = await readFileAsBase64(file);
+        const result = await api.fs.saveImage({
+          dataBase64,
+          mime: file.type || "image/png",
+          ...(file.name ? { name: file.name } : {}),
+        });
+        if (result.ok && result.path) {
+          insertText(tr("composer.insertAttachment", { path: result.path }));
+          saved += 1;
+        } else {
+          errors.push(result.error ?? "unknown error");
+        }
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (saved > 0) notify(tr("composer.imageSaved", { count: saved }));
+    if (errors.length > 0) notify(tr("composer.imageFailed", { error: errors[0] }));
+  };
+
+  /** 粘贴：只接管剪贴板里的图片（普通文本/文件保持默认粘贴行为）。 */
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    const items = event.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const files: File[] = [];
+    for (const item of Array.from(items)) {
+      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    if (files.length === 0) return;
+    event.preventDefault();
+    void savePastedImages(files);
+  };
+
+  /** @ / Ctrl+U：用主进程文件选择框取路径，插入为附件引用。 */
+  const pickFileReference = async (): Promise<void> => {
+    if (!api?.dialog?.pickPath) {
+      notify(tr("composer.fileUnavailable"));
+      return;
+    }
+    try {
+      const result = await api.dialog.pickPath({ kind: "file", title: tr("composer.pickFile") });
+      if (result.canceled || !result.path) return;
+      insertText(tr("composer.insertAttachment", { path: result.path }));
+    } catch {
+      notify(tr("composer.fileUnavailable"));
+    }
+  };
+
+  /** 执行斜杠命令：已知命令交 onCommand；未知/未接线给出提示（不静默吞掉）。 */
+  const runCommand = (command: string): void => {
+    onChange("");
+    setCommandDismissed(true);
+    setCommandIndex(0);
+    const known = SLASH_COMMANDS.some((item) => item.cmd === command);
+    if (!known) {
+      notify(tr("composer.unknownCommand", { cmd: command }));
+      return;
+    }
+    if (!onCommand) {
+      notify(tr("composer.commandUnwired", { cmd: command }));
+      return;
+    }
+    onCommand(command);
+  };
+
+  /** 输入变化统一入口：重置命令面板状态（Esc 关闭后继续输入会重新展开）。 */
+  const handleValueChange = (next: string): void => {
+    onChange(next);
+    setCommandDismissed(false);
+    setCommandIndex(0);
+  };
+
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.nativeEvent.isComposing) return;
+    const key = event.key;
+
+    if (commandOpen) {
+      if (key === "ArrowDown") {
+        event.preventDefault();
+        if (commandItems.length > 0) setCommandIndex((activeCommandIndex + 1) % commandItems.length);
+        return;
+      }
+      if (key === "ArrowUp") {
+        event.preventDefault();
+        if (commandItems.length > 0) setCommandIndex((activeCommandIndex - 1 + commandItems.length) % commandItems.length);
+        return;
+      }
+      if (key === "Escape") {
+        event.preventDefault();
+        setCommandDismissed(true);
+        return;
+      }
+      if (key === "Tab") {
+        event.preventDefault();
+        const chosen = commandItems[activeCommandIndex];
+        if (chosen) handleValueChange(`${chosen.cmd} `);
+        return;
+      }
+      if (key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        const chosen = commandItems[activeCommandIndex];
+        if (chosen) {
+          runCommand(chosen.cmd);
+          return;
+        }
+        if (commandQuery.trim() !== "") {
+          runCommand(`/${commandQuery.trim()}`);
+          return;
+        }
+        // 只输入了 "/"：按普通消息处理
+        setCommandDismissed(true);
+      }
+    }
+
+    if (key === "@" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      void pickFileReference();
+      return;
+    }
+    if ((key === "u" || key === "U") && (event.ctrlKey || event.metaKey) && !event.altKey) {
+      event.preventDefault();
+      void pickFileReference();
+      return;
+    }
+    if (key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      requestSend();
+    }
+  };
+
   usePopover("composer-steer", askSteer, setAskSteer);
   /** 运行中发送先询问：编辑 / 直接引导 / 取消（对齐 slime 的中断插入选择）。 */
   const requestSend = (): void => {
@@ -127,37 +353,36 @@ export default function Composer({
           <span style={styles.measureChip}><Icon name="bolt" size={12} style={{ marginRight: 4 }} />Build</span>
           <span style={styles.measureChip}>
             <Icon name="check" size={12} style={{ marginRight: 4 }} />
-            {permSummary ? permissionLabel(permSummary) : "权限"}
+            {permSummary ? permissionLabel(permSummary) : tr("composer.permissionFallback")}
           </span>
           <span style={styles.measureChip}>
             <Icon name="cloud-upload" size={12} style={{ marginRight: 4 }} />
-            {provider?.configured ? provider.model : "未配置模型"}
+            {provider?.configured ? provider.model : tr("composer.modelUnconfigured")}
           </span>
-          <span style={styles.measureChip}><Icon name="file" size={12} style={{ marginRight: 4 }} />附件</span>
-          <span style={styles.measureChip}>停止</span>
-          <span style={styles.measureChip}>发送</span>
+          <span style={styles.measureChip}><Icon name="file" size={12} style={{ marginRight: 4 }} />{tr("composer.attachLabel")}</span>
+          <span style={styles.measureChip}>{tr("composer.stop")}</span>
+          <span style={styles.measureChip}>{tr("composer.send")}</span>
         </div>
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              requestSend();
-            }
-          }}
-          placeholder="输入消息（Enter 发送，Shift+Enter 换行）"
+          onChange={(event) => handleValueChange(event.target.value)}
+          onKeyDown={handleTextareaKeyDown}
+          onPaste={handlePaste}
+          placeholder={tr("composer.placeholder")}
           style={styles.textarea}
           rows={3}
+          aria-label={tr("composer.placeholder")}
         />
         <div style={styles.chipRow}>
           <button
             type="button"
             className="chip"
             style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}), ...(mode === "build" ? styles.chipActive : {}) }}
-            title={`模式：${mode === "build" ? "Build 可执行工具" : "Plan 只读规划"}${compactUi ? "（空间不足，已折叠）" : ""}`}
-            aria-label={mode === "build" ? "Build 模式" : "Plan 模式"}
+            title={tr("composer.modeTip", {
+              detail: `${mode === "build" ? tr("composer.modeBuildDetail") : tr("composer.modePlanDetail")}${compactUi ? tr("composer.compactHint") : ""}`,
+            })}
+            aria-label={mode === "build" ? tr("composer.modeBuildDetail") : tr("composer.modePlanDetail")}
             onClick={onToggleMode}
           >
             <Icon name="bolt" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
@@ -169,18 +394,18 @@ export default function Composer({
               type="button"
               className="chip"
               style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-              title={`当前会话权限${compactUi ? "（空间不足，已折叠）" : ""}`}
-              aria-label="当前会话权限"
+              title={`${tr("composer.permChipTitle")}${compactUi ? tr("composer.compactHint") : ""}`}
+              aria-label={tr("composer.permChipTitle")}
               onClick={openPermissionMenu}
             >
               <Icon name="check" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-              {compactUi ? null : permSummary ? permissionLabel(permSummary) : "权限"}
+              {compactUi ? null : permSummary ? permissionLabel(permSummary) : tr("composer.permissionFallback")}
             </button>
             <Popover anchorRef={permAnchorRef} open={openMenu === "perm" && Boolean(permSummary)} onClose={() => setOpenMenu(null)} width={260}>
-                <div style={styles.modelMenuHead}>本会话工具权限</div>
+                <div style={styles.modelMenuHead}>{tr("composer.permMenuTitle")}</div>
                 {PERMISSION_CATEGORIES.map((category) => (
                   <div key={category.key} style={styles.permRow}>
-                    <span style={styles.permCat}>{category.label}</span>
+                    <span style={styles.permCat}>{tr(category.labelKey)}</span>
                     <span style={styles.permSeg}>
                       {(["allow", "confirm", "deny"] as const).map((decision) => (
                         <button
@@ -193,7 +418,11 @@ export default function Composer({
                           }}
                           onClick={() => adjustPermission(category.key, decision)}
                         >
-                          {decision === "allow" ? "允许" : decision === "confirm" ? "询问" : "拒绝"}
+                          {decision === "allow"
+                            ? tr("composer.perm.allow")
+                            : decision === "confirm"
+                              ? tr("composer.perm.confirm")
+                              : tr("composer.perm.deny")}
                         </button>
                       ))}
                     </span>
@@ -215,7 +444,7 @@ export default function Composer({
                     onOpenSettings("permissions");
                   }}
                 >
-                  打开完整权限设置…
+                  {tr("composer.permOpenFull")}
                 </div>
               </Popover>
           </span>
@@ -225,25 +454,27 @@ export default function Composer({
               type="button"
               className="chip"
               style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-              title={`选择模型：${provider?.configured ? provider.model : "未配置"}${compactUi ? "（空间不足，已折叠）" : ""}`}
-              aria-label="选择模型"
+              title={tr("composer.modelChipTitle", {
+                model: `${provider?.configured ? (provider.model ?? "") : tr("composer.modelUnconfigured")}${compactUi ? tr("composer.compactHint") : ""}`,
+              })}
+              aria-label={tr("composer.modelChipTitle", { model: provider?.configured ? (provider.model ?? "") : tr("composer.modelUnconfigured") })}
               onClick={openModelMenuSafely}
             >
               <Icon name="cloud-upload" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-              {compactUi ? null : provider?.configured ? provider.model : "未配置模型"}
+              {compactUi ? null : provider?.configured ? (provider.model ?? "") : tr("composer.modelUnconfigured")}
             </button>
             <Popover anchorRef={modelAnchorRef} open={modelMenuOpen} onClose={onCloseModelMenu} width={340}>
-              <div style={styles.modelMenuHead}>选择模型 · 跨供应商</div>
+              <div style={styles.modelMenuHead}>{tr("composer.modelMenuTitle")}</div>
               {modelGroups === null ? (
-                <div style={styles.modelMenuItem}>加载中…</div>
+                <div style={styles.modelMenuItem}>{tr("composer.modelMenuLoading")}</div>
               ) : modelGroups.length === 0 ? (
-                <div style={styles.modelMenuItem}>还没有供应商，请先添加</div>
+                <div style={styles.modelMenuItem}>{tr("composer.modelMenuEmpty")}</div>
               ) : (
                 modelGroups.map((group) => (
                   <div key={group.providerId} style={styles.modelGroup}>
                     <div style={styles.modelGroupHead}>
                       <span style={styles.modelGroupName}>{group.provider}</span>
-                      {group.active ? <span style={styles.modelGroupBadge}>当前</span> : null}
+                      {group.active ? <span style={styles.modelGroupBadge}>{tr("composer.modelCurrent")}</span> : null}
                       <span style={styles.modelGroupHost} title={group.baseUrl}>
                         {group.baseUrl.replace(/^https?:\/\//, "").slice(0, 28)}
                       </span>
@@ -257,12 +488,12 @@ export default function Composer({
                           className="model-item"
                           style={{ ...styles.modelMenuItem, ...(current ? styles.modelMenuItemActive : {}) }}
                           onClick={() => onChooseModel(model.id, group.providerId)}
-                          title={`${group.provider} · ${model.id}${model.contextWindow ? ` · 上下文 ${Math.round(model.contextWindow / 1000)}K` : ""}${model.thinkingEfforts?.length ? ` · 推理 ${model.thinkingEfforts.join("/")}` : ""}`}
+                          title={`${group.provider} · ${model.id}${model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}K` : ""}${model.thinkingEfforts?.length ? ` · ${model.thinkingEfforts.join("/")}` : ""}`}
                         >
                           <span style={styles.modelItemName}>
                             {model.id}
-                            {model.thinking ? <span style={styles.modelBadge}>推理</span> : null}
-                            {model.vision ? <span style={styles.modelBadge}>视觉</span> : null}
+                            {model.thinking ? <span style={styles.modelBadge}>{tr("composer.modelBadge.thinking")}</span> : null}
+                            {model.vision ? <span style={styles.modelBadge}>{tr("composer.modelBadge.vision")}</span> : null}
                           </span>
                           {current ? <Icon name="check" size={12} /> : null}
                         </button>
@@ -273,7 +504,7 @@ export default function Composer({
               )}
               {effortOptions.length > 0 ? (
                 <div style={styles.effortSection}>
-                  <div style={styles.modelMenuHead}>推理等级</div>
+                  <div style={styles.modelMenuHead}>{tr("composer.effortSection")}</div>
                   <div style={styles.effortRow}>
                     {["", ...effortOptions].map((effort) => (
                       <button
@@ -282,9 +513,9 @@ export default function Composer({
                         className="chip"
                         style={{ ...styles.chip, ...(reasoningEffort === effort ? styles.chipActive : {}) }}
                         onClick={() => onReasoningEffortChange(effort)}
-                        title={effort || "关闭推理"}
+                        title={effort || tr("composer.effortOff")}
                       >
-                        {effortLabel(effort).replace("推理：", "")}
+                        {effortLabel(effort).replace(/^(推理：|Reasoning:\s*)/i, "")}
                       </button>
                     ))}
                   </div>
@@ -306,7 +537,7 @@ export default function Composer({
                   onOpenSettings("providers");
                 }}
               >
-                管理供应商 / 添加模型…
+                {tr("composer.modelMenuManage")}
               </div>
             </Popover>
           </span>
@@ -315,12 +546,12 @@ export default function Composer({
             type="button"
             className="chip"
             style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-            title="添加附件（把文件路径放进消息，Agent 可用工具读取）"
-            aria-label="添加附件"
+            title={tr("composer.attach")}
+            aria-label={tr("composer.attach")}
             onClick={onPickAttachment}
           >
             <Icon name="file" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-            {compactUi ? null : "附件"}
+            {compactUi ? null : tr("composer.attachLabel")}
           </button>
           <span style={styles.spacer} />
           {busy ? (
@@ -331,11 +562,11 @@ export default function Composer({
                 className="chip"
                 style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
                 onClick={onStop}
-                title={`停止生成${compactUi ? "（空间不足，已折叠）" : ""}`}
-                aria-label="停止生成"
+                title={`${tr("composer.stop")}${compactUi ? tr("composer.compactHint") : ""}`}
+                aria-label={tr("composer.stop")}
               >
                 <Icon name="stop" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                {compactUi ? null : "停止"}
+                {compactUi ? null : tr("composer.stop")}
               </button>
             </>
           ) : null}
@@ -346,14 +577,15 @@ export default function Composer({
             style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
             onClick={requestSend}
             disabled={!canSend}
-            title={busy ? "发送转向提示（运行中发送 = 转向，下一轮生效）" : "发送（Enter）"}
+            title={busy ? tr("composer.sendSteer") : tr("composer.send")}
+            aria-label={busy ? tr("composer.sendSteer") : tr("composer.send")}
           >
             <Icon name={busy ? "forward" : "send"} size={15} />
           </button>
         </div>
         <Popover anchorRef={sendAnchorRef} open={askSteer} onClose={() => setAskSteer(false)} width={280}>
-          <div style={styles.steerAskTitle}>当前回复仍在进行</div>
-          <div style={styles.steerAskText}>这条消息将作为「转向提示」在下一轮开始时注入，不会打断当前输出。</div>
+          <div style={styles.steerAskTitle}>{tr("composer.steerTitle")}</div>
+          <div style={styles.steerAskText}>{tr("composer.steerText")}</div>
           <div style={styles.steerAskActions}>
             <button
               type="button"
@@ -364,7 +596,7 @@ export default function Composer({
                 window.setTimeout(() => textareaRef.current?.focus(), 0);
               }}
             >
-              编辑
+              {tr("composer.steerEdit")}
             </button>
             <button
               type="button"
@@ -375,17 +607,47 @@ export default function Composer({
                 onSend();
               }}
             >
-              直接引导
+              {tr("composer.steerDirect")}
             </button>
             <button type="button" className="chip" style={styles.chip} onClick={() => setAskSteer(false)}>
-              取消
+              {tr("common.cancel")}
             </button>
+          </div>
+        </Popover>
+        {/* 斜杠命令面板：行首 / 触发；键盘上下选择、Enter 执行、Tab 补全、Esc 关闭 */}
+        <Popover anchorRef={sendAnchorRef} open={commandOpen} onClose={() => setCommandDismissed(true)} width={300}>
+          <div className="command-panel">
+            <div className="command-head">
+              <span>{tr("composer.commandTitle")}</span>
+              <span className="command-count">{commandItems.length}</span>
+            </div>
+            {commandItems.length === 0 ? (
+              <div className="command-empty">{tr("composer.commandEmpty")}</div>
+            ) : (
+              <div className="command-list" role="listbox" aria-label={tr("composer.commandTitle")}>
+                {commandItems.map((command, index) => (
+                  <button
+                    key={command.cmd}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeCommandIndex}
+                    className={`command-item${index === activeCommandIndex ? " is-active" : ""}`}
+                    onMouseEnter={() => setCommandIndex(index)}
+                    onClick={() => runCommand(command.cmd)}
+                  >
+                    <span className="command-cmd">{command.cmd}</span>
+                    <span className="command-desc">{tr(command.descKey)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="command-hint">{tr("composer.commandHint")}</div>
           </div>
         </Popover>
       </div>
       <div style={styles.composerFoot}>
         <span style={styles.notice}>
-          {notice || (busy ? "生成中…" : mode === "plan" ? "Plan 模式：只读规划，不执行写操作" : "Build 模式：可在权限范围内执行工具")}
+          {notice || (busy ? tr("composer.generating") : mode === "plan" ? tr("composer.planFoot") : tr("composer.buildFoot"))}
         </span>
       </div>
     </div>

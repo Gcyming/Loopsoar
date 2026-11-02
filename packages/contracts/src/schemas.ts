@@ -51,6 +51,13 @@ export const TimelineStepSchema = z.object({
 
 export const ReadImageSchema = z.object({ path: z.string().min(1).max(2000) });
 
+/** 剪贴板粘贴图片落盘：base64 解码后仅允许图片 MIME/扩名，写入数据目录 pasted-images/。 */
+export const SaveImageSchema = z.object({
+  dataBase64: z.string().min(1).max(12_000_000),
+  mime: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]).optional(),
+  name: z.string().max(120).optional(),
+});
+
 export const ChatSaveTimelineSchema = z.object({
   sessionId: SessionIdSchema.optional(),
   timeline: z.array(TimelineStepSchema).max(600),
@@ -351,6 +358,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "fs",
     method: "readImage",
     request: ReadImageSchema,
+    sensitive: true,
+  },
+  "fs:saveImage": {
+    domain: "fs",
+    method: "saveImage",
+    request: SaveImageSchema,
     sensitive: true,
   },
   "chat:saveTimeline": {

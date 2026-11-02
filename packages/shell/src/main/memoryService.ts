@@ -1,14 +1,36 @@
 /**
- * 记忆服务（壳层）：持久化 JSON + 五个门的写入治理 + 召回注入。
+ * 记忆服务（壳层）：持久化 JSON + 五个门的写入治理 + 召回注入 + 混合检索（ADR-0007 W5）。
  * 存储位置可配置（设置 · 存储 · 记忆库路径），默认 <dataDir>/memory/memory.json。
- * 为什么是 JSON 而不是直接上 sqlite-vec：记忆规模先到万级、语义检索用 Jaccard 足够；
- * 向量库属于 ADR-0007 的待裁决项（W5 基准后切换），接口（load/save/write/recall）已按可替换设计。
+ *
+ * 向量能力（ADR-0007 裁决后的默认方案）：
+ *   · 默认 = 纯 TS：FlatVectorIndex + 确定性 hash embedding（零原生依赖，离线可用）；
+ *   · 若注入了 embed（或平台 platform.embed = llama-server BGE-M3 127.0.0.1:8991 可用），
+ *     load/写入后维护外部向量索引，searchAsync() 走真实语义检索；任何失败自动降级 hash，
+ *     绝不让记忆检索因为本地模型没起来而不可用（fail-open 到可用的词法检索）。
+ *   · 为什么不直接上 sqlite-vec：需要 better-sqlite3 原生模块（Electron ABI 重编译 + 联网安装），
+ *     按 ADR-0007 留到打包阶段；当前接口（FlatVectorIndex）保持可替换。
  */
 import fs from "node:fs";
 import path from "node:path";
-import { MemoryStore, shouldRecall, type MemoryCandidate, type MemoryFact } from "loopsoar-core/memory";
-import { extractMemoryCandidates } from "loopsoar-core/memory";
+import {
+  DEFAULT_EMBED_DIM,
+  FlatVectorIndex,
+  MemoryStore,
+  extractMemoryCandidates,
+  hashEmbedding,
+  retrieveMemory,
+  shouldRecall,
+  type MemoryCandidate,
+  type MemoryFact,
+  type VectorLookup,
+} from "loopsoar-core/memory";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
+
+/** 外部 embedding 注入签名（与 llama-server /v1/embeddings 同构；失败必须 throw，由服务降级）。 */
+export type MemoryEmbedder = (texts: string[]) => Promise<number[][]>;
+
+/** 当前向量空间：hash=纯 TS 词法向量；external=外部模型（BGE-M3 等）真实语义向量。 */
+export type MemoryEmbeddingMode = "hash" | "external";
 
 export interface MemoryServiceOptions {
   platform: LoopsoarPlatform;
@@ -21,14 +43,91 @@ export interface MemoryServiceOptions {
    * 设为 false 时总是检索，用于兼容旧行为或做「有/无门控」对照测试。
    */
   recallGate?: boolean;
+  /** 外部 embedding（缺省自动尝试 platform.embed；都不可用/失败 → hash embedding 降级）。 */
+  embed?: MemoryEmbedder;
+  /** hash embedding 维度（默认 256，与 core vector 默认一致）。 */
+  vectorDim?: number;
+  /** 外部 embedding 刷新超时（默认 3000ms；超时降级 hash，避免启动被本地模型拖死）。 */
+  embedTimeoutMs?: number;
+  /** 默认 agent 归属（多 Agent 第 5 闸跨 agent 指针；默认 "loopsoar"）。 */
+  agentId?: string;
+}
+
+/** 向量诊断信息（设置·诊断/基准报告/测试用）。 */
+export interface MemoryVectorStats {
+  mode: MemoryEmbeddingMode;
+  hashDimension: number;
+  hashIndexSize: number;
+  hashIndexBytes: number;
+  externalDimension: number;
+  externalIndexSize: number;
+}
+
+const DEFAULT_EMBED_TIMEOUT_MS = 3_000;
+
+/** 从平台适配层解析 embed 能力；缺失/未实现时返回 null（不抛，交由 hash 降级）。 */
+function resolvePlatformEmbedder(platform: LoopsoarPlatform | undefined): MemoryEmbedder | null {
+  const adapter = platform?.embed as { embed?: unknown } | undefined;
+  if (!adapter || typeof adapter.embed !== "function") return null;
+  return (texts: string[]) => (adapter.embed as (input: string[]) => Promise<number[][]>).call(adapter, texts);
+}
+
+/** 超时包装：本地模型不可用时必须在有限时间内失败并降级，不能挂住记忆加载。 */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} 超时（${timeoutMs}ms）`)), timeoutMs);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/** 把外部 embedding 返回值规整为 Float32Array（校验数量/维度/有限值；不合法返回 null → 降级）。 */
+function normalizeExternalVectors(raw: unknown, expectedCount: number): { dim: number; vectors: Float32Array[] } | null {
+  if (!Array.isArray(raw) || raw.length !== expectedCount) return null;
+  const vectors: Float32Array[] = [];
+  let dim = 0;
+  for (const item of raw) {
+    if (!Array.isArray(item) || item.length === 0) return null;
+    if (dim === 0) dim = item.length;
+    else if (item.length !== dim) return null;
+    const vector = new Float32Array(item.length);
+    for (let i = 0; i < item.length; i++) {
+      const value = Number(item[i]);
+      if (!Number.isFinite(value)) return null;
+      vector[i] = value;
+    }
+    vectors.push(vector);
+  }
+  return { dim, vectors };
 }
 
 export class MemoryService {
   private store: MemoryStore;
   private loaded = false;
+  private readonly hashDim: number;
+  private hashIndex: FlatVectorIndex;
+  private externalVectors: Map<string, Float32Array> | null = null;
+  private externalDim = 0;
+  /** 外部 embedding 已确认不可用（连接失败/维度非法）→ 本进程内不再重试，避免每次写入都付探测成本。 */
+  private externalDisabled = false;
+  private readonly embedFn: MemoryEmbedder | null;
+  private readonly embedTimeoutMs: number;
 
   constructor(private opts: MemoryServiceOptions) {
-    this.store = new MemoryStore({ capacity: opts.capacity });
+    this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
+    this.hashDim = Number.isInteger(opts.vectorDim) && (opts.vectorDim as number) > 0 ? (opts.vectorDim as number) : DEFAULT_EMBED_DIM;
+    this.hashIndex = new FlatVectorIndex(this.hashDim, 64);
+    this.embedFn = opts.embed ?? resolvePlatformEmbedder(opts.platform);
+    this.embedTimeoutMs = opts.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
   }
 
   get filePath(): string {
@@ -39,8 +138,12 @@ export class MemoryService {
   async relocate(filePath: string): Promise<void> {
     await this.save();
     this.opts = { ...this.opts, filePath };
-    this.store = new MemoryStore({ capacity: this.opts.capacity });
+    this.store = new MemoryStore({ capacity: this.opts.capacity, agentId: this.opts.agentId });
     this.loaded = false;
+    // 换库时重新给本地模型一次机会（可能刚启动）
+    this.externalDisabled = false;
+    this.externalVectors = null;
+    this.externalDim = 0;
     await this.load();
   }
 
@@ -57,6 +160,8 @@ export class MemoryService {
       // 损坏的记忆文件 → 以空库启动（不阻断应用）
       this.store.restore({});
     }
+    // 索引在 load 后立即维护：hash 索引同步重建（毫秒级）；外部向量尽力而为（超时/失败降级 hash）
+    await this.rebuildVectorIndex();
     this.loaded = true;
   }
 
@@ -83,6 +188,7 @@ export class MemoryService {
   async add(candidate: MemoryCandidate): Promise<MemoryFact> {
     const fact = this.store.add(candidate);
     await this.save();
+    await this.indexFacts([fact]);
     return fact;
   }
 
@@ -91,25 +197,36 @@ export class MemoryService {
     patch: Partial<Pick<MemoryFact, "content" | "category" | "tags" | "importance">>,
   ): Promise<MemoryFact | null> {
     const fact = this.store.update(id, patch);
-    if (fact) await this.save();
+    if (fact) {
+      await this.save();
+      await this.indexFacts([fact]);
+    }
     return fact;
   }
 
   async remove(id: string): Promise<boolean> {
     const removed = this.store.remove(id);
-    if (removed) await this.save();
+    if (removed) {
+      this.hashIndex.remove(id);
+      this.externalVectors?.delete(id);
+      await this.save();
+    }
     return removed;
   }
 
   async clear(): Promise<void> {
     this.store.clear();
+    this.hashIndex.clear();
+    this.externalVectors = null;
+    this.externalDim = 0;
     await this.save();
   }
 
   /**
    * 召回提示词片段（供 ChatService 注入 volatile 段）。
    * 门控开启时（默认）：core recallGate 无信号命中 → 返回 ""，即不检索、不注入。
-   * 为什么先门控再检索：记忆会增长，若无条件检索，普通寒暄也会被塞入几条低相关记忆（噪声 + token 成本）。
+   * 说明：召回注入保持 v1 的关键词路径（store.recall），混合检索用于显式 search / searchAsync，
+   * 避免自动注入的行为随向量权重变化而漂移（行为可回归、可对照）。
    */
   recallPrompt(text: string): string {
     if (this.recallGateEnabled() && !shouldRecall(text).hit) return "";
@@ -123,12 +240,47 @@ export class MemoryService {
 
   /**
    * 显式检索（memory_search 工具用）：不走召回门控——模型/用户明确要求搜索时应当拿到结果。
-   * 返回 { fact, score }[]，score 由 core 的有效值 × 相似度排序；limit 收敛到 [1, 20]。
+   * 四阶段检索：门控（显式搜索跳过）→ BM25 候选 → hash 向量重排 → 阈值 + limit。
+   * 保持同步签名（工具执行链路不变）；需要真实语义向量时用 searchAsync()。
    */
   search(query: string, limit = 6): { fact: MemoryFact; score: number }[] {
-    const raw = Number.isFinite(limit) ? Math.floor(limit) : 6;
-    const safeLimit = Math.max(1, Math.min(20, raw));
-    return this.store.recall(query, safeLimit);
+    const safeLimit = this.clampLimit(limit);
+    const facts = this.store.list();
+    if (facts.length === 0) return [];
+    const lookup: VectorLookup = (id) => this.hashIndex.get(id);
+    const hits = retrieveMemory({
+      query,
+      docs: facts,
+      vectors: lookup,
+      vectorDim: this.hashDim,
+      limit: safeLimit,
+    });
+    return this.mapHits(hits, facts);
+  }
+
+  /**
+   * 混合检索（异步，真实 embedding 优先）：外部向量可用时用 BGE-M3 语义向量重排；
+   * 外部向量/embed 不可用或失败 → 自动回退 search() 的 hash 混合检索（不抛错）。
+   */
+  async searchAsync(query: string, limit = 6): Promise<{ fact: MemoryFact; score: number }[]> {
+    const safeLimit = this.clampLimit(limit);
+    if (!this.externalVectors || !this.embedFn) return this.search(query, safeLimit);
+    const facts = this.store.list();
+    if (facts.length === 0) return [];
+    try {
+      const queryVectors = await this.embedTexts([query]);
+      if (!queryVectors || queryVectors.length !== 1) return this.search(query, safeLimit);
+      const hits = retrieveMemory({
+        query,
+        docs: facts,
+        vectors: (id) => this.externalVectors?.get(id) ?? null,
+        queryVector: queryVectors[0],
+        limit: safeLimit,
+      });
+      return this.mapHits(hits, facts);
+    } catch {
+      return this.search(query, safeLimit);
+    }
   }
 
   /**
@@ -137,6 +289,24 @@ export class MemoryService {
    */
   recallSignals(query: string, lastTaskType?: string): string[] {
     return shouldRecall(query, lastTaskType).signals;
+  }
+
+  /** 当前向量空间模式（hash=词法兜底；external=真实 embedding 已就绪）。 */
+  embeddingMode(): MemoryEmbeddingMode {
+    return this.externalVectors ? "external" : "hash";
+  }
+
+  /** 向量索引诊断（内存/条数/维度）。 */
+  vectorStats(): MemoryVectorStats {
+    const stats = this.hashIndex.stats();
+    return {
+      mode: this.embeddingMode(),
+      hashDimension: this.hashDim,
+      hashIndexSize: stats.size,
+      hashIndexBytes: stats.memoryBytes,
+      externalDimension: this.externalDim,
+      externalIndexSize: this.externalVectors?.size ?? 0,
+    };
   }
 
   /**
@@ -152,11 +322,108 @@ export class MemoryService {
     const result = this.store.write(candidates);
     if (result.added.length || result.merged.length || result.deduped.length) {
       await this.save();
+      // 新增条目建索引；合并会改写目标条目正文 → 需要重算其向量
+      const touched = [...result.added, ...result.merged.map((item) => this.store.get(item.into)).filter((fact): fact is MemoryFact => fact !== null)];
+      await this.indexFacts(touched);
     }
     return {
       added: result.added.length,
       merged: result.merged.length,
       deduped: result.deduped.length,
     };
+  }
+
+  /* ───────────────────────── 向量索引维护（内部） ───────────────────────── */
+
+  /** 重建 hash 索引（同步、毫秒级）+ 尝试重建外部向量索引（超时/失败降级）。 */
+  private async rebuildVectorIndex(): Promise<void> {
+    const facts = this.store.list();
+    const index = new FlatVectorIndex(this.hashDim, Math.max(64, facts.length));
+    for (const fact of facts) index.upsert(fact.id, hashEmbedding(fact.content, this.hashDim));
+    this.hashIndex = index;
+    this.externalVectors = await this.buildExternalIndex(facts);
+    this.externalDim = this.externalVectors ? this.externalDim : 0;
+  }
+
+  /** 外部向量全量构建：embedFn 缺失/失败/超时/维度不合法 → null（调用方保持 hash 模式）。 */
+  private async buildExternalIndex(facts: MemoryFact[]): Promise<Map<string, Float32Array> | null> {
+    if (!this.embedFn || this.externalDisabled || facts.length === 0) return null;
+    try {
+      const raw = await withTimeout(
+        this.embedFn(facts.map((fact) => fact.content)),
+        this.embedTimeoutMs,
+        "记忆 embedding 构建",
+      );
+      const normalized = normalizeExternalVectors(raw, facts.length);
+      if (!normalized) {
+        this.externalDisabled = true;
+        return null;
+      }
+      const map = new Map<string, Float32Array>();
+      for (let i = 0; i < facts.length; i++) map.set(facts[i].id, normalized.vectors[i]);
+      this.externalDim = normalized.dim;
+      return map;
+    } catch {
+      // 本地模型未启动/超时：本进程内降级 hash，不再反复探测（fail-open 到可用检索）
+      this.externalDisabled = true;
+      return null;
+    }
+  }
+
+  /** 增量维护：hash 索引必更新；外部索引未就绪时尝试激活一次，已就绪则增量更新。 */
+  private async indexFacts(facts: MemoryFact[]): Promise<void> {
+    for (const fact of facts) {
+      if (!fact) continue;
+      this.hashIndex.upsert(fact.id, hashEmbedding(fact.content, this.hashDim));
+    }
+    if (!this.embedFn || facts.length === 0) return;
+    if (!this.externalVectors) {
+      // 「load 时服务还没起来、后面才起来」的补救：首次写入时整体试建一次
+      this.externalVectors = await this.buildExternalIndex(this.store.list());
+      return;
+    }
+    const vectors = await this.embedTexts(facts.map((fact) => fact.content));
+    if (!vectors || vectors.length !== facts.length) {
+      this.externalVectors = null;
+      this.externalDim = 0;
+      return;
+    }
+    if (this.externalDim !== vectors[0].length) {
+      // 向量空间变了（换了模型/维度）：整体降级 hash，等待下次 load 重建
+      this.externalVectors = null;
+      this.externalDim = 0;
+      return;
+    }
+    for (let i = 0; i < facts.length; i++) this.externalVectors.set(facts[i].id, vectors[i]);
+  }
+
+  /** 调外部 embed（带超时）；失败返回 null（调用方决定降级）。 */
+  private async embedTexts(texts: string[]): Promise<Float32Array[] | null> {
+    if (!this.embedFn || texts.length === 0) return null;
+    try {
+      const raw = await withTimeout(this.embedFn(texts), this.embedTimeoutMs, "记忆 embedding");
+      const normalized = normalizeExternalVectors(raw, texts.length);
+      return normalized ? normalized.vectors : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private clampLimit(limit: number): number {
+    const raw = Number.isFinite(limit) ? Math.floor(limit) : 6;
+    return Math.max(1, Math.min(20, raw));
+  }
+
+  private mapHits(
+    hits: { id: string; score: number }[],
+    facts: MemoryFact[],
+  ): { fact: MemoryFact; score: number }[] {
+    const byId = new Map(facts.map((fact) => [fact.id, fact]));
+    const result: { fact: MemoryFact; score: number }[] = [];
+    for (const hit of hits) {
+      const fact = byId.get(hit.id);
+      if (fact) result.push({ fact, score: hit.score });
+    }
+    return result;
   }
 }

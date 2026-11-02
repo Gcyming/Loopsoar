@@ -90,7 +90,11 @@ export function registerMemoryTools(registry: ToolRegistry, memory: MemoryServic
       const parsed = SearchSchema.safeParse(ctx.params ?? {});
       if (!parsed.success) return invalidParams(parsed.error);
       const { query, limit } = parsed.data;
-      const hits = memory.search(query, limit ?? 6);
+      // 语义向量可用时走 searchAsync（llama-server 嵌入）；旧装配/测试只有同步 search 时自动回退
+      const hits =
+        typeof memory.searchAsync === "function"
+          ? await memory.searchAsync(query, limit ?? 6)
+          : memory.search(query, limit ?? 6);
       if (hits.length === 0) {
         return {
           ok: true,

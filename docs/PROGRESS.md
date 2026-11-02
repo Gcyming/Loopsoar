@@ -307,6 +307,22 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   - 修复真实缺陷：`baseName` 只按 `/` 切分导致 Windows 路径整串返回；`todo_write` 运行时校验缺 max(50)（注册表 schema 不会自动校验执行参数）
 - 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 109 文件 / 867 tests 全绿**
 
+## 二·三十一、2026-11-02 第二十八次增量（记忆升级 + App 拆分 + 体验/质量收尾）
+- **记忆升级（ADR-0007 W5 基准完成）**：
+  - `core/memory/vector.ts`（纯 TS 零依赖：确定性 hash embedding 256 维、FlatVectorIndex flat Float32Array、增量 upsert/remove/墓碑 compact/内存估算）+ `core/memory/retrieval.ts`（四阶段：召回门控→BM25 关键词候选→向量重排→融合阈值）
+  - 第 5 闸「跨 agent 指针」：MemoryFact 增加 `agentId?/crossAgentLinks?`，同内容不同 agent 建立双向指针而不去重/合并；旧数据自动归一 loopsoar
+  - `MemoryService` 混合检索：hash 索引默认 + 可注入/自动探测 `platform.embed`（llama-server BGE-M3），失败/超时/维度非法 fail-closed 降级；新增 `searchAsync/embeddingMode/vectorStats`，既有 API 不变；`memory_search` 可用时走语义检索
+  - **W5 十万条实测**（`scripts/memory-bench.mjs` → `docs/research/memory-bench-ADR-0007.md`）：hybrid P95 **17.23ms**（P50 7.81，recall@5 90.2%）、裸向量 42.95ms、keyword-linear 43.19ms、倒排 4.12ms；索引内存 145.8MB；增量写入 ~3.9 万条/秒。结论：默认后端=纯 TS hybrid（满足 P95≤50ms、零原生依赖）；sqlite-vec/LanceDB 与 BGE-M3 语义质量留打包阶段复测（报告明确不宣称优劣）
+- **App.tsx 拆分（架构债清偿）**：2064 → **1118 行**（红线 1200）；新增 `useChatStreamEvents`（启动数据 + 全部事件订阅）、`useE2eDeepLinks`、`AgentSidebar/BrowserMenus/StatusBar/PermissionDialog/Toast/StartPage/ids`；顺手删除死 state/函数与 32 个无引用 style；`ui-contract` 守卫改为扫描全部 ui/src 源码（拆分后不失效）
+- **体验/易用性**：
+  - 上下文环真正渲染到助手头部（有数据才显示）
+  - i18n 基础：`i18n.ts` 中英词典各 163 key + `useLanguage/useT` 即时切换；已接入 Composer/TerminalPanel/AskUserDialog/TitleBar/Onboarding/ContextRing，设置语言即时生效
+  - 首次启动向导（3 步：欢迎→供应商设置→技能/工作区/终端；可跳过；设置·关于可重开）
+  - Composer 增强：剪贴板图片粘贴（新增 `fs:saveImage` 主进程落盘 6MB/白名单）、`@`/Ctrl+U 文件引用、斜杠命令面板（/new /clear /stop /settings /compact /help）
+- **质量/发布门**：新增分层依赖守卫、浏览器桥四攻击路径守卫、插件权限生命周期端到端守卫；补 planTools/attachments/railParams/pastedImage 测试；新增 `docs/E2E-SMOKE.md`（真机冒烟清单）
+- **真机冒烟**：Electron 启动通过（E2E 截图自动退出）；新标签页/书签/保存/快照/状态栏终端入口/Composer 提示均正常（截图 `.loopsoar-data-smoke/shot-main.png`）
+- 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 114 文件 / 915 tests 全绿**
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

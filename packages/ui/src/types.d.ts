@@ -811,6 +811,14 @@ export interface LoopsoarAPI {
   };
   fs: LoopsoarDomain & {
     readImage(payload: { path: string }): Promise<{ ok: boolean; dataUrl?: string; mime?: string; error?: string }>;
+    /** 剪贴板图片落盘（主进程限 6MB / png·jpeg·webp·gif；文件名由主进程生成）。 */
+    saveImage(payload: { dataBase64: string; mime: string; name?: string }): Promise<{
+      ok: boolean;
+      path?: string;
+      mime?: string;
+      bytes?: number;
+      error?: string;
+    }>;
   };
   extensions: LoopsoarDomain & {
     list(): Promise<{

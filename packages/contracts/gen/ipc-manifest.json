@@ -29,6 +29,13 @@
       "hasRequest": true
     },
     {
+      "channel": "fs:saveImage",
+      "domain": "fs",
+      "method": "saveImage",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "chat:saveTimeline",
       "domain": "chat",
       "method": "saveTimeline",

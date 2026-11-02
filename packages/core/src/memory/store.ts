@@ -16,9 +16,11 @@ import {
   gateMerge,
   gateLink,
   gateCapacity,
+  gateCrossAgent,
   effectiveValue,
   jaccardCJK,
   THRESHOLD_CAPACITY_MAX,
+  DEFAULT_AGENT_ID,
 } from "./fiveGate.js";
 
 export interface MemoryCandidate {
@@ -28,6 +30,8 @@ export interface MemoryCandidate {
   importance?: number;
   source?: string;
   layer?: MemoryFact["layer"];
+  /** 归属 agent（缺省 = store 的默认 agent "loopsoar"；多 Agent 场景用于第 5 闸跨 agent 指针）。 */
+  agentId?: string;
 }
 
 export interface MemoryStats {
@@ -37,6 +41,8 @@ export interface MemoryStats {
   links: number;
   totalAccess: number;
   byCategory: Record<string, number>;
+  /** 跨 agent 指针总数（第 5 闸；旧数据/单 agent 场景为 0）。 */
+  crossAgentLinks?: number;
 }
 
 export interface MemoryStoreState {
@@ -50,7 +56,7 @@ export class MemoryStore {
   private archived: MemoryFact[] = [];
   private seq = 0;
 
-  constructor(private opts: { capacity?: number; now?: () => number } = {}) {}
+  constructor(private opts: { capacity?: number; now?: () => number; agentId?: string } = {}) {}
 
   private now(): number {
     return this.opts.now ? this.opts.now() : Date.now();
@@ -73,6 +79,7 @@ export class MemoryStore {
 
   /**
    * 写入候选（Mem0 式「抽取后写入」）：
+   * ⓪ 第 5 闸（跨 agent）：同内容但归属不同 agent → 不去重/不合并，新增条目 + 双向 crossAgentLinks 指针；
    * ① 去重命中 → 命中项 repeated+1、lastAccessed 刷新（不新增）；
    * ② 合并命中（无 tags 且高相似）→ 合并内容与标签、记录 mergeTrail；
    * ③ 否则新增；④ 建链；⑤ 容量超限软归档。
@@ -84,12 +91,16 @@ export class MemoryStore {
     deduped: { id: string; content: string }[];
     archived: string[];
     linked: number;
+    /** 第 5 闸：本次建立的跨 agent 指针数。 */
+    crossAgent: number;
   } {
     const nowMs = this.now();
+    const defaultAgent = this.opts.agentId ?? DEFAULT_AGENT_ID;
     const added: MemoryFact[] = [];
     const merged: { into: string; content: string }[] = [];
     const deduped: { id: string; content: string }[] = [];
     let linked = 0;
+    let crossAgent = 0;
 
     for (const candidate of candidates) {
       const content = candidate.content.trim();
@@ -103,7 +114,23 @@ export class MemoryStore {
         lastAccessed: nowMs,
         source: candidate.source ?? "chat",
         layer: candidate.layer ?? "semantic",
+        agentId: candidate.agentId ?? defaultAgent,
+        crossAgentLinks: [],
       });
+
+      // ⓪ 第 5 闸：同内容但不同 agent → 保留双方条目，只建双向指针（不合并/不去重）
+      const cross = gateCrossAgent(this.facts, incoming, incoming.agentId ?? defaultAgent);
+      if (cross.crossAgent) {
+        for (const pointer of cross.pointers) {
+          pointer.crossAgentLinks = pointer.crossAgentLinks ?? [];
+          if (!pointer.crossAgentLinks.includes(incoming.id)) pointer.crossAgentLinks.push(incoming.id);
+          if (!incoming.crossAgentLinks!.includes(pointer.id)) incoming.crossAgentLinks!.push(pointer.id);
+        }
+        crossAgent += cross.pointers.length;
+        this.facts.push(incoming);
+        added.push(incoming);
+        continue;
+      }
 
       // ① 去重
       const dedupe = gateDedupe(this.facts, incoming);
@@ -144,7 +171,14 @@ export class MemoryStore {
       for (const fact of result.archived) this.archived.push(fact);
     }
 
-    return { added, merged, deduped, archived: this.archived.slice(-(added.length + 1)).map((f) => f.id), linked };
+    return {
+      added,
+      merged,
+      deduped,
+      archived: this.archived.slice(-(added.length + 1)).map((f) => f.id),
+      linked,
+      crossAgent,
+    };
   }
 
   /** 手动新增（UI「新增记忆」入口）。 */
@@ -233,6 +267,7 @@ export class MemoryStore {
       links: all.reduce((sum, f) => sum + f.links.length, 0),
       totalAccess: all.reduce((sum, f) => sum + f.accessCount, 0),
       byCategory,
+      crossAgentLinks: all.reduce((sum, f) => sum + (f.crossAgentLinks?.length ?? 0), 0),
     };
   }
 }

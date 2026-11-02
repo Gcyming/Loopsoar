@@ -8,6 +8,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import ContextRing from "./ContextRing.js";
 import LiveStatus from "./LiveStatus.js";
 import Timeline from "./TimelineView.js";
 import { ProductPanel } from "./ArtifactPanels.js";
@@ -111,6 +112,12 @@ export default function ChatMessageView({
         <div style={styles.assistantHead}>
           <span style={styles.assistantName}>Loopsoar</span>
           {streaming ? <span style={styles.streamDot} /> : null}
+          {/* 上下文环：真实渲染在助手头部（空数据不渲染，避免 0/0 误导） */}
+          {contextCap > 0 && contextUsed > 0 ? (
+            <span style={styles.contextRingWrap}>
+              <ContextRing used={contextUsed} cap={contextCap} loading={streaming} />
+            </span>
+          ) : null}
         </div>
         {/* 悬停元信息：复制 / 模式 / 模型 / 耗时 / 思考开关（与 slime 一样位于正文之前） */}
         <div className="msg-hover" style={styles.msgHover}>
@@ -312,6 +319,8 @@ const styles: Record<string, React.CSSProperties> = {
   msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
   msgTiming: { color: BRAND.linenFaint, fontSize: 10 },
   assistantHead: { display: "flex", alignItems: "center", gap: 6, minHeight: 20 },
+  /** 上下文环靠右（与助手名/生成中圆点同一行，LiveStatus 风格的小组件）。 */
+  contextRingWrap: { marginLeft: "auto", display: "inline-flex", alignItems: "center", flexShrink: 0 },
   avatar: {
     width: 32,
     height: 32,
