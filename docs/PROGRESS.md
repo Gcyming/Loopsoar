@@ -267,6 +267,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 
 ## 三、未完成 / 已知问题（下次继续）
 
+### 0.1.0 后启动（已记录，不提前做）
+- **Cloudflare + GitHub 产品化与免费跨设备同步**：官网/文档/下载（Pages、GitHub Releases、R2）、更新检查、Email Routing、Turnstile、免费同步 API（Workers + D1 + GitHub Device Flow + 客户端加密）、可选付费云端 worktree（Sandboxes 需 Workers Paid）。
+  完整计划、域名分工、免费额度、前置授权与验收标准见
+  `docs/规划/0.1.0后-Cloudflare-GitHub-产品化与同步.md`。
+  **触发条件：Loopsoar 0.1.0 可安装版本完成后。此前不写部署代码、不申请付费。**
+
 ### 高优先
 1. **本轮新增 UI 待验收**：ToolCard、Markdown 表格、中断横幅已实现且测试/构建通过，
    但最后一次 E2E 截图停留在历史消息，未能拍到表格/卡片最终效果 —— 需要重跑：

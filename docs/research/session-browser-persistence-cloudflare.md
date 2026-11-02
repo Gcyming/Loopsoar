@@ -1,6 +1,6 @@
 # 会话/网页持久化：Cloudflare + GitHub 方案查证
 
-> 状态：**仅查证，不实施云端**（2026-11-01）。本地持久化已在 ADR-0014 实现；本文回答"没有服务器，能否用 Cloudflare 关联 GitHub 做跨设备持久化"。
+> 状态：**仅查证，不实施云端**（2026-11-01）。2026-11-02 用户决定：**等 Loopsoar 0.1.0 完成后再做**；完整计划见 `docs/规划/0.1.0后-Cloudflare-GitHub-产品化与同步.md`。本地持久化已在 ADR-0014 实现；本文回答"没有服务器，能否用 Cloudflare 关联 GitHub 做跨设备持久化"。
 >
 > 结论：**技术上可行，免费额度对个人使用足够**；但不建议"GitHub 仓库当数据库"，推荐 **Cloudflare Workers + D1 + GitHub OAuth Device Flow + 自定义域名 + 客户端加密**。Cloudflare Pages 只负责静态页面/部署，不能单独提供数据写入能力。
 

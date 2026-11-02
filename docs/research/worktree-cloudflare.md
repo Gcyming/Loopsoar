@@ -1,6 +1,6 @@
 # Worktree × Cloudflare：能否把隔离工作区搬到云端
 
-> 2026-11-01 查证。结论：**本地 worktree 已实现，且不依赖 Cloudflare**。
+> 2026-11-01 查证。2026-11-02 用户决定：**等 Loopsoar 0.1.0 完成后再评估云端执行器**；本地方案继续使用。计划见 `docs/规划/0.1.0后-Cloudflare-GitHub-产品化与同步.md`。结论：**本地 worktree 已实现，且不依赖 Cloudflare**。
 > Cloudflare 上做"云端 worktree/远程编码环境"技术上可行，但**不是免费方案**，需要 Workers Paid 计划与账号授权；因此本轮不阻塞本地方案。
 
 ## 1. 本地 worktree（已实现）
