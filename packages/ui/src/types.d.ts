@@ -50,6 +50,8 @@ export interface Preferences {
   animations: "full" | "reduced" | "off";
   restoreSession: boolean;
   searchEngine: "bing" | "google" | "duckduckgo";
+  /** 广告/追踪请求拦截（webRequest 层；缺省 true，误拦时可关闭）。 */
+  adBlockEnabled?: boolean;
   downloadDir?: string;
   workspaceRoot?: string;
   memoryStorePath?: string;
@@ -499,6 +501,58 @@ export interface LoopFallbackPayload {
   at?: number;
 }
 
+/* ── 书签（浏览器功能面） ── */
+
+/** 一条书签（URL 已由主进程规范化并去重）。 */
+export interface BookmarkItem {
+  id: string;
+  url: string;
+  title: string;
+  createdAt: number;
+}
+
+/** bookmarks:add 返回：duplicate=true 表示该 URL 已存在（返回已有项）。 */
+export interface BookmarkAddResult {
+  ok: boolean;
+  bookmark?: BookmarkItem;
+  error?: string;
+  duplicate?: boolean;
+}
+
+/* ── 页面快照（可读正文 + 可交互元素） ── */
+
+/** 快照里的一个可交互元素（来自注入脚本的 DOM 扫描）。 */
+export interface BrowserSnapshotElement {
+  /** 元素编号（点击/输入工具的目标）。 */
+  id?: string;
+  tag?: string;
+  type?: string;
+  text?: string;
+  href?: string;
+}
+
+/** browser:snapshot 返回（ok=false 时为 error）。 */
+export interface BrowserSnapshotResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  text?: string;
+  /** 可交互元素列表（WebContentsView 后端返回 elements）。 */
+  elements?: BrowserSnapshotElement[];
+  /** 兼容可能的新字段名（与 elements 同构）。 */
+  interactive?: BrowserSnapshotElement[];
+  error?: string;
+}
+
+/** browser:savePage 返回：保存到下载目录 saved-pages/ 的 HTML 全页。 */
+export interface SavePageResult {
+  ok: boolean;
+  path?: string;
+  title?: string;
+  bytes?: number;
+  error?: string;
+}
+
 export type LoopsoarEvent =
   | "chat:stream:chunk"
   | "chat:stream:reasoning"
@@ -610,8 +664,18 @@ export interface LoopsoarAPI {
     history(payload?: { tabId?: string }): Promise<{ entries: HistoryEntry[] }>;
     downloads(): Promise<{ downloads: DownloadItem[] }>;
     downloadAction(payload: { id: string; action: "cancel" | "open" | "showInFolder" | "remove" }): Promise<{ ok: boolean }>;
-    snapshot(): Promise<{ ok: boolean; url?: string; title?: string; text?: string; error?: string }>;
+    snapshot(): Promise<BrowserSnapshotResult>;
     screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
+    /** 保存当前页面 HTML 全页到下载目录 saved-pages/。 */
+    savePage(payload?: { tabId?: string }): Promise<SavePageResult>;
+  };
+  bookmarks: LoopsoarDomain & {
+    /** 书签列表（最新在前；主进程已去重，上限 500）。 */
+    list(): Promise<{ bookmarks: BookmarkItem[] }>;
+    /** 新增书签；duplicate=true 表示已存在（返回已有项，不重复插入）。 */
+    add(payload: { url: string; title?: string }): Promise<BookmarkAddResult>;
+    /** 删除书签；ok=false 表示已不存在（幂等）。 */
+    remove(payload: { id: string }): Promise<{ ok: boolean }>;
   };
   terminal: LoopsoarDomain & {
     /** 探测本机可用的终端配置档（cmd/PowerShell/Git Bash/Python/Node/C++；裸数组）。 */

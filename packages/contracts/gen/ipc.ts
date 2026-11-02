@@ -107,6 +107,10 @@ export const IPC_CHANNELS = {
   "ask:respond": { domain: "ask", method: "respond", sensitive: true, hasRequest: true },
   "loop:list": { domain: "loop", method: "list", sensitive: true, hasRequest: false },
   "loop:setActive": { domain: "loop", method: "setActive", sensitive: true, hasRequest: true },
+  "bookmarks:list": { domain: "bookmarks", method: "list", sensitive: true, hasRequest: false },
+  "bookmarks:add": { domain: "bookmarks", method: "add", sensitive: true, hasRequest: true },
+  "bookmarks:remove": { domain: "bookmarks", method: "remove", sensitive: true, hasRequest: true },
+  "browser:savePage": { domain: "browser", method: "savePage", sensitive: true, hasRequest: true },
   "terminal:history": { domain: "terminal", method: "history", sensitive: true, hasRequest: true },
 } as const;
 
@@ -140,7 +144,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "workspace": ["read", "write", "list", "create", "select", "remove", "status"],
     "agents": ["list"],
     "runtime": ["version", "status"],
-    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay", "setSidebarWidth", "back", "forward", "reload", "history", "downloads", "downloadAction"],
+    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "selectTab", "listTabs", "setOverlay", "setSidebarWidth", "back", "forward", "reload", "history", "downloads", "downloadAction", "savePage"],
     "settings": ["listModels", "getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "diagnostics", "about", "setApiKey", "clearApiKey", "listProviders", "upsertProvider", "removeProvider", "setActiveProvider"],
     "dialog": ["pickPath"],
     "memory": ["list", "add", "update", "delete", "stats", "clear"],
@@ -151,7 +155,8 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "mcp": ["list", "add", "remove", "connect", "disconnect"],
     "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"],
     "ask": ["respond"],
-    "loop": ["list", "setActive"]
+    "loop": ["list", "setActive"],
+    "bookmarks": ["list", "add", "remove"]
     },
   };
 }

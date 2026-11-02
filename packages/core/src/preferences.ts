@@ -30,6 +30,8 @@ export const PreferencesSchema = z.object({
   reasoningEffort: z.string().max(64).optional(),
   /** 当前 Agent-Loop id（空 = 内置 loop）；与 contracts PreferencesSchema 同步，勿再漂移。 */
   loopId: z.string().max(64).optional(),
+  /** 广告/追踪请求拦截开关（默认开启；与 contracts PreferencesSchema 同步）。 */
+  adBlockEnabled: z.boolean().optional(),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -50,6 +52,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   agentRepeatToolStop: 30,
   reasoningEffort: "",
   loopId: "",
+  adBlockEnabled: true,
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
@@ -71,6 +74,7 @@ export function mergePreferences(raw: unknown): Preferences {
     agentRepeatToolStop: parsed.data.agentRepeatToolStop ?? 30,
     reasoningEffort: parsed.data.reasoningEffort ?? "",
     loopId: parsed.data.loopId ?? "",
+    adBlockEnabled: parsed.data.adBlockEnabled ?? true,
   };
 }
 

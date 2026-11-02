@@ -1615,6 +1615,291 @@
       line-height: 1.6;
       word-break: break-word;
     }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       书签（顶栏浮层）与页面快照浮层
+       颜色对齐 theme.ts 的 BRAND：ink #111318 / inkRaised #17191e /
+       border #262a31 / borderStrong #333842 / linen #f4efe6 /
+       linenMuted #a8a29a / linenFaint #6f6a63 / ochre #c8763c / ochreHover #d98a4f。
+       ══════════════════════════════════════════════════════════════════════ */
+
+    /* 已收藏星标：品牌赭石高亮（未收藏走 icon-btn 的默认灰） */
+    .icon-btn.is-bookmarked {
+      color: #d98a4f;
+    }
+    .bookmark-list-btn {
+      opacity: 0.7;
+    }
+    .bookmark-list-btn:hover {
+      opacity: 1;
+    }
+    .bookmark-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 6px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #f4efe6;
+    }
+    .bookmark-count {
+      font-size: 9.5px;
+      font-weight: 400;
+      color: #7c766a;
+      padding: 0 5px;
+      border-radius: 999px;
+      border: 1px solid #2c2c31;
+    }
+    .bookmark-empty {
+      padding: 8px 6px 10px;
+      font-size: 11px;
+      line-height: 1.6;
+      color: #6f6a63;
+    }
+    .bookmark-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-height: 320px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .bookmark-row {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      border-radius: 7px;
+    }
+    .bookmark-row:hover {
+      background: #1e2127;
+    }
+    .bookmark-open {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 6px 8px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: #a8a29a;
+      text-align: left;
+      cursor: pointer;
+    }
+    .bookmark-title {
+      font-size: 11.5px;
+      color: #f4efe6;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .bookmark-url {
+      font-size: 10px;
+      color: #6f6a63;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+      font-family: ui-monospace, Consolas, monospace;
+    }
+    .bookmark-del {
+      width: 22px;
+      height: 22px;
+      flex: none;
+      opacity: 0;
+      transition: opacity 120ms;
+    }
+    .bookmark-row:hover .bookmark-del,
+    .bookmark-del:focus-visible {
+      opacity: 1;
+    }
+    .bookmark-open:focus-visible,
+    .bookmark-del:focus-visible {
+      outline: 2px solid rgba(200, 118, 60, 0.6);
+      outline-offset: 1px;
+    }
+
+    /* ── 页面快照浮层（正文可读 + 可交互元素） ── */
+    .snapshot-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 48; /* 低于设置(50)/权限(60)/ask(70)：这些模态打开时快照已让位 */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(8, 9, 12, 0.55);
+      animation: fadeOnly 140ms ease both;
+    }
+    .snapshot-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: min(720px, 94vw);
+      max-height: 84vh;
+      padding: 14px 16px;
+      border: 1px solid #333842;
+      border-radius: 12px;
+      background: #17191e;
+      color: #f4efe6;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+      animation: popIn 140ms ease both;
+    }
+    .snapshot-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .snapshot-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .snapshot-url {
+      font-size: 10.5px;
+      color: #6f6a63;
+      font-family: ui-monospace, Consolas, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .snapshot-meta {
+      font-size: 10.5px;
+      color: #7c766a;
+    }
+    .snapshot-text {
+      margin: 0;
+      padding: 8px 10px;
+      min-height: 120px;
+      max-height: 38vh;
+      overflow: auto;
+      overscroll-behavior: contain;
+      border: 1px solid #262a31;
+      border-radius: 8px;
+      background: #0c0e13;
+      color: #c9c3b6;
+      font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
+      font-size: 11.5px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      outline: none;
+    }
+    .snapshot-text:focus-visible {
+      box-shadow: inset 0 0 0 1px rgba(200, 118, 60, 0.5);
+    }
+    .snapshot-elements {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 0;
+    }
+    .snapshot-elements-title {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: #a8a29a;
+    }
+    .snapshot-elements-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      max-height: 20vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      border: 1px solid #262a31;
+      border-radius: 8px;
+      padding: 6px;
+      background: #111318;
+    }
+    .snapshot-element {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      font-size: 11px;
+      line-height: 1.5;
+      min-width: 0;
+    }
+    .snapshot-element-id {
+      flex: none;
+      color: #c8763c;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 10px;
+      min-width: 30px;
+    }
+    .snapshot-element-tag {
+      flex: none;
+      font-size: 9.5px;
+      color: #7c766a;
+      padding: 0 4px;
+      border-radius: 5px;
+      border: 1px solid #2c2c31;
+      background: #1a1d24;
+    }
+    .snapshot-element-text {
+      flex: 1;
+      min-width: 0;
+      color: #c9c3b6;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .snapshot-element-href {
+      flex: none;
+      max-width: 220px;
+      color: #d98a4f;
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .snapshot-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 2px;
+    }
+    .snapshot-btn {
+      height: 28px;
+      padding: 0 12px;
+      border: 1px solid #333842;
+      border-radius: 7px;
+      background: transparent;
+      color: #a8a29a;
+      font-size: 12.5px;
+      cursor: pointer;
+      transition: border-color 120ms, color 120ms, background 120ms;
+    }
+    .snapshot-btn:hover:not(:disabled) {
+      border-color: #c8763c;
+      color: #f4efe6;
+      background: rgba(200, 118, 60, 0.08);
+    }
+    .snapshot-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .snapshot-btn:focus-visible,
+    .snapshot-close:focus-visible {
+      outline: 2px solid rgba(200, 118, 60, 0.6);
+      outline-offset: 1px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .snapshot-panel {
+        animation: fadeOnly 120ms ease both;
+      }
+    }
+    html[data-animations="off"] .snapshot-overlay,
+    html[data-animations="off"] .snapshot-panel {
+      animation: none !important;
+    }
   </style>
   </head>
   <body>

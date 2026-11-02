@@ -38,7 +38,9 @@ export function registerPlanTools(registry: ToolRegistry): void {
     schema: z.object({ items: z.array(TodoItemSchema).min(1).max(50) }),
     execute: async (ctx): Promise<ToolResult> => {
       const params = (ctx.params ?? {}) as { items?: unknown };
-      const parsed = z.array(TodoItemSchema).safeParse(params.items);
+      // 运行时校验必须与声明 schema 完全一致（含 min/max 条数）：
+      // 注册表 schema 只用于给模型看，不会在 execute 前自动校验。
+      const parsed = z.array(TodoItemSchema).min(1).max(50).safeParse(params.items);
       if (!parsed.success) {
         return { ok: false, content: `[错误] items 参数不合法：${parsed.error.issues.map((i) => i.message).join("；")}` };
       }

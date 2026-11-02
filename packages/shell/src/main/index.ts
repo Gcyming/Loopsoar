@@ -57,6 +57,9 @@ import { registerLoopDomain } from "./domains/loop.js";
 import { AskBus } from "./askBus.js";
 import { registerAskDomain } from "./domains/ask.js";
 import { registerAskTools } from "./askTools.js";
+import { BookmarksStore } from "./bookmarksStore.js";
+import { registerBookmarksDomain } from "./domains/bookmarks.js";
+import { registerPageSaveDomain } from "./domains/pageSave.js";
 import { registerMemoryDomain } from "./domains/memory.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
@@ -704,6 +707,8 @@ app.whenReady().then(async () => {
     initialPrefs.workspaceRoot?.trim() || process.cwd(),
   );
   const worktreesRoot = path.join(dirs.dataDir, "worktrees");
+  // 书签（浏览器功能面 MVP）：独立 JSON 存储，单实例（多实例会互相覆盖）
+  const bookmarks = new BookmarksStore(dirs.dataDir);
   /** 会话工作根：会话 worktree > 会话工作区 > 活动工作区。 */
   const resolveSessionRoot = (sessionId?: string): string => {
     const worktree = sessionId ? sessions.getWorktree(sessionId) : null;
@@ -880,7 +885,12 @@ app.whenReady().then(async () => {
       if (!/^https?:\/\//i.test(url)) return;
       void browserHost?.newTab(url);
     },
-    { initialSessionId, onSessionStateChanged: queueBrowserStateSave },
+    {
+      initialSessionId,
+      onSessionStateChanged: queueBrowserStateSave,
+      // 广告/追踪拦截开关跟随偏好（默认开；设置里改动即时生效）
+      isAdBlockEnabled: () => loadPreferences(dirs.configDir).adBlockEnabled ?? true,
+    },
   );
   // 启动即恢复当前会话上次的网页（标题/URL/活动标签）
   const bootBrowserState = sessions.getBrowserState(initialSessionId);
@@ -891,7 +901,7 @@ app.whenReady().then(async () => {
       .catch(() => undefined);
   }
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
-  registerBrowserTools(registry, () => browserHost);
+  registerBrowserTools(registry, () => browserHost, resolveSessionRoot);
   registerTerminalTools(registry, resolveSessionRoot);
   registerPlanTools(registry);
   registerFileTools(registry, resolveSessionRoot);
@@ -1002,6 +1012,14 @@ app.whenReady().then(async () => {
   registerTerminalDomain(deps, terminals);
   registerLoopDomain(deps, loopRuntime);
   registerAskDomain(deps, askBus);
+  registerBookmarksDomain(deps, bookmarks);
+  registerPageSaveDomain({
+    ...deps,
+    browser: browserHost ?? undefined,
+    dataDir: dirs.dataDir,
+    // 下载目录随时可在设置里改：执行时读最新偏好
+    downloadDir: () => loadPreferences(dirs.configDir).downloadDir ?? "",
+  });
   // 扩展运行时：每个启用扩展一个隔离子进程，工具桥接为 ext__<id>__<tool>
   const extensionRuntime = new ExtensionRuntime({
     extensions,

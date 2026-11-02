@@ -142,6 +142,69 @@ export const SSRF_BLOCKED_HOSTNAMES = [
 /** SSRF：禁止的端口之外，仅允许这些显式端口直连（80/443 为常规 Web）。 */
 export const SSRF_ALLOWED_PORTS = [80, 443, 8080, 8443] as const;
 
+/* ───────────────────────── 广告/追踪拦截（浏览器功能面 MVP） ───────────────────────── */
+
+/**
+ * 广告/追踪域名后缀（webRequest 请求层拦截；子域命中即拦截）。
+ * 为什么用后缀而不是正则：请求量大，后缀匹配 O(1) 且易审计；误杀可通过设置整体开关规避。
+ */
+export const AD_BLOCK_HOST_SUFFIXES = [
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "google-analytics.com",
+  "googletagmanager.com",
+  "googletagservices.com",
+  "adservice.google.com",
+  "amazon-adsystem.com",
+  "adsystem.amazon.com",
+  "scorecardresearch.com",
+  "quantserve.com",
+  "outbrain.com",
+  "taboola.com",
+  "criteo.com",
+  "criteo.net",
+  "adsrvr.org",
+  "pubmatic.com",
+  "rubiconproject.com",
+  "openx.net",
+  "adnxs.com",
+  "moatads.com",
+  "zedo.com",
+  "serving-sys.com",
+  "2mdn.net",
+  "adform.net",
+  "smartadserver.com",
+  "casalemedia.com",
+  "sharethrough.com",
+  "teads.tv",
+  "tremorhub.com",
+  "3lift.com",
+  "bidswitch.net",
+  "sitescout.com",
+  "mathtag.com",
+  "agkn.com",
+  "krxd.net",
+  "bluekai.com",
+  "demdex.net",
+  "omtrdc.net",
+  "everesttech.net",
+] as const;
+
+/** 广告/追踪 URL 片段（路径级补充；后缀不命中的常见追踪端点）。 */
+export const AD_BLOCK_URL_PATTERNS = [
+  "/ads/",
+  "/adserver/",
+  "/advert/",
+  "/analytics.js",
+  "/gtag/js",
+  "/collect?v=",
+  "/pagead/",
+  "/pixel.gif",
+  "/tracker/",
+  "/telemetry/",
+] as const;
+
 /* ───────────────────────── 文件 IPC ───────────────────────── */
 
 /** 文件读取 IPC 单次最大字节数（约 5MB，防止一次拉爆主进程）。 */

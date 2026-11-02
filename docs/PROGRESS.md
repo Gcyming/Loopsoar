@@ -292,6 +292,21 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **UI**：AskUserDialog（模态/焦点圈定/Esc 防误关）、设置页 Agent-Loop 选择器与回退原因展示、`loop:fallback` 全局提示
 - 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 99 文件 / 783 tests 全绿**
 
+## 二·三十、2026-11-02 第二十七次增量（浏览器功能面补缺 + 质量守卫）
+- **书签**：`BookmarksStore`（`<dataDir>/bookmarks.json`，原子写/损坏恢复/同 URL 去重/上限 500 淘汰最旧/仅 http(s)）+ `bookmarks:list/add/remove` 通道 + UI 星标（已收藏实心高亮）+ 书签列表浮层（导航/删除/空态）
+- **广告拦截**：contracts 单一产地 `AD_BLOCK_HOST_SUFFIXES`（40 域名后缀）+ `AD_BLOCK_URL_PATTERNS`；`browserRequestGuard` 请求层判定（子域边界防误杀、reason/kind=adblock）；偏好 `adBlockEnabled`（默认开，设置·通用可关，每次请求读最新值）；拦截日志只打 host
+- **页面保存**：`browser:savePage` + `saveActivePage`（executeScript 取 title+outerHTML、补 UTF-8 meta、文件名清洗/Windows 保留名、20MB 上限、同秒冲突序号）；UI 顶栏保存按钮 + 路径 toast
+- **浏览器工具补齐**：`browser_screenshot`（滚动定位→capturePage→写会话工作根 `.loopsoar/screenshots/`，返回尺寸）、`browser_wait`（selector/text 轮询，默认 3s/上限 10s）
+- **刷新语义修复**：顶栏刷新按钮改走 `browser:reload`（此前是重新 navigate，会重置历史）
+- **快照面板化**：`browser.snapshot` 不再只弹 toast，`SnapshotPanel` 展示标题/URL/正文/可交互元素，复制正文/链接，Esc/遮罩关闭；快照期间隐藏原生视图、设置/工作区打开时让位、页面跳转自动收起
+- **质量守卫（发布门 2/4 + 架构）**：
+  - 新增 `tests/guards/layering.spec.ts`：contracts←core←services←shell←ui 依赖方向、包内相对 import 不越界、仅 index/electronBrowser/preload 可 import electron
+  - 新增 `tests/guards/browser-bridge-security.spec.ts`：发布门 2 四攻击路径（preload 注入/IPC 冒用/window.open 逃逸/CDP 滥用）+ 视图安全基线 + 导航白名单
+  - 新增 `tests/guards/plugin-permission-lifecycle.spec.ts`：插件装载→桥接→沙箱判定→会话授权→卸载精确撤销→未知工具拒绝（发布门 4）
+  - 补测试：planTools（会话隔离/状态继承/参数校验）、attachments（附件协议）、railParams（参数夹紧）
+  - 修复真实缺陷：`baseName` 只按 `/` 切分导致 Windows 路径整串返回；`todo_write` 运行时校验缺 max(50)（注册表 schema 不会自动校验执行参数）
+- 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 109 文件 / 867 tests 全绿**
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

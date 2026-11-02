@@ -441,6 +441,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Field l="语言"><Seg v={prefs.language} opts={[["zh-CN", "简体中文"], ["en-US", "English"]]} on={(x) => setPrefs({ ...prefs, language: x as Preferences["language"] })} /></Field>
           <Field l="动效强度" h="关闭后全局停用动画与过渡"><Seg v={prefs.animations} opts={[["full", "完整"], ["reduced", "弱化"], ["off", "关闭"]]} on={(x) => setPrefs({ ...prefs, animations: x as Preferences["animations"] })} /></Field>
           <Field l="默认搜索引擎"><Seg v={prefs.searchEngine} opts={[["bing", "Bing"], ["google", "Google"], ["duckduckgo", "DuckDuckGo"]]} on={(x) => setPrefs({ ...prefs, searchEngine: x as Preferences["searchEngine"] })} /></Field>
+          <Field l="广告拦截" h="拦截广告与追踪请求（请求层过滤，默认开启）；若网站因拦截出现异常可关闭">
+            <Toggle v={prefs.adBlockEnabled ?? true} on={(x) => setPrefs({ ...prefs, adBlockEnabled: x })} />
+          </Field>
           <Field l="启动时恢复上次会话"><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
           <Field l="Agent 请求上限" h="单次任务最多请求轮数（默认 40）；防止异常循环，撞上限会明确标注中断原因">
             <In

@@ -11,6 +11,10 @@
  * 设置环境变量 `LOOPSOAR_STRICT_NET=1` 后不再放行（生产严格模式）。
  */
 import {
+  AD_BLOCK_HOST_SUFFIXES,
+  AD_BLOCK_URL_PATTERNS,
+} from "loopsoar-contracts/security-policy";
+import {
   isBlockedHostname,
   isIpLiteral,
   isLoopbackHostname,
@@ -22,6 +26,8 @@ import {
 export interface BrowserRequestDecision {
   action: "allow" | "block";
   reason?: string;
+  /** 拦截类别：adblock=广告/追踪；缺省=SSRF/协议等安全拦截（装配层据此在日志里标注）。 */
+  kind?: "adblock";
 }
 
 /** 浏览器允许的协议：页面/WebSocket 够用，且都能被 SSRF 判据覆盖。 */
@@ -44,21 +50,74 @@ function hostOf(rawUrl: string): string {
   }
 }
 
+/* ────────────────────────── 广告/追踪判定（纯函数，契约常量驱动） ────────────────────────── */
+
+const AD_HOST_SUFFIXES: readonly string[] = AD_BLOCK_HOST_SUFFIXES.map((suffix) => String(suffix).toLowerCase());
+const AD_URL_PATTERNS: readonly string[] = AD_BLOCK_URL_PATTERNS.map((pattern) => String(pattern).toLowerCase());
+
+export interface AdBlockMatch {
+  kind: "host" | "url";
+  detail: string;
+}
+
+/**
+ * 纯函数：URL 是否命中广告/追踪规则（命中返回匹配细节，未命中 null）。
+ * 规则来自 contracts 单一产地：
+ *   · 域名后缀：host === suffix 或 host 以 ".suffix" 结尾（子域命中；带点边界防 notdoubleclick.net 误杀）；
+ *   · URL 片段：pathname+search 包含契约片段（如 /collect?v=、/gtag/js），大小写不敏感。
+ * IP 字面量与非常规 scheme 不参与广告判定（它们由 SSRF/协议层负责）。
+ */
+export function matchAdBlockUrl(rawUrl: string): AdBlockMatch | null {
+  let url: URL;
+  try {
+    url = new URL(String(rawUrl ?? ""));
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "ws:" && url.protocol !== "wss:") {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/\.+$/, "");
+  if (!host || isIpLiteral(host)) return null;
+
+  for (const suffix of AD_HOST_SUFFIXES) {
+    if (host === suffix || host.endsWith(`.${suffix}`)) return { kind: "host", detail: suffix };
+  }
+  const withQuery = `${url.pathname}${url.search}`.toLowerCase();
+  for (const pattern of AD_URL_PATTERNS) {
+    if (withQuery.includes(pattern)) return { kind: "url", detail: pattern };
+  }
+  return null;
+}
+
+function blockAd(match: AdBlockMatch): BrowserRequestDecision {
+  const what = match.kind === "host" ? `域名后缀 ${match.detail}` : `URL 片段 ${match.detail}`;
+  return { action: "block", kind: "adblock", reason: `广告/追踪请求拦截（${what}）` };
+}
+
 export interface BrowserRequestPolicyOptions {
   /** 是否放行回环（127.0.0.1/::1/localhost）；默认 true，`LOOPSOAR_STRICT_NET=1` 时强制关闭。 */
   allowLoopback?: boolean;
+  /**
+   * 广告/追踪拦截开关（缺省 true，遵循偏好 adBlockEnabled）。
+   * 传函数以便装配层每次请求读取最新偏好（设置改完即时生效）；传 false 完全跳过广告判定。
+   */
+  adBlock?: boolean | (() => boolean);
 }
 
 export type BrowserRequestPolicy = (url: string) => BrowserRequestDecision;
 
 /**
- * 创建同步 URL 策略：仅 http/https/ws/wss；拒绝内部主机名、私网/保留 IP、userinfo、非标准 scheme。
+ * 创建同步 URL 策略：仅 http/https/ws/wss；拒绝内部主机名、私网/保留 IP、userinfo、非标准 scheme；
+ * 广告/追踪开关打开时按契约后缀/片段拦截（kind="adblock" 供日志标注）。
  * 注意：域名是否解析到私网由 createBrowserRequestChecker 的异步 DNS 层补判。
  */
 export function createBrowserRequestPolicy(opts: BrowserRequestPolicyOptions = {}): BrowserRequestPolicy {
   // 严格模式通过环境变量全局收紧（发布版可默认开启，E2E/本地开发不设即可）
   const strictNet = process.env.LOOPSOAR_STRICT_NET === "1";
   const allowLoopback = (opts.allowLoopback ?? true) && !strictNet;
+  const adBlockEnabled = (): boolean =>
+    typeof opts.adBlock === "function" ? opts.adBlock() : opts.adBlock ?? true;
 
   return (rawUrl: string): BrowserRequestDecision => {
     let url: URL;
@@ -89,6 +148,12 @@ export function createBrowserRequestPolicy(opts: BrowserRequestPolicyOptions = {
       return allowLoopback ? allow() : block(`严格模式下拒绝回环主机名 ${host}`);
     }
     if (isBlockedHostname(host)) return block(`拒绝内部主机名 ${host}`);
+
+    // 广告/追踪：放最后判——内网/危险地址的拦截原因优先展示（安全告警不被广告拦截掩盖）
+    if (adBlockEnabled()) {
+      const ad = matchAdBlockUrl(rawUrl);
+      if (ad) return blockAd(ad);
+    }
     return allow();
   };
 }
@@ -104,6 +169,8 @@ export interface BrowserRequestCheckerOptions {
   policy?: BrowserRequestPolicy;
   /** 缓存条目上限（LRU，防止恶意页面刷域名撑爆主进程内存）。 */
   maxCacheEntries?: number;
+  /** 广告/追踪拦截开关（仅在未注入 policy 时用于构造默认策略；缺省 true）。 */
+  adBlock?: boolean | (() => boolean);
 }
 
 export type BrowserRequestChecker = (url: string) => Promise<BrowserRequestDecision>;
@@ -118,7 +185,7 @@ interface CacheEntry {
  * 任何异常都走 fail-closed（拦截），绝不因解析失败而放行。
  */
 export function createBrowserRequestChecker(options: BrowserRequestCheckerOptions): BrowserRequestChecker {
-  const policy = options.policy ?? createBrowserRequestPolicy();
+  const policy = options.policy ?? createBrowserRequestPolicy({ adBlock: options.adBlock });
   const cacheTtlMs = options.cacheTtlMs ?? 300_000;
   const maxCacheEntries = options.maxCacheEntries ?? 256;
   const cache = new Map<string, CacheEntry>();

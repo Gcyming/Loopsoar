@@ -15,6 +15,7 @@ export function splitAttachments(text: string): { body: string; docs: string[] }
 }
 
 export function baseName(path: string): string {
-  const parts = path.split(/[\/]/);
+  // 同时兼容 Windows 反斜杠与 POSIX 正斜杠（此前正则只匹配了 `/`，Windows 路径整串返回）
+  const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }

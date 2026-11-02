@@ -6,6 +6,7 @@ import type {
   AgentSummary,
   AskUserRequest,
   BootStatus,
+  BrowserSnapshotResult,
   LoopsoarAPI,
   DownloadItem,
   HistoryEntry,
@@ -31,6 +32,7 @@ import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 import TerminalPanel from "./TerminalPanel.js";
 import AskUserDialog from "./AskUserDialog.js";
+import SnapshotPanel from "./SnapshotPanel.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -122,6 +124,8 @@ export default function App(): React.JSX.Element {
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  // 页面快照面板：null=关闭；非空时隐藏原生浏览器视图并渲染可读浮层
+  const [snapshotData, setSnapshotData] = useState<BrowserSnapshotResult | null>(null);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
@@ -1039,15 +1043,56 @@ export default function App(): React.JSX.Element {
     });
   }, [api, metaFor, writeSessionMessages]);
 
+  /** 刷新当前页：走 browser:reload（区别于地址栏导航，不重置历史栈）。 */
+  const reloadPage = useCallback((): void => {
+    if (!api) return;
+    void api.browser
+      .reload({})
+      .then((result) => {
+        if (!result.ok) {
+          setNotice(`刷新失败：${result.error ?? "未知错误"}`);
+          return;
+        }
+        if (result.url) {
+          lastSyncedUrlRef.current = result.url;
+          setAddress(result.url);
+          setCurrentUrl(result.url);
+        }
+        void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
+      })
+      .catch((err: unknown) => setNotice(`刷新失败：${err instanceof Error ? err.message : String(err)}`));
+  }, [api]);
+
+  /** 保存当前页面 HTML 全页（主进程写到下载目录 saved-pages/），成功 toast 显示路径。 */
+  const savePage = useCallback((): void => {
+    if (!api) return;
+    setNotice("正在保存页面…");
+    void api.browser
+      .savePage({})
+      .then((result) => {
+        if (!result.ok) {
+          setNotice(`保存失败：${result.error ?? "未知错误"}`);
+          return;
+        }
+        const size = typeof result.bytes === "number" ? `（${Math.max(1, Math.round(result.bytes / 1024))} KB）` : "";
+        setNotice(`页面已保存${size}：${result.path ?? "（路径未返回）"}`);
+      })
+      .catch((err: unknown) => setNotice(`保存失败：${err instanceof Error ? err.message : String(err)}`));
+  }, [api]);
+
   const snapshot = useCallback((): void => {
     if (!api) return;
-    void api.browser.snapshot().then((result) => {
-      setNotice(
-        result.ok
-          ? `页面快照：${result.title ?? ""}（${(result.text ?? "").length} 字符）`
-          : `快照失败：${result.error}`,
-      );
-    });
+    void api.browser
+      .snapshot()
+      .then((result) => {
+        if (result.ok) {
+          setSnapshotData(result); // 面板化：正文/元素可滚动与复制，不再只 toast 一行
+          setNotice("");
+          return;
+        }
+        setNotice(`快照失败：${result.error ?? "未知错误"}`);
+      })
+      .catch((err: unknown) => setNotice(`快照失败：${err instanceof Error ? err.message : String(err)}`));
   }, [api]);
 
   // E2E：?e2e=chat 时自动发一条消息（配合 scripts/mock-openai-server.mjs 验证真流式链路）
@@ -1165,15 +1210,26 @@ export default function App(): React.JSX.Element {
     if (wanted) setSettingsSection(wanted);
   }, []);
 
-  // 修复遮挡：应用内浮层（设置）打开时隐藏原生 WebContentsView
+  // 修复遮挡：应用内浮层（设置 / 工作区 / 快照面板）打开时隐藏原生 WebContentsView
   useEffect(() => {
     if (!api) return;
-    const overlay = settingsOpen || workspacePanelOpen;
+    const overlay = settingsOpen || workspacePanelOpen || snapshotData !== null;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
     return () => {
       void api.browser.setOverlay({ open: false }).catch(() => {});
     };
-  }, [api, settingsOpen, workspacePanelOpen]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData]);
+
+  // 让位：打开设置/工作区面板时收起快照浮层（避免两层模态叠在一起）
+  useEffect(() => {
+    if (settingsOpen || workspacePanelOpen) setSnapshotData(null);
+  }, [settingsOpen, workspacePanelOpen]);
+
+  // 页面变化后快照内容会过期：自动收起，避免展示与当前页不匹配的旧正文
+  useEffect(() => {
+    if (!snapshotData) return;
+    if (currentUrl && snapshotData.url && currentUrl !== snapshotData.url) setSnapshotData(null);
+  }, [currentUrl, snapshotData]);
 
   // 动效强度偏好 → 根节点 data 属性（CSS 里统一降级，避免各处手写判断）
   useEffect(() => {
@@ -1293,10 +1349,14 @@ export default function App(): React.JSX.Element {
         onNavigate={() => navigate()}
         onBack={goBack}
         onForward={goForward}
+        onReload={reloadPage}
         onToggleHistory={toggleHistory}
         onToggleDownloads={toggleDownloads}
+        onSavePage={savePage}
         onSnapshot={() => void snapshot()}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenBookmark={(url) => navigate(url)}
+        onNotice={setNotice}
         onSelectTab={selectTab}
         onCloseTab={closeTab}
         onNewTab={newTab}
@@ -1564,6 +1624,8 @@ export default function App(): React.JSX.Element {
         }}
         onNotice={setNotice}
       />
+      {/* 页面快照浮层：正文/元素可滚动复制；打开设置/工作区时自动收起 */}
+      <SnapshotPanel snapshot={snapshotData} onClose={() => setSnapshotData(null)} />
       {settingsOpen ? (
         <Settings
           key={settingsSection || "settings"}

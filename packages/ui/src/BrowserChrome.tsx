@@ -1,13 +1,18 @@
 /**
- * 浏览器顶栏：后退/前进/刷新/历史 + 地址搜索框 + 下载/快照/设置 + 标签栏。
- * 纯展示 + 回调注入；历史/下载浮层由 App 传入（它们依赖各自的业务状态）。
+ * 浏览器顶栏：后退/前进/刷新/历史/收藏 + 地址搜索框 + 下载/保存页面/快照/设置 + 标签栏。
+ *
+ * 后退/前进/历史/下载/保存/快照仍走 App 回调（依赖各自的业务状态）；
+ * 收藏（书签）是本组件自己的浏览器功能：经 preload 的 bookmarks 域拉列表，
+ * 星标按「当前页是否已收藏」高亮，点击即 add/remove，浮层里可跳转或删除。
  */
 import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import Popover from "./AnchoredPopover.js";
-import type { TabState } from "./types.js";
+import { usePopover } from "./popover.js";
+import { useLoopsoarApi } from "./useLoopsoarApi.js";
+import type { BookmarkItem, TabState } from "./types.js";
 
 export interface BrowserChromeProps {
   tabs: TabState[];
@@ -23,13 +28,27 @@ export interface BrowserChromeProps {
   onNavigate: () => void;
   onBack: () => void;
   onForward: () => void;
+  /** 刷新当前页（走 browser:reload，不是重新导航）。 */
+  onReload: () => void;
   onToggleHistory: () => void;
   onToggleDownloads: () => void;
+  /** 保存当前页面 HTML 全页（App 负责 toast 路径）。 */
+  onSavePage: () => void;
   onSnapshot: () => void;
   onOpenSettings: () => void;
+  /** 打开一条书签（当前标签导航）。 */
+  onOpenBookmark: (url: string) => void;
+  /** 面板内操作提示（收藏/删除结果）。 */
+  onNotice: (text: string) => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
+}
+
+/** 书签同一性判据：忽略 URL hash 与末尾斜杠（同页锚点不产生第二条书签）。 */
+function pageKey(url: string): string {
+  const trimmed = url.trim().replace(/#.*$/, "");
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
 export default function BrowserChrome({
@@ -46,17 +65,96 @@ export default function BrowserChrome({
   onNavigate,
   onBack,
   onForward,
+  onReload,
   onToggleHistory,
   onToggleDownloads,
+  onSavePage,
   onSnapshot,
   onOpenSettings,
+  onOpenBookmark,
+  onNotice,
   onSelectTab,
   onCloseTab,
   onNewTab,
 }: BrowserChromeProps): React.ReactElement {
+  const api = useLoopsoarApi();
   const active = tabs.find((tab) => tab.active);
   const historyButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const downloadsButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const bookmarkListRef = React.useRef<HTMLButtonElement | null>(null);
+
+  const [bookmarks, setBookmarks] = React.useState<BookmarkItem[]>([]);
+  const [bookmarksOpen, setBookmarksOpen] = React.useState(false);
+  // 与历史/下载/输入区菜单共用全局浮层仲裁：同一时刻只展开一个
+  usePopover("browser-bookmarks", bookmarksOpen, setBookmarksOpen);
+
+  const refreshBookmarks = React.useCallback(async (): Promise<void> => {
+    if (!api?.bookmarks) {
+      setBookmarks([]);
+      return;
+    }
+    try {
+      const result = await api.bookmarks.list();
+      setBookmarks(Array.isArray(result?.bookmarks) ? result.bookmarks : []);
+    } catch {
+      setBookmarks([]); // 旧 shell 未装配书签域：静默空列表，不影响浏览
+    }
+  }, [api]);
+
+  // 挂载 / 页面切换时刷新（决定星标高亮）；浮层展开时再拉一次（别处可能新增过）
+  React.useEffect(() => {
+    void refreshBookmarks();
+  }, [refreshBookmarks, currentUrl]);
+  React.useEffect(() => {
+    if (bookmarksOpen) void refreshBookmarks();
+  }, [bookmarksOpen, refreshBookmarks]);
+
+  /** 仅 http/https 页面可收藏（书签 store 也只接受这两种协议）。 */
+  const canBookmark = /^https?:\/\//i.test(currentUrl);
+  const currentBookmark = React.useMemo(() => {
+    if (!canBookmark) return null;
+    const key = pageKey(currentUrl);
+    return bookmarks.find((item) => pageKey(item.url) === key) ?? null;
+  }, [bookmarks, canBookmark, currentUrl]);
+
+  const toggleBookmark = React.useCallback(async (): Promise<void> => {
+    if (!api?.bookmarks || !currentUrl || !canBookmark) return;
+    try {
+      if (currentBookmark) {
+        const result = await api.bookmarks.remove({ id: currentBookmark.id });
+        setBookmarks((prev) => prev.filter((item) => item.id !== currentBookmark.id));
+        onNotice(result?.ok ? "已取消收藏" : "书签已不存在（可能已被删除）");
+        return;
+      }
+      const result = await api.bookmarks.add({
+        url: currentUrl,
+        ...(active?.title ? { title: active.title } : {}),
+      });
+      if (!result?.ok) {
+        onNotice(`收藏失败：${result?.error ?? "未知错误"}`);
+        return;
+      }
+      onNotice(result.duplicate ? "该页面已在书签中" : "已加入书签");
+      await refreshBookmarks();
+    } catch (err) {
+      onNotice(`收藏失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [api, active?.title, canBookmark, currentBookmark, currentUrl, onNotice, refreshBookmarks]);
+
+  const removeBookmark = React.useCallback(
+    async (item: BookmarkItem): Promise<void> => {
+      if (!api?.bookmarks) return;
+      try {
+        const result = await api.bookmarks.remove({ id: item.id });
+        setBookmarks((prev) => prev.filter((x) => x.id !== item.id));
+        onNotice(result?.ok ? "已删除书签" : "书签已不存在（可能已被删除）");
+      } catch (err) {
+        onNotice(`删除书签失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [api, onNotice],
+  );
+
   return (
     <>
       <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
@@ -67,7 +165,7 @@ export default function BrowserChrome({
           <button type="button" className="icon-btn" title="前进" disabled={!active?.canForward} onClick={onForward}>
             <Icon name="forward" size={16} />
           </button>
-          <button type="button" className="icon-btn" title="刷新" disabled={!currentUrl} onClick={onNavigate}>
+          <button type="button" className="icon-btn" title="刷新" disabled={!currentUrl} onClick={onReload}>
             <Icon name="reload" size={16} />
           </button>
           <span style={styles.anchor} data-popover-trigger>
@@ -93,9 +191,76 @@ export default function BrowserChrome({
             style={styles.omnibox}
             aria-label="地址与搜索"
           />
-          <button type="button" className="icon-btn" title="收藏（待接）" disabled style={styles.omniboxStar}>
-            <Icon name="star" size={15} />
-          </button>
+          <span style={styles.starWrap} data-popover-trigger>
+            <button
+              type="button"
+              className={`icon-btn${currentBookmark ? " is-bookmarked" : ""}`}
+              style={styles.omniboxStar}
+              title={
+                !canBookmark
+                  ? "当前页面不可收藏（仅支持 http/https）"
+                  : currentBookmark
+                    ? "取消收藏当前页面"
+                    : "收藏当前页面"
+              }
+              aria-label={currentBookmark ? "取消收藏当前页面" : "收藏当前页面"}
+              aria-pressed={Boolean(currentBookmark)}
+              disabled={!canBookmark}
+              onClick={() => void toggleBookmark()}
+            >
+              <Icon name={currentBookmark ? "star-filled" : "star"} size={15} />
+            </button>
+            <button
+              ref={bookmarkListRef}
+              type="button"
+              className="icon-btn bookmark-list-btn"
+              style={styles.bookmarkListBtn}
+              title="书签列表"
+              aria-label="书签列表"
+              onClick={() => setBookmarksOpen((value) => !value)}
+            >
+              <Icon name="more" size={13} />
+            </button>
+            <Popover anchorRef={bookmarkListRef} open={bookmarksOpen} onClose={() => setBookmarksOpen(false)} width={340}>
+              <div className="bookmark-panel">
+                <div className="bookmark-head">
+                  <span>书签</span>
+                  <span className="bookmark-count">{bookmarks.length}</span>
+                </div>
+                {bookmarks.length === 0 ? (
+                  <div className="bookmark-empty">还没有书签：点地址栏的星标收藏当前页面</div>
+                ) : (
+                  <div className="bookmark-list" aria-label="书签列表">
+                    {bookmarks.map((item) => (
+                      <div key={item.id} className="bookmark-row">
+                        <button
+                          type="button"
+                          className="bookmark-open"
+                          title={item.url}
+                          onClick={() => {
+                            onOpenBookmark(item.url);
+                            setBookmarksOpen(false);
+                          }}
+                        >
+                          <span className="bookmark-title">{item.title || item.url}</span>
+                          <span className="bookmark-url">{item.url}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn bookmark-del"
+                          title="删除书签"
+                          aria-label={`删除书签：${item.title || item.url}`}
+                          onClick={() => void removeBookmark(item)}
+                        >
+                          <Icon name="close" size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Popover>
+          </span>
         </div>
 
         <div style={styles.topActions}>
@@ -115,6 +280,16 @@ export default function BrowserChrome({
               {downloadsPanel}
             </Popover>
           </span>
+          <button
+            type="button"
+            className="icon-btn"
+            title={currentUrl ? "保存页面（HTML 全页）" : "先打开一个网页"}
+            aria-label="保存页面"
+            onClick={onSavePage}
+            disabled={!currentUrl}
+          >
+            <Icon name="file" size={16} />
+          </button>
           <button type="button" className="icon-btn" title={currentUrl ? "页面快照" : "先打开一个网页"} onClick={onSnapshot} disabled={!currentUrl}>
             <Icon name="capture" size={17} />
           </button>
@@ -194,7 +369,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     minWidth: 0,
   },
+  starWrap: { position: "relative", display: "inline-flex", alignItems: "center", flex: "none" },
   omniboxStar: { width: 24, height: 24, flex: "none" },
+  bookmarkListBtn: { width: 18, height: 24, flex: "none", opacity: 0.75 },
   topActions: { display: "flex", gap: 2, flexShrink: 0 },
   dlDot: {
     position: "absolute",

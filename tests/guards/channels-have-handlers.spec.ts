@@ -23,6 +23,9 @@ import { registerAskDomain } from "../../packages/shell/src/main/domains/ask.ts"
 import { registerLoopDomain } from "../../packages/shell/src/main/domains/loop.ts";
 import { AskBus } from "../../packages/shell/src/main/askBus.ts";
 import type { LoopRuntime } from "../../packages/shell/src/main/loopRuntime.ts";
+import { registerBookmarksDomain } from "../../packages/shell/src/main/domains/bookmarks.ts";
+import { BookmarksStore } from "../../packages/shell/src/main/bookmarksStore.ts";
+import { registerPageSaveDomain } from "../../packages/shell/src/main/domains/pageSave.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -90,6 +93,8 @@ function assemble(): void {
   registerTerminalDomain(deps, fakeTerminalManager());
   registerAskDomain(deps, new AskBus({ push: () => {} }));
   registerLoopDomain(deps, fakeLoopRuntime());
+  registerBookmarksDomain(deps, new BookmarksStore("C:/tmp/loopsoar-data-test/bookmarks"));
+  registerPageSaveDomain({ ...deps, dataDir: "C:/tmp/loopsoar-data-test" });
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,

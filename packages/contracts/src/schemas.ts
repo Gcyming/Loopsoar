@@ -183,6 +183,18 @@ export const AskRespondSchema = z.object({
 /* ───────────────────────── Agent-Loop（ADR-0010 接线） ───────────────────────── */
 
 export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
+
+/* ───────────────────────── 书签（浏览器功能面 MVP） ───────────────────────── */
+
+export const BookmarkAddSchema = z.object({
+  url: z.string().url().max(2000),
+  title: z.string().max(300).optional(),
+});
+export const BookmarkRemoveSchema = z.object({ id: z.string().min(1).max(120) });
+
+/* ───────────────────────── 页面保存（全文保存） ───────────────────────── */
+
+export const SavePageSchema = z.object({ tabId: z.string().min(1).max(120).optional() });
 export const TerminalCloseSchema = z.object({ terminalId: TerminalIdSchema });
 export const TerminalHistorySchema = z.object({ terminalId: TerminalIdSchema });
 
@@ -221,6 +233,8 @@ export const SettingsProviderSchema = z.object({
 /** 通用偏好（设置 · 通用）。 */
 export const PreferencesSchema = z.object({
   language: z.enum(["zh-CN", "en-US"]),
+  /** 广告/追踪请求拦截（webRequest 层；默认开启，可在设置·通用关闭）。 */
+  adBlockEnabled: z.boolean().optional(),
   /** 动效强度：full=全部；reduced=弱化；off=关闭（无障碍）。 */
   animations: z.enum(["full", "reduced", "off"]),
   /** 启动时恢复上次会话（当前为占位开关，会话持久化接入后生效）。 */
@@ -901,6 +915,34 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "loop",
     method: "setActive",
     request: LoopSetActiveSchema,
+    sensitive: true,
+  },
+
+  /* ── 书签 ── */
+  "bookmarks:list": {
+    domain: "bookmarks",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "bookmarks:add": {
+    domain: "bookmarks",
+    method: "add",
+    request: BookmarkAddSchema,
+    sensitive: true,
+  },
+  "bookmarks:remove": {
+    domain: "bookmarks",
+    method: "remove",
+    request: BookmarkRemoveSchema,
+    sensitive: true,
+  },
+
+  /* ── 页面保存（全文保存） ── */
+  "browser:savePage": {
+    domain: "browser",
+    method: "savePage",
+    request: SavePageSchema,
     sensitive: true,
   },
   "terminal:history": {

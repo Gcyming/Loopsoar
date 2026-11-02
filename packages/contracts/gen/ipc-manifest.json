@@ -680,6 +680,34 @@
       "hasRequest": true
     },
     {
+      "channel": "bookmarks:list",
+      "domain": "bookmarks",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "bookmarks:add",
+      "domain": "bookmarks",
+      "method": "add",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "bookmarks:remove",
+      "domain": "bookmarks",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:savePage",
+      "domain": "browser",
+      "method": "savePage",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "terminal:history",
       "domain": "terminal",
       "method": "history",

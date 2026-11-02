@@ -22,6 +22,8 @@ export interface ElectronBrowserHostOptions {
   resolveIps?: (host: string) => Promise<string[]>;
   /** 浏览器是否允许回环（默认 true：E2E/本地页面需要；LOOPSOAR_STRICT_NET=1 关闭）。 */
   allowLoopback?: boolean;
+  /** 广告/追踪拦截开关（读偏好 adBlockEnabled；缺省 true，即未注入也默认开启）。 */
+  isAdBlockEnabled?: () => boolean;
 }
 
 /** 默认 DNS 解析：只把地址交给守卫，解析失败返回空数组（守卫按 fail-closed 拦截）。 */
@@ -48,7 +50,11 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
   if (browserRequestGuardInstalled) return;
   browserRequestGuardInstalled = true;
 
-  const policy = createBrowserRequestPolicy({ allowLoopback: options.allowLoopback });
+  const policy = createBrowserRequestPolicy({
+    allowLoopback: options.allowLoopback,
+    // 每次请求读最新偏好（设置里关掉广告拦截即时生效）
+    adBlock: () => options.isAdBlockEnabled?.() ?? true,
+  });
   const check = createBrowserRequestChecker({
     resolveIps: options.resolveIps ?? defaultResolveIps,
     policy,
@@ -72,7 +78,9 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
           done({});
           return;
         }
-        console.warn(`[browser-guard] 拦截请求 host=${browserRequestHost(details.url)} reason=${decision.reason ?? "未说明"}`);
+        // 日志只打 host（不带完整 URL 的查询参数）；广告拦截单独标注，便于排查误杀
+        const tag = decision.kind === "adblock" ? " [adblock]" : "";
+        console.warn(`[browser-guard]${tag} 拦截请求 host=${browserRequestHost(details.url)} reason=${decision.reason ?? "未说明"}`);
         done({ cancel: true });
       })
       .catch(() => done({ cancel: true }));

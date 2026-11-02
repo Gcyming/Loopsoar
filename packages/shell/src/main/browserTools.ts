@@ -6,6 +6,9 @@
  *   · 权限按类别声明：读取页面 read，导航/点击/输入/抓取 network（默认每次确认）；
  *   · 输出限制大小（模型上下文友好），错误返回 ok:false 而不是抛异常。
  */
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { NetAdapter } from "loopsoar-core/platform";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
@@ -16,6 +19,26 @@ const MAX_TEXT = 8000;
 function clip(text: string, max = MAX_TEXT): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n…[已截断，共 ${text.length} 字符]`;
+}
+
+/** 等待指定毫秒（browser_wait 轮询用）。 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/** 读 PNG IHDR 的宽高（截图尺寸展示用）；非 PNG 返回 null。 */
+function readPngSize(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.length < 24) return null;
+  if (buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return null;
+  if (buffer.subarray(12, 16).toString("ascii") !== "IHDR") return null;
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/** 截图文件名时间戳（本地时间 YYYYMMDD-HHmmss）。 */
+function screenshotStamp(): string {
+  const date = new Date();
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
 /** 极简 HTML → 文本（仅用于 web_fetch 的兜底可读化）。 */
@@ -35,7 +58,16 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-export function registerBrowserTools(registry: ToolRegistry, browserHost: () => BrowserHost | null): void {
+/**
+ * 注册浏览器工具集。
+ * @param resolveSessionRoot 会话工作根解析（截图落盘 <root>/.loopsoar/screenshots/；缺省 process.cwd()）。
+ *   作为可选第三参保持向后兼容（既有调用/测试只传前两个参数）。
+ */
+export function registerBrowserTools(
+  registry: ToolRegistry,
+  browserHost: () => BrowserHost | null,
+  resolveSessionRoot?: (sessionId?: string) => string,
+): void {
   const needHost = (): BrowserHost => {
     const host = browserHost();
     if (!host) throw new Error("浏览器未就绪");
@@ -173,6 +205,120 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
               : `window.scrollBy({ top: ${direction === "up" ? -amount : amount} }); 'ok'`;
         await needHost().executeScript(script, ctx.sessionId);
         return { ok: true, content: `已滚动：${direction}` };
+      } catch (err) {
+        return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  registry.register({
+    name: "browser_screenshot",
+    description:
+      "对当前标签页截图（可见区域，PNG）并保存到会话工作根 .loopsoar/screenshots/；可选 selector 先把元素滚动到可视区。返回文件路径与像素尺寸",
+    permissions: { read: true },
+    schema: z.object({ selector: z.string().min(1).max(200).optional() }),
+    execute: async (ctx): Promise<ToolResult> => {
+      try {
+        const params = (ctx.params ?? {}) as { selector?: string };
+        const host = needHost();
+
+        // selector 只负责把目标元素滚进视野（Electron capturePage 截的是当前视口，不是元素级截图）
+        if (params.selector) {
+          const selector = JSON.stringify(params.selector);
+          const located = (await host.executeScript(
+            `(() => {
+              let el = null;
+              try { el = document.querySelector(${selector}); } catch {}
+              if (!el) return { ok: false, reason: "未找到元素：" + ${selector} };
+              el.scrollIntoView({ block: "center" });
+              return { ok: true };
+            })()`,
+            ctx.sessionId,
+          )) as { ok?: boolean; reason?: string } | null;
+          if (!located?.ok) return { ok: false, content: `[错误] ${located?.reason ?? "元素定位失败"}` };
+        }
+
+        const data = await host.screenshot(ctx.sessionId);
+        if (!data) return { ok: false, content: "[错误] 当前没有打开的网页标签" };
+        // 兼容 dataURL（data:image/png;base64,xxx）与裸 base64 两种适配器实现
+        const base64 = data.includes(",") ? data.slice(data.indexOf(",") + 1) : data;
+        const buffer = Buffer.from(base64, "base64");
+        if (buffer.length === 0) return { ok: false, content: "[错误] 截图失败（空图像）" };
+
+        const root = resolveSessionRoot?.(ctx.sessionId)?.trim() || process.cwd();
+        const dir = path.join(root, ".loopsoar", "screenshots");
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `screenshot-${screenshotStamp()}-${randomUUID().slice(0, 8)}.png`);
+        fs.writeFileSync(file, buffer);
+
+        const size = readPngSize(buffer);
+        return {
+          ok: true,
+          content: `已截图：${file}\n尺寸：${size ? `${size.width}x${size.height}` : "未知"}（${buffer.length} 字节）`,
+        };
+      } catch (err) {
+        return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  registry.register({
+    name: "browser_wait",
+    description:
+      "等待页面就绪：轮询指定选择器出现/文本出现在页面中，或简单等待若干毫秒（默认 3000ms，上限 10s）。适合等异步内容加载",
+    permissions: { read: true },
+    schema: z.object({
+      ms: z.number().int().min(100).max(10_000).optional(),
+      selector: z.string().min(1).max(200).optional(),
+      text: z.string().min(1).max(200).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      try {
+        const params = (ctx.params ?? {}) as { ms?: number; selector?: string; text?: string };
+        const timeoutMs = params.ms ?? 3000;
+        const selector = params.selector?.trim();
+        const text = params.text?.trim();
+        const host = needHost();
+        const startedAt = Date.now();
+
+        // 只给 ms：纯等待（让页面自行加载）
+        if (!selector && !text) {
+          await sleep(timeoutMs);
+          return { ok: true, content: `[就绪] 已等待 ${timeoutMs}ms` };
+        }
+
+        const description = [selector ? `选择器 ${selector}` : "", text ? `文本「${text}」` : ""]
+          .filter(Boolean)
+          .join(" 或 ");
+        const checkScript = `(() => {
+          const selector = ${selector ? JSON.stringify(selector) : "null"};
+          const text = ${text ? JSON.stringify(text) : "null"};
+          if (selector) {
+            let el = null;
+            try { el = document.querySelector(selector); } catch { return false; }
+            if (!el) return false;
+          }
+          if (text) {
+            const body = document.body ? document.body.innerText : "";
+            if (body.indexOf(text) === -1) return false;
+          }
+          return true;
+        })()`;
+
+        while (true) {
+          let ready = false;
+          try {
+            ready = Boolean(await host.executeScript(checkScript, ctx.sessionId));
+          } catch (err) {
+            return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+          }
+          const elapsed = Date.now() - startedAt;
+          if (ready) return { ok: true, content: `[就绪] ${description} 已出现（等待 ${elapsed}ms）` };
+          if (elapsed >= timeoutMs) {
+            return { ok: false, content: `[超时] 等待 ${timeoutMs}ms 仍未检测到 ${description}` };
+          }
+          await sleep(Math.min(200, Math.max(0, timeoutMs - elapsed)));
+        }
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
