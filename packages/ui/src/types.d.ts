@@ -176,10 +176,14 @@ export interface TabState {
   canForward: boolean;
 }
 
+/** 全局历史条目（所有标签/会话共享；旧字段 index/current 仅向后兼容保留）。 */
 export interface HistoryEntry {
   url: string;
-  index: number;
-  current: boolean;
+  title?: string;
+  visitedAt?: number;
+  visitCount?: number;
+  index?: number;
+  current?: boolean;
 }
 
 export interface DownloadItem {
@@ -481,30 +485,6 @@ export interface LoopFallbackRecord {
 }
 
 /** loop:list 返回：可选 loop 列表 + 当前选择 + 回退历史。 */
-/** 插件条目（用户插件 + 内置系统条目）。 */
-export interface PluginInfo {
-  id: string;
-  name: string;
-  version: string;
-  origin: "builtin" | "local" | "market" | string;
-  builtin: boolean;
-  enabled: boolean;
-  state: "loaded" | "disabled" | "error" | "idle";
-  description?: string;
-  tools: Array<{ name: string; description?: string }>;
-  error?: string;
-}
-
-/** OpenAI 兼容 gateway 状态。 */
-export interface GatewayStatus {
-  running: boolean;
-  url: string;
-  port: number;
-  tokenRequired: boolean;
-  sessions: number;
-  error?: string;
-}
-
 /** /compact 结果。 */
 export interface CompactResult {
   ok: boolean;
@@ -628,8 +608,6 @@ export type LoopsoarEvent =
   | "ask:user"
   | "loop:changed"
   | "loop:fallback"
-  | "plugins:updated"
-  | "gateway:changed"
   | "chat:compacted";
 
 export interface LoopsoarAPI {
@@ -664,16 +642,6 @@ export interface LoopsoarAPI {
     setActive(payload: { id: string }): Promise<LoopSetActiveResult>;
     /** 重新扫描 loops/ 目录（L2 声明式 / L3 脚本）。 */
     reload(): Promise<LoopListResult>;
-  };
-  plugin: LoopsoarDomain & {
-    list(): Promise<{ plugins: PluginInfo[] }>;
-    setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; plugins?: PluginInfo[]; error?: string }>;
-    reload(): Promise<{ plugins: PluginInfo[] }>;
-  };
-  gateway: LoopsoarDomain & {
-    status(): Promise<GatewayStatus>;
-    start(): Promise<GatewayStatus & { ok: boolean; error?: string }>;
-    stop(): Promise<GatewayStatus & { ok: boolean; error?: string }>;
   };
   file: LoopsoarDomain;
   workspace: LoopsoarDomain & {

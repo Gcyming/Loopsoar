@@ -16,10 +16,6 @@ export interface ShutdownDeps {
   shutdownMcp: () => void | Promise<void>;
   /** 停止扩展宿主子进程。 */
   stopExtensions: () => void | Promise<void>;
-  /** 停止插件宿主子进程（可选）。 */
-  stopPlugins?: () => void | Promise<void>;
-  /** 关闭嵌入式 OpenAI 兼容 gateway（可选）。 */
-  stopGateway?: () => void | Promise<void>;
   /** 关闭所有持久终端会话（同步，避免退出流程再多一个等待点）。 */
   closeTerminals: () => void;
   /** 把审计队列刷盘。 */
@@ -83,8 +79,6 @@ async function runShutdown(deps: ShutdownDeps): Promise<void> {
     ["saveBrowserStates", deps.saveBrowserStates],
     ["shutdownMcp", deps.shutdownMcp],
     ["stopExtensions", deps.stopExtensions],
-    ...(deps.stopPlugins ? ([["stopPlugins", deps.stopPlugins]] as Array<[string, () => void | Promise<void>]>) : []),
-    ...(deps.stopGateway ? ([["stopGateway", deps.stopGateway]] as Array<[string, () => void | Promise<void>]>) : []),
     ["closeTerminals", deps.closeTerminals],
     ["flushAudit", deps.flushAudit],
   ];

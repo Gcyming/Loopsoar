@@ -1,14 +1,22 @@
 /**
- * 扩展运行时（子进程隔离）：加载真实 worker，注册扩展工具、调用、停止注销、崩溃隔离。
+ * 扩展运行时（子进程隔离）：加载真实 worker，注册扩展工具、调用、停止注销、崩溃隔离；
+ * 以及 fake spawn 覆盖的确定性路径（冲突 fail-closed / 超时 / 入口守卫 / env 白名单）。
  */
 import { afterAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
 import { ExtensionHost } from "../../packages/shell/src/main/extensions.ts";
-import { ExtensionRuntime } from "../../packages/shell/src/main/extensionRuntime.ts";
+import {
+  buildExtensionWorkerEnv,
+  ExtensionRuntime,
+  type ExtensionChild,
+  type ExtensionSpawn,
+} from "../../packages/shell/src/main/extensionRuntime.ts";
+import type { ExtensionToolDef } from "../../packages/core/src/extensionWorker.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workerPath = path.join(here, "../../packages/shell/src/main/extensionWorker.mjs");
@@ -131,4 +139,214 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
     expect(status.state).toBe("error");
     expect(status.error).toContain("main");
   }, 15000);
+});
+
+/* ─────────────── fake spawn：确定性覆盖冲突/超时/入口守卫/env（不依赖真实子进程） ─────────────── */
+
+interface FakeChild {
+  child: ExtensionChild;
+  stdout: PassThrough;
+  stderr: PassThrough;
+  /** runtime 写入 stdin 的原始行（同步捕获，便于断言 JSON-RPC/shutdown）。 */
+  writes: string[];
+  readonly killed: boolean;
+  emitReady(tools: ExtensionToolDef[]): void;
+  emitResult(message: { id: number; ok: boolean; content?: string; error?: string }): void;
+  emitExit(code: number | null): void;
+  emitError(message: string): void;
+}
+
+function makeFakeSpawn(): { spawn: ExtensionSpawn; children: FakeChild[] } {
+  const children: FakeChild[] = [];
+  const spawnImpl: ExtensionSpawn = () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const writes: string[] = [];
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    let killed = false;
+    const child: ExtensionChild = {
+      stdin: {
+        write(chunk: string) {
+          writes.push(String(chunk));
+          return true;
+        },
+      },
+      stdout,
+      stderr,
+      kill() {
+        killed = true;
+        return true;
+      },
+      on(event: string, listener: (...args: unknown[]) => void) {
+        const list = listeners.get(event) ?? [];
+        list.push(listener);
+        listeners.set(event, list);
+        return child;
+      },
+    };
+    const emit = (event: string, ...args: unknown[]): void => {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
+    };
+    const fake: FakeChild = {
+      child,
+      stdout,
+      stderr,
+      writes,
+      get killed() {
+        return killed;
+      },
+      emitReady: (tools) => stdout.write(`${JSON.stringify({ type: "ready", tools })}\n`),
+      emitResult: (message) => stdout.write(`${JSON.stringify({ type: "result", ...message })}\n`),
+      emitExit: (code) => emit("exit", code),
+      emitError: (message) => emit("error", new Error(message)),
+    };
+    children.push(fake);
+    return child;
+  };
+  return { spawn: spawnImpl, children };
+}
+
+function makeFakeRuntime(root: string, opts: { startTimeoutMs?: number; callTimeoutMs?: number } = {}) {
+  const registry = new ToolRegistry();
+  const host = new ExtensionHost(path.join(root, "extensions"));
+  host.scan();
+  const fake = makeFakeSpawn();
+  const runtime = new ExtensionRuntime({
+    extensions: host,
+    registry,
+    workerPath,
+    spawn: fake.spawn,
+    timeoutMs: opts.startTimeoutMs ?? 200,
+    callTimeoutMs: opts.callTimeoutMs ?? 200,
+  });
+  return { registry, host, runtime, fake };
+}
+
+function addExtensionDir(root: string, id: string, source = ""): string {
+  const dir = path.join(root, "extensions", id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "loopsoar.extension.json"),
+    JSON.stringify({ id, name: id, version: "0.1.0", main: "index.mjs" }, null, 2),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "index.mjs"), source, "utf8");
+  return dir;
+}
+
+describe("扩展运行时 · 合并插件能力后的确定性回归（fake spawn）", () => {
+  it("工具名冲突 fail-closed：不覆盖已有工具，状态里可见冲突原因，其余工具照常注册", async () => {
+    const root = makeExtension("conflict-ext", "");
+    const { registry, host, runtime, fake } = makeFakeRuntime(root);
+    registry.register({
+      name: "ext__conflict-ext__clash",
+      description: "内置占位（不可被覆盖）",
+      permissions: {},
+      schema: { safeParse: () => ({ success: true, data: {} }) } as never,
+      execute: async () => ({ ok: true, content: "original" }),
+    });
+    host.setEnabled("conflict-ext", true);
+    const started = runtime.start("conflict-ext");
+    fake.children[0].emitReady([
+      { name: "clash", description: "扩展想覆盖" },
+      { name: "extra", description: "另一个工具" },
+    ]);
+    const status = await started;
+    expect(status.state).toBe("ready");
+    expect(status.error).toContain("工具名冲突");
+    expect(registry.get("ext__conflict-ext__clash")?.description).toBe("内置占位（不可被覆盖）");
+    expect(registry.has("ext__conflict-ext__extra")).toBe(true);
+    expect(status.tools).toEqual(["ext__conflict-ext__extra"]);
+    expect(runtime.status("conflict-ext").error).toContain("工具名冲突");
+  });
+
+  it("调用超时：worker 不返回时按超时失败（不悬挂）", async () => {
+    const root = makeExtension("slow-ext", "");
+    const { registry, host, runtime, fake } = makeFakeRuntime(root, { callTimeoutMs: 30 });
+    host.setEnabled("slow-ext", true);
+    const started = runtime.start("slow-ext");
+    fake.children[0].emitReady([{ name: "slow-tool" }]);
+    await started;
+    const result = await registry.get("ext__slow-ext__slow-tool")!.execute({ agentId: "a", params: {}, platform: {} });
+    expect(result.ok).toBe(false);
+    expect(result.content).toContain("执行超时");
+  });
+
+  it("启动超时：worker 迟迟不 ready → error 状态（不悬挂）", async () => {
+    const root = makeExtension("timeout-ext", "");
+    const { host, runtime } = makeFakeRuntime(root, { startTimeoutMs: 30 });
+    host.setEnabled("timeout-ext", true);
+    const status = await runtime.start("timeout-ext");
+    expect(status.state).toBe("error");
+    expect(status.error).toContain("启动超时");
+  });
+
+  it("入口守卫：文件缺失 / 越界在起进程前拒绝；崩溃只注销自己的工具", async () => {
+    const root = makeExtension("entry-ext", "");
+    const { host, runtime } = makeFakeRuntime(root);
+    fs.rmSync(path.join(root, "extensions", "entry-ext", "index.mjs"));
+    host.setEnabled("entry-ext", true);
+    expect((await runtime.start("entry-ext")).error).toContain("入口不存在");
+
+    // 绕过 scan 直接篡改内存清单，验证运行时自己的第二道入口守卫
+    const escapeRoot = makeExtension("escape-ext", "");
+    const second = makeFakeRuntime(escapeRoot);
+    second.host.list()[0].manifest.main = "../evil.mjs";
+    expect((await second.runtime.start("escape-ext")).error).toContain("入口越界");
+
+    // 崩溃隔离：一个扩展 exit 只注销自己的工具，另一扩展继续 ready
+    const crashRoot = makeExtension("crash-a", "");
+    addExtensionDir(crashRoot, "crash-b");
+    const third = makeFakeRuntime(crashRoot);
+    third.host.scan();
+    third.host.setEnabled("crash-a", true);
+    third.host.setEnabled("crash-b", true);
+    const a = third.runtime.start("crash-a");
+    third.fake.children[0].emitReady([{ name: "tool-a" }]);
+    await a;
+    const b = third.runtime.start("crash-b");
+    third.fake.children[1].emitReady([{ name: "tool-b" }]);
+    await b;
+    third.fake.children[0].emitExit(1);
+    expect(third.runtime.status("crash-a").state).toBe("error");
+    expect(third.registry.has("ext__crash-a__tool-a")).toBe(false);
+    expect(third.runtime.status("crash-b").state).toBe("ready");
+    expect(third.registry.has("ext__crash-b__tool-b")).toBe(true);
+  });
+
+  it("停用：精确注销该扩展工具 + 发送 shutdown", async () => {
+    const root = makeExtension("stop-ext", "");
+    const { registry, host, runtime, fake } = makeFakeRuntime(root);
+    host.setEnabled("stop-ext", true);
+    const started = runtime.start("stop-ext");
+    fake.children[0].emitReady([{ name: "greet" }, { name: "bye" }]);
+    await started;
+    expect(registry.has("ext__stop-ext__greet")).toBe(true);
+
+    const status = runtime.stop("stop-ext");
+    expect(status.state).toBe("idle");
+    expect(registry.has("ext__stop-ext__greet")).toBe(false);
+    expect(registry.has("ext__stop-ext__bye")).toBe(false);
+    const shutdown = JSON.parse(fake.children[0].writes.at(-1) ?? "{}") as { type?: string };
+    expect(shutdown.type).toBe("shutdown");
+  });
+
+  it("worker env 白名单：只放行启动必需变量，不继承 API key/token", () => {
+    const env = buildExtensionWorkerEnv("demo-ext", {
+      Path: "C:/bin",
+      HOME: "/home/user",
+      TEMP: "C:/tmp",
+      API_KEY: "secret",
+      OPENAI_API_KEY: "sk-xxx",
+      AUTH_TOKEN: "token",
+    } as NodeJS.ProcessEnv);
+    expect(env.Path).toBe("C:/bin");
+    expect(env.HOME).toBe("/home/user");
+    expect(env.TEMP).toBe("C:/tmp");
+    expect(env.API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.AUTH_TOKEN).toBeUndefined();
+    expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
+    expect(env.LOOPSOAR_EXTENSION_ID).toBe("demo-ext");
+  });
 });

@@ -7,7 +7,7 @@
  *
  * 约定：
  *   · key 命名 settings.<域>.<语义>，域与分区 id 对齐（general/appearance/permissions/
- *     providers/rules/memory/extensions/plugins/mcp/gateway/storage/advanced/about）；
+ *     providers/rules/memory/extensions/mcp/storage/advanced/about）；
  *   · 通用词汇放 settings.common.*（保存/取消/删除/读取失败…），避免每个分区重复造词；
  *   · 动态文案用 {param}，由 t(lang, key, params) 插值；
  *   · zh/en 同一 entry 内成对出现，天然保证两端 key 完全对齐。
@@ -64,12 +64,8 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.nav.memory.hint": { zh: "会话记忆汇总", en: "Session memory" },
   "settings.nav.extensions.label": { zh: "扩展", en: "Extensions" },
   "settings.nav.extensions.hint": { zh: "本地插件", en: "Local extensions" },
-  "settings.nav.plugins.label": { zh: "插件", en: "Plugins" },
-  "settings.nav.plugins.hint": { zh: "内置与本地插件", en: "Builtin & local plugins" },
   "settings.nav.mcp.label": { zh: "MCP", en: "MCP" },
   "settings.nav.mcp.hint": { zh: "外部工具服务", en: "External tool servers" },
-  "settings.nav.gateway.label": { zh: "Gateway", en: "Gateway" },
-  "settings.nav.gateway.hint": { zh: "OpenAI 兼容网关", en: "OpenAI-compatible gateway" },
   "settings.nav.storage.label": { zh: "存储", en: "Storage" },
   "settings.nav.storage.hint": { zh: "文件位置", en: "File locations" },
   "settings.nav.advanced.label": { zh: "高级", en: "Advanced" },
@@ -421,13 +417,6 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Isolation: each extension runs in its own child process (8s start timeout, 20s call timeout, crashed extensions unregister their tools); tool names ext__<extension>__<tool> are registered globally and still go through the sandbox and permission checks.",
   },
 
-  /* ── 插件（面板内容由 PluginsPanel 负责）── */
-  "settings.plugins.head": { zh: "插件", en: "Plugins" },
-  "settings.plugins.headHint": {
-    zh: "插件系统统一管理内置条目与本地插件；停用后工具立即注销，重新扫描即时生效。",
-    en: "The plugin system manages builtin entries and local plugins together; disabling one unregisters its tools immediately and rescanning applies at once.",
-  },
-
   /* ── 技能 ── */
   "settings.skills.head": { zh: "技能（Skills）", en: "Skills" },
   "settings.skills.headHint": {
@@ -488,36 +477,6 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     zh: "隔离：MCP 独立配置（mcp.json）与独立通道；工具调用仍走沙箱与权限确认（声明 network）。",
     en: "Isolation: MCP uses its own config (mcp.json) and channel; tool calls still go through the sandbox and permission checks (declares network).",
   },
-
-  /* ── Gateway ── */
-  "settings.gateway.head": { zh: "Gateway（OpenAI 兼容）", en: "Gateway (OpenAI compatible)" },
-  "settings.gateway.headHint": {
-    zh: "在本机暴露 OpenAI 兼容接口，供外部客户端复用同一套模型与工具配置。",
-    en: "Exposes an OpenAI-compatible endpoint on this machine so external clients can reuse the same model and tool setup.",
-  },
-  "settings.gateway.running": { zh: "运行中", en: "Running" },
-  "settings.gateway.stopped": { zh: "已停止", en: "Stopped" },
-  "settings.gateway.url": { zh: "地址", en: "URL" },
-  "settings.gateway.port": { zh: "端口", en: "Port" },
-  "settings.gateway.tokenRequired": { zh: "需要令牌", en: "Token required" },
-  "settings.gateway.yes": { zh: "是", en: "Yes" },
-  "settings.gateway.no": { zh: "否", en: "No" },
-  "settings.gateway.sessions": { zh: "活动会话 {count}", en: "{count} active sessions" },
-  "settings.gateway.start": { zh: "启动 Gateway", en: "Start gateway" },
-  "settings.gateway.stop": { zh: "停止 Gateway", en: "Stop gateway" },
-  "settings.gateway.starting": { zh: "启动中…", en: "Starting…" },
-  "settings.gateway.stopping": { zh: "停止中…", en: "Stopping…" },
-  "settings.gateway.unavailable": {
-    zh: "Gateway 不可用（shell 未装配 gateway 域）",
-    en: "Gateway unavailable (the shell does not expose the gateway domain)",
-  },
-  "settings.gateway.note": {
-    zh: "令牌在供应商配置外的安全设置中维护；外部客户端需带 Authorization: Bearer <token>。",
-    en: "The token is kept in the security settings; external clients must send Authorization: Bearer <token>.",
-  },
-  "settings.gateway.started": { zh: "Gateway 已启动", en: "Gateway started" },
-  "settings.gateway.stoppedNotice": { zh: "Gateway 已停止", en: "Gateway stopped" },
-  "settings.gateway.actionFailed": { zh: "操作失败：{error}", en: "Action failed: {error}" },
 
   /* ── 存储 ── */
   "settings.storage.head": { zh: "存储 / 文件位置", en: "Storage / file locations" },

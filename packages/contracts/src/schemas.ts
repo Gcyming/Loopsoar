@@ -191,13 +191,6 @@ export const AskRespondSchema = z.object({
 
 export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 
-/* ───────────────────────── 插件（ADR-0011 产品化） ───────────────────────── */
-
-export const PluginSetEnabledSchema = z.object({
-  id: z.string().min(1).max(64).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "插件 id 不合法"),
-  enabled: z.boolean(),
-});
-
 /* ───────────────────────── 会话压缩（/compact） ───────────────────────── */
 
 export const ChatCompactSchema = z.object({
@@ -934,46 +927,6 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     sensitive: true,
   },
 
-  /* ── 插件（ADR-0011 产品化） ── */
-  "plugin:list": {
-    domain: "plugin",
-    method: "list",
-    request: null,
-    sensitive: true,
-  },
-  "plugin:setEnabled": {
-    domain: "plugin",
-    method: "setEnabled",
-    request: PluginSetEnabledSchema,
-    sensitive: true,
-  },
-  "plugin:reload": {
-    domain: "plugin",
-    method: "reload",
-    request: null,
-    sensitive: true,
-  },
-
-  /* ── OpenAI 兼容 gateway（嵌入式启停） ── */
-  "gateway:status": {
-    domain: "gateway",
-    method: "status",
-    request: null,
-    sensitive: true,
-  },
-  "gateway:start": {
-    domain: "gateway",
-    method: "start",
-    request: null,
-    sensitive: true,
-  },
-  "gateway:stop": {
-    domain: "gateway",
-    method: "stop",
-    request: null,
-    sensitive: true,
-  },
-
   /* ── 会话压缩（/compact，真实压缩持久化） ── */
   "chat:compact": {
     domain: "chat",
@@ -1064,8 +1017,6 @@ export const EVENTS = [
   "ask:user",
   "loop:fallback",
   "loop:changed",
-  "plugins:updated",
-  "gateway:changed",
   "chat:compacted",
 ] as const;
 

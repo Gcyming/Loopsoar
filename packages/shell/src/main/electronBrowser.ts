@@ -8,7 +8,7 @@ import path from "node:path";
 import { lookup } from "node:dns/promises";
 import { app, BrowserWindow, session, shell, WebContentsView } from "electron";
 import { SESSION_PARTITION } from "../shared/brand.js";
-import { BrowserHost, type HostView, type PersistedBrowserState } from "./browserHost.js";
+import { BrowserHost, type BrowserVisit, type HostView, type PersistedBrowserState } from "./browserHost.js";
 import {
   browserRequestHost,
   createBrowserRequestChecker,
@@ -24,6 +24,10 @@ export interface ElectronBrowserHostOptions {
   allowLoopback?: boolean;
   /** 广告/追踪拦截开关（读偏好 adBlockEnabled；缺省 true，即未注入也默认开启）。 */
   isAdBlockEnabled?: () => boolean;
+  /** 成功访问 → 全局历史（跨标签/跨会话共享；由 index.ts 接到 BrowserHistoryStore）。 */
+  onVisited?: (visit: BrowserVisit) => void;
+  /** 页面标题迟到 → 刷新全局历史里同 URL 条目的标题（不新增访问）。 */
+  onTitleChanged?: (url: string, title: string) => void;
 }
 
 /** 默认 DNS 解析：只把地址交给守卫，解析失败返回空数组（守卫按 fail-closed 拦截）。 */
@@ -129,6 +133,8 @@ export function createElectronBrowserHost(
   return new BrowserHost({
     initialSessionId: options.initialSessionId,
     onSessionStateChanged: options.onSessionStateChanged,
+    onVisited: options.onVisited,
+    onTitleChanged: options.onTitleChanged,
     createView: () => {
       const view = new WebContentsView({
         webPreferences: {

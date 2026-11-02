@@ -32,6 +32,7 @@ import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createElectronBrowserHost, DownloadsBridge } from "./electronBrowser.js";
 import { withProviderDefaults } from "./providerDefaults.js";
 import type { BrowserHost } from "./browserHost.js";
+import { BrowserHistoryStore } from "./browserHistoryStore.js";
 import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
@@ -77,11 +78,6 @@ import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
-import { registerPluginDomain } from "./domains/plugin.js";
-import { registerGatewayDomain } from "./domains/gateway.js";
-import { PluginStore } from "./pluginStore.js";
-import { PluginRuntime, resolvePluginWorkerPath } from "./pluginRuntime.js";
-import { createGatewayRuntime, type GatewayRuntime } from "./gatewayRuntime.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
@@ -568,19 +564,6 @@ app.whenReady().then(async () => {
   sandbox.setWorkspaceRoot(process.cwd());
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
-  // 插件宿主（ADR-0011 产品化）：默认停用第三方代码；启用项在窗口就绪后异步启动。
-  // onToolsChanged 把插件工具同步进沙箱「已知工具」表（否则未知工具会按最高权限处理）。
-  const plugins = new PluginStore(dirs.dataDir);
-  const pluginRuntime = new PluginRuntime({
-    plugins,
-    registry,
-    workerPath: resolvePluginWorkerPath(__dirname),
-    onUpdate: (id, status) => pushToRenderer("plugins:updated", { action: "status", id, status }),
-    onToolsChanged: () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
-  });
-  // gateway 运行时惰性创建（点设置里的「启动」才装配/监听），退出时 dispose 关闭连接。
-  let gatewayRuntimeRef: GatewayRuntime | null = null;
-
   // 偏好（工作区根 / 记忆库位置 / 自动记忆开关）→ 决定后续装配
   const initialPrefs = loadPreferences(dirs.configDir);
   let workspaceRoot = initialPrefs.workspaceRoot?.trim() || process.cwd();
@@ -903,6 +886,9 @@ app.whenReady().then(async () => {
       }, 400),
     );
   };
+  // 全局浏览器历史（跨标签/跨会话共享）：持久化 <dataDir>/browser-history.json；
+  // 上限 500、按 URL 去重合并；每次成功访问即原子落盘（退出前无需额外 flush）。
+  const browserHistory = new BrowserHistoryStore(path.join(dirs.dataDir, "browser-history.json"));
   browserHost = createElectronBrowserHost(
     () => mainWindow,
     (url) => {
@@ -913,6 +899,14 @@ app.whenReady().then(async () => {
     {
       initialSessionId,
       onSessionStateChanged: queueBrowserStateSave,
+      // 成功访问（应用内导航/网页内跳转/新标签首屏）→ 追加全局历史
+      onVisited: (visit) => {
+        browserHistory.record(visit);
+      },
+      // 标题迟到 → 刷新同 URL 条目标题（不新增访问）
+      onTitleChanged: (url, title) => {
+        browserHistory.updateTitle(url, title);
+      },
       // 广告/追踪拦截开关跟随偏好（默认开；设置里改动即时生效）
       isAdBlockEnabled: () => loadPreferences(dirs.configDir).adBlockEnabled ?? true,
     },
@@ -1033,21 +1027,8 @@ app.whenReady().then(async () => {
     },
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
-  registerBrowserDomain({ ...deps, browser: browserHost, downloads });
+  registerBrowserDomain({ ...deps, browser: browserHost, downloads, history: browserHistory });
   registerTerminalDomain(deps, terminals);
-  // 插件域：plugin:list / setEnabled / reload（工具桥接已在 PluginRuntime 内完成）
-  registerPluginDomain({ ...deps, plugins, runtime: pluginRuntime, push: pushToRenderer });
-  // OpenAI 兼容 gateway 域：只监听 127.0.0.1；status/start/stop + gateway:changed
-  registerGatewayDomain({ ...deps, push: pushToRenderer, env: process.env }, async () => {
-    const runtime = await createGatewayRuntime({
-      dataDir: dirs.dataDir,
-      configDir: dirs.configDir,
-      getPlatform: () => platform,
-      env: process.env,
-    });
-    gatewayRuntimeRef = runtime;
-    return runtime;
-  });
   registerLoopDomain(deps, loopRuntime);
   registerAskDomain(deps, askBus);
   // /compact：真实压缩并写回持久化（预览/应用由 UI 决定；生成中拒绝，避免与落盘竞态）
@@ -1080,10 +1061,6 @@ app.whenReady().then(async () => {
   // 异步启动已启用扩展（失败互相隔离，不阻塞主窗口）
   setTimeout(() => {
     void extensionRuntime.startEnabled().catch(() => undefined);
-    // 插件启用项：延后启动，不抢窗口首帧；单个插件失败只影响自身状态
-    setTimeout(() => {
-      void pluginRuntime.startEnabled().catch(() => undefined);
-    }, 600);
   }, 500);
 
   registerExtensionsDomain({
@@ -1141,8 +1118,6 @@ app.whenReady().then(async () => {
     saveBrowserStates: saveAllBrowserStates,
     shutdownMcp: () => mcp.shutdown(),
     stopExtensions: () => extensionRuntime.stopAll(),
-    stopPlugins: () => pluginRuntime.stopAll(),
-    stopGateway: () => gatewayRuntimeRef?.dispose(),
     closeTerminals: () => {
       terminals.closeAll();
       askBus.clearAll("应用退出，按取消处理");

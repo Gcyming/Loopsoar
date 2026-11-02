@@ -66,6 +66,17 @@ export class ExtensionHost {
             skipped.push({ dir: full, reason: `扩展 id 重复（${manifest.id}），已忽略` });
             continue;
           }
+          // 入口路径守卫：main 只能是扩展目录内的相对路径（防 `../` / 绝对路径把任意文件当扩展执行）；
+          // worker 侧还有一层同样的校验，这里提前跳过并记录原因（坏扩展不进入列表）。
+          const main = manifest.main?.trim();
+          if (main) {
+            const root = path.resolve(full);
+            const entry = path.resolve(root, main);
+            if (path.isAbsolute(main) || (entry !== root && !entry.startsWith(root + path.sep))) {
+              skipped.push({ dir: full, reason: "main 入口必须是扩展目录内的相对路径（不允许绝对路径 / .. 穿越）" });
+              continue;
+            }
+          }
           seen.add(manifest.id);
           const enabled = state.enabled[manifest.id] ?? false;
           const installedAt = state.installedAt[manifest.id] ?? Date.now();

@@ -39,6 +39,13 @@ export interface BrowserHostDeps {
   onTabsChanged?: (tabs: TabState[]) => void;
   /** 任一会话的标签状态变化（持久化用）；index 侧做防抖落盘。 */
   onSessionStateChanged?: (sessionId: string, state: PersistedBrowserState) => void;
+  /**
+   * 成功访问（应用内导航 / 网页内跳转 / 新标签首个页面）。壳层据此追加**全局历史**：
+   * 历史面板跨标签/跨会话共享，与标签内部的后退/前进栈互不影响。
+   */
+  onVisited?: (visit: BrowserVisit) => void;
+  /** 页面标题变化：壳层用它刷新全局历史里同 URL 条目的标题（不新增访问）。 */
+  onTitleChanged?: (url: string, title: string) => void;
   /** 网页请求新窗口时由宿主转为新标签。 */
   openInNewTab?: (url: string) => void;
   /** 初始会话（默认 default）。 */
@@ -52,6 +59,15 @@ export interface TabState {
   active: boolean;
   canBack: boolean;
   canForward: boolean;
+}
+
+/** 一次成功访问（供壳层追加「全局历史」；与标签内部后退/前进栈无关）。 */
+export interface BrowserVisit {
+  url: string;
+  /** 访问当下已知的页面标题（可能缺省：网页内跳转时标题还没回来）。 */
+  title?: string;
+  sessionId: string;
+  tabId: string;
 }
 
 interface TabEntry {
@@ -126,6 +142,8 @@ export class BrowserHost {
           entry.history.push(url);
           entry.index = entry.history.length - 1;
         }
+        // 网页内点击/重定向/SPA 路由也是一次真实访问 → 追加全局历史（标题可能稍后由 onTitle 补）
+        this.deps.onVisited?.({ url, sessionId, tabId: id });
         this.emitTabs(sessionId);
       },
       onTitle: (title: string): void => {
@@ -134,6 +152,8 @@ export class BrowserHost {
         const next = title.trim().slice(0, 80) || this.hostnameOf(entry.url);
         if (next === entry.title) return;
         entry.title = next;
+        // 标题迟到：刷新全局历史里同 URL 的标题，不新增访问、不改变排序
+        if (entry.url) this.deps.onTitleChanged?.(entry.url, next);
         this.emitTabs(sessionId);
       },
     });
@@ -295,6 +315,8 @@ export class BrowserHost {
       } catch {
         entry.title = this.hostnameOf(result.url);
       }
+      // 应用内导航成功（含后退/前进/刷新）→ 追加全局历史；同 URL 由 store 去重合并（不重复占位）
+      this.deps.onVisited?.({ url: result.url, title: entry.title, sessionId: sid, tabId: id });
       this.emitTabs(sid);
       return { ok: true, url: result.url, tabId: id };
     } catch (err) {

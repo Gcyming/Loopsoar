@@ -12,8 +12,7 @@
 |---|---|---|
 | `loopsoar-contracts` | 契约单源（schema / security-policy / 生成器） | S2 |
 | `loopsoar-core` | 纯逻辑引擎（零 electron 依赖） | S3 / S4 |
-| `loopsoar-services` | 域服务（chat / engine / gateway 包装） | S5 |
-| `loopsoar-gateway` | OpenAI 兼容 HTTP 网关（Fastify） | S5 |
+| `loopsoar-services` | 域服务（chat / engine / 工具循环） | S5 |
 | `loopsoar-shell` | Electron 壳（反 God file，域拆分） | S6 |
 | `loopsoar-ui` | React 19 渲染层（Vite 构建） | S7 |
 | `loopsoar-sidecar` | 二进制侧车打包装配（P9 实现） | S1 |
@@ -58,6 +57,6 @@ pnpm test
 ## 边界
 
 - S1 只写 ROOT 根文件（本目录）、`docs/` 复制、`packages/sidecar/` 占位。
-- 禁止写 `packages/contracts`、`packages/core`、`packages/services`、`packages/gateway`、`packages/shell`、`packages/ui`、`tests/`（由对应子代理执行）。
+- 禁止写 `packages/contracts`、`packages/core`、`packages/services`、`packages/shell`、`packages/ui`、`tests/`（由对应子代理执行）。
 - S1 不运行 `pnpm install`、不执行构建/测试（统一由 S8 完成）。
 - `git init` 已在 ROOT 执行（无 commit，由 S8 统一提交）。

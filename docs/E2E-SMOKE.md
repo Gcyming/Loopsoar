@@ -117,6 +117,16 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 
 > E2E 辅助环境变量新增：`LOOPSOAR_E2E_CLICK_GAP_MS`（多步点击间隔，默认 500ms；终端配置档探测等异步内容建议 2500）。
 
+## 9. 2026-11-03 整理轮真机验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 顶部网址栏新布局（左：后退/前进/刷新；地址栏内收藏星标；右：快照+更多） | ✅ 历史记录图标已移除，其余按钮进「更多」 | `e2e-round4-more-menu.png` |
+| 「更多」菜单（历史记录/下载/收藏夹/保存页面/设置）且**浮于网页之上不被遮挡** | ✅ 原生 WebContentsView 在浮层打开时隐藏 | `e2e-round4-more-menu.png` |
+| 全局历史记录（跨会话；标题显示） | ✅ 面板可见 3 条（当前页/示例站点 A/B），与当前会话无关 | `e2e-round4-global-history.png` |
+| 插件与扩展合并后：设置仅「扩展」一个分区 | ✅（分区 12 个，无「插件」） | 设置截图 |
+| Gateway 已彻底删除 | ✅ 包/通道/分区/菜单均不存在；守卫断言防复活 | `tests/guards/project-isolation.spec.ts` |
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

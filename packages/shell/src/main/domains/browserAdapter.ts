@@ -4,11 +4,14 @@
  */
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { BrowserHost } from "../browserHost.js";
+import type { BrowserHistoryStore } from "../browserHistoryStore.js";
 import type { DownloadsBridge } from "../electronBrowser.js";
 
 export interface BrowserDeps extends TrustedIpcDeps {
   browser?: BrowserHost;
   downloads?: DownloadsBridge;
+  /** 全局历史（跨标签/跨会话共享，持久化）；未装配时 browser:history 返回空列表。 */
+  history?: BrowserHistoryStore;
 }
 
 export function registerBrowserDomain(deps: BrowserDeps): void {
@@ -67,8 +70,11 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     return deps.browser.reload((payload as { tabId?: string } | null)?.tabId);
   });
 
+  // 全局历史（跨标签/跨会话共享，持久化）：历史面板的唯一数据源。
+  // 兼容字段 `tab`：当前标签的内部历史栈（后退/前进语义），旧调用方/诊断仍可用，但不再作为面板数据源。
   handleTrusted(deps, "browser:history", (payload) => ({
-    entries: deps.browser?.history((payload as { tabId?: string } | null)?.tabId) ?? [],
+    entries: deps.history?.list() ?? [],
+    tab: deps.browser?.history((payload as { tabId?: string } | null)?.tabId) ?? [],
   }));
 
   // 下载管理（electron 会话级 will-download → DownloadsBridge）

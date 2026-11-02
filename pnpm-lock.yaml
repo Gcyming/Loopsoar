@@ -70,25 +70,6 @@ importers:
         specifier: ^3.23
         version: 3.23.0
 
-  packages/gateway:
-    dependencies:
-      '@fastify/cors':
-        specifier: ^10
-        version: 10.0.0
-      fastify:
-        specifier: ^5
-        version: 5.12.7
-      loopsoar-services:
-        specifier: workspace:*
-        version: link:../services
-    devDependencies:
-      '@types/node':
-        specifier: ^24
-        version: 24.19.2
-      typescript:
-        specifier: ^5.6
-        version: 5.6.2
-
   packages/services:
     dependencies:
       loopsoar-contracts:
@@ -116,9 +97,6 @@ importers:
       loopsoar-core:
         specifier: workspace:*
         version: link:../core
-      loopsoar-gateway:
-        specifier: workspace:*
-        version: link:../gateway
       loopsoar-services:
         specifier: workspace:*
         version: link:../services

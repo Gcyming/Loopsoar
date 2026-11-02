@@ -135,6 +135,8 @@ export default function App(): React.JSX.Element {
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  // 浏览器工具栏浮层（更多/收藏夹/历史/下载）打开：需隐藏原生 WebContentsView，否则菜单被网页遮挡
+  const [chromeOverlayOpen, setChromeOverlayOpen] = useState(false);
   // 页面快照面板：null=关闭；非空时隐藏原生浏览器视图并渲染可读浮层
   const [snapshotData, setSnapshotData] = useState<BrowserSnapshotResult | null>(null);
   const [sessionOpen, setSessionOpen] = useState(false);
@@ -934,12 +936,12 @@ export default function App(): React.JSX.Element {
   // 修复遮挡：应用内浮层（设置 / 工作区 / 快照面板 / 首次向导）打开时隐藏原生 WebContentsView
   useEffect(() => {
     if (!api) return;
-    const overlay = settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen;
+    const overlay = settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen || chromeOverlayOpen;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
     return () => {
       void api.browser.setOverlay({ open: false }).catch(() => {});
     };
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromeOverlayOpen]);
 
   // 语言：偏好（启动加载 / 设置里修改）同步到 i18n store；已接入 i18n 的组件即时重渲染
   useEffect(() => {
@@ -995,6 +997,7 @@ export default function App(): React.JSX.Element {
         downloadsOpen={downloadsOpen}
         downloadsActive={downloads.some((d) => d.state === "progressing")}
         historyPanel={<HistoryPanel entries={historyEntries} onSelect={selectHistory} />}
+        onOverlayChange={setChromeOverlayOpen}
         downloadsPanel={<DownloadsPanel downloads={downloads} api={api} onRefresh={refreshDownloads} />}
         onAddressChange={setAddress}
         onNavigate={() => navigate()}

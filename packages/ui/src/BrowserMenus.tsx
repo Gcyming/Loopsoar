@@ -1,6 +1,6 @@
 /**
  * 浏览器顶栏的两个下拉面板（从 App 抽出，纯展示 + 回调注入）：
- *   · HistoryPanel —— 当前标签的历史记录（点击交给 App 导航并收起浮层）；
+ *   · HistoryPanel —— 全局历史记录（所有标签/会话共享；点击交给 App 导航并收起浮层）；
  *   · DownloadsPanel —— 下载列表与操作（取消/打开/打开所在文件夹/移除记录）。
  *
  * 浮层的锚定与开合由 BrowserChrome / AnchoredPopover 负责，这里只画内容。
@@ -39,7 +39,7 @@ export interface HistoryPanelProps {
   onSelect: (url: string) => void;
 }
 
-/** 历史记录（本标签）：点击条目由 App 负责导航并收起浮层。 */
+/** 历史记录（全局）：点击条目由 App 负责导航并收起浮层。 */
 export function HistoryPanel({ entries, onSelect }: HistoryPanelProps): React.JSX.Element {
   const tr = useT();
   return (
@@ -50,14 +50,15 @@ export function HistoryPanel({ entries, onSelect }: HistoryPanelProps): React.JS
       ) : (
         entries.map((h) => (
           <button
-            key={`${h.index}-${h.url}`}
+            key={`${h.visitedAt ?? 0}-${h.url}`}
             type="button"
             className="model-item"
             style={{ ...menuStyles.dropItem, ...(h.current ? menuStyles.dropItemActive : {}) }}
             onClick={() => onSelect(h.url)}
-            title={h.url}
+            title={`${h.title ? `${h.title}
+` : ""}${h.url}${h.visitCount && h.visitCount > 1 ? ` · ${tr("browser.historyVisits", { count: String(h.visitCount) })}` : ""}`}
           >
-            {h.url}
+            {h.title?.trim() ? h.title : h.url}
           </button>
         ))
       )}

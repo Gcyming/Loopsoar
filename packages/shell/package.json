@@ -12,7 +12,6 @@
     "better-sqlite3": "^13.0.3",
     "loopsoar-contracts": "workspace:*",
     "loopsoar-core": "workspace:*",
-    "loopsoar-gateway": "workspace:*",
     "loopsoar-services": "workspace:*",
     "sqlite-vec": "^0.1.9",
     "zod": "^3.23.0"

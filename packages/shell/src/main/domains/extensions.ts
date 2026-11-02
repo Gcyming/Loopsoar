@@ -1,6 +1,6 @@
 /**
  * extensions 域：「万物皆插件」的本地扩展管理（发现/启停/卸载）。
- * 只暴露安全操作；扩展的运行时加载由 core/plugin + 后续 ext-loader 承担。
+ * 只暴露安全操作；扩展的运行时加载由 extensionRuntime.ts（子进程 worker）承担。
  */
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { ExtensionHost } from "../extensions.js";

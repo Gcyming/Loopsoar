@@ -335,6 +335,15 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **质量**：浏览器桥行为级用例（preload vm 沙箱/window.open handler/IPC 冒用/CDP 全仓断言）、品牌/webview/主题/popover 缺失测试、/compact 15 用例、插件 27 用例、gateway 29 用例、loop 39 用例、敏感步骤 44 用例
 - 验证基线：**typecheck 6/6、gen/check 逐字节一致、build 6/6、vitest 133 文件 / 1106 tests 全绿**
 
+## 二·三十三、2026-11-03 第三十次增量（用户反馈整理：扩展合并 / 网关删除 / 顶部精简 / 全局历史）
+- **插件合并进扩展（去重）**：用户裁决「扩展与插件是同一概念」。核实两者链路完全同构（目录扫描→清单校验→启停持久化→独立子进程→JSON-RPC 工具桥接→registry），且扩展侧已是功能超集（设置面板/通道/i18n/工具权限/测试更完整）→ **删除插件子系统 8 个文件 + core plugin kernel + 3 个测试 + 契约 3 通道/1 事件 + UI 面板/i18n 40 key**；把插件独有能力并入扩展：worker **env 白名单**（不继承 API key/token）、工具名冲突 **fail-closed 且状态可见**、**入口越界/缺失双层守卫（扫描+运行时）**、callTimeoutMs/spawn 可注入。工具命名统一 `ext__<id>__<tool>`。结论：**不冲突，是重复建设，合并后无功能损失**（唯一差异 builtin 系统根在插件中从无数据来源，不构成回退）
+- **Gateway 子系统整条删除**：用户判断为 slime 遗留测试项、在 Loopsoar 无实质作用。删除 `packages/gateway` 整包、shell `gatewayRuntime/domains/gateway`、`gateway:*` 3 通道 + `gateway:changed` 事件、`services/gateway.ts` 死模块、设置分区、测试、依赖/打包脚本/守卫引用；README/ISOLATION 同步；新增守卫断言「Gateway 不得复活」
+- **顶部网址栏精简**：左侧只保留 后退/前进/刷新；**移除地址栏左侧历史记录图标**；地址栏内保留收藏星标；右侧只保留 **快照 + 更多(⋯)**；下载/保存页面/设置/收藏夹/历史记录全部收进「更多」菜单（键盘可达、Esc/点外关闭、焦点管理、aria 完整）
+- **浮层遮挡修复**：新增 `chromeOverlayOpen`——浏览器工具栏任一浮层（更多/收藏夹/历史/下载）打开时隐藏原生 WebContentsView，菜单不再被网页覆盖（关闭通知 150ms 合并防闪烁）
+- **历史记录改全局**：新增 `browserHistoryStore`（`<dataDir>/browser-history.json`，上限 500、同 URL 去重合并 visitCount/标题回填、原子写、损坏留证容错），跨标签/跨会话共享；后退/前进仍按标签栈；历史面板显示全局条目（标题优先、访问次数 tooltip）；零契约变更
+- 真机 E2E：更多菜单浮于网页之上、全局历史面板跨会话显示 3 条（含标题）、顶部新布局截图
+- 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5（gateway 已删）、vitest 126 文件 / 1062 tests 全绿、bundle 711KB**
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

@@ -11,8 +11,7 @@
     ".": "./src/index.ts",
     "./events": "./src/events.ts",
     "./chat": "./src/chat.ts",
-    "./engine": "./src/engine.ts",
-    "./gateway": "./src/gateway.ts"
+    "./engine": "./src/engine.ts"
   },
   "dependencies": {
     "loopsoar-core": "workspace:*",

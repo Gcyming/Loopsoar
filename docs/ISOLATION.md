@@ -16,7 +16,6 @@
 
 | 用途 | Loopsoar | slime（避免冲突） |
 |---|---|---|
-| OpenAI 兼容网关 | **19210**（`LOOPSOAR_GATEWAY_PORT` 可覆盖） | 19110 / 19000 |
 | 嵌入服务（llama-server embeddings） | **8991**（`createNodePlatform({ embedBaseUrl })` 可覆盖） | 8999 |
 | 本地 chat 模型服务 | 由 `model_server` 动态分配时避开上述两端口区间 | 18082 + 100 区间 |
 
@@ -36,13 +35,13 @@
 ## 4. 进程与子代理隔离
 
 - 子代理 `cwd` 一律为 `D:\tool\AI\real-project\Loopsoar\Parent file`，禁止写 `D:\pilot project` 下任何文件（只读参考需显式说明）。
-- Loopsoar 的 Electron 进程、llama-server、gateway 进程各自命名（`loopsoar-*`），不 kill 非本项目的进程。
+- Loopsoar 的 Electron 进程、llama-server 进程各自命名（`loopsoar-*`），不 kill 非本项目的进程。
 - 沙箱工作目录默认 `process.cwd()`（Loopsoar 仓库根），越界写默认拒绝（fail-closed）。
 
 ## 5. 守卫（CI 必跑）
 
 `tests/guards/project-isolation.spec.ts` 断言：
 1. 源码无 `pilot`/`slime` 模块导入、无旧仓库绝对路径；
-2. gateway 默认端口 ≠ slime 端口且 = 19210；
-3. embed 默认端口 ≠ 8999 且 = 8991；
-4. shell 启动代码把 `userData` 显式落到 `DATA_DIR_NAME`（loopsoar）。
+2. embed 默认端口 ≠ 8999 且 = 8991；
+3. shell 启动代码把 `userData` 显式落到 `DATA_DIR_NAME`（loopsoar）；
+4. 已删除的 Gateway 子系统不得复活（目录/源码/通道均不存在）。

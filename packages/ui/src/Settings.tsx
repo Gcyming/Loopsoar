@@ -7,17 +7,16 @@ import {
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { Icon } from "./Icon.js";
-import PluginsPanel from "./PluginsPanel.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
 import type {
-  AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, GatewayStatus, InstalledExtension, LocationsInfo, LoopInfo,
+  AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
   LoopListResult, LoopsoarAPI, McpServerInfo, MemoryListResult, PermissionCategory, PermissionsState, Preferences,
   ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
 /**
- * 设置面板：通用 / 外观 / 权限（含安全）/ 供应商 / 规则 / 技能 / 记忆 / 扩展 / 插件 / MCP /
- * Gateway / 存储 / 高级 / 关于。
+ * 设置面板：通用 / 外观 / 权限（含安全）/ 供应商 / 规则 / 技能 / 记忆 / 扩展 / MCP /
+ * 存储 / 高级 / 关于。
  * 全部数据经 preload 白名单；规则与记忆在保存后即时生效（主进程惰性读取）。
  *
  * i18n：界面文案全部走 `tr("settings.*")`，词典在 i18nSettings.ts（zh/en 成对）；
@@ -36,9 +35,7 @@ type SectionId =
   | "skills"
   | "memory"
   | "extensions"
-  | "plugins"
   | "mcp"
-  | "gateway"
   | "storage"
   | "advanced"
   | "about";
@@ -53,9 +50,7 @@ const SECTIONS: { id: SectionId; icon: string; group: "basic" | "capability" | "
   { id: "skills", group: "capability", icon: "bulb" },
   { id: "memory", group: "capability", icon: "notes" },
   { id: "extensions", group: "capability", icon: "puzzle" },
-  { id: "plugins", group: "capability", icon: "puzzle" },
   { id: "mcp", group: "capability", icon: "terminal" },
-  { id: "gateway", group: "capability", icon: "home" },
   { id: "storage", group: "data", icon: "folders" },
   { id: "advanced", group: "data", icon: "terminal" },
   { id: "about", group: "other", icon: "bulb" },
@@ -134,9 +129,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [loopBusy, setLoopBusy] = useState(false);
   /** 最近一次安全回退（有则显示在 Agent Loop 行下方；ADR-0010：回退可见）。 */
   const latestLoopFallback = loopInfo && loopInfo.fallbacks.length > 0 ? loopInfo.fallbacks[loopInfo.fallbacks.length - 1] : null;
-  /** OpenAI 兼容 gateway：状态 + 启停忙碌标记（F6 新增分区）。 */
-  const [gateway, setGateway] = useState<GatewayStatus | null>(null);
-  const [gatewayBusy, setGatewayBusy] = useState(false);
 
   const ok = useCallback((text: string) => setNotice({ kind: "ok", text }), []);
   /** 供应商变更广播：主界面据此刷新模型 chip / 模型列表 */
@@ -155,12 +147,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api) { setLoading(false); return; }
     void (async () => {
       try {
-        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc, gw] = await Promise.allSettled([
+        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc] = await Promise.allSettled([
           api.settings.getPreferences(), api.settings.getPermissions(), api.settings.getProvider(),
           api.settings.getRules(), api.settings.diagnostics(), api.settings.about(), api.memory.list(),
           api.settings.listProviders(), api.extensions.list(), api.skills.list(), api.mcp.list(),
-          // gateway 域可能未被旧 shell 装配：先判空，避免同步抛错打断整批启动请求
-          api.gateway ? api.gateway.status() : Promise.reject(new Error("gateway domain unavailable")),
         ]);
         if (p.status === "fulfilled") { setPrefs(p.value.preferences); setLocations(p.value.locations); }
         if (pm.status === "fulfilled") setPerms(pm.value);
@@ -190,8 +180,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setMcpServers(mc.value.servers);
           setMcpConfigPath(mc.value.configPath);
         }
-        // gateway 域可能未被旧 shell 装配：拒绝时保持 null，分区显示「不可用」
-        if (gw.status === "fulfilled") setGateway(gw.value);
       } catch (e) { bad(e); } finally { setLoading(false); }
     })();
   }, [api, applyRules, bad]);
@@ -222,63 +210,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     });
     return off;
   }, [api]);
-
-  /* ── Gateway：状态刷新 + gateway:changed 事件同步 ── */
-  const refreshGateway = useCallback(async (): Promise<void> => {
-    if (!api) return;
-    try {
-      setGateway(await api.gateway.status());
-    } catch {
-      // 旧 shell 未装配 gateway 域：分区显示「不可用」，不影响其他分区
-      setGateway(null);
-    }
-  }, [api]);
-
-  useEffect(() => {
-    void refreshGateway();
-  }, [refreshGateway]);
-
-  useEffect(() => {
-    if (!api) return;
-    try {
-      return api.on("gateway:changed", () => {
-        void refreshGateway();
-      });
-    } catch {
-      // 旧 shell 事件白名单未含 gateway:changed：静默降级
-      return undefined;
-    }
-  }, [api, refreshGateway]);
-
-  const startGateway = useCallback(async (): Promise<void> => {
-    if (!api || gatewayBusy) return;
-    setGatewayBusy(true);
-    try {
-      const result = await api.gateway.start();
-      setGateway(result);
-      if (!result.ok) bad(result.error ?? tr("settings.gateway.actionFailed", { error: tr("settings.unknown") }));
-      else ok(tr("settings.gateway.started"));
-    } catch (e) {
-      bad(e);
-    } finally {
-      setGatewayBusy(false);
-    }
-  }, [api, gatewayBusy, ok, bad, tr]);
-
-  const stopGateway = useCallback(async (): Promise<void> => {
-    if (!api || gatewayBusy) return;
-    setGatewayBusy(true);
-    try {
-      const result = await api.gateway.stop();
-      setGateway(result);
-      if (!result.ok) bad(result.error ?? tr("settings.gateway.actionFailed", { error: tr("settings.unknown") }));
-      else ok(tr("settings.gateway.stoppedNotice"));
-    } catch (e) {
-      bad(e);
-    } finally {
-      setGatewayBusy(false);
-    }
-  }, [api, gatewayBusy, ok, bad, tr]);
 
   /* ── Agent-Loop：打开设置时拉取；loop:changed / loop:fallback 事件同步刷新并提示 ── */
   const refreshLoops = useCallback(async (): Promise<void> => {
@@ -683,54 +614,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <SaveBtn onClick={savePerms} label={tr("settings.permissions.save")} />
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
       }
-
-      case "plugins":
-        return (
-          <div>
-            <Head t={tr("settings.plugins.head")} h={tr("settings.plugins.headHint")} />
-            <PluginsPanel api={api} onNotice={(text) => ok(text)} />
-          </div>
-        );
-
-      case "gateway":
-        return (
-          <div>
-            <Head t={tr("settings.gateway.head")} h={tr("settings.gateway.headHint")} />
-            {gateway ? (
-              <div className="panel-card" style={S.card}>
-                <div style={S.rowBetween}>
-                  <span style={S.meta}>
-                    <span style={gateway.running ? BADGE.ok : BADGE.neutral}>
-                      {gateway.running ? tr("settings.gateway.running") : tr("settings.gateway.stopped")}
-                    </span>
-                    <span style={S.tag}>{tr("settings.gateway.sessions", { count: gateway.sessions })}</span>
-                  </span>
-                  <span style={S.icons}>
-                    {gateway.running ? (
-                      <Btn label={gatewayBusy ? tr("settings.gateway.stopping") : tr("settings.gateway.stop")} small onClick={() => void stopGateway()} />
-                    ) : (
-                      <Btn label={gatewayBusy ? tr("settings.gateway.starting") : tr("settings.gateway.start")} primary small onClick={() => void startGateway()} />
-                    )}
-                  </span>
-                </div>
-                <div style={S.providerRows}>
-                  <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.gateway.url")}</span><span style={S.providerVal}>{gateway.url || "—"}</span></div>
-                  <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.gateway.port")}</span><span style={S.providerVal}>{gateway.port}</span></div>
-                  <div style={S.providerRow}>
-                    <span style={S.providerKey}>{tr("settings.gateway.tokenRequired")}</span>
-                    <span style={S.providerVal}>{gateway.tokenRequired ? tr("settings.gateway.yes") : tr("settings.gateway.no")}</span>
-                  </div>
-                  {gateway.error ? (
-                    <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.error")}</span><span style={S.errText}>{gateway.error}</span></div>
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <div style={S.dashed}>{tr("settings.gateway.unavailable")}</div>
-            )}
-            <div style={S.note}>{tr("settings.gateway.note")}</div>
-          </div>
-        );
 
       case "providers": {
         const refreshProviders = async (): Promise<void> => {
@@ -1517,7 +1400,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       default:
         return null;
     }
-  }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, gateway, gatewayBusy, startGateway, stopGateway, provider]);
+  }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
 
   return (
     <div className="settings-overlay" style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
