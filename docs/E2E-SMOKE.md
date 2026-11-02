@@ -131,13 +131,24 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 
 | 项 | 结果 | 证据 |
 |---|---|---|
-| 点「更多」时**网页不再消失**、浮层浮在网页之上 | ✅ 浮层为独立子窗口（桌面截图可见网页内容仍完整显示，菜单浮于其上） | `e2e-round5-popover-main-desktop.png` + `-popover.png` |
+| 点「更多」时**网页不再消失**、浮层浮在网页之上 | ✅ 浮层为独立子窗口（`E2E_POPOVER_WINDOWS 1`，网页视图截图仍正常渲染） | `e2e-round5-popover-main-popover.png` + `e2e-round5-popover-main-browser-view.png` + E2E 日志 |
 | 浮层不被窗口边缘截断（翻转/夹取） | ✅ 主进程 computePopoverBounds；桌面截图菜单完整可见 | 同上 |
 | 悬停「更多」/收藏星标 250ms 自动弹出预览 | ✅ E2E hover（windows 2）→ 浮层打开 | `e2e-round5-hover-viewmore-popover.png` |
 | 浮层「查看更多」→ 整页管理界面 | ✅ ChromePage 打开（文本「收藏夹 共 0 条…」/「历史记录 共 1 条…」） | `e2e-round5-viewmore-page.png`、`e2e-round5-global-history-page.png` |
 | 历史全局（跨会话）+ 恢复标签补记 | ✅ 补记日志 `{"added":0,"merged":1}`；历史整页显示恢复的页面 | 主进程日志 + 历史整页截图 |
 | 网页随窗口缩放自适应（resize/maximize/unmaximize/fullscreen/恢复） | ✅ 六步探针 `actual==bounds==page.innerWidth`（995→734→1682→734→1682→734） | `E2E_RESIZE_STEP` 日志 |
 | 应用内其它下拉菜单边缘不截断 | ✅ placePopover 翻转/夹取 + resize/scroll 重定位 | 18 用例矩阵 + 真机 |
+
+## 11. 2026-11-03 视觉/布局轮真机验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 默认主题为「柔和无框」；旧观感可在设置切回 | ✅ `document.documentElement.dataset.theme = soft`；classic 覆盖后侧栏边框 rgb(38,42,49)、soft 为 rgba(255,255,255,0.06) | `e2e-round6-soft-default.png`、`e2e-round6-classic-theme.png` + E2E_EVAL 探针 |
+| 主题选择持久化 | ✅ 设置写入 `config/preferences.json`（theme: soft/classic），重启保持 | 配置文件 |
+| 会话栏收起为 48px 图标条，网页区变宽 | ✅ 收起/展开按钮生效，模式写入 `preferences.sidebarMode: collapsed` | `e2e-round6-sidebar-collapsed.png` |
+| 会话栏小窗化（浮动卡片） | ✅ 8px 外边距 + 16px 圆角 + 浮阴影卡片，模式写入 `sidebarMode: float`，不遮挡网页 | `e2e-round6-sidebar-float.png` |
+| 终端全宽底部拉起（VS Code 式） | ✅ 横跨浏览器区+会话栏；网页视图让位 `bottomInset:260`，`actual.height == page.innerHeight`（166/491） | `e2e-round6-terminal-fullwidth.png` + `E2E_RESIZE_STEP` 日志 |
+| 终端拖拽时网页不吞事件 | ✅ `onResizeStart/End` → `browser:setOverlay` 临时隐藏原生视图 | 代码 + 手动拖拽 |
 
 ## 7. 回归基线（必须全绿后才提交）
 

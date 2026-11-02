@@ -363,7 +363,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 6,
     border: "1px solid rgba(248,113,113,0.4)",
     background: "rgba(248,113,113,0.08)",
-    color: "#f87171",
+    color: "var(--ls-danger, #f87171)",
     fontSize: 12,
     whiteSpace: "pre-wrap",
   },

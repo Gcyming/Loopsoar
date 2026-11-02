@@ -1,18 +1,15 @@
 /**
- * 品牌色板（ui/theme.ts）用例：
- *   - 三品牌色锁定（深墨 #111318 / 亚麻白 #f4efe6 / 赭石 #c8763c，S4-UI风格 色板）；
- *   - 色值格式合法且无重复（同一份色板不该有两个同值 key）；
- *   - 正文可读性：linen 在 ink 上、ink 在 linen 上都要达到 WCAG AA 以上对比度；
- *   - 强调色/危险色在深色底上仍可读（≥4.5，小字徽标依赖这个）；
- *   - 自定义标题栏拖动区域常量形状正确。
+ * 品牌色板 / 主题 token 用例（第 6 轮 soft/classic 双主题后重写）：
+ *   - BRAND 全部颜色改为 CSS 变量引用（`var(--ls-…, fallback)`），fallback 仍是 S4 规格的品牌色；
+ *   - index.html 的 `:root` 定义 soft 主题 token，`html[data-theme="classic"]` 覆盖为旧观感；
+ *   - 两套主题的正文/强调色对比度都达到 WCAG AA（正文 ≥7 / 次要 ≥4.5 / 强调 ≥4.5）；
+ *   - 变量引用格式合法、token 无重复、classic 覆盖不缺失关键 token；
+ *   - 徽标与拖动区域常量形状不变。
  */
 import { describe, expect, it } from "vitest";
-import {
-  BADGE,
-  BRAND,
-  DRAG_REGION,
-  NO_DRAG_REGION,
-} from "../../packages/ui/src/theme.ts";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { BADGE, BRAND, DRAG_REGION, NO_DRAG_REGION } from "../../packages/ui/src/theme.ts";
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -32,13 +29,11 @@ function hexToLinearRgb(hex: string): Rgb {
   };
 }
 
-/** WCAG 相对亮度。 */
 function luminance(hex: string): number {
   const { r, g, b } = hexToLinearRgb(hex);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** WCAG 对比度（1~21）。 */
 function contrastRatio(a: string, b: string): number {
   const la = luminance(a);
   const lb = luminance(b);
@@ -46,51 +41,92 @@ function contrastRatio(a: string, b: string): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
-const SOLID_COLOR_KEYS = [
-  "ink",
-  "inkRaised",
-  "inkPanel",
-  "inkHover",
-  "border",
-  "borderStrong",
-  "linen",
-  "linenMuted",
-  "linenFaint",
-  "ochre",
-  "ochreHover",
-  "teal",
-  "danger",
-] as const;
+/** 从 `var(--token, fallback)` 中拆出 token 与 fallback。 */
+function parseVarRef(value: string): { token: string; fallback: string } {
+  const m = /^var\(\s*--([a-z0-9-]+)\s*,\s*(.+?)\s*\)$/i.exec(value.trim());
+  if (!m) throw new Error(`不是 CSS 变量引用：${value}`);
+  return { token: `--${m[1]}`, fallback: m[2] };
+}
 
-describe("品牌色板（BRAND）", () => {
-  it("三个品牌色值与 S4 规格一致", () => {
-    expect(BRAND.ink.toUpperCase()).toBe("#111318");
-    expect(BRAND.linen.toUpperCase()).toBe("#F4EFE6");
-    expect(BRAND.ochre.toUpperCase()).toBe("#C8763C");
+const HTML = readFileSync(path.join(process.cwd(), "packages/ui/index.html"), "utf8");
+
+/** 提取某个 CSS 块里的 `--ls-*` token 值（只取第一处匹配块）。 */
+function extractTokens(blockPattern: RegExp): Map<string, string> {
+  const block = blockPattern.exec(HTML)?.[0] ?? "";
+  const tokens = new Map<string, string>();
+  for (const m of block.matchAll(/--ls-([a-z0-9-]+)\s*:\s*([^;]+);/gi)) {
+    tokens.set(`--ls-${m[1]}`, m[2].trim());
+  }
+  return tokens;
+}
+
+const SOFT = extractTokens(/:root\s*\{[^}]*\}/i);
+const CLASSIC = extractTokens(/html\[data-theme="classic"\]\s*\{[^}]*\}/i);
+
+describe("品牌色板（BRAND）与主题 token", () => {
+  it("BRAND 全部是 CSS 变量引用，fallback 保留 S4 品牌色", () => {
+    const ink = parseVarRef(BRAND.ink);
+    const linen = parseVarRef(BRAND.linen);
+    const ochre = parseVarRef(BRAND.ochre);
+    expect(ink.fallback.toUpperCase()).toBe("#111318");
+    expect(linen.fallback.toUpperCase()).toBe("#F4EFE6");
+    expect(ochre.fallback.toUpperCase()).toBe("#C8763C");
   });
 
-  it("所有实色都是合法 #rrggbb，半透明只允许 rgba()", () => {
-    for (const key of SOLID_COLOR_KEYS) {
-      expect(BRAND[key], `${key} 必须是 #rrggbb`).toMatch(/^#[0-9a-f]{6}$/i);
+  it("所有颜色都是合法 var(...)，half-transparent 也走变量", () => {
+    for (const [key, value] of Object.entries(BRAND)) {
+      const { token, fallback } = parseVarRef(value);
+      expect(token, `${key} token 命名`).toMatch(/^--ls-[a-z0-9-]+$/);
+      expect(
+        /^#[0-9a-f]{6}$/i.test(fallback) ||
+          /^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$/i.test(fallback),
+        `${key} fallback 必须是 hex 或 rgba()：${fallback}`,
+      ).toBe(true);
     }
-    expect(BRAND.ochreSoft).toMatch(/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$/);
   });
 
-  it("色板无重复色值（避免改一处漏一处）", () => {
-    const values = Object.values(BRAND);
-    expect(new Set(values).size).toBe(values.length);
+  it("token 无重复（同一份色板不该有两个键指向同一变量）", () => {
+    const tokens = Object.values(BRAND).map((value) => parseVarRef(value).token);
+    expect(new Set(tokens).size).toBe(tokens.length);
   });
 
-  it("正文对比度达到 WCAG AA/AAA：ink ↔ linen ≥ 7，ink ↔ linenMuted ≥ 4.5", () => {
-    expect(contrastRatio(BRAND.ink, BRAND.linen)).toBeGreaterThanOrEqual(7);
-    expect(contrastRatio(BRAND.linen, BRAND.ink)).toBeGreaterThanOrEqual(7);
-    expect(contrastRatio(BRAND.ink, BRAND.linenMuted)).toBeGreaterThanOrEqual(4.5);
+  it("index.html 定义 soft 默认 token，且 classic 覆盖回旧观感", () => {
+    expect(SOFT.size).toBeGreaterThanOrEqual(20);
+    for (const token of ["--ls-bg", "--ls-surface", "--ls-text", "--ls-accent", "--ls-border"]) {
+      expect(SOFT.has(token), `soft 缺少 ${token}`).toBe(true);
+    }
+    expect(SOFT.get("--ls-bg")?.toUpperCase()).toBe("#0D0F13");
+    expect(CLASSIC.get("--ls-bg")?.toUpperCase()).toBe("#111318");
+    expect(CLASSIC.get("--ls-border")?.toUpperCase()).toBe("#262A31");
+    // BRAND 引用到的每个 token 必须在前景（soft 或 classic）有定义
+    for (const value of Object.values(BRAND)) {
+      const { token } = parseVarRef(value);
+      expect(SOFT.has(token) || CLASSIC.has(token), `未定义 token：${token}`).toBe(true);
+    }
   });
 
-  it("强调色/危险色在深墨底上仍可读（≥4.5）", () => {
-    expect(contrastRatio(BRAND.ink, BRAND.ochre)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(BRAND.ink, BRAND.ochreHover)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(BRAND.ink, BRAND.danger)).toBeGreaterThanOrEqual(4.5);
+  it("soft 主题对比度：正文 ≥7，次要/强调/危险 ≥4.5", () => {
+    const bg = SOFT.get("--ls-bg") as string;
+    const text = SOFT.get("--ls-text") as string;
+    const muted = SOFT.get("--ls-text-muted") as string;
+    const accent = SOFT.get("--ls-accent") as string;
+    const danger = SOFT.get("--ls-danger") as string;
+    expect(contrastRatio(bg, text)).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(bg, muted)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(bg, accent)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(bg, danger)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("classic 主题对比度：正文 ≥7，次要/强调/危险 ≥4.5（旧观感仍可读）", () => {
+    const bg = CLASSIC.get("--ls-bg") as string;
+    const text = CLASSIC.get("--ls-text") as string;
+    const muted = CLASSIC.get("--ls-text-muted") as string;
+    const accent = CLASSIC.get("--ls-accent") as string;
+    const danger = CLASSIC.get("--ls-danger") as string;
+    expect(contrastRatio(bg, text)).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(bg, muted)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(bg, accent)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(bg, danger)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("徽标三级样式齐全且各自带排版字段", () => {

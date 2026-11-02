@@ -1,5 +1,10 @@
 /**
- * 终端面板（应用内终端）：右侧 Agent 面板底部的可拖拽抽屉。
+ * 终端面板（应用内终端）：可拖拽的持久终端。
+ *
+ * 两种布局（由 `fullWidth` 决定）：
+ *   · 默认（false）= 右侧 Agent 面板底部抽屉（旧行为完全不变）；
+ *   · fullWidth = 从整个程序底部拉起的全宽面板（VS Code 风格）：根容器 100% 宽、顶部拖拽手柄横跨全行、
+ *     工具栏/标签栏/输出/输入区横向铺满；类名 `.terminal-panel.is-fullwidth`，圆角/无硬边框等主题细节由 CSS 补充。
  *
  * 定位：在 Agent 工具之外，给人一个「看得见、可交互」的持久终端——
  * 多环境配置档（cmd / PowerShell / Git Bash / Python / Node / C++）、按会话隔离标签、
@@ -32,6 +37,22 @@ export interface TerminalPanelProps {
   /** 抽屉高度（px）；拖动/键盘调整时回调，持久化由 App 负责。 */
   height: number;
   onHeightChange: (height: number) => void;
+  /**
+   * 全宽底部面板模式（VS Code 风格，从整个程序底部拉起）：
+   *   · 根容器宽度 100%，顶部拖拽手柄横跨整行；
+   *   · 工具栏/标签栏/输出/输入区横向铺满，不再为窄侧栏换行；
+   *   · 视觉类名 `.terminal-panel.is-fullwidth`（顶部圆角/无硬边框等细节由主题 CSS 补充）。
+   * 默认 false = 旧的侧栏抽屉布局（行为完全不变）。
+   */
+  fullWidth?: boolean;
+  /**
+   * 高度拖拽开始（鼠标按下 / 键盘调整开始时）回调。
+   * 为什么需要：全宽面板贴底时，拖动过程中鼠标会进入原生网页视图区域，事件被 WebContentsView 吞掉；
+   * App 在这里临时隐藏原生视图（setOverlay({ open: true })），松手后再恢复。
+   */
+  onResizeStart?: () => void;
+  /** 高度拖拽结束（鼠标松开 / 键盘调整完成时）回调；与 onResizeStart 成对调用。 */
+  onResizeEnd?: () => void;
 }
 
 /** 原始输出缓冲上限（字符）：长跑进程只保留最近一段，避免内存无界。 */
@@ -84,6 +105,9 @@ export default function TerminalPanel({
   onClose,
   height,
   onHeightChange,
+  fullWidth = false,
+  onResizeStart,
+  onResizeEnd,
 }: TerminalPanelProps): React.JSX.Element | null {
   const api = useLoopsoarApi();
   const tr = useT();
@@ -113,6 +137,8 @@ export default function TerminalPanel({
   const followRef = React.useRef(true);
   const terminalsRef = React.useRef<TerminalSessionInfo[]>([]);
   const activeIdRef = React.useRef<string | null>(null);
+  /** 正在进行的拖拽收尾函数（mouseup 未到达时由卸载清理兜底调用，保证 onResizeEnd 不丢）。 */
+  const dragEndRef = React.useRef<(() => void) | null>(null);
 
   React.useEffect(() => {
     terminalsRef.current = terminals;
@@ -238,11 +264,13 @@ export default function TerminalPanel({
     };
   }, [api, appendRaw, showNotice, tr]);
 
-  // 卸载清理节流器，避免定时器泄漏（组件通常常驻，但测试/热更新会卸载）
+  // 卸载清理节流器，避免定时器泄漏（组件通常常驻，但测试/热更新会卸载）；
+  // 若拖拽中卸载，补发 onResizeEnd，避免 App 的原生视图覆盖层被永久留在隐藏态。
   React.useEffect(() => {
     return () => {
       if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
       if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+      dragEndRef.current?.();
     };
   }, []);
 
@@ -487,21 +515,22 @@ export default function TerminalPanel({
 
   const onResizerKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>): void => {
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        onHeightChange(clampTerminalHeight(height + HEIGHT_KEY_STEP));
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        onHeightChange(clampTerminalHeight(height - HEIGHT_KEY_STEP));
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        onHeightChange(LAYOUT.TERMINAL_PANEL_MIN_HEIGHT);
-      } else if (event.key === "End") {
-        event.preventDefault();
-        onHeightChange(LAYOUT.TERMINAL_PANEL_MAX_HEIGHT);
+      let next: number | null = null;
+      if (event.key === "ArrowUp") next = clampTerminalHeight(height + HEIGHT_KEY_STEP);
+      else if (event.key === "ArrowDown") next = clampTerminalHeight(height - HEIGHT_KEY_STEP);
+      else if (event.key === "Home") next = LAYOUT.TERMINAL_PANEL_MIN_HEIGHT;
+      else if (event.key === "End") next = LAYOUT.TERMINAL_PANEL_MAX_HEIGHT;
+      if (next === null) return;
+      event.preventDefault();
+      // 键盘调整是原子操作：开始 → 变更 → 结束在同一事件内成对触发，App 可据此临时隐藏原生视图。
+      onResizeStart?.();
+      try {
+        onHeightChange(next);
+      } finally {
+        onResizeEnd?.();
       }
     },
-    [height, onHeightChange],
+    [height, onHeightChange, onResizeEnd, onResizeStart],
   );
 
   const startHeightDrag = React.useCallback(
@@ -509,18 +538,30 @@ export default function TerminalPanel({
       event.preventDefault();
       const startY = event.clientY;
       const startHeight = height;
+      let ended = false;
       const onMove = (moveEvent: MouseEvent): void => {
         // 面板贴在底部：鼠标向上拖 → 高度增大
         onHeightChange(clampTerminalHeight(startHeight + (startY - moveEvent.clientY)));
       };
       const onUp = (): void => {
+        if (ended) return;
+        ended = true;
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        window.removeEventListener("blur", onUp);
+        dragEndRef.current = null;
+        // 必须在原生视图恢复前同步通知 App（恢复后再次拖动仍能命中手柄）
+        onResizeEnd?.();
       };
+      dragEndRef.current = onUp;
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
+      // 窗口失焦（拖到窗口外松手 / Alt+Tab）也收尾，避免覆盖层卡在隐藏态
+      window.addEventListener("blur", onUp);
+      // 先通知 App 临时隐藏原生网页视图（否则拖动时鼠标进入 WebContentsView 会丢事件）
+      onResizeStart?.();
     },
-    [height, onHeightChange],
+    [height, onHeightChange, onResizeEnd, onResizeStart],
   );
 
   /* ------------------------------ 输出跟随最新 ------------------------------ */
@@ -570,11 +611,12 @@ export default function TerminalPanel({
 
   return (
     <section
-      className="terminal-panel"
-      style={{ ...styles.panel, height: clampedHeight }}
+      className={`terminal-panel${fullWidth ? " is-fullwidth" : ""}`}
+      style={{ ...styles.panel, ...(fullWidth ? styles.panelFullWidth : null), height: clampedHeight }}
       aria-label={tr("terminal.panelLabel")}
     >
-      {/* 高度拖拽条：鼠标拖动 / 上下方向键 / Home·End；行内角色做无障碍语义 */}
+      {/* 高度拖拽条：鼠标拖动 / 上下方向键 / Home·End；行内角色做无障碍语义。
+          fullWidth 下沿面板上边缘横跨整行（拖拽开始/结束通知 App 隐藏原生视图）。 */}
       <div
         className="terminal-resizer"
         role="separator"
@@ -586,11 +628,17 @@ export default function TerminalPanel({
         aria-valuetext={tr("terminal.resizeValueText", { height: clampedHeight })}
         tabIndex={0}
         title={tr("terminal.resizeTitle")}
+        style={fullWidth ? styles.resizerFullWidth : undefined}
         onMouseDown={startHeightDrag}
         onKeyDown={onResizerKeyDown}
       />
-      <div className="terminal-toolbar">
-        <div className="terminal-profiles" role="group" aria-label={tr("terminal.profilesGroup")}>
+      <div className="terminal-toolbar" style={fullWidth ? styles.toolbarFullWidth : undefined}>
+        <div
+          className="terminal-profiles"
+          role="group"
+          aria-label={tr("terminal.profilesGroup")}
+          style={fullWidth ? styles.profilesFullWidth : undefined}
+        >
           {profilesLoading && profiles.length === 0 ? <span className="terminal-hint">{tr("terminal.probing")}</span> : null}
           {profiles.map((profile) => (
             <button
@@ -649,7 +697,7 @@ export default function TerminalPanel({
         </div>
       ) : null}
       {terminals.length > 0 ? (
-        <div className="terminal-tabbar">
+        <div className="terminal-tabbar" style={fullWidth ? styles.tabbarFullWidth : undefined}>
           <div className="terminal-tabs" role="tablist" aria-label={tr("terminal.tabsLabel")}>
             {terminals.map((item) => (
               <button
@@ -736,7 +784,7 @@ export default function TerminalPanel({
           </button>
         </div>
       ) : (
-        <div className="terminal-output-wrap">
+        <div className="terminal-output-wrap" style={fullWidth ? styles.outputWrapFullWidth : undefined}>
           <pre
             ref={outputRef}
             className="terminal-output"
@@ -753,7 +801,7 @@ export default function TerminalPanel({
           ) : null}
         </div>
       )}
-      <div className="terminal-command">
+      <div className="terminal-command" style={fullWidth ? styles.commandFullWidth : undefined}>
         <span className="terminal-prompt" aria-hidden="true">
           {rawMode ? "»" : "›"}
         </span>
@@ -811,6 +859,31 @@ const styles: Record<string, React.CSSProperties> = {
     background: BRAND.inkPanel,
     borderTop: `1px solid ${BRAND.borderStrong}`,
   },
+  /**
+   * 全宽底部面板：宽度铺满、顶部圆角、无硬边框（用 BRAND.border 的内阴影画一条 1px 分隔线，
+   * 保留「浮起面板」的层次感）；具体主题细节（如更强的阴影/动画）由 `.terminal-panel.is-fullwidth` 的 CSS 补充。
+   */
+  panelFullWidth: {
+    width: "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    borderTop: "none",
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    boxShadow: `inset 0 1px 0 ${BRAND.border}`,
+  },
+  /** 全宽时拖拽手柄横跨整行，稍微加高更易命中（视觉 grip 由 .terminal-resizer::after 绘制）。 */
+  resizerFullWidth: { width: "100%", height: 8 },
+  /** 工具栏横向撑满：左侧 6 个配置档 chips，右侧状态点 + 关闭按钮（由 flex 自然分布）。 */
+  toolbarFullWidth: { width: "100%", boxSizing: "border-box", gap: 8, padding: "0 12px 6px" },
+  /** 全宽下配置档保持单行（空间足够，不再像窄侧栏那样换行；窗口极窄时横向滚动）。 */
+  profilesFullWidth: { flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" },
+  /** 标签栏铺满：标签左对齐、中断/清屏/关闭终端固定在右侧。 */
+  tabbarFullWidth: { width: "100%", boxSizing: "border-box", padding: "0 12px" },
+  /** 输出区铺满。 */
+  outputWrapFullWidth: { width: "100%" },
+  /** 输入行铺满：提示符 + 输入框（flex:1）+ 原始模式/发送按钮。 */
+  commandFullWidth: { width: "100%", boxSizing: "border-box", padding: "6px 12px" },
   emptyIcon: { color: BRAND.linenFaint },
   sendIcon: { color: BRAND.ink },
 };

@@ -47,6 +47,15 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     return { width };
   });
 
+  // 底部 DOM 面板（全宽终端）高度：原生网页视图让出这一段，否则会被面板盖住。
+  // 契约已限制 0..2000 整数，这里再夹一次并回显实际生效值（UI 可用返回值校准）。
+  handleTrusted(deps, "browser:setBottomInset", (payload) => {
+    const raw = (payload as { bottom: number }).bottom;
+    const bottom = Math.max(0, Math.min(2000, Number.isFinite(raw) ? Math.round(raw) : 0));
+    deps.browser?.setBottomInset(bottom);
+    return { bottom };
+  });
+
   // 修复遮挡：设置等应用内浮层打开时隐藏原生浏览器视图
   handleTrusted(deps, "browser:setOverlay", (payload) => {
     const open = (payload as { open: boolean }).open;

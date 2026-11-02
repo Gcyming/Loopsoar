@@ -110,6 +110,14 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Off: stop all entrance / wave animations (accessibility)",
   },
   "settings.appearance.animationsSaved": { zh: "动效强度已保存", en: "Animation intensity saved" },
+  "settings.appearance.theme.head": { zh: "主题", en: "Theme" },
+  "settings.appearance.theme.label": { zh: "界面风格", en: "Interface style" },
+  "settings.appearance.theme.hint": {
+    zh: "柔和无框是新的默认外观（弱化边框与阴影，阅读更安静）；经典保留旧观感（边框与层次更明显）。切换后全局立即生效。",
+    en: "Soft is the new default look (softer borders and shadows, quieter reading); Classic keeps the previous look with stronger borders and depth. Applies globally right away.",
+  },
+  "settings.appearance.theme.soft": { zh: "柔和无框", en: "Soft" },
+  "settings.appearance.theme.classic": { zh: "经典", en: "Classic" },
   "settings.appearance.note": {
     zh: "与 slime 外观页一致：参数改动即时生效、无需重启；保存在本机浏览器存储。",
     en: "Matches the slime appearance page: changes apply instantly with no restart; stored in local browser storage.",

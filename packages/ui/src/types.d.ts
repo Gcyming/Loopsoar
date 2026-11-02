@@ -64,6 +64,10 @@ export interface Preferences {
   reasoningEffort?: string;
   /** 当前 Agent-Loop id（缺省 = 内置 loop；主进程按需持久化）。 */
   loopId?: string;
+  /** 界面主题（soft 默认 / classic 经典）。 */
+  theme?: ThemeMode;
+  /** 右侧会话栏模式。 */
+  sidebarMode?: SidebarMode;
   /** 敏感步骤（登录/支付/不可撤销操作）始终强制人工确认（默认 true）。 */
   sensitiveAlwaysConfirm?: boolean;
 }
@@ -617,6 +621,12 @@ export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads";
 /** 浏览器管理整页种类（更多菜单「查看更多」/设置打开）。 */
 export type ChromePageKind = "history" | "downloads" | "bookmarks" | "settings";
 
+/** 界面主题。 */
+export type ThemeMode = "soft" | "classic";
+
+/** 右侧会话栏模式：常驻 / 收起 / 小窗浮动。 */
+export type SidebarMode = "docked" | "collapsed" | "float";
+
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
     stream(payload: {
@@ -706,6 +716,8 @@ export interface LoopsoarAPI {
     listTabs(): Promise<{ tabs: TabState[] }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
     setSidebarWidth(payload: { width: number }): Promise<{ width: number }>;
+    /** 底部 DOM 面板（全宽终端）占用高度：原生网页视图让出，避免被遮挡。 */
+    setBottomInset(payload: { bottom: number }): Promise<{ bottom: number }>;
     back(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     forward(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     reload(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;

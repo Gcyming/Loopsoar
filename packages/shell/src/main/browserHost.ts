@@ -97,6 +97,8 @@ export class BrowserHost {
   private overlayOpen = false;
   /** 侧栏当前宽度（用户可拖拽；偏好持久化在 UI 层）。 */
   private sidebarWidth: number = LAYOUT.SIDEBAR_WIDTH;
+  /** 底部 DOM 面板（全宽终端）占用的高度：原生视图必须让出，否则会被面板盖住。 */
+  private bottomInset = 0;
   private seq = 0;
 
   constructor(private deps: BrowserHostDeps) {
@@ -179,6 +181,21 @@ export class BrowserHost {
   }
 
   /**
+   * 底部 DOM 面板（全宽终端）高度：原生视图让出这一段，否则面板会被 WebContentsView 盖住。
+   * 契约/UI 层已校验 0..2000，这里再夹一次（宿主也可能被测试或其它内部路径直接调用）。
+   */
+  setBottomInset(height: number): void {
+    const next = Number.isFinite(height) ? Math.round(height) : 0;
+    this.bottomInset = Math.max(0, Math.min(2000, next));
+    this.applyLayout();
+  }
+
+  /** 当前底部让位高度（UI 恢复终端高度时可先读回，避免首帧跳动）。 */
+  getBottomInset(): number {
+    return this.bottomInset;
+  }
+
+  /**
    * E2E/诊断：当前窗口尺寸、**计算出的** bounds 与**活动视图真实 getBounds()**。
    * 三者对比才能定位「网页不随窗口自适应」的真实断点：
    *   window 变 / bounds 变 / actual 不变 → setBounds 没生效（视图未挂载/不可见）；
@@ -190,12 +207,15 @@ export class BrowserHost {
     actual: { x: number; y: number; width: number; height: number } | null;
     sessionId: string;
     tabId: string | null;
+    /** 侧栏宽度与底部让位高度（诊断/回归断言用，说明 bounds 是怎么算出来的）。 */
+    sidebarWidth: number;
+    bottomInset: number;
   } {
     const windowSize = this.deps.getWindowSize();
-    const bounds = computeBrowserViewBounds(windowSize, {
-      ...LAYOUT,
-      SIDEBAR_WIDTH: this.sidebarWidth,
-    } as unknown as typeof LAYOUT);
+    const bounds = computeBrowserViewBounds(windowSize, LAYOUT, {
+      sidebarWidth: this.sidebarWidth,
+      bottomInset: this.bottomInset,
+    });
     const entry = this.activeEntry();
     let actual: { x: number; y: number; width: number; height: number } | null = null;
     try {
@@ -203,7 +223,15 @@ export class BrowserHost {
     } catch {
       actual = null;
     }
-    return { window: windowSize, bounds, actual, sessionId: this.activeSession, tabId: this.activeEntryId() };
+    return {
+      window: windowSize,
+      bounds,
+      actual,
+      sessionId: this.activeSession,
+      tabId: this.activeEntryId(),
+      sidebarWidth: this.sidebarWidth,
+      bottomInset: this.bottomInset,
+    };
   }
 
   private activeEntryId(sessionId?: string): string | null {
@@ -227,10 +255,12 @@ export class BrowserHost {
   }
 
   private applyLayout(): void {
-    const bounds = computeBrowserViewBounds(this.deps.getWindowSize(), {
-      ...LAYOUT,
-      SIDEBAR_WIDTH: this.sidebarWidth,
-    } as unknown as typeof LAYOUT);
+    // 几何单一产地：侧栏宽度与底部 DOM 面板（全宽终端）高度都作为 options 传入，
+    // 原生视图让出这两块区域，否则会被 DOM 盖住/盖住 DOM。
+    const bounds = computeBrowserViewBounds(this.deps.getWindowSize(), LAYOUT, {
+      sidebarWidth: this.sidebarWidth,
+      bottomInset: this.bottomInset,
+    });
     for (const [sessionId, group] of this.groups) {
       for (const [id, entry] of group.tabs) {
         entry.view.setBounds(bounds);

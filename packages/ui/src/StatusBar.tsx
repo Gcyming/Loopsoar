@@ -95,7 +95,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   terminalToggleOpen: {
     background: BRAND.ochreSoft,
-    borderColor: "rgba(200,118,60,0.55)",
+    borderColor: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.55)",
     color: BRAND.ochreHover,
   },
 };

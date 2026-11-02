@@ -18,6 +18,8 @@ export const PreferencesSchema = z.object({
   memoryStorePath: z.string().max(1024).optional(),
   memoryAutoCapture: z.boolean(),
   sidebarWidth: z.number().int().min(240).max(720),
+  theme: z.enum(["soft", "classic"]).optional(),
+  sidebarMode: z.enum(["docked", "collapsed", "float"]).optional(),
   /** Agent 单次任务最多请求轮数（防止无限循环；默认 40）。 */
   agentMaxRounds: z.number().int().min(1).max(500).optional(),
   /** Agent 单次任务最多工具调用次数（默认 100）。 */
@@ -48,6 +50,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   memoryStorePath: "",
   memoryAutoCapture: true,
   sidebarWidth: 360,
+  theme: "soft",
+  sidebarMode: "docked",
   agentMaxRounds: 40,
   agentMaxToolCalls: 100,
   agentRepeatToolWarn: 5,
@@ -79,6 +83,8 @@ export function mergePreferences(raw: unknown): Preferences {
     loopId: parsed.data.loopId ?? "",
     adBlockEnabled: parsed.data.adBlockEnabled ?? true,
     sensitiveAlwaysConfirm: parsed.data.sensitiveAlwaysConfirm ?? true,
+    theme: parsed.data.theme ?? "soft",
+    sidebarMode: parsed.data.sidebarMode ?? "docked",
   };
 }
 

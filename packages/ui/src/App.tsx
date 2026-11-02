@@ -15,7 +15,7 @@ import type {
   TabState,
   WorkspaceRecord,
 } from "./types.js";
-import { BRAND } from "./theme.js";
+import { BRAND, applyTheme } from "./theme.js";
 import Settings from "./Settings.js";
 import ChromePage from "./ChromePage.js";
 import MessageList from "./MessageList.js";
@@ -29,7 +29,7 @@ import Composer from "./Composer.js";
 import TerminalPanel from "./TerminalPanel.js";
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
 import { setLanguage } from "./i18n.js";
-import type { ChromePageKind } from "./types.js";
+import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
 import AskUserDialog from "./AskUserDialog.js";
 import SnapshotPanel from "./SnapshotPanel.js";
 import AgentSidebar from "./AgentSidebar.js";
@@ -113,6 +113,13 @@ export default function App(): React.JSX.Element {
     return new URLSearchParams(location.search).get("e2e") === "settings";
   });
   const [preferences, setPreferences] = useState<Preferences | null>(null);
+  // 主题（soft 柔和无框默认 / classic 旧观感）：写到 html[data-theme]，CSS 变量整体切换
+  const theme: ThemeMode = preferences?.theme ?? "soft";
+  React.useEffect(() => {
+    applyTheme(theme === "classic" ? "classic" : "soft");
+  }, [theme]);
+  // 右侧会话栏三态：常驻 / 收起 / 小窗化（持久化到偏好）
+  const sidebarMode: SidebarMode = preferences?.sidebarMode ?? "docked";
   // 浏览器管理整页（历史/下载/收藏夹/设置）：由浮层「查看更多」或动作打开
   const [chromePage, setChromePage] = useState<ChromePageKind | null>(null);
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
@@ -343,6 +350,36 @@ export default function App(): React.JSX.Element {
     },
     [api, preferences, sidebarWidth],
   );
+
+  /** 侧栏模式切换：写偏好（持久化）+ 立即同步原生视图宽度。 */
+  const changeSidebarMode = useCallback(
+    (next: SidebarMode): void => {
+      if (!api || !preferences) return;
+      setSessionOpen(false);
+      void api.settings
+        .setPreferences({ ...preferences, sidebarMode: next })
+        .then((r) => setPreferences(r.preferences))
+        .catch(() => {});
+    },
+    [api, preferences],
+  );
+
+  /** 生效的侧栏宽度（收起态只用图标条宽度，让网页区自然变宽）。 */
+  const effectiveSidebarWidth = sidebarMode === "collapsed" ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
+  React.useEffect(() => {
+    if (!api) return;
+    void api.browser.setSidebarWidth({ width: effectiveSidebarWidth }).catch(() => {});
+  }, [api, effectiveSidebarWidth]);
+
+  // 全宽终端占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
+  React.useEffect(() => {
+    if (!api) return;
+    const bottom = terminalOpen ? terminalHeight : 0;
+    const timer = window.setTimeout(() => {
+      void api.browser.setBottomInset({ bottom }).catch(() => {});
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [api, terminalOpen, terminalHeight]);
 
   // 终端抽屉高度：夹紧到契约范围并持久化（TerminalPanel 拖拽/键盘调整后回调）
   const changeTerminalHeight = useCallback((next: number): void => {
@@ -981,9 +1018,13 @@ export default function App(): React.JSX.Element {
       <div style={styles.body}>
         <StartPage currentUrl={currentUrl} />
 
-        <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
+        {sidebarMode === "docked" ? (
+          <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
+        ) : null}
         <AgentSidebar
-          width={sidebarWidth}
+          width={effectiveSidebarWidth}
+          mode={sidebarMode}
+          onModeChange={changeSidebarMode}
           agentLabel={agentLabel}
           messages={messages}
           sessions={sessions}
@@ -1012,14 +1053,6 @@ export default function App(): React.JSX.Element {
             onRollback={rollbackTo}
             onRegenerate={regenerate}
             onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
-          />
-          {/* 应用内终端：渲染在 Composer 之上的底部抽屉；关闭时组件仍挂载以保留本地输出缓冲 */}
-          <TerminalPanel
-            sessionId={currentSession ?? undefined}
-            open={terminalOpen}
-            onClose={() => setTerminalOpen(false)}
-            height={terminalHeight}
-            onHeightChange={changeTerminalHeight}
           />
           <Composer
             value={input}
@@ -1079,6 +1112,31 @@ export default function App(): React.JSX.Element {
             notice={notice}
           />
         </AgentSidebar>
+      </div>
+
+      {/* 应用内终端：全宽底部面板（VS Code 风格，从整个程序底部拉起） */}
+      <div
+        style={{
+          height: terminalOpen ? terminalHeight : 0,
+          flexShrink: 0,
+          overflow: "hidden",
+          transition: "height 240ms cubic-bezier(0.2, 0, 0.2, 1)",
+        }}
+      >
+        <TerminalPanel
+          sessionId={currentSession ?? undefined}
+          open={terminalOpen}
+          onClose={() => setTerminalOpen(false)}
+          height={terminalHeight}
+          onHeightChange={changeTerminalHeight}
+          fullWidth
+          onResizeStart={() => {
+            void api?.browser.setOverlay({ open: true }).catch(() => {});
+          }}
+          onResizeEnd={() => {
+            void api?.browser.setOverlay({ open: false }).catch(() => {});
+          }}
+        />
       </div>
 
       <StatusBar

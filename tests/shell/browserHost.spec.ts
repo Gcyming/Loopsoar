@@ -219,3 +219,57 @@ describe("BrowserHost（地址与网页强绑定）", () => {
     expect(host.listTabs()[0].title).toBe("新标题 - 站点");
   });
 });
+
+describe("BrowserHost（底部让位：全宽终端面板）", () => {
+  it("setBottomInset 只缩短高度，不动 x/y/宽度", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://example.com");
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+    host.setBottomInset(260);
+    // 860 - 36(Title) - 34(Tab) - 48(Top) - 32(Status) - 260(终端) = 450
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 450 });
+  });
+
+  it("与侧栏宽度组合：宽度和高度同时让位（互不干扰）", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://example.com");
+    host.setSidebarWidth(542);
+    host.setBottomInset(260);
+    // 宽 1360-542-6=812；高 860-150-260=450
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 812, height: 450 });
+  });
+
+  it("debugBounds 反映 sidebarWidth/bottomInset（E2E 可据此核对让位是否生效）", async () => {
+    const { host } = makeHost();
+    await host.navigate("https://example.com");
+    host.setSidebarWidth(542);
+    host.setBottomInset(260);
+    expect(host.debugBounds()).toMatchObject({
+      window: { width: 1360, height: 860 },
+      bounds: { x: 0, y: 118, width: 812, height: 450 },
+      sidebarWidth: 542,
+      bottomInset: 260,
+    });
+  });
+
+  it("夹取：负数归零、超 2000 封顶、窗口不足时高度为 0（不产生负尺寸）", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://example.com");
+    host.setBottomInset(-100);
+    expect(host.getBottomInset()).toBe(0);
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+    host.setBottomInset(5000);
+    expect(host.getBottomInset()).toBe(2000);
+    // 高度不允许为负：max(0, 860-150-2000) = 0
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 0 });
+  });
+
+  it("无标签时设置也记住，后续导航直接生效；inset=0 恢复整块高度（终端关闭）", async () => {
+    const { host, created } = makeHost();
+    host.setBottomInset(300);
+    await host.navigate("https://example.com");
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 410 });
+    host.setBottomInset(0);
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+  });
+});

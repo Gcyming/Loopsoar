@@ -474,7 +474,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1px 6px",
     borderRadius: 999,
     border: "1px solid rgba(248,113,113,0.45)",
-    color: "#f87171",
+    color: "var(--ls-danger, #f87171)",
     whiteSpace: "nowrap",
   },
   stateBox: {
@@ -499,7 +499,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 10,
     border: "1px solid rgba(248,113,113,0.35)",
     background: "rgba(248,113,113,0.06)",
-    color: "#f87171",
+    color: "var(--ls-danger, #f87171)",
     fontSize: 12,
   },
   stateRetry: { height: 24, fontSize: 11, padding: "0 10px" },

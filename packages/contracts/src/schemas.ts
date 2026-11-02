@@ -239,6 +239,11 @@ export const SavePageSchema = z.object({ tabId: z.string().min(1).max(120).optio
 export const TerminalCloseSchema = z.object({ terminalId: TerminalIdSchema });
 export const TerminalHistorySchema = z.object({ terminalId: TerminalIdSchema });
 
+/** 底部面板（全宽终端）占用的高度：原生网页视图必须让出，避免被 DOM 面板遮挡。 */
+export const BrowserBottomInsetSchema = z.object({
+  bottom: z.number().int().min(0).max(2000),
+});
+
 export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
@@ -291,6 +296,10 @@ export const PreferencesSchema = z.object({
   memoryAutoCapture: z.boolean(),
   /** 右侧 Agent 面板宽度（可拖拽调整，持久化）。 */
   sidebarWidth: z.number().int().min(240).max(720),
+  /** 界面主题：soft=柔和无框（默认）/ classic=旧版条框观感。 */
+  theme: z.enum(["soft", "classic"]).optional(),
+  /** 右侧会话栏模式：docked=常驻 / collapsed=收起成图标条 / float=小窗化浮动卡片。 */
+  sidebarMode: z.enum(["docked", "collapsed", "float"]).optional(),
   /** Agent 单次任务最多请求轮数。 */
   agentMaxRounds: z.number().int().min(1).max(500).optional(),
   /** Agent 单次任务最多工具调用次数。 */
@@ -520,6 +529,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "setSidebarWidth",
     request: BrowserSidebarWidthSchema,
+    sensitive: true,
+  },
+  "browser:setBottomInset": {
+    domain: "browser",
+    method: "setBottomInset",
+    request: BrowserBottomInsetSchema,
     sensitive: true,
   },
   "memory:list": {

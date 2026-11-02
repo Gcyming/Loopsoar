@@ -55,7 +55,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: `radial-gradient(circle at 28% 18%, rgba(200,118,60,0.10) 0%, ${BRAND.ink} 58%)`,
+    background: `radial-gradient(circle at 28% 18%, rgba(var(--ls-accent-rgb, 200, 118, 60),0.10) 0%, ${BRAND.ink} 58%)`,
   },
   startPage: { maxWidth: 520, padding: 28, textAlign: "left" },
   startMark: { marginBottom: 18, opacity: 0.95 },

@@ -422,6 +422,23 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               </div>
               <div style={{ flex: 1, minWidth: 280 }}>
                 <div className="panel-card" style={S.card}>
+                  <div style={S.formHead}>{tr("settings.appearance.theme.head")}</div>
+                  <Field l={tr("settings.appearance.theme.label")} h={tr("settings.appearance.theme.hint")}>
+                    <Seg
+                      v={prefs?.theme ?? "soft"}
+                      opts={[
+                        ["soft", tr("settings.appearance.theme.soft")],
+                        ["classic", tr("settings.appearance.theme.classic")],
+                      ]}
+                      on={(x) => {
+                        if (!prefs) return;
+                        // theme 属于偏好：写入 prefs 后由通用 400ms 防抖 effect 调用 setPreferences 落盘
+                        setPrefs({ ...prefs, theme: x as Preferences["theme"] });
+                      }}
+                    />
+                  </Field>
+                </div>
+                <div className="panel-card" style={S.card}>
                   <div style={S.formHead}>{tr("settings.appearance.railParams")}</div>
                   {sliderDefs.map((item) => (
                     <div key={item.key} style={S.sliderRow}>

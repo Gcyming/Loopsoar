@@ -287,6 +287,14 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             await new Promise((r) => setTimeout(r, 900));
           }
 
+          // E2E：任意表达式求值（LOOPSOAR_E2E_EVAL）——探针用，生产不触发
+          if (process.env.LOOPSOAR_E2E_EVAL) {
+            const result = await win.webContents
+              .executeJavaScript(process.env.LOOPSOAR_E2E_EVAL, true)
+              .catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
+            console.log("E2E_EVAL", JSON.stringify(result));
+          }
+
           // E2E：悬停预览（LOOPSOAR_E2E_HOVER_TITLE=更多）——真实 mouseMove 触发 250ms hover 打开浮层
           if (process.env.LOOPSOAR_E2E_HOVER_TITLE) {
             const target = process.env.LOOPSOAR_E2E_HOVER_TITLE;

@@ -21,7 +21,7 @@ export default function ContextRing({ used, cap, loading }: ContextRingProps): R
   const safeCap = Math.max(1, cap);
   const ratio = Math.min(1, Math.max(0, used / safeCap));
   const pct = Math.round(ratio * 100);
-  const color = ratio < 0.6 ? "#4ade80" : ratio < 0.85 ? "#f2b855" : "#f87171";
+  const color = ratio < 0.6 ? "#4ade80" : ratio < 0.85 ? "#f2b855" : "var(--ls-danger, #f87171)";
   const radius = (SIZE - STROKE) / 2;
   const circumference = 2 * Math.PI * radius;
   return (

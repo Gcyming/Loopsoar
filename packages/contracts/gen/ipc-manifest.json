@@ -176,6 +176,13 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:setBottomInset",
+      "domain": "browser",
+      "method": "setBottomInset",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "memory:list",
       "domain": "memory",
       "method": "list",

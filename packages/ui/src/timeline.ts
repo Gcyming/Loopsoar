@@ -187,10 +187,10 @@ export type ToolCategory = "" | "执行命令" | "写入" | "网页访问" | "�
 /** 工具分类（决定时间线节点颜色与分类徽标）。 */
 export function toolCategoryOf(name: string): { category: ToolCategory; color: string } {
   const raw = name.replace(/^mcp__[^_]+__/, "");
-  if (/^(todo_write|todo|plan)/i.test(raw)) return { category: "规划", color: "#c8763c" };
+  if (/^(todo_write|todo|plan)/i.test(raw)) return { category: "规划", color: "var(--ls-accent, #c8763c)" };
   if (/^(delegate_subagent|subagent_result|delegate)$/i.test(raw)) return { category: "委派子代理", color: "#c084fc" };
   if (/bash|terminal|exec|command|code_check|\.py|npm|pip|git /i.test(raw)) return { category: "执行命令", color: "#a78bfa" };
-  if (/delete|remove|\brm\b|del/i.test(raw)) return { category: "删除", color: "#f87171" };
+  if (/delete|remove|\brm\b|del/i.test(raw)) return { category: "删除", color: "var(--ls-danger, #f87171)" };
   if (/write|edit|create|save|generate/i.test(raw)) return { category: "写入", color: "#34d399" };
   if (/search|fetch|navigate|browse|snapshot|click|type/i.test(raw)) return { category: "网页访问", color: "#60a5fa" };
   if (/read|list|get/i.test(raw)) return { category: "读取", color: "#fbbf24" };

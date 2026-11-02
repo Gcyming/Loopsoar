@@ -695,7 +695,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   chipCompact: { width: 24, padding: 0, justifyContent: "center" },
-  chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: "rgba(200,118,60,0.10)" },
+  chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.10)" },
   anchor: { position: "relative", display: "inline-flex" },
   spacer: { flex: 1 },
   spinnerInline: { color: BRAND.ochreHover },
@@ -730,7 +730,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 10.5,
     cursor: "pointer",
   },
-  permSegBtnOn: { color: BRAND.ochreHover, borderColor: BRAND.ochre, background: "rgba(200,118,60,0.12)" },
+  permSegBtnOn: { color: BRAND.ochreHover, borderColor: BRAND.ochre, background: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.12)" },
   modelMenuItem: {
     display: "flex",
     alignItems: "center",
@@ -745,7 +745,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     textAlign: "left",
   },
-  modelMenuItemActive: { color: BRAND.ochreHover, background: "rgba(200,118,60,0.10)" },
+  modelMenuItemActive: { color: BRAND.ochreHover, background: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.10)" },
   modelItemName: { display: "flex", alignItems: "center", gap: 5, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   modelBadge: {
     fontSize: 9,

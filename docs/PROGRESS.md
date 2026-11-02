@@ -353,6 +353,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **清理**：BrowserChrome 11 个过渡 shim props 删除；旧历史/下载浮层调用链从 App 移除；layering 守卫白名单补 chromePopover（合法 Electron 子窗口管理器）
 - 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5、vitest 129 文件 / 1130 tests 全绿、bundle 736KB**；真机 E2E 证据：`e2e-round5-popover-main-desktop.png`（网页可见+浮层浮于其上）、`e2e-round5-viewmore-page.png`（查看更多→整页）、`e2e-round5-global-history-page.png`（全局历史整页）、`e2e-round5-resize.png`
 
+## 二·三十五、2026-11-03 第三十二次增量（视觉/布局：柔和无框主题 + 会话栏三态 + 全宽终端）
+- **终端全宽底部 dock（VS Code 式）**：TerminalPanel 新增 `fullWidth` 模式（宽度 100%、上边缘横跨全宽拖拽手柄、工具栏/输出/输入横向铺满）；App 把终端从侧栏移到应用根布局底部（浏览器区+会话栏之下），开关 240ms 高度过渡；新增 `browser:setBottomInset` 通道 + `computeBrowserViewBounds({bottomInset})`，原生网页视图同步让出底部高度（真机探针 `bottomInset:260`、`actual.height == page.innerHeight`）；拖拽期间 `setOverlay` 隐藏原生视图避免事件被吞
+- **会话栏三态（收起 / 小窗化）**：`docked` / `collapsed`（48px 图标条：Agent 图标+展开+会话切换+新建，内容常驻 DOM 淡出 320ms）/ `float`（8px 外边距、16px 圆角、浮阴影卡片）；头部新增收起/小窗两个按钮，模式持久化到 `preferences.sidebarMode`，原生视图宽度随生效宽度实时重算；收起/展开回到上一次非收起态
+- **柔和无框双主题 + token 体系**：theme.ts 的 BRAND 全部改为 `var(--ls-…, fallback)`（内联样式自动跟随主题），新增 RADIUS/SHADOW/MOTION/applyTheme；index.html 定义 soft 默认 30 token + classic 覆盖 23 token（旧观感逐像素保留）+ 58 条无框化规则（去 1px 硬边、大圆角、明度分层、hover 不位移、统一缓动、主题切换 200ms、reduced-motion 降级），310 处颜色字面量收敛到 token；设置·外观新增 soft/classic 分段选择（默认 soft），切换即时生效
+- **动效与减噪**：侧栏收起/展开、终端拉起/收起、浮层进出统一 120–450ms decelerate；会话栏头部/工作区分隔线移除、消息/输入区去硬框；参考 `D:\pilot project` 的 collapse/float 参数与「折叠内容常驻 DOM + 延迟 visibility」经验（未拷贝代码）
+- **清理**：会话栏 i18n 补 7 个 key；theme.spec.ts 重写为双主题 token/对比度断言；删除会暴露本机桌面的 E2E 桌面截图（改为窗口级证据）
+- 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5、vitest 130 文件 / 1150 tests 全绿、bundle 739KB**；真机截图：`e2e-round6-soft-default.png`、`e2e-round6-classic-theme.png`、`e2e-round6-sidebar-collapsed.png`、`e2e-round6-sidebar-float.png`、`e2e-round6-terminal-fullwidth.png`
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

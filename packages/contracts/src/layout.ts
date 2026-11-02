@@ -14,6 +14,10 @@ export const LAYOUT = {
   TOP_BAR_HEIGHT: 48,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
   SIDEBAR_WIDTH: 360,
+  /** 侧栏收起态宽度（只剩图标/展开按钮）。 */
+  SIDEBAR_COLLAPSED_WIDTH: 48,
+  /** 小窗化（浮动卡片）模式下侧栏四周留白。 */
+  SIDEBAR_FLOAT_MARGIN: 8,
   /** 侧栏拖拽分隔条宽度：原生网页视图必须让出这 6px，否则分隔条被视图盖住无法拖拽。 */
   SPLITTER_WIDTH: 6,
   /** 底部状态条高度。 */
@@ -42,18 +46,29 @@ export interface BrowserViewBounds {
  * 计算浏览器原生视图的包围盒（逻辑像素）：
  * 顶部让出 TOP_BAR，右侧让出 SIDEBAR，底部让出 STATUS_BAR；宽高不足时钳制为 0（不产生负尺寸）。
  */
+export interface BrowserBoundsOptions {
+  /** 右侧侧栏实际宽度（收起态 48 / 浮动卡片宽度）；缺省用 layout.SIDEBAR_WIDTH。 */
+  sidebarWidth?: number;
+  /** 底部被 DOM 面板（全宽终端）占用的高度；原生视图必须让出，否则被盖住。 */
+  bottomInset?: number;
+}
+
 export function computeBrowserViewBounds(
   size: WindowSize,
   layout: typeof LAYOUT = LAYOUT,
+  options: BrowserBoundsOptions = {},
 ): BrowserViewBounds {
-  const width = Math.max(0, size.width - layout.SIDEBAR_WIDTH - layout.SPLITTER_WIDTH);
+  const sidebarWidth = Math.max(0, options.sidebarWidth ?? layout.SIDEBAR_WIDTH);
+  const bottomInset = Math.max(0, Math.min(options.bottomInset ?? 0, size.height));
+  const width = Math.max(0, size.width - sidebarWidth - layout.SPLITTER_WIDTH);
   const height = Math.max(
     0,
     size.height -
       layout.TITLE_BAR_HEIGHT -
       layout.TAB_BAR_HEIGHT -
       layout.TOP_BAR_HEIGHT -
-      layout.STATUS_BAR_HEIGHT,
+      layout.STATUS_BAR_HEIGHT -
+      bottomInset,
   );
   return { x: 0, y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + layout.TAB_BAR_HEIGHT, width, height };
 }

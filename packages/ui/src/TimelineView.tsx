@@ -339,7 +339,7 @@ function ToolNode({
   }, [step.result]);
   return (
     <div className="think-tool-node">
-      <span className="think-tool-mark" style={{ background: failed ? "#f87171" : color }} />
+      <span className="think-tool-mark" style={{ background: failed ? "var(--ls-danger, #f87171)" : color }} />
       <div
         className="think-tool-btn"
         data-status={running ? "running" : failed ? "fail" : "ok"}
@@ -356,7 +356,7 @@ function ToolNode({
         style={{ cursor: hasBody ? "pointer" : "default" }}
       >
         <span className="think-tool-glyph" aria-hidden>{glyphFor(category)}</span>
-        <span className="think-tool-name" style={{ color: failed ? "#f87171" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
+        <span className="think-tool-name" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
         {category ? <span className="think-tool-cat">{category}</span> : null}
         {diffStats ? (
           <span className="think-diff-inline">
@@ -386,7 +386,7 @@ function ToolNode({
           className="think-tool-status"
           data-running={running ? "1" : undefined}
           data-settled={!running ? "1" : undefined}
-          style={{ color: running ? BRAND.ochreHover : failed ? "#f87171" : "#4ade80" }}
+          style={{ color: running ? BRAND.ochreHover : failed ? "var(--ls-danger, #f87171)" : "#4ade80" }}
           title={running ? "正在执行" : failed ? "执行失败" : "执行成功"}
         >
           {status}
@@ -418,7 +418,7 @@ function ToolNode({
               isCommand ? (
                 <pre className="think-terminal">{resultText.slice(0, 6000)}{resultText.length > 6000 ? "\n…（已截断）" : ""}</pre>
               ) : (
-                <div className="think-tool-result" style={{ color: failed ? "#f87171" : BRAND.linenMuted }}>
+                <div className="think-tool-result" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.linenMuted }}>
                   <span className="think-tool-result-mark" aria-hidden>{failed ? "✕" : "✓"}</span>
                   <span className="think-tool-result-text">{resultText.slice(0, 600)}{resultText.length > 600 ? "…" : ""}</span>
                 </div>

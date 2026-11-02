@@ -221,5 +221,5 @@ export default function Onboarding({ open, onClose, onOpenSettings }: Onboarding
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  bulletIcon: { flex: "none", color: "#c8763c", marginTop: 3 },
+  bulletIcon: { flex: "none", color: "var(--ls-accent, #c8763c)", marginTop: 3 },
 };
