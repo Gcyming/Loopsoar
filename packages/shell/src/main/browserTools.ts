@@ -7,6 +7,7 @@
  *   · 输出限制大小（模型上下文友好），错误返回 ok:false 而不是抛异常。
  */
 import { z } from "zod";
+import type { NetAdapter } from "loopsoar-core/platform";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import type { BrowserHost } from "./browserHost.js";
 
@@ -187,26 +188,35 @@ export function registerBrowserTools(registry: ToolRegistry, browserHost: () => 
       try {
         const params = ctx.params as { url?: string; maxChars?: number };
         if (!params?.url) return { ok: false, content: "[错误] 缺少 url" };
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 12_000);
-        try {
-          const res = await fetch(params.url, {
-            headers: { "user-agent": "LoopsoarBot/0.0 (+local agent browser)", accept: "text/html,application/json,text/plain,*/*" },
-            signal: controller.signal,
-            redirect: "follow",
-          });
-          const contentType = res.headers.get("content-type") ?? "";
-          const raw = await res.text();
-          const text = /html/i.test(contentType) ? htmlToText(raw) : raw;
-          return {
-            ok: res.ok,
-            content: res.ok ? `HTTP ${res.status} ${params.url}\n\n${clip(text, params.maxChars ?? MAX_TEXT)}` : `[HTTP ${res.status}] ${clip(text, 1000)}`,
-          };
-        } finally {
-          clearTimeout(timer);
+        // 出网必须走注入的 platform.net（DNS 钉扎 + 逐跳 SSRF 校验）；
+        // 这里不再裸 fetch：裸 fetch 会重新解析 DNS，把 SSRF 防护降级成"校验后被 TOCTOU 绕过"。
+        const net = ctx.platform?.net as NetAdapter | undefined;
+        if (!net || typeof net.request !== "function") {
+          return { ok: false, content: "[错误] 网络适配器未就绪（无法安全抓取）" };
         }
+        const maxChars = params.maxChars ?? MAX_TEXT;
+        const response = await net.request({
+          url: params.url,
+          method: "GET",
+          timeoutMs: 12_000,
+          maxChars,
+          allowLoopback: false,
+          headers: {
+            "user-agent": "LoopsoarBot/0.0 (+local agent browser)",
+            accept: "text/html,application/json,text/plain,*/*",
+          },
+        });
+        const contentType = response.headers["content-type"] ?? "";
+        const text = /html/i.test(contentType) ? htmlToText(response.text) : response.text;
+        const ok = response.status >= 200 && response.status < 300;
+        return {
+          ok,
+          content: ok
+            ? `HTTP ${response.status} ${response.finalUrl}\n\n${clip(text, maxChars)}`
+            : `[HTTP ${response.status}] ${clip(text, 1000)}`,
+        };
       } catch (err) {
-        const message = err instanceof Error ? (err.name === "AbortError" ? "抓取超时（12s）" : err.message) : String(err);
+        const message = err instanceof Error ? err.message : String(err);
         return { ok: false, content: `[错误] ${message}` };
       }
     },

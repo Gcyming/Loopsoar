@@ -17,6 +17,8 @@ import { registerExtensionsDomain } from "../../packages/shell/src/main/domains/
 import { registerSkillsDomain } from "../../packages/shell/src/main/domains/skills.ts";
 import { registerMcpDomain } from "../../packages/shell/src/main/domains/mcp.ts";
 import { registerFsDomain } from "../../packages/shell/src/main/domains/fs.ts";
+import { registerTerminalDomain } from "../../packages/shell/src/main/domains/terminal.ts";
+import type { TerminalSessionManager } from "../../packages/shell/src/main/terminalSession.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -43,6 +45,24 @@ function fakeAgentRegistry(): AgentRegistry {
   return reg;
 }
 
+/** 假终端管理器：本守卫只验证「通道有 handler」，不启动真实子进程。 */
+function fakeTerminalManager(): TerminalSessionManager {
+  return {
+    profiles: async () => [],
+    list: () => [],
+    open: async () => {
+      throw new Error("守卫测试不启动终端");
+    },
+    input: () => ({ ok: false }),
+    run: async () => ({ ok: false }),
+    interrupt: () => false,
+    close: () => false,
+    closeSession: () => 0,
+    closeAll: () => {},
+    history: () => null,
+  } as unknown as TerminalSessionManager;
+}
+
 function assemble(): void {
   const deps = fakeDeps();
   registerRuntimeDomain(deps);
@@ -53,6 +73,7 @@ function assemble(): void {
   registerAgentsDomain({ ...deps, agents: fakeAgentRegistry() });
   registerChatDomain({ ...deps, chatService: fakeChatService(), push: () => {} });
   registerBrowserDomain(deps);
+  registerTerminalDomain(deps, fakeTerminalManager());
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,

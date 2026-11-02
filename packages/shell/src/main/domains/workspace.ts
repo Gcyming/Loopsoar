@@ -5,7 +5,8 @@
  * 「会话 worktree > 会话工作区 > 活动工作区」决定。
  * 所有 git 操作限制在 Loopsoar 管理的 worktrees 根目录内，且只接受 loopsoar/* 分支。
  */
-import { FILE_WRITE_MAX_BYTES } from "loopsoar-contracts/security-policy";
+import path from "node:path";
+import { FILE_READ_MAX_BYTES, FILE_WRITE_MAX_BYTES } from "loopsoar-contracts/security-policy";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import type { SessionStore } from "../sessionStore.js";
 import type { WorkspaceStore } from "../workspaceStore.js";
@@ -26,17 +27,74 @@ export interface WorkspaceDeps extends TrustedIpcDeps {
   worktreesRoot?: string;
   /** 弹系统文件夹选择框；返回 null=取消。 */
   pickFolder?: () => Promise<string | null>;
+  /**
+   * 会话工作根解析（worktree > 会话工作区 > 活动工作区），由 index.ts 装配注入。
+   * 为什么注入而不是在这里读 store：文件 IPC 必须和 Agent 工具用同一个根（否则两边判定不一致）；
+   * 未注入时（守卫测试 / 旧装配）回退活动工作区根 → process.cwd()。
+   */
+  resolveSessionRoot?: (sessionId?: string) => string;
+}
+
+/** 本次 file:read / file:write 允许访问的根目录（fail-closed：解析失败也只会收紧到活动工作区/cwd）。 */
+function resolveFileRoot(deps: WorkspaceDeps, sessionId?: string): string {
+  if (deps.resolveSessionRoot) {
+    try {
+      const root = deps.resolveSessionRoot(sessionId);
+      if (root && root.trim()) return path.resolve(root);
+    } catch {
+      // 装配异常时继续走兜底根（仍是受限目录，不会放开到整盘）
+    }
+  }
+  const activeRoot = deps.workspaces?.active()?.root;
+  return path.resolve(activeRoot && activeRoot.trim() ? activeRoot : process.cwd());
+}
+
+/**
+ * 目标是否落在 root 内（含 root 自身）。
+ * 用 path.relative 判定而不是字符串 startsWith：避免 "C:/work2" 被 "C:/work" 前缀误判为内部，
+ * 也兼容 Windows 盘符/大小写差异（path.relative 在 win32 上按大小写不敏感比较）。
+ */
+function isInsideRoot(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  if (rel === "") return true;
+  if (rel === ".." || rel.startsWith(`..${path.sep}`)) return false;
+  return !path.isAbsolute(rel);
+}
+
+/** 解析并校验目标路径：越界返回 null（调用方给出可读的「路径越界」错误）。 */
+function resolveInRoot(root: string, requested: string): string | null {
+  const target = path.resolve(root, requested);
+  return isInsideRoot(root, target) ? target : null;
 }
 
 export function registerWorkspaceDomain(deps: WorkspaceDeps): void {
   handleTrusted(deps, "file:read", async (payload) => {
-    const { path, offset = 0, limit = 1000 } = payload as {
+    const {
+      path: requested,
+      offset = 0,
+      limit = 1000,
+      sessionId,
+    } = payload as {
       path: string;
       offset?: number;
       limit?: number;
+      sessionId?: string;
     };
     try {
-      const text = await deps.platform.fs.readFileUtf8(path);
+      const root = resolveFileRoot(deps, sessionId);
+      const target = resolveInRoot(root, requested);
+      if (!target) {
+        return { ok: false, content: `[错误] 路径越界：${requested} 不在会话工作根内（${root}）` };
+      }
+      // 先看大小再读：读 5MB 再截断会把主进程内存打满（大文件如日志/数据库）
+      const stat = await deps.platform.fs.stat(target);
+      if (stat.size > FILE_READ_MAX_BYTES) {
+        return {
+          ok: false,
+          content: `[错误] 文件过大：${target} 为 ${stat.size} 字节，超过读取上限 ${FILE_READ_MAX_BYTES} 字节`,
+        };
+      }
+      const text = await deps.platform.fs.readFileUtf8(target);
       const lines = text.split(/\r?\n/);
       const page = lines.slice(offset, offset + limit);
       return { ok: true, content: page.join("\n"), totalLines: lines.length };
@@ -46,13 +104,24 @@ export function registerWorkspaceDomain(deps: WorkspaceDeps): void {
   });
 
   handleTrusted(deps, "file:write", async (payload) => {
-    const { path, content } = payload as { path: string; content: string };
-    if (content.length > FILE_WRITE_MAX_BYTES) {
-      return { ok: false, content: "[错误] 内容超过 5MB 单文件写入上限" };
+    const { path: requested, content, sessionId } = payload as {
+      path: string;
+      content: string;
+      sessionId?: string;
+    };
+    // 按 UTF-8 实际字节数判上限（content.length 是 UTF-16 码元数，中文会被低估）
+    const bytes = Buffer.byteLength(content, "utf8");
+    if (bytes > FILE_WRITE_MAX_BYTES) {
+      return { ok: false, content: `[错误] 内容超过 5MB 单文件写入上限（${bytes} 字节）` };
     }
     try {
-      await deps.platform.fs.writeFileUtf8(path, content);
-      return { ok: true, content: `已写入 ${path}` };
+      const root = resolveFileRoot(deps, sessionId);
+      const target = resolveInRoot(root, requested);
+      if (!target) {
+        return { ok: false, content: `[错误] 路径越界：${requested} 不在会话工作根内（${root}）` };
+      }
+      await deps.platform.fs.writeFileUtf8(target, content);
+      return { ok: true, content: `已写入 ${requested}` };
     } catch (err) {
       return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
     }

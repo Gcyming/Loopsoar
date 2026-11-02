@@ -60,6 +60,10 @@ import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
 import { registerFsDomain } from "./domains/fs.js";
+import { registerTerminalDomain } from "./domains/terminal.js";
+import { TerminalSessionManager } from "./terminalSession.js";
+import { AuditFileLogger } from "./auditFile.js";
+import { createShutdownHandler } from "./shutdown.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -80,11 +84,17 @@ app.setPath(
   process.env.LOOPSOAR_DATA_DIR || path.join(app.getPath("appData"), DATA_DIR_NAME),
 );
 
+/** 审计：内存环形缓冲（诊断快照，最多 200 条）+ JSONL 落盘（发布门：审计可追溯）。 */
+const AUDIT_RING_MAX = 200;
 const auditLog: AuditEntry[] = [];
+/** 数据目录就绪后初始化；启动早期的审计只进内存环。 */
+let auditFile: AuditFileLogger | null = null;
 const deps: TrustedIpcDeps = {
   ipc: ipcMain,
   audit: (entry) => {
     auditLog.push(entry);
+    if (auditLog.length > AUDIT_RING_MAX) auditLog.shift();
+    auditFile?.append(entry);
   },
 };
 
@@ -105,6 +115,23 @@ function pushToRenderer(event: string, payload: unknown): void {
 
 let mainWindow: BrowserWindow | null = null;
 let browserHost: BrowserHost | null = null;
+
+/**
+ * 退出清理：MCP/扩展子进程、终端会话、标签落盘、审计 flush 必须收尾。
+ * 用 preventDefault 先拦住默认退出，清理完成后再 app.exit（幂等，避免退出循环）。
+ */
+let shutdownHandler: (() => Promise<void>) | null = null;
+let quitting = false;
+app.on("before-quit", (event) => {
+  if (!shutdownHandler || quitting) return;
+  quitting = true;
+  event.preventDefault();
+  void shutdownHandler()
+    .catch(() => undefined)
+    .finally(() => {
+      app.exit(0);
+    });
+});
 
 function iconPath(): string | undefined {
   const candidate = path.join(__dirname, "../../resources/icon.png");
@@ -493,6 +520,8 @@ function ensureWritableDataDirs(): ReturnType<typeof ensureLoopsoarDirs> {
 app.whenReady().then(async () => {
   try {
     const dirs = ensureWritableDataDirs();
+  // 审计落盘：<dataDir>/logs/audit-YYYYMMDD.jsonl（重启可查；失败不影响主流程）
+  auditFile = new AuditFileLogger({ dir: path.join(dirs.dataDir, "logs") });
 
   // 协议：服务真实 UI 产物；产物缺失时降级为可读提示页（不白屏）
   const uiDist = resolveUiDistDir(uiDistCandidates(__dirname, process.cwd()));
@@ -632,6 +661,12 @@ app.whenReady().then(async () => {
   };
   // 沙箱根跟随活动工作区（逐个工具执行前还会按会话根覆盖，见 ChatService.resolveWorkspaceRoot）
   sandbox.setWorkspaceRoot(workspaces.active()?.root ?? workspaceRoot);
+
+  // 终端会话管理器（持久多环境终端）：每终端独立子进程，进程与工作根按会话隔离
+  const terminals = new TerminalSessionManager({
+    resolveWorkspaceRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
+    push: (event, payload) => pushToRenderer(event, payload),
+  });
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
   const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
   const mcp = new McpHost(
@@ -662,6 +697,7 @@ app.whenReady().then(async () => {
     },
     diagnosticsExtra: () => ({
       auditEntries: auditLog.length,
+      auditFile: auditFile?.stats() ?? null,
       tools: registry.list().length,
       agents: agents.list().length,
       memoryEntries: memory.stats().total,
@@ -709,12 +745,22 @@ app.whenReady().then(async () => {
     resolveWorkspaceRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
     // 供应商：设置面板保存后即时生效
     getLlm: (sessionId?: string) => buildLlmFromActive(sessionId) ?? llmRef,
-    // 会话历史：每次 stream 读取持久化消息，让模型具备多轮上下文（回滚后同样生效）
-    getHistory: () =>
-      (sessions.load()?.messages ?? []).slice(-400).map((m) => ({
+    // 会话历史：按本次请求的 sessionId 读该会话消息（后台会话不串台；回滚后同样生效）
+    getHistory: (sessionId?: string) => {
+      const messages = sessionId
+        ? (sessions.loadMessages(sessionId) ?? [])
+        : (sessions.load()?.messages ?? []);
+      return messages.slice(-400).map((m) => ({
         role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
         content: m.text,
-      })),
+      }));
+    },
+    // 当前模型上下文窗口（tokens）：用于历史压缩预算；未探测到则回退 core 默认
+    getContextWindow: () => {
+      const active = providers.active();
+      const spec = active?.models?.find((m) => m.id === active.model);
+      return spec?.contextWindow;
+    },
     // Agent 请求上限（设置 · 通用）
     getAgentLimits: () => {
       const prefs = loadPreferences(dirs.configDir);
@@ -782,15 +828,15 @@ app.whenReady().then(async () => {
   registerFileTools(registry, resolveSessionRoot);
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
-  // 退出前把每个会话的标签状态落盘（防抖队列可能还没触发）
-  app.on("before-quit", () => {
+  /** 退出前全量落盘：标签防抖队列可能还没触发，必须同步刷一次。 */
+  const saveAllBrowserStates = (): void => {
     for (const timer of tabSaveTimers.values()) clearTimeout(timer);
     tabSaveTimers.clear();
     for (const meta of sessions.list()) {
       const state = browserHost?.snapshotSession(meta.id);
       if (state && state.tabs.length > 0) sessions.saveBrowserState(meta.id, state);
     }
-  });
+  };
 
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
   const downloads = new DownloadsBridge(
@@ -805,6 +851,8 @@ app.whenReady().then(async () => {
     workspaces,
     sessions,
     worktreesRoot,
+    // file:read/write 的会话工作根解析（worktree > 会话工作区 > 活动工作区）
+    resolveSessionRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
     pickFolder: async () => {
       const result = await dialog.showOpenDialog(mainWindow ?? undefined!, {
         title: "选择工作区文件夹",
@@ -845,6 +893,7 @@ app.whenReady().then(async () => {
       pushToRenderer("browser:tabs", { tabs });
     },
     onSessionDeleting: async (sessionId) => {
+      terminals.closeSession(sessionId);
       const worktree = sessions.getWorktree(sessionId);
       if (!worktree) return;
       await removeWorktree({
@@ -870,6 +919,7 @@ app.whenReady().then(async () => {
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost, downloads });
+  registerTerminalDomain(deps, terminals);
   // 扩展运行时：每个启用扩展一个隔离子进程，工具桥接为 ext__<id>__<tool>
   const extensionRuntime = new ExtensionRuntime({
     extensions,
@@ -930,6 +980,15 @@ app.whenReady().then(async () => {
       isMaximized: () => mainWindow?.isMaximized() ?? false,
       isFocused: () => mainWindow?.isFocused() ?? false,
     },
+  });
+
+  // 退出清理装配（P0）：子进程/终端/落盘/审计全部收尾后再退出
+  shutdownHandler = createShutdownHandler({
+    saveBrowserStates: saveAllBrowserStates,
+    shutdownMcp: () => mcp.shutdown(),
+    stopExtensions: () => extensionRuntime.stopAll(),
+    closeTerminals: () => terminals.closeAll(),
+    flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });
 
   // 移除原生菜单栏（File/Edit/View/Window）——品牌统一由自定义标题栏承载

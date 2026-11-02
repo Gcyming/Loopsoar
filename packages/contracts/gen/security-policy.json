@@ -176,5 +176,26 @@
     "silentTimeoutMs": 90000,
     "noProgressRounds": 5
   },
-  "displayLimitDefault": 1200
+  "displayLimitDefault": 1200,
+  "terminalLimits": {
+    "maxSessions": 8,
+    "idleMs": 1800000,
+    "bufferBytes": 524288,
+    "inputMaxBytes": 16384
+  },
+  "ssrf": {
+    "blockedHostnames": [
+      "localhost",
+      "metadata",
+      "metadata.google.internal",
+      "instance-data"
+    ],
+    "allowedPorts": [
+      80,
+      443,
+      8080,
+      8443
+    ]
+  },
+  "fileReadMaxBytes": 5242880
 }

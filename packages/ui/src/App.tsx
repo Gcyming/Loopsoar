@@ -28,6 +28,7 @@ import TitleBar from "./TitleBar.js";
 import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
+import TerminalPanel from "./TerminalPanel.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -60,6 +61,26 @@ function nextId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** 终端抽屉高度持久化键（与 railParams 等本地设置一致，放 localStorage）。 */
+const TERMINAL_HEIGHT_STORAGE_KEY = "loopsoar_terminal_height";
+
+/** 读取持久化的终端抽屉高度：夹紧到契约范围，读失败回默认值。 */
+function readTerminalHeight(): number {
+  const fallback = LAYOUT.TERMINAL_PANEL_HEIGHT;
+  if (typeof localStorage === "undefined") return fallback;
+  try {
+    const raw = localStorage.getItem(TERMINAL_HEIGHT_STORAGE_KEY);
+    const value = raw === null ? Number.NaN : Number(raw);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(
+      LAYOUT.TERMINAL_PANEL_MAX_HEIGHT,
+      Math.max(LAYOUT.TERMINAL_PANEL_MIN_HEIGHT, Math.round(value)),
+    );
+  } catch {
+    return fallback; // 隐私模式等不允许访问 localStorage
+  }
+}
+
 /* ---------------------------------- 主界面 ---------------------------------- */
 
 export default function App(): React.JSX.Element {
@@ -71,6 +92,9 @@ export default function App(): React.JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  // 应用内终端（P0-4）：面板开合 + 高度（高度 localStorage 持久化；布局范围来自契约 LAYOUT）。
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState<number>(() => readTerminalHeight());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [address, setAddress] = useState("");
@@ -568,6 +592,20 @@ export default function App(): React.JSX.Element {
     },
     [api, preferences, sidebarWidth],
   );
+
+  // 终端抽屉高度：夹紧到契约范围并持久化（TerminalPanel 拖拽/键盘调整后回调）
+  const changeTerminalHeight = useCallback((next: number): void => {
+    const clamped = Math.min(
+      LAYOUT.TERMINAL_PANEL_MAX_HEIGHT,
+      Math.max(LAYOUT.TERMINAL_PANEL_MIN_HEIGHT, Math.round(next)),
+    );
+    setTerminalHeight(clamped);
+    try {
+      localStorage.setItem(TERMINAL_HEIGHT_STORAGE_KEY, String(clamped));
+    } catch {
+      // 忽略（隐私模式等）
+    }
+  }, []);
 
   const openModelMenu = useCallback((): void => {
     if (!api || !provider?.configured) {
@@ -1364,6 +1402,14 @@ export default function App(): React.JSX.Element {
             onRegenerate={regenerate}
             onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
           />
+          {/* 应用内终端：渲染在 Composer 之上的底部抽屉；关闭时组件仍挂载以保留本地输出缓冲 */}
+          <TerminalPanel
+            sessionId={currentSession ?? undefined}
+            open={terminalOpen}
+            onClose={() => setTerminalOpen(false)}
+            height={terminalHeight}
+            onHeightChange={changeTerminalHeight}
+          />
           <Composer
             value={input}
             onChange={setInput}
@@ -1430,6 +1476,18 @@ export default function App(): React.JSX.Element {
         <span style={styles.statusItem}>agent: {agentLabel}</span>
         <span style={styles.statusItem}>{providerLabel}</span>
         <span style={{ ...styles.statusItem, ...styles.statusUrl }}>{currentUrl || "about:start"}</span>
+        <button
+          type="button"
+          className="chip"
+          style={{ ...styles.chip, ...styles.terminalToggle, ...(terminalOpen ? styles.terminalToggleOpen : {}) }}
+          title={terminalOpen ? "收起应用内终端" : "打开应用内终端（cmd / PowerShell / Git Bash / Python / Node / C++）"}
+          aria-label={terminalOpen ? "收起终端面板" : "打开终端面板"}
+          aria-pressed={terminalOpen}
+          onClick={() => setTerminalOpen((value) => !value)}
+        >
+          <Icon name="terminal" size={12} />
+          终端
+        </button>
       </footer>
 
       <WorkspacePanel
@@ -1848,6 +1906,19 @@ const styles: Record<string, React.CSSProperties> = {
   statusItem: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   liveDot: { marginRight: 6, verticalAlign: "1px" },
   statusUrl: { marginLeft: "auto", fontFamily: "ui-monospace, Consolas, monospace", color: BRAND.linenFaint },
+  /** 状态栏「终端」按钮：打开时用品牌赭石强调（与 chip 共用底样式）。 */
+  terminalToggle: {
+    height: 22,
+    gap: 4,
+    padding: "0 8px",
+    flexShrink: 0,
+    fontSize: 10.5,
+  },
+  terminalToggleOpen: {
+    background: BRAND.ochreSoft,
+    borderColor: "rgba(200,118,60,0.55)",
+    color: BRAND.ochreHover,
+  },
   toast: {
     position: "absolute",
     left: "50%",

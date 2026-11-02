@@ -18,6 +18,10 @@ export const LAYOUT = {
   SPLITTER_WIDTH: 6,
   /** 底部状态条高度。 */
   STATUS_BAR_HEIGHT: 32,
+  /** 右侧 Agent 面板底部终端抽屉：默认/最小/最大高度。 */
+  TERMINAL_PANEL_HEIGHT: 260,
+  TERMINAL_PANEL_MIN_HEIGHT: 140,
+  TERMINAL_PANEL_MAX_HEIGHT: 560,
 } as const;
 
 export const WindowSizeSchema = z.object({

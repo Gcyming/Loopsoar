@@ -361,6 +361,79 @@ export interface ChatHistoryMessage {
   model?: string;
 }
 
+/* ── 终端（持久多环境终端；P0 应用内终端面板） ── */
+
+/** 终端配置档：不同解释器 / 工具链环境（与 contracts 的 TerminalProfileKeySchema 对齐）。 */
+export type TerminalProfileKey = "cmd" | "powershell" | "gitbash" | "python" | "node" | "cpp";
+
+/** 配置档种类（shell 环境 / 解释器 REPL / 编译器工具链）。 */
+export type TerminalProfileKind = "shell" | "interpreter" | "toolchain";
+
+/** 配置档能力信息（探测结果）：不可用项 UI 禁用并显示 detail（安装提示）。 */
+export interface TerminalProfileInfo {
+  key: TerminalProfileKey;
+  label: string;
+  description: string;
+  available: boolean;
+  /** 探测到的版本号（如 "Python 3.12.4"），不可用时可能缺省。 */
+  version?: string;
+  /** 不可用原因 / 安装指引 / 额外说明（tooltip 展示）。 */
+  detail?: string;
+  kind: TerminalProfileKind;
+}
+
+/** 终端实例状态：进程退出后条目保留（exited，可回放/关闭），close 后才从列表移除。 */
+export type TerminalSessionState = "starting" | "ready" | "exited" | "error";
+
+/** 一个持久终端实例（主进程签发 terminalId）。 */
+export interface TerminalSessionInfo {
+  terminalId: string;
+  sessionId: string;
+  profile: TerminalProfileKey;
+  cwd: string;
+  state: TerminalSessionState;
+  createdAt: number;
+  /** 标签标题（shell 侧生成）。 */
+  label: string;
+}
+
+/** 终端回放缓冲（切换标签 / 重开面板时恢复输出；主进程环形缓冲上限 512KB）。 */
+export interface TerminalHistoryResult {
+  terminalId: string;
+  profile: string;
+  state: string;
+  /** 原始输出（含 ANSI 转义与 \r；UI 需 stripAnsi + 规范化）。 */
+  data: string;
+}
+
+/** 终端操作通用返回（run / input）。 */
+export interface TerminalActionResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** terminal:data 事件负载：增量输出（stdout+stderr 合流、主进程 30ms 批处理）。 */
+export interface TerminalDataPayload {
+  terminalId: string;
+  data: string;
+}
+
+/** terminal:exit 事件负载：子进程退出（code=null 表示被信号终止）。 */
+export interface TerminalExitPayload {
+  terminalId: string;
+  code: number | null;
+  signal?: string;
+}
+
+/** terminal:state 事件负载：终端状态迁移（可能携带 cwd/label 更新）。 */
+export interface TerminalStatePayload {
+  terminalId: string;
+  state: TerminalSessionState;
+  cwd?: string;
+  label?: string;
+  error?: string;
+}
+
 export type LoopsoarEvent =
   | "chat:stream:chunk"
   | "chat:stream:reasoning"
@@ -379,7 +452,10 @@ export type LoopsoarEvent =
   | "mcp:updated"
   | "skills:updated"
   | "mcp:updated"
-  | "memory:updated";
+  | "memory:updated"
+  | "terminal:data"
+  | "terminal:exit"
+  | "terminal:state";
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
@@ -458,6 +534,24 @@ export interface LoopsoarAPI {
     downloadAction(payload: { id: string; action: "cancel" | "open" | "showInFolder" | "remove" }): Promise<{ ok: boolean }>;
     snapshot(): Promise<{ ok: boolean; url?: string; title?: string; text?: string; error?: string }>;
     screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
+  };
+  terminal: LoopsoarDomain & {
+    /** 探测本机可用的终端配置档（cmd/PowerShell/Git Bash/Python/Node/C++；裸数组）。 */
+    profiles(): Promise<TerminalProfileInfo[]>;
+    /** 当前终端列表（裸数组；已退出条目保留 state:"exited" 供回放）。 */
+    list(): Promise<TerminalSessionInfo[]>;
+    /** 新建持久终端；缺省 cwd = 当前会话工作根。失败会 reject（中文错误消息）。 */
+    open(payload: { sessionId?: string; profile: TerminalProfileKey; cwd?: string }): Promise<TerminalSessionInfo>;
+    /** 原始输入（REPL 交互用；是否追加换行由 UI/用户决定）。 */
+    input(payload: { terminalId: string; data: string }): Promise<TerminalActionResult>;
+    /** 执行一整条命令（Enter 提交；安全判定在主进程）。 */
+    run(payload: { terminalId: string; command: string }): Promise<TerminalActionResult>;
+    /** 中断当前前台进程（Ctrl+C 等价）；false = 不存在/已退出（幂等）。 */
+    interrupt(payload: { terminalId: string }): Promise<boolean>;
+    /** 关闭终端并清理子进程树；false = 不存在/已退出（幂等）。 */
+    close(payload: { terminalId: string }): Promise<boolean>;
+    /** 回放终端输出缓冲；null = 该 id 不认识/已关闭。 */
+    history(payload: { terminalId: string }): Promise<TerminalHistoryResult | null>;
   };
   memory: LoopsoarDomain & {
     list(): Promise<MemoryListResult>;

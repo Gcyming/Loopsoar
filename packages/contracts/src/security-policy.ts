@@ -29,7 +29,7 @@ export const PROTECTED_SOURCE_DIRS = [
 ];
 
 /**
- * 私网 CIDR 数据（IPv4 与 IPv6），共 13 段。
+ * 私网 CIDR 数据（IPv4 与 IPv6），共 15 段。
  * 纯数据格式：v=4|6，base 为数字数组（v4 四段，v6 两段 [hi,lo]），prefix 为前缀长度。
  * 用于 websearch / sandbox 的 SSRF 检查。
  */
@@ -114,3 +114,35 @@ export const LOOP_HEALTH = {
  * 默认显示行数限制。
  */
 export const DISPLAY_LIMIT_DEFAULT = 1200;
+
+/* ───────────────────────── 终端持久会话（P0 终端子系统） ───────────────────────── */
+
+/** 同时存活的终端会话上限（每会话每环境一个，全应用封顶）。 */
+export const TERMINAL_MAX_SESSIONS = 8;
+/** 终端空闲回收时间（30 分钟无输入/输出即回收，防止进程泄漏）。 */
+export const TERMINAL_IDLE_MS = 30 * 60 * 1000;
+/** 单终端回放缓冲上限（512KB，超出丢弃最旧输出）。 */
+export const TERMINAL_BUFFER_BYTES = 512 * 1024;
+/** 终端原始输入单次上限（16KB）。 */
+export const TERMINAL_INPUT_MAX_BYTES = 16_384;
+
+/* ───────────────────────── 网络安全（SSRF / DNS 钉扎） ───────────────────────── */
+
+/**
+ * SSRF 主机名黑名单：IP 段之外的内部名称别名（解析前后都要判）。
+ * 为什么还要黑名单：部分云元数据服务用固定内部域名，只判 IP 段会漏。
+ */
+export const SSRF_BLOCKED_HOSTNAMES = [
+  "localhost",
+  "metadata",
+  "metadata.google.internal",
+  "instance-data",
+] as const;
+
+/** SSRF：禁止的端口之外，仅允许这些显式端口直连（80/443 为常规 Web）。 */
+export const SSRF_ALLOWED_PORTS = [80, 443, 8080, 8443] as const;
+
+/* ───────────────────────── 文件 IPC ───────────────────────── */
+
+/** 文件读取 IPC 单次最大字节数（约 5MB，防止一次拉爆主进程）。 */
+export const FILE_READ_MAX_BYTES = 5_242_880;

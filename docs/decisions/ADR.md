@@ -216,6 +216,26 @@
 
 ---
 
+## ADR-0016 P0 安全门加固 + 持久多环境终端 + 工具参数单一转换
+
+- **背景**：2026-11-02 代码级扫描发现三个发布门级缺陷：① 危险命令硬规则「双落空」（`terminal_run` 参数名 `command`，而沙箱只校验 `args.path`，`hardRuleCheck` 永不触发）；② `web_fetch`/`browser_navigate`/模型探测使用裸 `fetch`，无 SSRF/DNS 钉扎；③ `file:read/write` IPC 无工作根约束、`sessionId` 未净化即拼路径；另有沙箱全局根竞态、退出不清理 MCP/扩展子进程、审计不落盘。同时产品缺少「真正的终端」与工具参数 Schema（模型收到空 `parameters`）。
+- **决策**：
+  1. **安全门优先于新功能**：先把 fail-closed 链路修到可验证，再补能力；
+  2. 危险命令在**工具执行与终端输入两条路径**都前置拦截（不依赖沙箱的 target 推断）；
+  3. 网络统一走「SSRF 判据（纯逻辑）+ 平台层 DNS 钉扎 + 浏览器请求守卫」三层，工具不得直接 `fetch`；
+  4. 文件 IPC 与所有会话落盘路径一律「会话工作根约束 + 会话 ID 净化」；
+  5. 沙箱判定显式传入会话工作根，**禁止运行时改写全局根**；
+  6. 终端采用**持久会话 + 应用内面板**，配置档覆盖 cmd/PowerShell/Git Bash/Python/Node/C++（零新增原生依赖，不用 PTY/xterm）；
+  7. 工具参数由 zod 单一转换到 JSON Schema（零依赖），未知类型降级 + warning 而不抛错。
+- **理由**：这些是「敢不敢给人用」的发布门级缺陷，且全部有可自动化验证的判据；终端真实可用是 Agent 浏览器形态的日常操作入口；工具参数为空会让工具调用靠猜，是 Agent 质量的第一道漏点。
+- **替代方案**：① 只修工具不修 IPC——被否（潜伏的面更大）；② 引入 node-pty/xterm 做完整 TTY——被否（本轮零新增原生依赖，Unix/Windows PTY 差异大，且沙箱受限会话无法验证）；③ 用第三方 zod-to-json-schema 包——被否（离线环境无法安装且子集足够）。
+- **验证方式**：`tests/core/ssrf.spec.ts`、`tests/core/netFetch.spec.ts`、`tests/shell/browserRequestGuard.spec.ts`、`tests/shell/terminalCommandPolicy.spec.ts`、`tests/shell/terminalDomain.spec.ts`、`tests/shell/sessionId.spec.ts`、`tests/shell/fileIpc.spec.ts`、`tests/core/sandboxSessionRoot.spec.ts`、`tests/shell/auditFile.spec.ts`、`tests/shell/shutdown.spec.ts`、`tests/core/jsonSchema.spec.ts`；基线 typecheck 6/6 + gen/check 逐字节 + build 6/6 + vitest 686/686。
+- **状态**：✅ 已验证（自动化测试）；🟡 E2E 真机冒烟（终端面板、C++ 编译、浏览器守卫）待跑
+- **回退条件**：浏览器请求守卫误杀正常页面 → 拆成「仅拦私网/IP + 子资源 scheme 白名单」两档配置；终端管道语义不满足验收 → 引入 PTY 作为独立 ADR
+- **复核时间**：P0 发布门复验时（E2E 后）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -235,3 +255,4 @@
 | ADR-0013 | 会话流按会话隔离 + 会话 UI 纯模块化 | ✅ 已验证 |
 | ADR-0014 | 会话 = 浏览器文件夹（标签按会话隔离 + 本地恢复） | ✅ 已验证（云端待批准） |
 | ADR-0015 | 工作区（挂载项目文件夹）+ 会话级 Git Worktree | ✅ 本地已实现（云端后置） |
+| ADR-0016 | P0 安全门加固 + 持久多环境终端 + 工具参数单一转换 | ✅ 已验证（E2E 真机冒烟待跑） |

@@ -20,6 +20,14 @@ import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { withProviderDefaults } from "../providerDefaults.js";
 import { isSameProviderTarget } from "../providerStore.js";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
+import { inferApiFormat } from "loopsoar-core/llm";
+import {
+  isBlockedHostname,
+  isIpLiteral,
+  isLoopbackHostname,
+  isLoopbackIp,
+  isPrivateOrReservedIp,
+} from "loopsoar-core/websearch";
 import {
   validateProviderConfig,
   resolveApiKeyFromEnv,
@@ -282,48 +290,133 @@ function enrichModelSpec(raw: Record<string, unknown>): {
   return { id, contextWindow, maxOutput, vision, thinking, thinkingEfforts };
 }
 
+/* ───────────────────────── 供应商探测目标校验（SSRF） ───────────────────────── */
+
+export type ProbeTargetResult = { ok: true; url: URL } | { ok: false; message: string };
+
+/**
+ * 模型服务探测目标校验（策略与通用 web_fetch 不同）：
+ *   · 允许回环（本地 Ollama / llama-server 是合法目标，端口任意）；
+ *   · 拒绝其他私网 / 链路本地 / 元数据地址（169.254.169.254 等）；
+ *   · 仅允许 http/https；解析结果为空或混有回环+公网（疑似 DNS rebinding）一律拒绝。
+ * 为什么单独一套：通用抓取的「禁回环」会在本地模型场景误杀，而「全放行」又会被拿来打内网。
+ */
+export async function validateProbeTarget(
+  platform: Pick<LoopsoarPlatform, "net"> | undefined,
+  baseUrl: string,
+): Promise<ProbeTargetResult> {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return { ok: false, message: "SSRF 拦截：baseUrl 不是合法 URL" };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { ok: false, message: `SSRF 拦截：模型服务仅允许 http/https（当前 ${url.protocol}）` };
+  }
+  if (url.username || url.password) {
+    return { ok: false, message: "SSRF 拦截：baseUrl 不允许携带用户名/密码" };
+  }
+  const host = url.hostname;
+  if (!host) return { ok: false, message: "SSRF 拦截：baseUrl 缺少主机名" };
+
+  if (isIpLiteral(host)) {
+    if (isLoopbackIp(host)) return { ok: true, url };
+    if (isPrivateOrReservedIp(host)) {
+      return { ok: false, message: `SSRF 拦截：拒绝探测内部/保留地址（${host}）` };
+    }
+    return { ok: true, url };
+  }
+  // localhost / *.localhost：本地模型服务常见目标，显式允许
+  if (isLoopbackHostname(host)) return { ok: true, url };
+  if (isBlockedHostname(host)) {
+    return { ok: false, message: `SSRF 拦截：拒绝探测内部主机名（${host}）` };
+  }
+
+  const net = platform?.net;
+  if (!net || typeof net.resolveIps !== "function") {
+    // 未装配 DNS 适配器（单元测试/纯配置校验）：交给后续请求层兜底，避免在这里误杀合法配置
+    return { ok: true, url };
+  }
+  let ips: string[] = [];
+  try {
+    const list = await net.resolveIps(host);
+    if (Array.isArray(list)) ips = list.map((ip) => String(ip ?? "").trim()).filter((ip) => ip.length > 0);
+  } catch {
+    ips = [];
+  }
+  if (ips.length === 0) {
+    return { ok: false, message: `SSRF 拦截：无法解析模型服务主机名（${host}）` };
+  }
+  const internal = ips.find((ip) => !isLoopbackIp(ip) && isPrivateOrReservedIp(ip));
+  if (internal) {
+    return { ok: false, message: `SSRF 拦截：模型服务主机名解析到内部/保留地址（${internal}）` };
+  }
+  const loopbacks = ips.filter((ip) => isLoopbackIp(ip));
+  if (loopbacks.length > 0 && loopbacks.length !== ips.length) {
+    return { ok: false, message: "SSRF 拦截：模型服务主机名解析结果混有回环与非回环地址（疑似 DNS 重绑定）" };
+  }
+  return { ok: true, url };
+}
+
 /* ───────────────────────── 供应商连通性测试 ───────────────────────── */
 
 async function testProvider(
   deps: SettingsDeps,
   cfg: ProviderConfig,
   headerTemplates?: Record<string, string>,
+  apiFormat?: "auto" | "openai" | "anthropic",
 ): Promise<{ ok: boolean; status?: number; latencyMs?: number; message: string }> {
+  // 第一道门：探测目标本身不许指向内网（回环本地模型除外）
+  const target = await validateProbeTarget(deps.platform, cfg.baseUrl);
+  if (!target.ok) return { ok: false, message: target.message };
+
   // 密钥解析：加密库（活跃供应商）优先，环境变量兜底；测试任意配置时复用该密钥
   const activeId = deps.providers?.active()?.id;
   const apiKey = (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
   const effectiveHeaders = withProviderDefaults(cfg.provider, cfg.baseUrl, headerTemplates);
-  const url = `${cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  // 与 index.ts 装配的真实客户端同一端点规则：显式 apiFormat 优先，auto 按 baseUrl 推断
+  const format = !apiFormat || apiFormat === "auto" ? inferApiFormat(cfg.baseUrl) : apiFormat;
+  const base = cfg.baseUrl.replace(/\/+$/, "");
+  const anthropic = format === "anthropic";
+  const url = anthropic ? `${base.replace(/\/v1$/, "")}/messages` : `${base}/chat/completions`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   const startedAt = Date.now();
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "User-Agent": "Loopsoar/1.0",
+      ...(apiKey
+        ? anthropic
+          ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+          : { Authorization: `Bearer ${apiKey}` }
+        : anthropic
+          ? { "anthropic-version": "2023-06-01" }
+          : {}),
+      ...renderHeaderTemplates(effectiveHeaders, {
+        provider: cfg.provider,
+        model: cfg.model,
+        sessionId: "test-provider",
+        requestId: randomUUID(),
+        timestamp: new Date().toISOString(),
+      }),
+    };
+    const body = anthropic
+      ? { model: cfg.model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }
+      : { model: cfg.model, messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false };
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "Loopsoar/1.0",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        ...renderHeaderTemplates(effectiveHeaders, {
-          provider: cfg.provider,
-          model: cfg.model,
-          sessionId: "test-provider",
-          requestId: randomUUID(),
-          timestamp: new Date().toISOString(),
-        }),
-      },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [{ role: "user", content: "ping" }],
-        max_tokens: 1,
-        stream: false,
-      }),
+      headers,
+      body: JSON.stringify(body),
+      // 不跟随重定向：探测目标已校验，跟随 3xx 等于把校验让给服务端（SSRF 绕过口）
+      redirect: "manual",
       signal: controller.signal,
     });
     const latencyMs = Date.now() - startedAt;
     if (!response.ok) {
-      const body = (await response.text()).slice(0, 200);
-      return { ok: false, status: response.status, latencyMs, message: `HTTP ${response.status}：${body}` };
+      const bodyText = (await response.text()).slice(0, 200);
+      return { ok: false, status: response.status, latencyMs, message: `HTTP ${response.status}：${bodyText}` };
     }
     return {
       ok: true,
@@ -496,9 +589,9 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   });
 
   handleTrusted(deps, "settings:testProvider", async (payload) => {
-    const raw = payload as { headers?: Record<string, string> };
+    const raw = payload as { headers?: Record<string, string>; apiFormat?: "auto" | "openai" | "anthropic" };
     const cfg = validateProviderConfig(payload);
-    return testProvider(deps, cfg, raw.headers);
+    return testProvider(deps, cfg, raw.headers, raw.apiFormat);
   });
 
   // ── 通用偏好 / 存储位置 ──
@@ -641,6 +734,9 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       headers?: Record<string, string>;
     };
     const cfg = validateProviderConfig({ provider: raw.provider, baseUrl: raw.baseUrl, model: raw.model || "default" });
+    // SSRF 门：模型服务地址可以指向本机回环，但不能指向内网/链路本地/元数据服务
+    const target = await validateProbeTarget(deps.platform, cfg.baseUrl);
+    if (!target.ok) return { models: [], error: target.message };
     const activeId = deps.providers?.active()?.id;
     // 密钥优先级：表单刚输入的（未保存）> 活跃供应商已保存 > 环境变量
     const typedKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
@@ -673,7 +769,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(modelsUrl, { headers, signal: controller.signal });
+      const response = await fetch(modelsUrl, { headers, redirect: "manual", signal: controller.signal });
       if (!response.ok) {
         const bodyText = (await response.text().catch(() => "")).slice(0, 200);
         return { models: [], error: `HTTP ${response.status}${bodyText ? `：${bodyText}` : ""}` };

@@ -8,6 +8,8 @@ import type {
   ProcessAdapter,
   SqliteAdapter,
   NetAdapter,
+  NetRequestOptions,
+  NetResponse,
   EmbedAdapter,
   LoopsoarPlatform,
 } from "./types.js";
@@ -49,7 +51,13 @@ class WebStubSqliteAdapter implements SqliteAdapter {
 }
 
 class WebStubNetAdapter implements NetAdapter {
-  async fetchText(): Promise<any> {
+  async request(_opts: NetRequestOptions): Promise<NetResponse> {
+    throw new LoopsoarNotImplementedError("web 实现将在移动端阶段提供");
+  }
+  async fetchText(
+    _url: string,
+    _opts: { timeoutMs?: number; maxChars?: number; headers?: Record<string, string>; maxRedirects?: number },
+  ): Promise<{ status: number; finalUrl: string; text: string }> {
     throw new LoopsoarNotImplementedError("web 实现将在移动端阶段提供");
   }
   async resolveIps(_host: string): Promise<string[]> {

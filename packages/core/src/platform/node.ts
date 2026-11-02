@@ -1,13 +1,24 @@
 /**
  * Node 平台实现（§4.2）
- * 这是唯一允许接触 Node 内建模块（fs/promises、child_process、dns）的边界
+ * 这是唯一允许接触 Node 内建模块（fs/promises、child_process、dns、http/https）的边界
+ *
+ * 网络安全约定：NetAdapter.request 是 Agent 出网的唯一实现——
+ *   1) 先做纯 URL 判据（../net/ssrf：协议/主机名/IP/端口）；
+ *   2) 再做 DNS 解析判据，任一私网/保留 IP 即拒；
+ *   3) 连接钉扎：TCP 直接连到已校验的 IP（不交给 DNS 再解析一次，堵住 DNS rebinding TOCTOU），
+ *      但 Host 头与 TLS servername 保持原主机名，虚拟主机/证书校验语义不变；
+ *   4) 3xx 手动逐跳跟随，每一跳重新校验+重新解析+重新钉扎。
  */
 import * as fs from "node:fs/promises";
 import { resolve as resolvePath, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { lookup } from "node:dns/promises";
+import * as http from "node:http";
+import * as https from "node:https";
 
+import { MAX_REDIRECTS } from "loopsoar-contracts/security-policy";
 import { LoopsoarNotImplementedError } from "./errors.js";
+import { assertPublicUrlWithDns, isIpLiteral } from "../net/ssrf.js";
 import type {
   FsAdapter,
   ProcessResult,
@@ -15,6 +26,8 @@ import type {
   SqliteAdapter,
   SqliteDb,
   NetAdapter,
+  NetRequestOptions,
+  NetResponse,
   EmbedAdapter,
   LoopsoarPlatform,
 } from "./types.js";
@@ -65,6 +78,7 @@ class NodeProcessAdapter implements ProcessAdapter {
     return new Promise((resolve) => {
       let stdoutAcc = "";
       let stderrAcc = "";
+      let settled = false;
       const maxBytes = opts.maxBytes ?? 8_388_608;
       const child = execFile(cmd, args, {
         cwd: opts.cwd,
@@ -72,6 +86,23 @@ class NodeProcessAdapter implements ProcessAdapter {
         maxBuffer: 64 * 1024 * 1024, // 内部缓冲放大；输出截断由 data 监听器按 maxBytes 完成（避免 maxBuffer 超限杀进程）
         killSignal: "SIGTERM",
       });
+
+      // 超时定时器必须在结束时清掉：否则进程提前退出后定时器仍挂着，
+      // 既阻止进程退出（Electron 退出被拖住），又会误杀复用的 pid/句柄。
+      let killTimer: NodeJS.Timeout | undefined;
+      let forceKillTimer: NodeJS.Timeout | undefined;
+      const clearTimers = (): void => {
+        if (killTimer) clearTimeout(killTimer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        killTimer = undefined;
+        forceKillTimer = undefined;
+      };
+      const finish = (result: ProcessResult): void => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        resolve(result);
+      };
 
       child.stdout?.on("data", (chunk: Buffer) => {
         const s = chunk.toString("utf-8", 0, Math.min(chunk.length, Math.max(0, maxBytes - stdoutAcc.length)));
@@ -83,7 +114,7 @@ class NodeProcessAdapter implements ProcessAdapter {
       });
 
       child.on("close", (code, signal) => {
-        resolve({
+        finish({
           code: typeof code === "number" ? code : null,
           stdout: stdoutAcc,
           stderr: stderrAcc,
@@ -92,24 +123,28 @@ class NodeProcessAdapter implements ProcessAdapter {
       });
       child.on("error", (err: Error) => {
         // 执行出错：直接返回错误结果，保持 fail-closed
-        resolve({
+        finish({
           code: null,
           stdout: stdoutAcc,
           stderr: stderrAcc + (err.message ? `\n[执行错误] ${err.message}` : ""),
           timedOut: false,
         });
       });
-      // 超时处理
+      // 超时处理：SIGTERM 后 1s 仍不退再 SIGKILL（execFile 自带 timeout 兜底）
       if (opts.timeoutMs && opts.timeoutMs > 0) {
-        setTimeout(() => {
+        killTimer = setTimeout(() => {
           if (!child.killed) {
             child.kill("SIGTERM");
-            // 延迟强制终止（如果 SIGTERM 无效）
-            setTimeout(() => {
-              try { child.kill("SIGKILL"); } catch { /* 已终止 */ }
+            forceKillTimer = setTimeout(() => {
+              try {
+                child.kill("SIGKILL");
+              } catch {
+                /* 已终止 */
+              }
             }, 1_000);
           }
         }, opts.timeoutMs);
+        killTimer.unref?.();
       }
     });
   }
@@ -122,124 +157,251 @@ class NodeSqliteAdapter implements SqliteAdapter {
   }
 }
 
-// 纯函数：将 IP 与 13 段 CIDR 比对（来自 contracts 的 PRIVATE_NET_RANGES）
-function isPrivateOrReserved(ipStr: string, privateRanges: Array<{ v: 4 | 6; base: number[]; prefix: number }>): boolean {
-  // 简化实现：逐段比对，匹配则视为私有
-  const ip4Match = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/.exec(ipStr);
-  if (ip4Match) {
-    const [a, b, c, d] = [parseInt(ip4Match[1]), parseInt(ip4Match[2]), parseInt(ip4Match[3]), parseInt(ip4Match[4])];
-    for (const r of privateRanges) {
-      if (r.v === 6) continue; // IPv6 另处理
-      // 简化：检查常见私有段
-      if (a === 10) return true; // 10/8
-      if (a === 172 && b >= 16 && b <= 31) return true; // 172.16/12
-      if (a === 192 && b === 168) return true; // 192.168/16
-      if (a === 169 && b === 254) return true; // 169.254/16
-      if (a === 127) return true; // 127/8
-      if (a === 0 && b === 0) return true; // 0/8
-      if (a === 100 && b >= 64 && b <= 127) return true; // 100.64/10
-      if (a === 192 && b === 0 && c === 0) return true; // 192.0.0/24
-      if (a === 192 && b === 0 && c === 2) return true; // 192.0.2/24
-      if (a === 198 && b === 18) return true; // 198.18/15
-      if (a === 198 && b === 51 && c === 100) return true; // 198.51.100/24
-      if (a === 203 && b === 0 && c === 113) return true; // 203.0.113/24
-    }
+/* ────────────────────────────── 网络请求（DNS 钉扎） ────────────────────────────── */
+
+interface RawHttpResponse {
+  status: number;
+  headers: Record<string, string>;
+  text: string;
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function hasHeader(headers: Record<string, string> | undefined, name: string): boolean {
+  if (!headers) return false;
+  const lower = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
+}
+
+function normalizeHeaders(headers: http.IncomingHttpHeaders): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    out[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : String(value);
   }
-  // IPv6 简化处理
-  if (ipStr.includes(":")) {
-    // ::1 / fc00:: / fe80::
-    if (ipStr === "::1" || ipStr.includes("fc00:") || ipStr.includes("fe80:") || ipStr.includes("::ffff:") || ipStr.startsWith("fe80:")) return true;
+  return out;
+}
+
+/** 网络错误 → 可读中文（tool/UI 直接展示；不含请求体等敏感信息）。 */
+function normalizeNetError(err: unknown): Error {
+  const e = err as NodeJS.ErrnoException | undefined;
+  const code = typeof e?.code === "string" ? e.code : "";
+  const message = e instanceof Error ? e.message : String(err);
+  if (message === "LOOPSOAR_TIMEOUT") return new Error("网络请求超时");
+  if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return new Error("网络请求超时");
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return new Error("DNS 解析失败（目标主机不存在）");
+  if (code === "ECONNREFUSED") return new Error("连接被拒绝（目标端口未监听）");
+  if (code === "ECONNRESET") return new Error("连接被重置");
+  if (code === "EHOSTUNREACH" || code === "ENETUNREACH") return new Error("目标网络不可达");
+  if (/CERT|TLS|SSL|EPROTO/i.test(code) || /certificate|self.signed|altnames|SSL|TLS/i.test(message)) {
+    return new Error(`TLS 证书校验失败（${message}）`);
   }
-  return false;
+  return new Error(`网络请求失败：${message}`);
 }
 
 class NodeNetAdapter implements NetAdapter {
-  constructor() {}
-
   async resolveIps(host: string): Promise<string[]> {
     try {
-      const result = await lookup(host, { all: true }) as Array<{ address: string; family?: number } | string>;
-      const addrs = Array.isArray(result) ? result : [];
-      return addrs.map((a: any) => (typeof a === "string" ? a : a?.address)).filter(Boolean);
+      const result = (await lookup(host, { all: true })) as Array<{ address?: string } | string>;
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const entry of result) {
+        const address = typeof entry === "string" ? entry : entry?.address;
+        if (!address || seen.has(address)) continue;
+        seen.add(address);
+        out.push(address);
+      }
+      return out;
     } catch {
       return [];
     }
   }
 
+  /** 抓取文本（历史接口）：直接委托 request，保证与 DNS 钉扎抓取走同一条安全路径。 */
   async fetchText(
     url: string,
     opts: { timeoutMs?: number; maxChars?: number; headers?: Record<string, string>; maxRedirects?: number },
   ): Promise<{ status: number; finalUrl: string; text: string }> {
-    const maxRedirects = opts.maxRedirects ?? 5;
-    let redirectCount = 0;
-    let currentUrl = url;
-    const headers = opts.headers ?? {};
+    const response = await this.request({
+      url,
+      method: "GET",
+      headers: opts.headers,
+      timeoutMs: opts.timeoutMs,
+      maxChars: opts.maxChars,
+      maxRedirects: opts.maxRedirects,
+    });
+    return { status: response.status, finalUrl: response.finalUrl, text: response.text };
+  }
 
-    const performFetch = async (targetUrl: string): Promise<{ status: number; finalUrl: string; text: string }> => {
-      const controller = new AbortController();
-      const timeoutMs = opts.timeoutMs ?? 30_000;
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  async request(opts: NetRequestOptions): Promise<NetResponse> {
+    const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 30_000;
+    const maxRedirects = opts.maxRedirects ?? MAX_REDIRECTS;
+    const maxChars = opts.maxChars && opts.maxChars > 0 ? opts.maxChars : 1_000_000;
+    const deadline = Date.now() + timeoutMs;
 
-      try {
-        const resp = await fetch(targetUrl, {
-          method: "GET",
-          headers: { ...headers, "User-Agent": "Loopsoar-S4/1.0" },
-          redirect: "manual",
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
+    let currentUrl = opts.url;
+    let method: "GET" | "POST" = opts.method ?? "GET";
+    let body: string | undefined = opts.body;
+    let redirects = 0;
 
-        // 处理重定向
-        if (resp.status >= 300 && resp.status < 400 && resp.headers.has("location")) {
-          redirectCount++;
-          if (redirectCount > maxRedirects) {
-            throw new Error(`重定向超过最大次数 ${maxRedirects}`);
-          }
-          const newLocation = resp.headers.get("location") || "";
-          const resolvedUrl = new URL(newLocation, targetUrl).toString();
+    while (true) {
+      const { url, ips } = await assertPublicUrlWithDns(currentUrl, (host) => this.resolveIps(host), {
+        allowLoopback: opts.allowLoopback === true,
+      });
+      if (ips.length === 0) throw new Error("SSRF 拦截：目标主机没有可用 IP");
 
-          // 逐跳 SSRF 复查：解析新 URL 的主机并检查 IP
-          const urlObj = new URL(resolvedUrl);
-          const host = urlObj.hostname;
-          const ips = await this.resolveIps(host);
-          // 简化：使用 contracts 的 PRIVATE_NET_RANGES 检查（此处直接检查常见私有段）
-          for (const ip of ips) {
-            if (isPrivateOrReserved(ip, [
-              { v: 4, base: [10, 0, 0, 0], prefix: 8 },
-              { v: 4, base: [172, 16, 0, 0], prefix: 12 },
-              { v: 4, base: [192, 168, 0, 0], prefix: 16 },
-              { v: 4, base: [169, 254, 0, 0], prefix: 16 },
-              { v: 4, base: [127, 0, 0, 0], prefix: 8 },
-              { v: 4, base: [0, 0, 0, 0], prefix: 8 },
-              { v: 4, base: [100, 64, 0, 0], prefix: 10 },
-              { v: 4, base: [192, 0, 0, 0], prefix: 24 },
-              { v: 4, base: [192, 0, 2, 0], prefix: 24 },
-              { v: 4, base: [198, 18, 0, 0], prefix: 15 },
-              { v: 4, base: [198, 51, 100, 0], prefix: 24 },
-              { v: 4, base: [203, 0, 113, 0], prefix: 24 },
-              { v: 6, base: [0, 0, 0, 0, 0, 0, 0, 1], prefix: 128 }, // ::1
-              { v: 6, base: [0, 252, 0, 0, 0, 0, 0, 0], prefix: 7 }, // fc00::/7
-              { v: 6, base: [0, 254, 128, 0, 0, 0, 0, 0], prefix: 10 }, // fe80::/10
-            ])) {
-              throw new Error(`SSRF 检测：重定向到私有/保留 IP ${ip}`);
-            }
-          }
-          return await performFetch(resolvedUrl);
+      const response = await this.requestWithFallback(url, ips, method, body, opts.headers, maxChars, deadline);
+      const location = response.headers["location"];
+      if (isRedirectStatus(response.status) && location) {
+        if (redirects >= maxRedirects) {
+          throw new Error(`网络请求失败：重定向超过最大次数 ${maxRedirects}`);
         }
-
-        const text = await resp.text();
-        return {
-          status: resp.status,
-          finalUrl: resp.url,
-          text: opts.maxChars ? text.slice(0, opts.maxChars) : text,
-        };
-      } catch (err: any) {
-        clearTimeout(timeoutId);
-        throw err;
+        redirects += 1;
+        const nextUrl = new URL(location, url);
+        // 浏览器语义：301/302/303 把 POST 降级为 GET 并丢弃 body（307/308 保留）
+        if (method === "POST" && (response.status === 301 || response.status === 302 || response.status === 303)) {
+          method = "GET";
+          body = undefined;
+        }
+        currentUrl = nextUrl.toString();
+        continue;
       }
-    };
+      return {
+        status: response.status,
+        finalUrl: url.toString(),
+        text: response.text,
+        headers: response.headers,
+      };
+    }
+  }
 
-    return await performFetch(currentUrl);
+  /**
+   * 依次尝试 DNS 解析出的多个 IP（仍全部是已校验 IP，不会重新解析）。
+   * 为什么需要：localhost 常同时解析出 ::1 与 127.0.0.1，而本地服务往往只监听其中一个；
+   * 公网双栈主机在无 IPv6 网络下也会出现首个地址不可达。
+   */
+  private async requestWithFallback(
+    url: URL,
+    ips: string[],
+    method: "GET" | "POST",
+    body: string | undefined,
+    extraHeaders: Record<string, string> | undefined,
+    maxChars: number,
+    deadline: number,
+  ): Promise<RawHttpResponse> {
+    let lastError: unknown;
+    for (const ip of ips) {
+      if (Date.now() >= deadline) break;
+      try {
+        return await this.requestPinned(url, ip, method, body, extraHeaders, maxChars, deadline);
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("网络请求失败：目标地址全部不可达");
+  }
+
+  /** 单跳请求：TCP 连 pinnedIp，Host/servername 保持原主机名。 */
+  private requestPinned(
+    url: URL,
+    pinnedIp: string,
+    method: "GET" | "POST",
+    body: string | undefined,
+    extraHeaders: Record<string, string> | undefined,
+    maxChars: number,
+    deadline: number,
+  ): Promise<RawHttpResponse> {
+    return new Promise((resolve, reject) => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        reject(new Error("网络请求超时"));
+        return;
+      }
+      const isHttps = url.protocol === "https:";
+      const transport = isHttps ? https : http;
+      const port = url.port ? Number(url.port) : isHttps ? 443 : 80;
+
+      const headers: Record<string, string | number> = {
+        "user-agent": "Loopsoar-S4/1.0",
+        accept: "text/html,application/json,text/plain,*/*",
+        ...(extraHeaders ?? {}),
+        // 关键：连接打到 IP，但 Host 头保持原主机名（虚拟主机路由 + 证书校验语义不变）
+        host: url.host,
+      };
+      if (body !== undefined) {
+        headers["content-length"] = Buffer.byteLength(body, "utf8");
+        if (!hasHeader(extraHeaders, "content-type")) headers["content-type"] = "application/json; charset=utf-8";
+      }
+
+      const options: https.RequestOptions = {
+        host: pinnedIp,
+        port,
+        method,
+        path: `${url.pathname || "/"}${url.search}`,
+        headers,
+        agent: false,
+      };
+      // SNI/证书校验用原主机名；目标是 IP 字面量时不设 servername（否则会按域名规则校验 IP 证书）
+      if (isHttps && !isIpLiteral(url.hostname)) {
+        options.servername = url.hostname;
+      }
+
+      let settled = false;
+      const finish = (result: RawHttpResponse): void => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const fail = (err: unknown): void => {
+        if (settled) return;
+        settled = true;
+        reject(normalizeNetError(err));
+      };
+
+      const req = transport.request(options, (res) => {
+        const chunks: string[] = [];
+        let collected = 0;
+        const status = res.statusCode ?? 0;
+        const headersOut = normalizeHeaders(res.headers);
+        const finishBody = (): void => {
+          finish({ status, headers: headersOut, text: chunks.join("") });
+        };
+
+        res.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          const piece = chunk.toString("utf8");
+          const room = maxChars - collected;
+          if (room <= 0) {
+            // 语义是「取前 maxChars 个字符」：够了就收尾，避免把整页下载进内存
+            finishBody();
+            res.destroy();
+            return;
+          }
+          if (piece.length <= room) {
+            chunks.push(piece);
+            collected += piece.length;
+            return;
+          }
+          chunks.push(piece.slice(0, room));
+          collected = maxChars;
+          finishBody();
+          res.destroy();
+        });
+        res.on("end", finishBody);
+        res.on("error", (err: Error) => {
+          // 主动截断后的 socket 错误不再上报（数据已按 maxChars 收齐）
+          if (!settled) fail(err);
+        });
+      });
+      req.on("error", fail);
+      req.setTimeout(Math.max(1, remaining), () => {
+        req.destroy(new Error("LOOPSOAR_TIMEOUT"));
+      });
+      if (body !== undefined) req.write(body);
+      req.end();
+    });
   }
 }
 

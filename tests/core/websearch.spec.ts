@@ -43,6 +43,9 @@ describe("SSRF 防护", () => {
   it("DNS 解析到私网 IP → 拒绝（注入 net 适配器）", async () => {
     const fakeNet: NetAdapter = {
       resolveIps: async () => ["10.1.2.3"],
+      request: async () => {
+        throw new Error("不应到达 request");
+      },
       fetchText: async () => {
         throw new Error("不应到达 fetch");
       },
@@ -56,6 +59,9 @@ describe("SSRF 防护", () => {
     let called = false;
     const fakeNet: NetAdapter = {
       resolveIps: async () => ["93.184.216.34"],
+      request: async () => {
+        throw new Error("safeFetch 走全局 fetch，不应到达 request");
+      },
       fetchText: async () => {
         called = true;
         return { status: 200, finalUrl: "http://example.com/", text: "ok" };

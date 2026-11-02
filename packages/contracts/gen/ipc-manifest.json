@@ -608,6 +608,62 @@
       "method": "disconnect",
       "sensitive": true,
       "hasRequest": true
+    },
+    {
+      "channel": "terminal:profiles",
+      "domain": "terminal",
+      "method": "profiles",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "terminal:list",
+      "domain": "terminal",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "terminal:open",
+      "domain": "terminal",
+      "method": "open",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "terminal:input",
+      "domain": "terminal",
+      "method": "input",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "terminal:run",
+      "domain": "terminal",
+      "method": "run",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "terminal:interrupt",
+      "domain": "terminal",
+      "method": "interrupt",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "terminal:close",
+      "domain": "terminal",
+      "method": "close",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "terminal:history",
+      "domain": "terminal",
+      "method": "history",
+      "sensitive": true,
+      "hasRequest": true
     }
   ],
   "events": [
@@ -626,6 +682,9 @@
     "memory:updated",
     "extensions:updated",
     "skills:updated",
-    "mcp:updated"
+    "mcp:updated",
+    "terminal:data",
+    "terminal:exit",
+    "terminal:state"
   ]
 }

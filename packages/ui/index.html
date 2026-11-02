@@ -961,6 +961,427 @@
       cursor: pointer;
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
     }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       应用内终端（右侧 Agent 面板底部抽屉）
+       颜色对齐 theme.ts 的 BRAND：ink #111318 / inkPanel #15171c /
+       border #262a31 / borderStrong #333842 / linenMuted #a8a29a /
+       linenFaint #6f6a63 / ochre #c8763c / ochreHover #d98a4f / teal #5eead4。
+       深色输出区与既有 .think-terminal 工具输出区同色（#0c0e13），视觉统一。
+       ══════════════════════════════════════════════════════════════════════ */
+    .terminal-panel {
+      /* 终端局部主题变量（颜色对齐 theme.ts BRAND；输出区与 .think-terminal 同色，深底更耐读） */
+      --terminal-output-bg: #0c0e13;
+      --terminal-output-fg: #c9c3b6;
+      display: flex;
+      flex-direction: column;
+      flex: none;
+      min-height: 0;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    /* 高度拖拽条：鼠标拖动 / 方向键 / Home·End（role=separator） */
+    .terminal-resizer {
+      position: relative;
+      flex: none;
+      height: 6px;
+      cursor: row-resize;
+      background: transparent;
+      outline: none;
+      touch-action: none;
+    }
+    .terminal-resizer::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 2px;
+      width: 44px;
+      height: 2px;
+      transform: translateX(-50%);
+      border-radius: 2px;
+      background: #333842;
+      transition: background 120ms;
+    }
+    .terminal-resizer:hover::after,
+    .terminal-resizer:focus-visible::after {
+      background: #c8763c;
+    }
+    .terminal-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: none;
+      min-height: 24px;
+      padding: 0 8px 4px;
+    }
+    .terminal-profiles {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1;
+      min-width: 0;
+      padding: 2px 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+    }
+    .terminal-profiles::-webkit-scrollbar {
+      height: 0;
+    }
+    .terminal-profile {
+      display: inline-flex;
+      align-items: center;
+      flex: none;
+      height: 20px;
+      padding: 0 7px;
+      border-radius: 10px;
+      border: 1px solid #262a31;
+      background: transparent;
+      color: #a8a29a;
+      font-size: 10.5px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: border-color 120ms, color 120ms, background 120ms, transform 80ms;
+    }
+    .terminal-profile:hover:not(:disabled) {
+      border-color: #c8763c;
+      color: #f4efe6;
+    }
+    .terminal-profile:active:not(:disabled) {
+      transform: scale(0.96);
+    }
+    .terminal-profile.is-active {
+      border-color: rgba(200, 118, 60, 0.55);
+      background: rgba(200, 118, 60, 0.14);
+      color: #d98a4f;
+    }
+    .terminal-profile:disabled {
+      opacity: 0.34;
+      cursor: not-allowed;
+    }
+    .terminal-hint {
+      font-size: 10.5px;
+      color: #6f6a63;
+      white-space: nowrap;
+    }
+    .terminal-close-btn {
+      flex: none;
+    }
+    .terminal-state {
+      flex: none;
+      font-size: 10px;
+      color: #6f6a63;
+    }
+    .terminal-state[data-state="ready"] {
+      color: #5eead4;
+    }
+    .terminal-state[data-state="error"] {
+      color: #f87171;
+    }
+    .terminal-notice {
+      flex: none;
+      padding: 2px 10px;
+      font-size: 10.5px;
+      color: #d98a4f;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .terminal-tabbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: none;
+      padding: 0 8px;
+      border-bottom: 1px solid #262a31;
+    }
+    .terminal-tabs {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .terminal-tabs::-webkit-scrollbar {
+      height: 0;
+    }
+    .terminal-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: none;
+      max-width: 150px;
+      height: 24px;
+      padding: 0 8px;
+      border: none;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: #a8a29a;
+      font-size: 11px;
+      cursor: pointer;
+      transition: color 120ms, border-color 120ms, background 120ms;
+    }
+    .terminal-tab:hover {
+      color: #f4efe6;
+      background: #1e2127;
+    }
+    .terminal-tab.is-active {
+      color: #f4efe6;
+      border-bottom-color: #c8763c;
+    }
+    .terminal-tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .terminal-tab-dot {
+      flex: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #6f6a63;
+    }
+    .terminal-tab-dot[data-state="ready"] {
+      background: #5eead4;
+    }
+    .terminal-tab-dot[data-state="starting"] {
+      background: #c8763c;
+      animation: pulseDot 1.6s ease-in-out infinite;
+    }
+    .terminal-tab-dot[data-state="error"] {
+      background: #f87171;
+    }
+    .terminal-tab-add {
+      display: grid;
+      place-items: center;
+      flex: none;
+      width: 20px;
+      height: 20px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: #a8a29a;
+      cursor: pointer;
+      transition: background 120ms, color 120ms, transform 80ms;
+    }
+    .terminal-tab-add:hover:not(:disabled) {
+      background: #1e2127;
+      color: #f4efe6;
+    }
+    .terminal-tab-add:active:not(:disabled) {
+      transform: scale(0.9);
+    }
+    .terminal-tab-add:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .terminal-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      flex: none;
+      padding-left: 4px;
+    }
+    .terminal-action {
+      height: 20px;
+      padding: 0 5px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: #a8a29a;
+      font-size: 10px;
+      cursor: pointer;
+      transition: color 120ms, border-color 120ms, background 120ms;
+    }
+    .terminal-action:hover:not(:disabled) {
+      color: #d98a4f;
+      border-color: rgba(200, 118, 60, 0.4);
+      background: rgba(200, 118, 60, 0.08);
+    }
+    .terminal-action:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .terminal-empty {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px;
+      text-align: center;
+    }
+    .terminal-empty-title {
+      font-size: 12px;
+      color: #c9c3b6;
+    }
+    .terminal-empty-hint {
+      max-width: 300px;
+      font-size: 10.5px;
+      line-height: 1.5;
+      color: #6f6a63;
+    }
+    .terminal-empty-btn {
+      height: 24px;
+      margin-top: 2px;
+      padding: 0 12px;
+      border: 1px solid #333842;
+      border-radius: 7px;
+      background: transparent;
+      color: #a8a29a;
+      font-size: 11.5px;
+      cursor: pointer;
+    }
+    .terminal-empty-btn:hover:not(:disabled) {
+      border-color: #c8763c;
+      color: #f4efe6;
+    }
+    .terminal-empty-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .terminal-output-wrap {
+      position: relative;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+    .terminal-output {
+      flex: 1;
+      min-height: 0;
+      margin: 0;
+      padding: 6px 10px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      background: var(--terminal-output-bg);
+      color: var(--terminal-output-fg);
+      font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
+      font-size: 11.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+      outline: none;
+    }
+    .terminal-output:focus-visible {
+      box-shadow: inset 0 0 0 1px rgba(200, 118, 60, 0.5);
+    }
+    .terminal-jump {
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(24, 26, 32, 0.92);
+      color: #d98a4f;
+      font-size: 10.5px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    }
+    .terminal-jump:hover {
+      border-color: rgba(200, 118, 60, 0.55);
+    }
+    .terminal-command {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: none;
+      padding: 5px 8px;
+      border-top: 1px solid #262a31;
+    }
+    .terminal-prompt {
+      flex: none;
+      color: #c8763c;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px;
+    }
+    .terminal-command-input {
+      flex: 1;
+      min-width: 0;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid #262a31;
+      border-radius: 6px;
+      background: #111318;
+      color: #f4efe6;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 11.5px;
+      outline: none;
+    }
+    .terminal-command-input:focus {
+      border-color: #6f6a63;
+    }
+    .terminal-command-input:disabled {
+      opacity: 0.5;
+    }
+    .terminal-raw-toggle {
+      flex: none;
+      height: 22px;
+      padding: 0 7px;
+      border: 1px solid #262a31;
+      border-radius: 6px;
+      background: transparent;
+      color: #a8a29a;
+      font-size: 10.5px;
+      cursor: pointer;
+      transition: border-color 120ms, color 120ms, background 120ms;
+    }
+    .terminal-raw-toggle:hover {
+      border-color: #c8763c;
+      color: #f4efe6;
+    }
+    .terminal-raw-toggle.is-on {
+      border-color: rgba(200, 118, 60, 0.55);
+      background: rgba(200, 118, 60, 0.14);
+      color: #d98a4f;
+    }
+    .terminal-send {
+      display: grid;
+      place-items: center;
+      flex: none;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 6px;
+      background: #c8763c;
+      cursor: pointer;
+      transition: background 120ms, transform 80ms;
+    }
+    .terminal-send:hover:not(:disabled) {
+      background: #d98a4f;
+      transform: scale(1.05);
+    }
+    .terminal-send:active:not(:disabled) {
+      transform: scale(0.94);
+    }
+    .terminal-send:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    /* 焦点环（键盘可达）：终端内的按钮/输入区统一品牌赭石描边 */
+    .terminal-profile:focus-visible,
+    .terminal-tab:focus-visible,
+    .terminal-tab-add:focus-visible,
+    .terminal-action:focus-visible,
+    .terminal-raw-toggle:focus-visible,
+    .terminal-send:focus-visible,
+    .terminal-empty-btn:focus-visible,
+    .terminal-jump:focus-visible {
+      outline: 2px solid rgba(200, 118, 60, 0.6);
+      outline-offset: 1px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .terminal-tab-dot[data-state="starting"] {
+        animation: none;
+      }
+    }
+    html[data-animations="off"] .terminal-tab-dot {
+      animation: none !important;
+    }
   </style>
   </head>
   <body>

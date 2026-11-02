@@ -265,6 +265,23 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 查证 `docs/research/worktree-cloudflare.md`：Cloudflare Sandboxes 仅 Workers Paid，本地 worktree 不依赖云；云端执行器后置
 - 证据 gui-89（工作区面板）、gui-90（worktree 创建）
 
+## 二·二十八、2026-11-02 第二十五次增量（P0 安全门 + 持久多环境终端 + 工具参数 Schema）
+- **ADR-0016：P0 安全门加固 + 持久多环境终端 + 工具参数单一转换**（本轮落地）
+- 安全门（发布门 1/3 相关）：
+  - `hard_rules` 真正接入终端：`terminal_run` 与持久终端 `run/input` 逐行过 `hardRuleCheck`+`classifyCommand`（此前终端参数名是 `command` 而沙箱只校验 `args.path`，规则永不触发）
+  - SSRF/DNS 钉扎：新增 `core/net/ssrf`（15 段 CIDR/IPv4-mapped/IPv6/主机名黑名单/回环开关，fail-closed）；`NetAdapter.request` 用「校验后 IP 直连 + Host/TLS servername 保持原主机 + 手动逐跳重定向」实现钉扎；`web_fetch` 改走注入的 `platform.net.request`（删除裸 fetch）；浏览器 `webRequest.onBeforeRequest` 请求守卫（私网/保留地址/非 http(s) 拦截，回环可按 `LOOPSOAR_STRICT_NET=1` 收紧）；模型探测 `validateProbeTarget`（允许本地回环模型、拒绝其他私网/元数据）+ `testProvider` 支持 anthropic `/messages`
+  - `file:read/write` IPC 增加会话工作根约束（worktree>会话工作区>活动工作区）+ 读取字节上限；`sessionId` 全链路净化（`SESSION_ID_RE`/`sanitizeSessionId`，落盘路径统一净化）
+  - 沙箱改为「按会话作用域」判定：`checkPermission(req, { workspaceRoot })` 不再改写全局根；修复并发会话串根竞态
+  - 退出清理：`createShutdownHandler` 幂等收尾 MCP/扩展子进程、终端会话、标签落盘、审计 flush（3s 超时兜底）
+  - 审计落盘：`AuditFileLogger` → `<dataDir>/logs/audit-YYYYMMDD.jsonl`（5MB 轮转、保留 5 份、字段截断、全程不抛）
+- **持久多环境终端**（新增终端子系统）：
+  - 6 配置档：`cmd / powershell / gitbash / python / node / cpp`（探测+版本+不可用安装提示；C++ 探测 MSVC vswhere/vcvars64 与 MinGW g++/clang++）
+  - `TerminalSessionManager`：每终端独立持久子进程（保留 cwd/env）、30ms 输出合流、512KB 环形回放、30min 空闲回收、8 并发上限、`taskkill /T /F` 进程树清理、环境变量白名单（剥离 API Key/TOKEN/LOOPSOAR_*）、cwd realpath 防 symlink 越界
+  - IPC：`terminal:profiles/list/open/input/run/interrupt/close/history` + 事件 `terminal:data/exit/state`；应用内终端面板（配置档 chip/多标签/原始输入/中断/清屏/高度拖拽/ANSI 剥离/2 万行/自动滚底）
+- **工具参数 JSON Schema**：新增零依赖 `zodToJsonSchema`（Object/String/Number/Enum/Array/Optional/Default/Nullable/Union/Record/Lazy/Effects，未知降级+warning），`ToolRegistry.toolSchemas()` 接线 → 模型首次能拿到真实工具参数（此前为空 object 占位）
+- 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 90 文件 / 686 tests 全绿**
+- 已知遗留（后续阶段处理）：管道式终端 Ctrl+C 语义=杀进程树（无 PTY，终端变 exited）；PowerShell 管道中文编码；浏览器守卫对 data:/blob: 子资源偏严需真机观察；模型探测仍有 DNS-rebinding TOCTOU 窗口；E2E 真机冒烟待跑
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

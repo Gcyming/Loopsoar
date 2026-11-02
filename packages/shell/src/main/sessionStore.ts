@@ -5,10 +5,15 @@
  *
  * 兼容旧版：若存在 last.json（单会话时代），首次加载自动迁移为一条会话。
  * 最多保留 200 条消息；列表按 updatedAt 倒序。
+ *
+ * 安全：所有「sessionId → 文件路径」的拼接都必须先过 sanitizeSessionId（见 sessionId.ts）。
+ * 非法 ID 一律 fail-closed（get→null / remove→false / save→抛可读错误，绝不落盘），
+ * 防止 IPC 入参里的 `../` 把会话文件写到数据目录之外。
  */
 import fs from "node:fs";
 import path from "node:path";
 import type { PersistedBrowserState } from "./browserSessionState.js";
+import { requireSessionId, sanitizeSessionId } from "./sessionId.js";
 
 export interface PersistedMessage {
   role: "user" | "assistant";
@@ -104,8 +109,14 @@ export class SessionStore {
     this.writeJson(this.indexFile, { currentId: index.currentId, items });
   }
 
-  private sessionFile(id: string): string {
-    const safe = id.replace(/[^a-zA-Z0-9._-]/g, "_");
+  /**
+   * 会话文件路径（唯一拼接点）：非法 ID 返回 null，调用方据此 fail-closed。
+   * 为什么返回 null 而不是抛：读路径（get/getBrowserState/getWorktree…）在 IPC 层
+   * 本就用 null 表达「不存在」，不一致会让调用方误判为「文件损坏」。
+   */
+  private sessionFile(id: string | null | undefined): string | null {
+    const safe = sanitizeSessionId(id);
+    if (!safe) return null;
     return path.join(this.dir, `${safe}.json`);
   }
 
@@ -114,8 +125,11 @@ export class SessionStore {
     if (fs.existsSync(this.indexFile)) return;
     const legacy = this.readJson<PersistedSession>(path.join(this.dir, "last.json"));
     if (!legacy || !Array.isArray(legacy.messages) || legacy.messages.length === 0) return;
-    const id = legacy.sessionId || `sess-${Date.now()}`;
-    this.writeJson(this.sessionFile(id), { ...legacy, sessionId: id });
+    // 旧数据里的 sessionId 不可信（可能来自手工编辑/更早版本），非法则换新 ID，绝不拿它拼路径。
+    const id = sanitizeSessionId(legacy.sessionId) || `sess-${Date.now()}`;
+    const file = this.sessionFile(id);
+    if (!file) return;
+    this.writeJson(file, { ...legacy, sessionId: id });
     this.writeJson(this.indexFile, {
       currentId: id,
       items: [this.metaOf(id, legacy.messages, legacy.updatedAt)],
@@ -143,6 +157,7 @@ export class SessionStore {
   /** 保存某会话的浏览器标签快照（不触发 updatedAt/列表元信息变化）。 */
   saveBrowserState(sessionId: string, state: PersistedBrowserState): boolean {
     const file = this.sessionFile(sessionId);
+    if (!file) return false;
     const data = this.readJson<PersistedSession>(file);
     if (!data) return false;
     data.browser = state.tabs.length > 0 ? state : undefined;
@@ -155,11 +170,21 @@ export class SessionStore {
     return this.get(sessionId)?.browser ?? null;
   }
 
+  /**
+   * 目标会话 id：显式传入时只用它（非法即拒绝，不回退到当前会话——否则会把数据写到错误的会话）；
+   * 未传入时才取 currentId。
+   */
+  private targetId(sessionId: string | null | undefined): string | null {
+    if (sessionId === null || sessionId === undefined) return sanitizeSessionId(this.currentId());
+    return sanitizeSessionId(sessionId);
+  }
+
   /** 把时间线挂到最后一条助手消息（对话完成后由 UI 上报；失败静默不影响对话）。 */
   attachTimeline(sessionId: string | null, timeline: unknown[]): boolean {
-    const id = sessionId ?? this.currentId();
+    const id = this.targetId(sessionId);
     if (!id) return false;
-    const file = path.join(this.dir, `${id}.json`);
+    const file = this.sessionFile(id);
+    if (!file) return false;
     const data = this.readJson<PersistedSession>(file);
     if (!data) return false;
     for (let i = data.messages.length - 1; i >= 0; i -= 1) {
@@ -174,9 +199,10 @@ export class SessionStore {
 
   /** 截断到第 keepCount 条消息（保留 [0, keepCount)），用于消息回滚；返回截断后的会话。 */
   truncate(sessionId: string | null, keepCount: number): PersistedSession | null {
-    const id = sessionId ?? this.currentId();
+    const id = this.targetId(sessionId);
     if (!id) return null;
-    const file = path.join(this.dir, `${id}.json`);
+    const file = this.sessionFile(id);
+    if (!file) return null;
     const data = this.readJson<PersistedSession>(file);
     if (!data) return null;
     const keep = Math.max(0, Math.min(Math.floor(keepCount), data.messages.length));
@@ -204,7 +230,16 @@ export class SessionStore {
   }
 
   get(id: string): PersistedSession | null {
-    return this.readJson<PersistedSession>(this.sessionFile(id));
+    const file = this.sessionFile(id);
+    return file ? this.readJson<PersistedSession>(file) : null;
+  }
+
+  /**
+   * 读取指定会话的消息（按会话取历史，供 ChatService.getHistory 用）。
+   * 非法 ID / 会话不存在都返回 null；调用方按「无历史」处理。
+   */
+  loadMessages(sessionId: string): PersistedMessage[] | null {
+    return this.get(sessionId)?.messages ?? null;
   }
 
   /** 兼容旧接口：当前会话。 */
@@ -214,30 +249,36 @@ export class SessionStore {
   }
 
   save(session: PersistedSession): PersistedSession {
+    // 写路径非法 ID 必须显式失败：静默丢弃会让 UI 以为「已保存」而下次启动丢历史。
+    const safeId = requireSessionId(session.sessionId);
+    const file = this.sessionFile(safeId);
+    if (!file) throw new Error(`[错误] 非法会话 ID：${safeId}`);
     const trimmed: PersistedSession = {
       ...session,
       messages: session.messages.slice(-MAX_MESSAGES),
     };
-    this.writeJson(this.sessionFile(session.sessionId), trimmed);
+    this.writeJson(file, trimmed);
     const index = this.index();
-    const meta = this.metaOf(session.sessionId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId);
-    const at = index.items.findIndex((i) => i.id === session.sessionId);
+    const meta = this.metaOf(safeId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId);
+    const at = index.items.findIndex((i) => i.id === safeId);
     if (at >= 0) index.items[at] = meta;
     else index.items.push(meta);
-    index.currentId = index.currentId ?? session.sessionId;
+    index.currentId = index.currentId ?? safeId;
     this.saveIndex(index);
     return trimmed;
   }
 
   newSession(workspaceId?: string | null): PersistedSession {
     const id = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const file = this.sessionFile(id);
+    if (!file) throw new Error("[错误] 内部生成的会话 ID 非法");
     const session: PersistedSession = {
       sessionId: id,
       updatedAt: Date.now(),
       messages: [],
       ...(workspaceId ? { workspaceId } : {}),
     };
-    this.writeJson(this.sessionFile(id), session);
+    this.writeJson(file, session);
     const index = this.index();
     index.items.push(this.metaOf(id, [], Date.now(), workspaceId));
     index.currentId = id;
@@ -247,10 +288,12 @@ export class SessionStore {
 
   /** 会话归属工作区（旧会话可补绑）。 */
   setWorkspaceId(sessionId: string, workspaceId: string | null): boolean {
-    const data = this.get(sessionId);
+    const file = this.sessionFile(sessionId);
+    if (!file) return false;
+    const data = this.readJson<PersistedSession>(file);
     if (!data) return false;
     data.workspaceId = workspaceId;
-    this.writeJson(this.sessionFile(sessionId), data);
+    this.writeJson(file, data);
     const index = this.index();
     const meta = index.items.find((item) => item.id === sessionId);
     if (meta) {
@@ -266,14 +309,18 @@ export class SessionStore {
   }
 
   setWorktree(sessionId: string, worktree: PersistedWorktree | null): boolean {
-    const data = this.get(sessionId);
+    const file = this.sessionFile(sessionId);
+    if (!file) return false;
+    const data = this.readJson<PersistedSession>(file);
     if (!data) return false;
     data.worktree = worktree;
-    this.writeJson(this.sessionFile(sessionId), data);
+    this.writeJson(file, data);
     return true;
   }
 
   switchTo(id: string): boolean {
+    // 索引只由本模块维护，理论上 id 一定合法；仍校验一次（索引文件可被手工编辑）。
+    if (!sanitizeSessionId(id)) return false;
     const index = this.index();
     if (!index.items.some((i) => i.id === id)) return false;
     index.currentId = id;
@@ -305,11 +352,12 @@ export class SessionStore {
   }
 
   remove(id: string): boolean {
+    const file = this.sessionFile(id);
+    if (!file) return false;
     const index = this.index();
     const exists = index.items.some((i) => i.id === id);
     if (!exists) return false;
     try {
-      const file = this.sessionFile(id);
       if (fs.existsSync(file)) fs.unlinkSync(file);
     } catch {
       return false;

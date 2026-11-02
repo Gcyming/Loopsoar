@@ -5,13 +5,78 @@
  *        不再产生 Electron 独立窗口（旧行为看起来像「弹窗」）。
  */
 import path from "node:path";
+import { lookup } from "node:dns/promises";
 import { app, BrowserWindow, session, shell, WebContentsView } from "electron";
 import { SESSION_PARTITION } from "../shared/brand.js";
 import { BrowserHost, type HostView, type PersistedBrowserState } from "./browserHost.js";
+import {
+  browserRequestHost,
+  createBrowserRequestChecker,
+  createBrowserRequestPolicy,
+} from "./browserRequestGuard.js";
 
 export interface ElectronBrowserHostOptions {
   initialSessionId?: string;
   onSessionStateChanged?: (sessionId: string, state: PersistedBrowserState) => void;
+  /** DNS 解析注入（测试/E2E 可替换；默认用 node:dns）。 */
+  resolveIps?: (host: string) => Promise<string[]>;
+  /** 浏览器是否允许回环（默认 true：E2E/本地页面需要；LOOPSOAR_STRICT_NET=1 关闭）。 */
+  allowLoopback?: boolean;
+}
+
+/** 默认 DNS 解析：只把地址交给守卫，解析失败返回空数组（守卫按 fail-closed 拦截）。 */
+async function defaultResolveIps(host: string): Promise<string[]> {
+  try {
+    const rows = await lookup(host, { all: true });
+    return rows.map((row) => row.address);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 模块级防重复注册：`onBeforeRequest` 是「追加监听」语义，重复注册会让同一个请求被判定多次，
+ * 且没有任何 API 能单独移除——所以必须在进程内只装一次。
+ */
+let browserRequestGuardInstalled = false;
+
+/**
+ * 给浏览器 session 装一次出网守卫（两阶段：同步 URL 策略 → 异步 DNS 校验）。
+ * 失败路径一律 cancel（fail-closed）；日志只打 host，避免把完整 URL 的敏感查询参数写进日志。
+ */
+function installBrowserRequestGuard(partitionSession: Electron.Session, options: ElectronBrowserHostOptions): void {
+  if (browserRequestGuardInstalled) return;
+  browserRequestGuardInstalled = true;
+
+  const policy = createBrowserRequestPolicy({ allowLoopback: options.allowLoopback });
+  const check = createBrowserRequestChecker({
+    resolveIps: options.resolveIps ?? defaultResolveIps,
+    policy,
+  });
+
+  partitionSession.webRequest.onBeforeRequest((details, callback) => {
+    // Electron 要求每个请求恰好回调一次：用 finished 守卫防止「resolve 后 catch 又调一次」。
+    let finished = false;
+    const done = (response: { cancel?: boolean }): void => {
+      if (finished) return;
+      finished = true;
+      try {
+        callback(response);
+      } catch {
+        // 请求可能已随标签销毁而结束，忽略
+      }
+    };
+    void check(details.url)
+      .then((decision) => {
+        if (decision.action === "allow") {
+          done({});
+          return;
+        }
+        console.warn(`[browser-guard] 拦截请求 host=${browserRequestHost(details.url)} reason=${decision.reason ?? "未说明"}`);
+        done({ cancel: true });
+      })
+      .catch(() => done({ cancel: true }));
+  });
 }
 
 export function createElectronBrowserHost(
@@ -19,6 +84,9 @@ export function createElectronBrowserHost(
   openInNewTab: (url: string) => void,
   options: ElectronBrowserHostOptions = {},
 ): BrowserHost {
+  // 守卫必须在任何 WebContentsView 创建之前装好（否则首批请求会漏检）；
+  // 只在浏览器分区上挂，不影响主窗口（loopsoar://）与下载。
+  installBrowserRequestGuard(session.fromPartition(SESSION_PARTITION), options);
   return new BrowserHost({
     initialSessionId: options.initialSessionId,
     onSessionStateChanged: options.onSessionStateChanged,

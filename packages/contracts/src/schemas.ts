@@ -5,9 +5,21 @@ import { z } from "zod";
  * Used by gen/ipc.ts for z.infer mapping.
  */
 export const AgentModeSchema = z.enum(["build", "plan"]);
+
+/**
+ * 会话 ID 契约（单一产地）：同时约束 IPC 入参与落盘文件名。
+ * 只允许字母数字开头 + [A-Za-z0-9._-]（禁止路径分隔符，禁止 "." / ".."），
+ * 防止 `path.join(dir, \`${id}.json\`)` 被注入穿越路径。
+ */
+export const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+export const SessionIdSchema = z
+  .string()
+  .min(1)
+  .max(120)
+  .regex(SESSION_ID_RE, "会话 ID 含非法字符（仅允许字母数字与 . _ -，且不能以符号开头）");
 export const ChatStreamSchema = z.object({
   message: z.string(),
-  sessionId: z.string().optional(),
+  sessionId: SessionIdSchema.optional(),
   /** build=允许执行工具；plan=只读规划（仅放行只读工具）。 */
   mode: AgentModeSchema.optional(),
   /** 推理等级（如 low/medium/high）；由模型参数声明支持值。 */
@@ -16,7 +28,7 @@ export const ChatStreamSchema = z.object({
 export const ChatSteerSchema = z.object({
   /** 运行中注入的转向提示（轮次边界生效，不打断当前输出）。 */
   message: z.string().min(1).max(4000),
-  sessionId: z.string().max(64).optional(),
+  sessionId: SessionIdSchema.optional(),
 });
 /** 思考时间线节点（持久化用；字段宽进严出，未知字段丢弃）。 */
 export const TimelineStepSchema = z.object({
@@ -40,20 +52,30 @@ export const TimelineStepSchema = z.object({
 export const ReadImageSchema = z.object({ path: z.string().min(1).max(2000) });
 
 export const ChatSaveTimelineSchema = z.object({
-  sessionId: z.string().max(120).optional(),
+  sessionId: SessionIdSchema.optional(),
   timeline: z.array(TimelineStepSchema).max(600),
 });
 
 export const ChatRollbackSchema = z.object({
   /** 截断到第 N 条持久化消息（保留 [0, keepCount)），用于消息回滚。 */
   keepCount: z.number().int().min(0).max(10_000),
-  sessionId: z.string().max(64).optional(),
+  sessionId: SessionIdSchema.optional(),
 });
-export const ChatStopSchema = z.object({ sessionId: z.string() });
-export const ChatSendSchema = z.object({ message: z.string(), sessionId: z.string().optional() });
+export const ChatStopSchema = z.object({ sessionId: SessionIdSchema });
+export const ChatSendSchema = z.object({ message: z.string(), sessionId: SessionIdSchema.optional() });
 export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enum(["allow-once", "allow-session", "deny"]) });
-export const FileReadSchema = z.object({ path: z.string(), offset: z.number().int().nonnegative().optional(), limit: z.number().int().positive().optional() });
-export const FileWriteSchema = z.object({ path: z.string(), content: z.string() });
+export const FileReadSchema = z.object({
+  path: z.string().min(1).max(2000),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+  /** 目标会话：按会话工作根（工作区/worktree）约束路径；缺省=活动工作区。 */
+  sessionId: SessionIdSchema.optional(),
+});
+export const FileWriteSchema = z.object({
+  path: z.string().min(1).max(2000),
+  content: z.string(),
+  sessionId: SessionIdSchema.optional(),
+});
 export const BrowserNavigateSchema = z.object({ url: z.string() });
 export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
@@ -84,7 +106,7 @@ export const ProviderItemSchema = z.object({
   models: z.array(ProviderModelSchema).max(500).optional(),
 });
 export const ProviderItemIdSchema = z.object({ id: z.string().min(1).max(64) });
-export const SessionRefSchema = z.object({ sessionId: z.string().min(1).max(120) });
+export const SessionRefSchema = z.object({ sessionId: SessionIdSchema });
 /** 工作区：挂载一个本地项目文件夹；会话归属于工作区，工具根目录取自会话工作区/worktree。 */
 export const WorkspaceIdSchema = z.object({ id: z.string().min(1).max(64) });
 export const WorkspaceCreateSchema = z.object({
@@ -124,6 +146,33 @@ export const McpServerSchema = z.object({
   headers: z.record(z.string().max(2000)).optional(),
   enabled: z.boolean().optional(),
 });
+/* ───────────────────────── 终端（持久会话，P0 安全门 #2 配套） ───────────────────────── */
+
+/** 终端配置档：不同解释器/工具链环境（cmd / PowerShell / Git Bash / Python / Node / C++）。 */
+export const TerminalProfileKeySchema = z.enum(["cmd", "powershell", "gitbash", "python", "node", "cpp"]);
+
+/** 终端实例 ID（主进程签发，UI 只回传；格式固定便于校验与日志排查）。 */
+export const TerminalIdSchema = z.string().min(4).max(64).regex(/^term-[A-Za-z0-9_-]+$/);
+
+export const TerminalOpenSchema = z.object({
+  sessionId: SessionIdSchema.optional(),
+  profile: TerminalProfileKeySchema,
+  /** 初始工作目录（必须落在当前会话工作根内；缺省=会话工作根）。 */
+  cwd: z.string().max(1024).optional(),
+});
+export const TerminalInputSchema = z.object({
+  terminalId: TerminalIdSchema,
+  /** 原始输入（整行命令/按键）；上限 16KB 防止灌爆主进程。 */
+  data: z.string().min(1).max(16384),
+});
+export const TerminalRunSchema = z.object({
+  terminalId: TerminalIdSchema,
+  command: z.string().min(1).max(8000),
+});
+export const TerminalInterruptSchema = z.object({ terminalId: TerminalIdSchema });
+export const TerminalCloseSchema = z.object({ terminalId: TerminalIdSchema });
+export const TerminalHistorySchema = z.object({ terminalId: TerminalIdSchema });
+
 export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
@@ -150,6 +199,8 @@ export const SettingsProviderSchema = z.object({
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),
   model: z.string().min(1).max(200),
+  /** 测试连接所用端点协议（auto 按 baseUrl 推断；anthropic 走 /messages）。 */
+  apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
   /** 测试连接时的自定义请求头（模板与聊天一致；不落盘）。 */
   headers: z.record(z.string().max(120), z.string().max(2000)).refine((value) => Object.keys(value).length <= 30, { message: "请求头最多 30 条" }).optional(),
 });
@@ -771,6 +822,56 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: McpServerIdSchema,
     sensitive: true,
   },
+
+  /* ── 终端（持久会话） ── */
+  "terminal:profiles": {
+    domain: "terminal",
+    method: "profiles",
+    request: null,
+    sensitive: true,
+  },
+  "terminal:list": {
+    domain: "terminal",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "terminal:open": {
+    domain: "terminal",
+    method: "open",
+    request: TerminalOpenSchema,
+    sensitive: true,
+  },
+  "terminal:input": {
+    domain: "terminal",
+    method: "input",
+    request: TerminalInputSchema,
+    sensitive: true,
+  },
+  "terminal:run": {
+    domain: "terminal",
+    method: "run",
+    request: TerminalRunSchema,
+    sensitive: true,
+  },
+  "terminal:interrupt": {
+    domain: "terminal",
+    method: "interrupt",
+    request: TerminalInterruptSchema,
+    sensitive: true,
+  },
+  "terminal:close": {
+    domain: "terminal",
+    method: "close",
+    request: TerminalCloseSchema,
+    sensitive: true,
+  },
+  "terminal:history": {
+    domain: "terminal",
+    method: "history",
+    request: TerminalHistorySchema,
+    sensitive: true,
+  },
 };
 
  /**
@@ -794,6 +895,9 @@ export const EVENTS = [
   "extensions:updated",
   "skills:updated",
   "mcp:updated",
+  "terminal:data",
+  "terminal:exit",
+  "terminal:state",
 ] as const;
 
 /**

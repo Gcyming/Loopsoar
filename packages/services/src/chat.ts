@@ -56,7 +56,7 @@ export interface ChatServiceOptions {
   getSkillPrompt?: (userText: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
   permissionPolicy?: () => Permissions;
-  /** 当前会话的工作根目录（工作区 / worktree）；工具执行前用于切换沙箱根。 */
+  /** 当前会话的工作根目录（工作区 / worktree）；作为每次工具权限判定的作用域根（不修改沙箱全局根）。 */
   resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
   /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
   getLlm?: (sessionId?: string) => LlmClient | undefined;
@@ -188,7 +188,7 @@ export class InternalToolExecutor {
       platform?: LoopsoarPlatform;
       agentId: string;
       sessionId: string;
-      /** 当前会话的工作根目录（工作区/ worktree）；权限校验前切换沙箱根。 */
+      /** 当前会话的工作根目录（工作区/ worktree）；作为本次权限判定的作用域根（不回写沙箱全局根）。 */
       resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
     },
   ) {}
@@ -222,15 +222,18 @@ export class InternalToolExecutor {
       ? String((toolCall.args as { path?: unknown }).path)
       : undefined;
 
-    // 按会话切换沙箱工作根：会话所属工作区 / 会话 worktree（后台会话也不串根）
+    // 按会话解析工作根：作为「本次判定」的作用域（不修改沙箱全局根）
+    // —— 并发/后台会话各自用自己的根判定，不会互相把沙箱根改串。
     const sessionRoot = this.opts.resolveWorkspaceRoot?.(this.opts.sessionId);
-    if (sessionRoot) sandbox.setWorkspaceRoot(sessionRoot);
-    const decision = sandbox.checkPermission({
-      agentId: this.opts.agentId,
-      toolName: toolCall.name,
-      target,
-      kind,
-    });
+    const decision = sandbox.checkPermission(
+      {
+        agentId: this.opts.agentId,
+        toolName: toolCall.name,
+        target,
+        kind,
+      },
+      sessionRoot ? { workspaceRoot: sessionRoot } : undefined,
+    );
 
     if (decision.action === "deny") {
       return { ok: false, content: `[错误] 权限拒绝：${decision.reason}`, error: decision.reason };

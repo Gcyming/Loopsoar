@@ -38,7 +38,34 @@ export interface SqliteAdapter {
   open(path: string): Promise<SqliteDb>;
 }
 
+/**
+ * 网络请求选项（platform 层唯一出网入口）。
+ * 为什么把 method/body 也放进适配层：DNS 钉扎必须由「真正发起连接的人」完成——
+ * 先校验再交给全局 fetch 会重新解析 DNS，等于把钉扎让给了 TOCTOU。
+ */
+export interface NetRequestOptions {
+  url: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+  timeoutMs?: number;
+  /** 响应体最大字符数（超出截断，防止上下文/主进程被撑爆）。 */
+  maxChars?: number;
+  /** 手动跟随 3xx 的上限（逐跳重新校验 + 重新解析 + 重新钉扎）。 */
+  maxRedirects?: number;
+  /** 是否允许回环目标（本地模型服务/E2E 本地页面）；默认 false。 */
+  allowLoopback?: boolean;
+}
+
+export interface NetResponse {
+  status: number;
+  finalUrl: string;
+  text: string;
+  headers: Record<string, string>;
+}
+
 export interface NetAdapter {
+  request(opts: NetRequestOptions): Promise<NetResponse>;
   fetchText(
     url: string,
     opts: {

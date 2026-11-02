@@ -7,7 +7,7 @@
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { CHANNEL_BINDINGS, EVENTS, type EventName } from "../src/schemas.js";
+import { CHANNEL_BINDINGS, EVENTS } from "../src/schemas.js";
 import * as policy from "../src/security-policy.js";
 
 /**
@@ -93,25 +93,6 @@ export type IpcRequest<T> = {
 };
 
 /**
- * IPC_METHODS：通道名 → 参数类型名映射（用 z.infer）。
- * 用于下游根据 channel 名获取对应请求参数的类型名称字符串。
- */
-export type IPC_METHODS = {
-  "chat:stream": z.infer<typeof import("../src/schemas.js").ChatStreamSchema>;
-  "chat:stop": z.infer<typeof import("../src/schemas.js").ChatStopSchema>;
-  "chat:send": z.infer<typeof import("../src/schemas.js").ChatSendSchema>;
-  "perm:respond": z.infer<typeof import("../src/schemas.js").PermRespondSchema>;
-  "file:read": z.infer<typeof import("../src/schemas.js").FileReadSchema>;
-  "file:write": z.infer<typeof import("../src/schemas.js").FileWriteSchema>;
-  "agents:list": null;
-  "app:version": null;
-  "boot:status": null;
-  "browser:navigate": z.infer<typeof import("../src/schemas.js").BrowserNavigateSchema>;
-  "browser:screenshot": z.infer<typeof import("../src/schemas.js").BrowserScreenshotSchema>;
-  "browser:snapshot": null;
-};
-
-/**
  * IPC_VALIDATORS：通道名 → zod 校验器（无参通道为 null）。
  * 与 CHANNEL_BINDINGS 同源（直接由 request 字段推导），
  * 供受信 IPC 入口做四要素校验之「参数合法性」。
@@ -136,12 +117,7 @@ ${preloadEntries}
  * EVENT_NAMES：所有事件名列表。
  */
 export const EVENT_NAMES = [
-  "chat:stream:chunk",
-  "chat:stream:done",
-  "chat:stream:error",
-  "chat:stream:heartbeat",
-  "perm:request",
-  "boot:ready",
+${EVENTS.map((e) => `  "${e}",`).join("\n")}
 ] as const;
 `;
 
@@ -184,6 +160,17 @@ export function generateSecurityPolicyJson() {
       noProgressRounds: policy.LOOP_HEALTH.noProgressRounds,
     },
     displayLimitDefault: policy.DISPLAY_LIMIT_DEFAULT,
+    terminalLimits: {
+      maxSessions: policy.TERMINAL_MAX_SESSIONS,
+      idleMs: policy.TERMINAL_IDLE_MS,
+      bufferBytes: policy.TERMINAL_BUFFER_BYTES,
+      inputMaxBytes: policy.TERMINAL_INPUT_MAX_BYTES,
+    },
+    ssrf: {
+      blockedHostnames: [...policy.SSRF_BLOCKED_HOSTNAMES],
+      allowedPorts: [...policy.SSRF_ALLOWED_PORTS],
+    },
+    fileReadMaxBytes: policy.FILE_READ_MAX_BYTES,
   };
   writeFileSync(outPath, JSON.stringify(data, null, 2) + "\n", "utf8");
   console.log("生成: " + outPath);

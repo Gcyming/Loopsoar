@@ -54,6 +54,17 @@ export interface PermissionReq {
   kind: PermissionKind;
 }
 
+/**
+ * 单次判定的作用域覆盖（当前会话的工作根）。
+ * 为什么不直接 setWorkspaceRoot 再判：SandboxManager 是进程级单例，多会话/多窗口并发工具调用时
+ * 「先改全局根再判定」会互相串根（A 会话的写判定用到 B 会话的根）；作用域参数只影响本次判定，
+ * 并发安全且不改变实例状态。
+ */
+export interface SandboxScope {
+  /** 本次判定使用的工作根；缺省用实例全局根（setWorkspaceRoot 兼容路径）。 */
+  workspaceRoot?: string;
+}
+
 export class SandboxManager {
   private workspaceRoot: string = process.cwd();
   private allowedDirs: string[] = [];
@@ -66,6 +77,7 @@ export class SandboxManager {
   private knownTools = new Set<string>(); // 已装配工具名（由 ToolRegistry 同步）
   private assemblyDone = false; // 「判不了 ≠ 不存在」：未装配完成时不因空清单而全拒
 
+  /** 设置实例级默认工作根（兼容旧装配）。按会话判定时应改用 checkPermission 的 opts.workspaceRoot。 */
   setWorkspaceRoot(root: string): void {
     this.workspaceRoot = root;
   }
@@ -102,9 +114,9 @@ export class SandboxManager {
     return p.replace(/\\/g, "/");
   }
 
-  private isInsideWorkspace(p?: string): boolean {
+  private isInsideWorkspace(p: string | undefined, workspaceRoot: string): boolean {
     if (!p) return true;
-    const root = path.resolve(this.workspaceRoot);
+    const root = path.resolve(workspaceRoot);
     // 相对路径按工作区根解析（工具参数通常给相对路径；不解析会永远判"越界"）
     const target = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
     const normRoot = this.norm(root);
@@ -142,9 +154,15 @@ export class SandboxManager {
     return null;
   }
 
-  checkPermission(req: PermissionReq): SandboxDecision {
+  /**
+   * 八步决策链。opts.workspaceRoot 只影响本次判定的越界检查，不回写实例全局根
+   * （保留 setWorkspaceRoot 兼容旧装配：未传作用域时仍用全局根）。
+   */
+  checkPermission(req: PermissionReq, opts?: SandboxScope): SandboxDecision {
     const { agentId, toolName, target, kind } = req;
     const level = kindToLevel(kind);
+    // 显式传入且非空才覆盖；空串视为未传（fail-safe，避免把根解析成 cwd 之外的空路径）
+    const scopeRoot = opts?.workspaceRoot?.trim() ? opts.workspaceRoot : this.workspaceRoot;
 
     // ① 白名单目录命中 → 放行
     if (this.isWhitelistedDir(target)) {
@@ -155,7 +173,7 @@ export class SandboxManager {
     if (
       kind !== "terminal" &&
       target &&
-      !this.isInsideWorkspace(target) &&
+      !this.isInsideWorkspace(target, scopeRoot) &&
       !this.isWhitelistedDir(target)
     ) {
       return { action: "deny", level: 5, reason: "目标越出工作目录且未授权" };

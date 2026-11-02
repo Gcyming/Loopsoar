@@ -97,6 +97,14 @@ export const IPC_CHANNELS = {
   "mcp:remove": { domain: "mcp", method: "remove", sensitive: true, hasRequest: true },
   "mcp:connect": { domain: "mcp", method: "connect", sensitive: true, hasRequest: true },
   "mcp:disconnect": { domain: "mcp", method: "disconnect", sensitive: true, hasRequest: true },
+  "terminal:profiles": { domain: "terminal", method: "profiles", sensitive: true, hasRequest: false },
+  "terminal:list": { domain: "terminal", method: "list", sensitive: true, hasRequest: false },
+  "terminal:open": { domain: "terminal", method: "open", sensitive: true, hasRequest: true },
+  "terminal:input": { domain: "terminal", method: "input", sensitive: true, hasRequest: true },
+  "terminal:run": { domain: "terminal", method: "run", sensitive: true, hasRequest: true },
+  "terminal:interrupt": { domain: "terminal", method: "interrupt", sensitive: true, hasRequest: true },
+  "terminal:close": { domain: "terminal", method: "close", sensitive: true, hasRequest: true },
+  "terminal:history": { domain: "terminal", method: "history", sensitive: true, hasRequest: true },
 } as const;
 
 /**
@@ -105,25 +113,6 @@ export const IPC_CHANNELS = {
 export type IpcRequest<T> = {
   readonly channel: string;
   readonly payload: T;
-};
-
-/**
- * IPC_METHODS：通道名 → 参数类型名映射（用 z.infer）。
- * 用于下游根据 channel 名获取对应请求参数的类型名称字符串。
- */
-export type IPC_METHODS = {
-  "chat:stream": z.infer<typeof import("../src/schemas.js").ChatStreamSchema>;
-  "chat:stop": z.infer<typeof import("../src/schemas.js").ChatStopSchema>;
-  "chat:send": z.infer<typeof import("../src/schemas.js").ChatSendSchema>;
-  "perm:respond": z.infer<typeof import("../src/schemas.js").PermRespondSchema>;
-  "file:read": z.infer<typeof import("../src/schemas.js").FileReadSchema>;
-  "file:write": z.infer<typeof import("../src/schemas.js").FileWriteSchema>;
-  "agents:list": null;
-  "app:version": null;
-  "boot:status": null;
-  "browser:navigate": z.infer<typeof import("../src/schemas.js").BrowserNavigateSchema>;
-  "browser:screenshot": z.infer<typeof import("../src/schemas.js").BrowserScreenshotSchema>;
-  "browser:snapshot": null;
 };
 
 /**
@@ -156,7 +145,8 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "worktree": ["create", "remove", "diff", "merge"],
     "extensions": ["list", "setEnabled", "remove", "start", "stop", "openDir"],
     "skills": ["list", "reload", "setEnabled", "openDir"],
-    "mcp": ["list", "add", "remove", "connect", "disconnect"]
+    "mcp": ["list", "add", "remove", "connect", "disconnect"],
+    "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"]
     },
   };
 }
@@ -166,9 +156,22 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
  */
 export const EVENT_NAMES = [
   "chat:stream:chunk",
+  "chat:stream:reasoning",
+  "chat:stream:tool",
+  "chat:stream:tool_start",
+  "chat:stream:progress",
   "chat:stream:done",
   "chat:stream:error",
   "chat:stream:heartbeat",
   "perm:request",
   "boot:ready",
+  "browser:tabs",
+  "browser:downloads",
+  "memory:updated",
+  "extensions:updated",
+  "skills:updated",
+  "mcp:updated",
+  "terminal:data",
+  "terminal:exit",
+  "terminal:state",
 ] as const;
