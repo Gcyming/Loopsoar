@@ -19,6 +19,10 @@ import { registerMcpDomain } from "../../packages/shell/src/main/domains/mcp.ts"
 import { registerFsDomain } from "../../packages/shell/src/main/domains/fs.ts";
 import { registerTerminalDomain } from "../../packages/shell/src/main/domains/terminal.ts";
 import type { TerminalSessionManager } from "../../packages/shell/src/main/terminalSession.ts";
+import { registerAskDomain } from "../../packages/shell/src/main/domains/ask.ts";
+import { registerLoopDomain } from "../../packages/shell/src/main/domains/loop.ts";
+import { AskBus } from "../../packages/shell/src/main/askBus.ts";
+import type { LoopRuntime } from "../../packages/shell/src/main/loopRuntime.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -63,6 +67,16 @@ function fakeTerminalManager(): TerminalSessionManager {
   } as unknown as TerminalSessionManager;
 }
 
+/** 假 Agent-Loop 运行时：只暴露域注册所需的 list/setActive。 */
+function fakeLoopRuntime(): LoopRuntime {
+  return {
+    registry: {} as never,
+    run: async () => ({ status: "done", reason: "guard", finalText: "", usage: { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 } }),
+    list: () => ({ loops: [], activeId: null, fallbacks: [] }),
+    setActive: () => ({ ok: false, error: "守卫测试" }),
+  } as unknown as LoopRuntime;
+}
+
 function assemble(): void {
   const deps = fakeDeps();
   registerRuntimeDomain(deps);
@@ -74,6 +88,8 @@ function assemble(): void {
   registerChatDomain({ ...deps, chatService: fakeChatService(), push: () => {} });
   registerBrowserDomain(deps);
   registerTerminalDomain(deps, fakeTerminalManager());
+  registerAskDomain(deps, new AskBus({ push: () => {} }));
+  registerLoopDomain(deps, fakeLoopRuntime());
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,

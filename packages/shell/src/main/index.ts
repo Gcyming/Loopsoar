@@ -39,7 +39,24 @@ import { registerAgentsDomain } from "./domains/agents.js";
 import { registerChatDomain } from "./domains/chat.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
-import { loadProviderConfig, registerSettingsDomain, currentRulesPrompt } from "./domains/settings.js";
+import {
+  loadProviderConfig,
+  registerSettingsDomain,
+  currentRulesPrompt,
+  savePreferencesPatch,
+} from "./domains/settings.js";
+import { registerMemoryTools } from "./memoryTools.js";
+import { registerSearchTools } from "./searchTools.js";
+import {
+  createFallbackLlmClient,
+  createModelRouterForTargets,
+  type FallbackLlmTarget,
+} from "./routerLlm.js";
+import { createLoopRuntime } from "./loopRuntime.js";
+import { registerLoopDomain } from "./domains/loop.js";
+import { AskBus } from "./askBus.js";
+import { registerAskDomain } from "./domains/ask.js";
+import { registerAskTools } from "./askTools.js";
 import { registerMemoryDomain } from "./domains/memory.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
@@ -596,43 +613,90 @@ app.whenReady().then(async () => {
     const stored = providerId ? (secrets.get(providerId) ?? "") : "";
     return stored || resolveApiKeyFromEnv(process.env);
   };
-  const buildLlmFromActive = (sessionId?: string): LlmClient | undefined => {
-    const active = providers.active();
-    const key = resolveProviderKey(active?.id);
-    if (!active || !key) return undefined;
+  type ProviderEntry = ReturnType<ProviderStore["list"]>[number];
+  /** 单个供应商 → LLM 客户端（请求头模板按 sessionId 渲染；缺 key 返回 undefined）。 */
+  const buildLlmForProvider = (item: ProviderEntry, sessionId?: string): LlmClient | undefined => {
+    const key = resolveProviderKey(item.id);
+    if (!key) return undefined;
     // 请求头模板（{{sessionId}} / {{model}} / {{requestId}} …）：按请求渲染，
     // 让 x-opencode-session 这类"每会话/每请求"限制无需为每个供应商写死。
-    const effectiveHeaders = withProviderDefaults(active.provider, active.baseUrl, active.headers);
+    const effectiveHeaders = withProviderDefaults(item.provider, item.baseUrl, item.headers);
     const resolveHeaders =
       Object.keys(effectiveHeaders).length > 0
         ? (): Record<string, string> =>
             renderHeaderTemplates(effectiveHeaders, {
-              provider: active.provider,
-              model: active.model,
+              provider: item.provider,
+              model: item.model,
               sessionId: sessionId ?? "no-session",
               requestId: randomUUID(),
               timestamp: new Date().toISOString(),
             })
         : undefined;
     // 端点协议：显式指定优先，auto 按 baseUrl 推断（OpenAI 兼容 / Anthropic Messages）
-    const format = active.apiFormat && active.apiFormat !== "auto" ? active.apiFormat : inferApiFormat(active.baseUrl);
+    const format = item.apiFormat && item.apiFormat !== "auto" ? item.apiFormat : inferApiFormat(item.baseUrl);
     if (format === "anthropic") {
       return createAnthropicClient({
-        baseUrl: active.baseUrl.replace(/\/v1$/, ""),
+        baseUrl: item.baseUrl.replace(/\/v1$/, ""),
         apiKey: key,
-        model: active.model,
+        model: item.model,
         resolveHeaders,
       });
     }
-    return createOpenAiClient({ baseUrl: active.baseUrl, apiKey: key, model: active.model, resolveHeaders });
+    return createOpenAiClient({ baseUrl: item.baseUrl, apiKey: key, model: item.model, resolveHeaders });
+  };
+
+  // 多供应商降级链（模型路由）：active 最高优先级，其余按配置顺序；冷却状态挂在 router 上跨请求复用。
+  let llmRouter = createModelRouterForTargets([]);
+  const buildLlmTargets = (sessionId?: string): FallbackLlmTarget[] => {
+    const activeId = providers.active()?.id;
+    return providers
+      .list()
+      .map((item, index) => {
+        if (!resolveProviderKey(item.id)) return null;
+        return {
+          id: item.id,
+          provider: item.provider,
+          model: item.model,
+          priority: item.id === activeId ? 100 : Math.max(1, 50 - index),
+          roles: ["chat"],
+          build: () => {
+            const client = buildLlmForProvider(item, sessionId);
+            if (!client) throw new Error(`供应商 ${item.provider} 未配置密钥`);
+            return client;
+          },
+        } satisfies FallbackLlmTarget;
+      })
+      .filter((target): target is FallbackLlmTarget => target !== null);
+  };
+  const rebuildLlmRouter = (): void => {
+    llmRouter = createModelRouterForTargets(buildLlmTargets());
+  };
+  const buildLlmFromActive = (sessionId?: string): LlmClient | undefined => {
+    const targets = buildLlmTargets(sessionId);
+    if (targets.length === 0) return undefined;
+    if (targets.length === 1) return targets[0].build();
+    return createFallbackLlmClient({ targets, router: llmRouter });
   };
   // 惰性引用：供应商增删改/切换活跃后立即生效（无需重启）
+  rebuildLlmRouter();
   let llmRef: LlmClient | undefined = buildLlmFromActive();
 
   // 记忆库（路径可在设置里改）+ 会话持久化
   const memoryFile = initialPrefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
   const memory = new MemoryService({ platform, filePath: memoryFile });
   await memory.load();
+
+  // 询问用户总线（ask_user 工具）：ask:user 推渲染层弹窗，回答经 ask:respond 结算（超时按取消）
+  const askBus = new AskBus({ push: (event, payload) => pushToRenderer(event, payload) });
+
+  // Agent-Loop 运行时（ADR-0010）：内置 loop + 安全模式回退；选择持久化到偏好（运行时切换即生效）
+  const loopRuntime = createLoopRuntime({
+    push: (event, payload) => pushToRenderer(event, payload),
+    getActiveId: () => loadPreferences(dirs.configDir).loopId,
+    onActiveChanged: (id) => {
+      savePreferencesPatch(dirs.configDir, { loopId: id });
+    },
+  });
   const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
   // 工作区：挂载项目文件夹。旧偏好里的 workspaceRoot 作为默认工作区，兼容升级用户。
   const workspaces = new WorkspaceStore(
@@ -707,12 +771,15 @@ app.whenReady().then(async () => {
     providers,
     secrets,
     onProvidersChanged: () => {
+      rebuildLlmRouter();
       llmRef = buildLlmFromActive();
     },
     onProviderCleared: () => {
+      rebuildLlmRouter();
       llmRef = buildLlmFromActive();
     },
     onProviderSaved: () => {
+      rebuildLlmRouter();
       llmRef = buildLlmFromActive();
     },
     // 偏好保存 → 应用工作区根 / 记忆库位置
@@ -731,6 +798,8 @@ app.whenReady().then(async () => {
     platform,
     registry,
     sandbox,
+    // Agent-Loop 可插拔：统一经 LoopRegistry 运行（内置 loop 失败自动回退安全模式）
+    runLoop: (input) => loopRuntime.run(input),
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
     // 规则文件（AGENTS.md）：每次 stream 重新读取，设置面板保存后即时生效
@@ -826,6 +895,17 @@ app.whenReady().then(async () => {
   registerTerminalTools(registry, resolveSessionRoot);
   registerPlanTools(registry);
   registerFileTools(registry, resolveSessionRoot);
+  // 记忆工具（设置·记忆同源数据）：读工具 plan 可用，写工具按 sandbox L2 确认
+  registerMemoryTools(registry, memory);
+  // 联网搜索工具：走注入的 platform.net.request（SSRF/DNS 钉扎），引擎来自偏好
+  registerSearchTools(registry, {
+    getEngine: () => loadPreferences(dirs.configDir).searchEngine,
+    getPlatform: () => platform,
+    getMaxResults: () => 5,
+  });
+  // 询问用户工具：挂起等待真人回答（弹窗）
+  registerAskTools(registry, askBus);
+  // 新工具注册后必须再同步沙箱白名单（否则会被判「未知工具名」）
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
   /** 退出前全量落盘：标签防抖队列可能还没触发，必须同步刷一次。 */
@@ -920,6 +1000,8 @@ app.whenReady().then(async () => {
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost, downloads });
   registerTerminalDomain(deps, terminals);
+  registerLoopDomain(deps, loopRuntime);
+  registerAskDomain(deps, askBus);
   // 扩展运行时：每个启用扩展一个隔离子进程，工具桥接为 ext__<id>__<tool>
   const extensionRuntime = new ExtensionRuntime({
     extensions,
@@ -987,7 +1069,10 @@ app.whenReady().then(async () => {
     saveBrowserStates: saveAllBrowserStates,
     shutdownMcp: () => mcp.shutdown(),
     stopExtensions: () => extensionRuntime.stopAll(),
-    closeTerminals: () => terminals.closeAll(),
+    closeTerminals: () => {
+      terminals.closeAll();
+      askBus.clearAll("应用退出，按取消处理");
+    },
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });
 

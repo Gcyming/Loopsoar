@@ -282,6 +282,16 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 90 文件 / 686 tests 全绿**
 - 已知遗留（后续阶段处理）：管道式终端 Ctrl+C 语义=杀进程树（无 PTY，终端变 exited）；PowerShell 管道中文编码；浏览器守卫对 data:/blob: 子资源偏严需真机观察；模型探测仍有 DNS-rebinding TOCTOU 窗口；E2E 真机冒烟待跑
 
+## 二·二十九、2026-11-02 第二十六次增量（Agent 核心补完：Loop 接线 / 路由 / 过滤 / 记忆 / 新工具）
+- **Agent-Loop 可插拔接线（ADR-0010 落地）**：`LoopRegistry` 真正接入 ChatService（`runLoop` 注入）；内置 `core-loop`（runner=runToolLoop）注册；自定义 loop 抛错/静态校验失败/静默超时 → 自动回退 builtin 用同一 ctx 重跑并推送 `loop:fallback`（界面可见）；`loop:list` / `loop:setActive` 通道 + 设置页「Agent Loop」选择器 + `preferences.loopId` 持久化（修复 core 重复 PreferencesSchema 丢字段问题）
+- **每轮声称核验 + 强制工具轮**：tool_loop 新增 `verifyRound`（模型准备收束且整段未用工具时核验；可疑声称注入「请先用工具实际核实」并继续循环，默认最多 2 次强制轮）与长等待工具豁免（ask_user 10 分钟静默超时、心跳保持）
+- **输出过滤接线**：ChatService 对正文/推理分别做跨 chunk 身份掩码（core/filter createStreamFilter），finalText 整体兜底；`filterOutput:false` 仅调试
+- **模型路由降级链**：`routerLlm`（core ModelRouter + 供应商优先级 + 可重试错误才降级 + 30s 冷却 + 输出后不重放）+ index 装配为多供应商 target 链（active 最高优先级）
+- **召回门控**：MemoryService.recallPrompt 接入 `shouldRecall` 四信号门控（无信号不注入，`recallGate:false` 可关）；新增 search/recallSignals
+- **新工具**：`web_search`（Bing/DDG HTML 解析、走 SSRF 钉扎 net、去重/跳转链解码）、`memory_search/add/update/delete`（读工具 plan 可用、写按 L2 确认）、`ask_user`（挂起等待真人回答、超时/取消 fail-closed、独立 AskBus + `ask:respond` 通道 + 模态弹窗、Esc/选项/自由文本）
+- **UI**：AskUserDialog（模态/焦点圈定/Esc 防误关）、设置页 Agent-Loop 选择器与回退原因展示、`loop:fallback` 全局提示
+- 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 99 文件 / 783 tests 全绿**
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

@@ -170,6 +170,19 @@ export const TerminalRunSchema = z.object({
   command: z.string().min(1).max(8000),
 });
 export const TerminalInterruptSchema = z.object({ terminalId: TerminalIdSchema });
+
+/* ───────────────────────── 询问用户（ask_user 工具） ───────────────────────── */
+
+export const AskRespondSchema = z.object({
+  requestId: z.string().min(1).max(120),
+  /** 用户回答（自由文本或所选选项文案）；取消时缺省。 */
+  answer: z.string().max(4000).optional(),
+  cancelled: z.boolean().optional(),
+});
+
+/* ───────────────────────── Agent-Loop（ADR-0010 接线） ───────────────────────── */
+
+export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 export const TerminalCloseSchema = z.object({ terminalId: TerminalIdSchema });
 export const TerminalHistorySchema = z.object({ terminalId: TerminalIdSchema });
 
@@ -233,6 +246,8 @@ export const PreferencesSchema = z.object({
   agentRepeatToolStop: z.number().int().min(3).max(200).optional(),
   /** 推理强度（空 = 模型默认；取值随模型，持久化到偏好以便重启保持）。 */
   reasoningEffort: z.string().max(64).optional(),
+  /** 当前 Agent-Loop id（缺省 = 内置 loop）；自定义 loop 接线后持久化选择。 */
+  loopId: z.string().max(64).optional(),
 });
 
 /** 权限策略（设置 · 权限）：工具类别的默认决策。 */
@@ -866,6 +881,28 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: TerminalCloseSchema,
     sensitive: true,
   },
+
+  /* ── 询问用户（Agent 工具） ── */
+  "ask:respond": {
+    domain: "ask",
+    method: "respond",
+    request: AskRespondSchema,
+    sensitive: true,
+  },
+
+  /* ── Agent-Loop（ADR-0010：内置 loop + 安全回退 + 选择） ── */
+  "loop:list": {
+    domain: "loop",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "loop:setActive": {
+    domain: "loop",
+    method: "setActive",
+    request: LoopSetActiveSchema,
+    sensitive: true,
+  },
   "terminal:history": {
     domain: "terminal",
     method: "history",
@@ -898,6 +935,9 @@ export const EVENTS = [
   "terminal:data",
   "terminal:exit",
   "terminal:state",
+  "ask:user",
+  "loop:fallback",
+  "loop:changed",
 ] as const;
 
 /**

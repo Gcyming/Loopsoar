@@ -48,6 +48,30 @@ export interface ToolLoopOpts {
   messages?: LlmMessage[];
   /** 推理等级（透传厂商；不支持则忽略）。 */
   reasoningEffort?: string;
+  /**
+   * 每轮声称核验（可选）：某轮无工具调用且模型准备收束（sawDone）时调用。
+   * 为什么：只在最终收束时核验，「已保存」的假完成已经先呈现给用户了；每轮核验能在收束前
+   * 逼模型用工具实际核实（ok=false 注入强制工具轮）。
+   */
+  verifyRound?: (info: {
+    /** 本轮序号（从 1 开始）。 */
+    round: number;
+    /** 截至本轮累计的模型正文（核验窗口）。 */
+    finalText: string;
+    /** 整段运行至此是否调用过工具（用于区分「纯口嗨」与「已做过操作」）。 */
+    usedAnyTool: boolean;
+  }) => Promise<{ ok: boolean; note?: string }>;
+  /** 声称核验失败后最多注入几次强制工具轮（默认 2；0=不强制，只记录 progress）。 */
+  maxVerifyForcedRounds?: number;
+  /**
+   * 长等待工具名单（默认 ["ask_user"]）。
+   * 为什么单独豁免：ask_user 等真人回答可能几分钟，按普通工具静默超时（90s）会被误杀。
+   */
+  longRunningTools?: readonly string[];
+  /** 长等待工具的超时（默认 600000 = 10 分钟，与 ask_user 默认等待时长一致）。 */
+  longRunningTimeoutMs?: number;
+  /** 普通工具静默超时覆盖（默认 LOOP_HEALTH.silentTimeoutMs；自定义 loop 可收紧，测试可缩短）。 */
+  silentTimeoutMs?: number;
 }
 
 // 工具循环产出：包含最终状态、归因文案、累积文本、最终预算使用量。
@@ -94,6 +118,13 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   const startTime = Date.now();
   const npr = configuredNoProgressRounds ?? LOOP_HEALTH.noProgressRounds;
   let roundsWithoutProgress = 0;
+  /** 已注入的强制工具轮次数（verifyRound 未通过时累计，受 maxVerifyForcedRounds 封顶）。 */
+  let forcedVerifyRounds = 0;
+  const maxVerifyForcedRounds = Math.max(0, Math.floor(opts.maxVerifyForcedRounds ?? 2));
+  /** 长等待工具集合：默认 ask_user（真人回答耗时不可控）。 */
+  const longRunningTools = new Set(opts.longRunningTools ?? ["ask_user"]);
+  const longRunningTimeoutMs = opts.longRunningTimeoutMs ?? 600_000;
+  const normalSilentTimeoutMs = opts.silentTimeoutMs ?? LOOP_HEALTH.silentTimeoutMs;
 
   let finalText = "";
   let seq = 0;
@@ -238,8 +269,12 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 }
               }, heartbeatMs);
 
-              // 静默超时：工具执行超过 LOOP_HEALTH.silentTimeoutMs 即中止并返回 silent 状态
-              const silentTimeoutMs = LOOP_HEALTH.silentTimeoutMs;
+              // 静默超时：普通工具按 LOOP_HEALTH.silentTimeoutMs；
+              // 长等待工具（ask_user 等需要真人回答的）豁免，走 longRunningTimeoutMs —— 否则会被 90s 误杀。
+              // 心跳保持：长等待期间仍按 heartbeatMs 发 heartbeat（UI 显示「仍在等待」）。
+              const isLongRunningTool = longRunningTools.has(toolCall.name);
+              const silentTimeoutMs = isLongRunningTool ? longRunningTimeoutMs : normalSilentTimeoutMs;
+              let silentTimer: NodeJS.Timeout | undefined;
               let toolResult: ToolResult;
 
               try {
@@ -251,24 +286,26 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                     error: err instanceof Error ? err.message : String(err),
                   } as ToolResult)),
                   new Promise<ToolResult>((_, reject) => {
-                    setTimeout(() => {
+                    silentTimer = setTimeout(() => {
                       reject(new Error("静默超时：工具执行超过安全静默时间"));
                     }, silentTimeoutMs);
+                    // 不阻止进程退出（否则普通工具的 90s 定时器会拖住测试/退出路径）
+                    silentTimer.unref?.();
                   }),
                 ]);
 
                 toolResult = await timeoutRace;
               } catch (err) {
-                // 超时：清理心跳，返回 silent（安全模式触发条件）
-                clearInterval(heartbeatInterval);
+                // 超时：心跳已发，返回 silent（安全模式触发条件）
                 emit("heartbeat", { silentMs: silentTimeoutMs });
                 return {
                   status: "silent",
-                  reason: "安全模式触发条件：工具执行静默超时（超过 LOOP_HEALTH.silentTimeoutMs）",
+                  reason: `安全模式触发条件：工具执行静默超时（超过 ${silentTimeoutMs}ms）`,
                   finalText,
                   usage,
                 };
               } finally {
+                if (silentTimer) clearTimeout(silentTimer);
                 clearInterval(heartbeatInterval);
               }
 
@@ -392,10 +429,57 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           }),
         ];
       } else if (sawDone) {
+        // 每轮声称核验（可选）：模型准备收束但本轮没调工具 → 先核验它的「已完成」声称。
+        // 为什么在这里拦：等最终收束后再核验，用户已经看到「已保存/已完成」的假完成了；
+        // 核验未通过就注入一条 user 提示，逼模型用工具实际核实（最多 maxVerifyForcedRounds 次）。
+        let verifyFailed = false;
+        let verifyNote = "";
+        if (opts.verifyRound) {
+          try {
+            const verdict = await opts.verifyRound({
+              round: round + 1,
+              finalText,
+              usedAnyTool: usage.toolCalls > 0,
+            });
+            verifyFailed = verdict.ok === false;
+            verifyNote = verdict.note ?? "声称与事实不符";
+          } catch (err) {
+            // 核验器自身异常：不阻断收束（避免核验故障误伤正常完成），但必须可见
+            emit("progress", {
+              note: `声称核验异常（本轮已跳过）：${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        }
+        if (verifyFailed) {
+          if (forcedVerifyRounds < maxVerifyForcedRounds) {
+            forcedVerifyRounds += 1;
+            emit("progress", {
+              note: `声称核验未通过（${verifyNote}），注入强制工具轮 ${forcedVerifyRounds}/${maxVerifyForcedRounds}`,
+              verify: true,
+            });
+            // 把模型的收束正文与本轮核验结论一起回灌，模型才知道「哪句话没被采信」
+            conversation = [
+              ...conversation,
+              { role: "assistant", content: roundText },
+              {
+                role: "user",
+                content: `声称核验未通过：${verifyNote}，请先用工具实际核实再收束`,
+              },
+            ];
+            // 强制轮是有效推进：清零无进度计数，避免被误判成死循环
+            roundsWithoutProgress = 0;
+            continue;
+          }
+          emit("progress", {
+            note: `声称核验未通过，但强制工具轮已达上限（${maxVerifyForcedRounds}），按现有结果收束`,
+          });
+        }
         emit("done", { finalText });
         return {
           status: "done",
-          reason: "LLM 返回 done，任务完成",
+          reason: verifyFailed
+            ? `LLM 返回 done，任务完成（声称核验未通过，强制工具轮已达上限 ${maxVerifyForcedRounds}）`
+            : "LLM 返回 done，任务完成",
           finalText,
           usage,
         };

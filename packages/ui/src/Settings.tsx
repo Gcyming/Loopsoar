@@ -8,7 +8,7 @@ import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { Icon } from "./Icon.js";
 import type {
-  AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopsoarAPI, McpServerInfo, MemoryListResult,
+  AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo, LoopListResult, LoopsoarAPI, McpServerInfo, MemoryListResult,
   PermissionsState, Preferences, ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
@@ -95,6 +95,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
   const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
+  /** Agent-Loop：可运行 loop 列表 + 当前选择 + 回退历史（设置 · 通用）。 */
+  const [loopInfo, setLoopInfo] = useState<LoopListResult | null>(null);
+  const [loopBusy, setLoopBusy] = useState(false);
+  /** 最近一次安全回退（有则显示在 Agent Loop 行下方；ADR-0010：回退可见）。 */
+  const latestLoopFallback = loopInfo && loopInfo.fallbacks.length > 0 ? loopInfo.fallbacks[loopInfo.fallbacks.length - 1] : null;
 
   const ok = useCallback((text: string) => setNotice({ kind: "ok", text }), []);
   /** 供应商变更广播：主界面据此刷新模型 chip / 模型列表 */
@@ -176,6 +181,86 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     });
     return off;
   }, [api]);
+
+  /* ── Agent-Loop：打开设置时拉取；loop:changed / loop:fallback 事件同步刷新并提示 ── */
+  const refreshLoops = useCallback(async (): Promise<void> => {
+    if (!api) return;
+    try {
+      setLoopInfo(await api.loop.list());
+    } catch {
+      // 旧 shell 未装配 loop 域：显示「不可用」而不是把设置页打成错误（不影响其他分区）
+      setLoopInfo(null);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void refreshLoops();
+  }, [refreshLoops]);
+
+  useEffect(() => {
+    if (!api) return;
+    const offs: Array<() => void> = [];
+    try {
+      offs.push(
+        api.on("loop:changed", (payload) => {
+          const info = payload as { activeId?: string | null; loops?: LoopInfo[] };
+          // 事件已带最新列表：直接更新（少一次 IPC）；没有就回退到拉取
+          if (Array.isArray(info?.loops)) {
+            setLoopInfo((prev) => ({ loops: info.loops as LoopInfo[], activeId: info.activeId ?? null, fallbacks: prev?.fallbacks ?? [] }));
+          } else {
+            void refreshLoops();
+          }
+          // 同步本地偏好副本里的 loopId（否则之后任何一次通用设置自动保存都可能把旧值写回）
+          if (typeof info?.activeId === "string") {
+            const activeId = info.activeId;
+            setPrefs((prev) => (prev && prev.loopId !== activeId ? { ...prev, loopId: activeId } : prev));
+          }
+        }),
+      );
+    } catch {
+      // 旧 shell 事件白名单未含 loop:changed：静默降级（不折叠整个设置面板）
+    }
+    try {
+      offs.push(
+        api.on("loop:fallback", (payload) => {
+          const info = payload as { reason?: string; at?: number };
+          // ADR-0010：回退必须可见——设置页里也要把原因提示出来
+          setNotice({ kind: "error", text: `Agent-Loop 已回退到内置 loop：${info?.reason ?? "原因未知"}` });
+          void refreshLoops();
+        }),
+      );
+    } catch {
+      // 同上
+    }
+    return () => {
+      for (const off of offs) off();
+    };
+  }, [api, refreshLoops]);
+
+  const chooseLoop = useCallback(async (loop: LoopInfo): Promise<void> => {
+    if (!api || loopBusy || loop.active) return;
+    setLoopBusy(true);
+    try {
+      const result = await api.loop.setActive({ id: loop.id });
+      if (!result?.ok) {
+        bad(result?.error ?? "切换 Agent-Loop 失败");
+        return;
+      }
+      // 成功返回里带最新列表（域层 {ok:true, ...LoopListPayload}）；没有则再拉一次兜底
+      if (Array.isArray(result.loops)) {
+        setLoopInfo({ loops: result.loops, activeId: result.activeId ?? null, fallbacks: result.fallbacks ?? [] });
+      } else {
+        setLoopInfo(await api.loop.list());
+      }
+      // 同步本地偏好副本里的 loopId：否则之后任何一次「通用设置」自动保存都会把旧 loopId 写回去
+      setPrefs((prev) => (prev ? { ...prev, loopId: loop.id } : prev));
+      ok(`Agent-Loop 已切换：${loop.name}`);
+    } catch (e) {
+      bad(e);
+    } finally {
+      setLoopBusy(false);
+    }
+  }, [api, loopBusy, ok, bad]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -386,6 +471,40 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             />
           </Field>
           <Field l="自动记忆汇总" h="每轮对话结束自动抽取记忆"><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
+          <Field l="Agent Loop" h="Agent 执行循环。内置 loop 不可删除、不可原位修改；自定义 loop 失败会自动回退到内置（同一上下文重跑，任务不重来）">
+            <div className="loop-picker" aria-busy={loopBusy}>
+              {loopInfo ? (
+                loopInfo.loops.length > 0 ? (
+                  loopInfo.loops.map((loop) => (
+                    <button
+                      key={loop.id}
+                      type="button"
+                      className={`loop-item${loop.active ? " is-active" : ""}`}
+                      disabled={loopBusy}
+                      aria-pressed={loop.active}
+                      title={loop.builtin ? "内置 loop：不可删除、不可原位修改（可复制为新 loop 再改）" : "自定义 loop"}
+                      onClick={() => void chooseLoop(loop)}
+                    >
+                      <span className="loop-item-name">{loop.name}</span>
+                      <span className="loop-item-tags">
+                        {loop.builtin ? <span style={BADGE.neutral}>内置</span> : <span style={BADGE.warn}>自定义</span>}
+                        {loop.active ? <span style={BADGE.ok}>当前</span> : null}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <span className="loop-empty">没有可运行的 Agent-Loop</span>
+                )
+              ) : (
+                <span className="loop-empty">Agent-Loop 不可用（shell 未装配 loop 域）</span>
+              )}
+              {latestLoopFallback ? (
+                <div className="loop-fallback" role="status">
+                  最近回退（{formatWhen(latestLoopFallback.at)}）：{latestLoopFallback.reason}
+                </div>
+              ) : null}
+            </div>
+          </Field>
           <div style={S.note}>以上设置修改后立即生效（自动保存）。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
 
@@ -1136,7 +1255,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.note}>规则遵循 AGENTS.md 约定；记忆设计参考 MemGPT / Mem0 / Anthropic 记忆工具。</div>
         </div>) : <div style={S.muted}>读取失败</div>;
     }
-  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail]);
+  }, [section, loading, api, prefs, locations, perms, provider, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveProvider, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop]);
 
   return (
     <div className="settings-overlay" style={S.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -1194,6 +1313,12 @@ function parseHeaderLines(text: string): Record<string, string> | undefined {
 function formatHeaderLines(headers?: Record<string, string>): string {
   if (!headers) return "";
   return Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n");
+}
+
+/** 时间戳展示（回退记录等；本地时区短格式，非法值显示「时间未知」）。 */
+function formatWhen(at: number): string {
+  if (!Number.isFinite(at) || at <= 0) return "时间未知";
+  return new Date(at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function Field({ l, h, children }: { l: string; h?: string; children: React.ReactNode }) {

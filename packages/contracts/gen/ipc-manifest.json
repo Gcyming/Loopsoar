@@ -659,6 +659,27 @@
       "hasRequest": true
     },
     {
+      "channel": "ask:respond",
+      "domain": "ask",
+      "method": "respond",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "loop:list",
+      "domain": "loop",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "loop:setActive",
+      "domain": "loop",
+      "method": "setActive",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "terminal:history",
       "domain": "terminal",
       "method": "history",
@@ -685,6 +706,9 @@
     "mcp:updated",
     "terminal:data",
     "terminal:exit",
-    "terminal:state"
+    "terminal:state",
+    "ask:user",
+    "loop:fallback",
+    "loop:changed"
   ]
 }

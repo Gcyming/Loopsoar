@@ -104,6 +104,9 @@ export const IPC_CHANNELS = {
   "terminal:run": { domain: "terminal", method: "run", sensitive: true, hasRequest: true },
   "terminal:interrupt": { domain: "terminal", method: "interrupt", sensitive: true, hasRequest: true },
   "terminal:close": { domain: "terminal", method: "close", sensitive: true, hasRequest: true },
+  "ask:respond": { domain: "ask", method: "respond", sensitive: true, hasRequest: true },
+  "loop:list": { domain: "loop", method: "list", sensitive: true, hasRequest: false },
+  "loop:setActive": { domain: "loop", method: "setActive", sensitive: true, hasRequest: true },
   "terminal:history": { domain: "terminal", method: "history", sensitive: true, hasRequest: true },
 } as const;
 
@@ -146,7 +149,9 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "extensions": ["list", "setEnabled", "remove", "start", "stop", "openDir"],
     "skills": ["list", "reload", "setEnabled", "openDir"],
     "mcp": ["list", "add", "remove", "connect", "disconnect"],
-    "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"]
+    "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"],
+    "ask": ["respond"],
+    "loop": ["list", "setActive"]
     },
   };
 }
@@ -174,4 +179,7 @@ export const EVENT_NAMES = [
   "terminal:data",
   "terminal:exit",
   "terminal:state",
+  "ask:user",
+  "loop:fallback",
+  "loop:changed",
 ] as const;

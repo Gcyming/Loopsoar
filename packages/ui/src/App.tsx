@@ -4,6 +4,7 @@ import { normalizeNavigateUrl } from "loopsoar-contracts/navigation";
 import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
+  AskUserRequest,
   BootStatus,
   LoopsoarAPI,
   DownloadItem,
@@ -29,6 +30,7 @@ import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 import TerminalPanel from "./TerminalPanel.js";
+import AskUserDialog from "./AskUserDialog.js";
 import { type TimelineStep } from "./timeline.js";
 
 /**
@@ -110,6 +112,8 @@ export default function App(): React.JSX.Element {
   const [mode, setMode] = useState<"build" | "plan">("build");
   const [reasoningEffort, setReasoningEffort] = useState<string>("");
   const [permReq, setPermReq] = useState<{ requestId: string; toolName: string; target?: string; kind?: string } | null>(null);
+  // ask_user 弹窗队列：ask:user 事件入队，逐条回答后出队（理论上同一时刻只有一条，队列兜住连发）
+  const [askQueue, setAskQueue] = useState<AskUserRequest[]>([]);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
@@ -372,6 +376,36 @@ export default function App(): React.JSX.Element {
           setPermReq({ requestId: req.requestId, toolName: req.toolName ?? "工具", target: req.target, kind: req.kind });
         }
       }),
+      // 新增事件用 try/catch 包裹：旧 shell 的 preload 白名单未登记时会抛错，降级为不订阅
+      ((): () => void => {
+        try {
+          return api.on("ask:user", (payload) => {
+            const req = payload as Partial<AskUserRequest> | null;
+            if (!req || typeof req.requestId !== "string" || typeof req.question !== "string") return;
+            const request: AskUserRequest = {
+              requestId: req.requestId,
+              question: req.question,
+              ...(Array.isArray(req.options) ? { options: req.options.filter((item): item is string => typeof item === "string") } : {}),
+              ...(typeof req.allowFreeText === "boolean" ? { allowFreeText: req.allowFreeText } : {}),
+            };
+            // 去重入队：同一 requestId 重复推送不弹两个窗
+            setAskQueue((prev) => (prev.some((item) => item.requestId === request.requestId) ? prev : [...prev, request]));
+          });
+        } catch {
+          return () => {};
+        }
+      })(),
+      ((): () => void => {
+        try {
+          return api.on("loop:fallback", (payload) => {
+            const info = payload as { reason?: string };
+            // ADR-0010：安全回退必须可见（自定义 loop 跑挂 → 同一 ctx 回退 builtin）
+            setNotice(`Agent-Loop 已回退到内置 loop：${info?.reason ?? "原因未知"}`);
+          });
+        } catch {
+          return () => {};
+        }
+      })(),
       api.on("browser:downloads", (payload) => {
         const p = payload as { downloads?: DownloadItem[] };
         if (Array.isArray(p.downloads)) setDownloads(p.downloads);
@@ -662,6 +696,27 @@ export default function App(): React.JSX.Element {
     void api.perm.respond({ requestId: permReq.requestId, choice });
     setPermReq(null);
   }, [api, permReq]);
+
+  /** 回答/取消 ask_user 弹窗：先出队再回填（避免重复提交），失败只提示不阻塞界面。 */
+  const respondAsk = useCallback((answer: string | null): void => {
+    const request = askQueue[0];
+    if (!request) return;
+    setAskQueue((prev) => prev.filter((item) => item.requestId !== request.requestId));
+    if (!api?.ask) {
+      setNotice("未在 Electron shell 中运行，回答无法送达");
+      return;
+    }
+    const payload = answer === null
+      ? { requestId: request.requestId, cancelled: true }
+      : { requestId: request.requestId, answer };
+    void api.ask
+      .respond(payload)
+      .then((result) => {
+        // received=false：问题已过期 / 会话已终止（shell 侧按取消结算了）
+        if (!result?.received) setNotice("回答未送达：问题已过期或会话已结束");
+      })
+      .catch((err: unknown) => setNotice(`回答失败：${err instanceof Error ? err.message : String(err)}`));
+  }, [api, askQueue]);
 
   /** 发送一条文本：立即渲染用户消息 + 助手占位（不等首字），再发起流式请求。 */
   const sendText = useCallback(
@@ -1547,6 +1602,11 @@ export default function App(): React.JSX.Element {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* ask_user 弹窗：Agent 提问挂起任务时置顶显示；取消/Esc 按 cancelled 回填 */}
+      {askQueue.length > 0 ? (
+        <AskUserDialog key={askQueue[0].requestId} request={askQueue[0]} onRespond={respondAsk} />
       ) : null}
 
       {notice ? (

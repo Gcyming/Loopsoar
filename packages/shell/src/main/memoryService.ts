@@ -6,7 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { MemoryStore, type MemoryCandidate, type MemoryFact } from "loopsoar-core/memory";
+import { MemoryStore, shouldRecall, type MemoryCandidate, type MemoryFact } from "loopsoar-core/memory";
 import { extractMemoryCandidates } from "loopsoar-core/memory";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 
@@ -14,6 +14,13 @@ export interface MemoryServiceOptions {
   platform: LoopsoarPlatform;
   filePath: string;
   capacity?: number;
+  /**
+   * 召回门控开关（默认 true = 开启）。
+   * 开启时：recallPrompt 只在 core recallGate 的廉价信号命中（上次/这个/引号/路径/专有名词…）才检索，
+   * 未命中返回 ""（不把无关记忆注入上下文，省 token 也防误导）；显式工具 memory_search 不受此门控。
+   * 设为 false 时总是检索，用于兼容旧行为或做「有/无门控」对照测试。
+   */
+  recallGate?: boolean;
 }
 
 export class MemoryService {
@@ -99,9 +106,37 @@ export class MemoryService {
     await this.save();
   }
 
-  /** 召回提示词片段（供 ChatService 注入 volatile 段）。 */
+  /**
+   * 召回提示词片段（供 ChatService 注入 volatile 段）。
+   * 门控开启时（默认）：core recallGate 无信号命中 → 返回 ""，即不检索、不注入。
+   * 为什么先门控再检索：记忆会增长，若无条件检索，普通寒暄也会被塞入几条低相关记忆（噪声 + token 成本）。
+   */
   recallPrompt(text: string): string {
+    if (this.recallGateEnabled() && !shouldRecall(text).hit) return "";
     return this.store.recallPrompt(text);
+  }
+
+  /** 召回门控是否生效（默认开启；显式 recallGate:false 才关闭，便于测试/兼容对照）。 */
+  private recallGateEnabled(): boolean {
+    return this.opts.recallGate !== false;
+  }
+
+  /**
+   * 显式检索（memory_search 工具用）：不走召回门控——模型/用户明确要求搜索时应当拿到结果。
+   * 返回 { fact, score }[]，score 由 core 的有效值 × 相似度排序；limit 收敛到 [1, 20]。
+   */
+  search(query: string, limit = 6): { fact: MemoryFact; score: number }[] {
+    const raw = Number.isFinite(limit) ? Math.floor(limit) : 6;
+    const safeLimit = Math.max(1, Math.min(20, raw));
+    return this.store.recall(query, safeLimit);
+  }
+
+  /**
+   * 召回门控诊断：返回 shouldRecall 命中的信号列表（空数组 = 无信号、不会自动召回）。
+   * 为什么暴露：日志/测试需要判断「这次没召回是没信号还是库里没有」，否则难排查。
+   */
+  recallSignals(query: string, lastTaskType?: string): string[] {
+    return shouldRecall(query, lastTaskType).signals;
   }
 
   /**

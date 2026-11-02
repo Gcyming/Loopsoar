@@ -145,6 +145,17 @@ export function loadPermissions(configDir: string): Permissions {
   return mergePermissions(readJsonFile(path.join(configDir, "permissions.json")) ?? {});
 }
 
+/**
+ * 局部更新偏好（供非设置页的装配层使用，如 Agent-Loop 选择持久化）。
+ * 为什么单独导出：设置页走 settings:setPreferences 通道；装配层（index.ts）也需要写偏好，
+ * 但不能为了一个字段伪造一次 IPC。合并后写回，返回完整偏好。
+ */
+export function savePreferencesPatch(configDir: string, patch: Partial<Preferences>): Preferences {
+  const next = mergePreferences({ ...loadPreferences(configDir), ...patch });
+  writeJsonFile(path.join(configDir, "preferences.json"), next);
+  return next;
+}
+
 /* ───────────────────────── 规则条目（逐条增删） ───────────────────────── */
 
 export interface RuleEntryState {

@@ -28,6 +28,8 @@ export const PreferencesSchema = z.object({
   agentRepeatToolStop: z.number().int().min(3).max(200).optional(),
   /** 推理强度（空 = 模型默认；重启后保持）。 */
   reasoningEffort: z.string().max(64).optional(),
+  /** 当前 Agent-Loop id（空 = 内置 loop）；与 contracts PreferencesSchema 同步，勿再漂移。 */
+  loopId: z.string().max(64).optional(),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -47,6 +49,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   agentRepeatToolWarn: 5,
   agentRepeatToolStop: 30,
   reasoningEffort: "",
+  loopId: "",
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
@@ -67,6 +70,7 @@ export function mergePreferences(raw: unknown): Preferences {
     agentRepeatToolWarn: parsed.data.agentRepeatToolWarn ?? 5,
     agentRepeatToolStop: parsed.data.agentRepeatToolStop ?? 30,
     reasoningEffort: parsed.data.reasoningEffort ?? "",
+    loopId: parsed.data.loopId ?? "",
   };
 }
 

@@ -60,6 +60,8 @@ export interface Preferences {
   agentRepeatToolWarn?: number;
   agentRepeatToolStop?: number;
   reasoningEffort?: string;
+  /** 当前 Agent-Loop id（缺省 = 内置 loop；主进程按需持久化）。 */
+  loopId?: string;
 }
 
 export interface PermissionCategory {
@@ -434,6 +436,69 @@ export interface TerminalStatePayload {
   error?: string;
 }
 
+/* ── 询问用户（ask_user 工具弹窗） ── */
+
+/** ask:user 事件负载（工具挂起等人回答；渲染层弹窗）。 */
+export interface AskUserRequest {
+  requestId: string;
+  question: string;
+  /** 可选项（最多 8 个；点选即回答）。 */
+  options?: string[];
+  /** 是否允许自由文本（缺省语义：无选项时允许）。 */
+  allowFreeText?: boolean;
+}
+
+/** ask:respond 返回：是否命中等待中的问题（重复/过期 = false）。 */
+export interface AskRespondResult {
+  received: boolean;
+}
+
+/* ── Agent-Loop（ADR-0010：内置 loop + 安全回退 + 选择） ── */
+
+/** 一个可运行的 Agent 执行循环（builtin 不可删除、不可原位修改）。 */
+export interface LoopInfo {
+  id: string;
+  name: string;
+  builtin: boolean;
+  /** 是否为当前活动 loop。 */
+  active: boolean;
+}
+
+/** 安全回退记录（自定义 loop 失败 → 用同一 ctx 回退 builtin）。 */
+export interface LoopFallbackRecord {
+  reason: string;
+  at: number;
+}
+
+/** loop:list 返回：可选 loop 列表 + 当前选择 + 回退历史。 */
+export interface LoopListResult {
+  loops: LoopInfo[];
+  activeId: string | null;
+  fallbacks: LoopFallbackRecord[];
+}
+
+/** loop:setActive 返回（失败带中文原因；成功时同时带最新列表，省一次 loop:list 往返）。 */
+export interface LoopSetActiveResult {
+  ok: boolean;
+  error?: string;
+  activeId?: string | null;
+  /** 成功时返回的最新 loop 列表（与 loop:list 同构字段）。 */
+  loops?: LoopInfo[];
+  fallbacks?: LoopFallbackRecord[];
+}
+
+/** loop:changed 事件负载：活动 loop 变更（可能携带最新列表）。 */
+export interface LoopChangedPayload {
+  activeId: string | null;
+  loops?: LoopInfo[];
+}
+
+/** loop:fallback 事件负载：安全回退（界面必须显著提示）。 */
+export interface LoopFallbackPayload {
+  reason: string;
+  at?: number;
+}
+
 export type LoopsoarEvent =
   | "chat:stream:chunk"
   | "chat:stream:reasoning"
@@ -455,7 +520,10 @@ export type LoopsoarEvent =
   | "memory:updated"
   | "terminal:data"
   | "terminal:exit"
-  | "terminal:state";
+  | "terminal:state"
+  | "ask:user"
+  | "loop:changed"
+  | "loop:fallback";
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
@@ -476,6 +544,16 @@ export interface LoopsoarAPI {
     deleteSession(payload: { sessionId: string }): Promise<{ removed: boolean; sessions: SessionMeta[]; currentId: string | null }>;
   };
   perm: LoopsoarDomain;
+  ask: LoopsoarDomain & {
+    /** 回答/取消挂起中的 ask_user 问题；received=false 表示问题已过期或会话已结束。 */
+    respond(payload: { requestId: string; answer?: string; cancelled?: boolean }): Promise<AskRespondResult>;
+  };
+  loop: LoopsoarDomain & {
+    /** 可运行的 Agent-Loop 列表 + 当前选择 + 回退历史。 */
+    list(): Promise<LoopListResult>;
+    /** 切换活动 loop（builtin 与自定义都允许；不存在或校验失败返回 ok:false+error）。 */
+    setActive(payload: { id: string }): Promise<LoopSetActiveResult>;
+  };
   file: LoopsoarDomain;
   workspace: LoopsoarDomain & {
     list(): Promise<{ workspaces: WorkspaceRecord[]; activeId: string | null }>;

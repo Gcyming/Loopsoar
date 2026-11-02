@@ -8,9 +8,12 @@ import { buildSystemSegments } from "loopsoar-core/session";
 import {
   runToolLoop,
   type ToolCall,
+  type ToolLoopOpts,
   type ToolLoopOutcome,
 } from "loopsoar-core/tool_loop";
 import { auditClaims, type ClaimFinding } from "loopsoar-core/claims";
+import { applyOutputFilter, createStreamFilter } from "loopsoar-core/filter";
+import type { LoopEvent } from "loopsoar-core/events";
 import { SteerBus } from "loopsoar-core/steerBus";
 import { compressConversation, historyBudgetChars } from "loopsoar-core/contextCompress";
 import type { ToolRegistry } from "loopsoar-core/tools/registry";
@@ -39,6 +42,12 @@ export type ChatEventType =
   | "done"
   | "error"
   | "heartbeat";
+
+/**
+ * Agent-Loop 注入签名：入参与 runToolLoop 一致（含事件 sink），额外带 sessionId 供 loop
+ * 运行时/安全模式回退使用；壳层用 LoopRegistry 包装成该签名（见 shell/loopRuntime.ts）。
+ */
+export type ChatLoopRunner = (input: ToolLoopOpts & { sessionId: string }) => Promise<ToolLoopOutcome>;
 
 export interface ChatServiceOptions {
   /** 未注入时 stream 返回可读错误（不崩溃）——装配层负责注入。 */
@@ -78,6 +87,16 @@ export interface ChatServiceOptions {
   agent?: ChatAgent;
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
+  /**
+   * Agent-Loop 运行器（shell 注入 LoopRegistry.run）：有则替代直接 runToolLoop，
+   * 让「可插拔 loop + 安全模式回退」生效；缺省退回内置 runToolLoop（行为不变）。
+   */
+  runLoop?: ChatLoopRunner;
+  /**
+   * 输出过滤（身份边界，默认 true）：chunk 文本跨 chunk 掩码模型自称，finalText 整体再过滤一次。
+   * 关闭仅用于调试/内部对比，生产应保持开启。
+   */
+  filterOutput?: boolean;
 }
 
 export interface ChatInput {
@@ -304,13 +323,21 @@ export class ChatService {
       chunks.push(batch);
       if (sink) for (const c of batch.chunks) sink(c);
     });
+    // 输出过滤（身份边界）：正文与推理各一条流式过滤器（两条流交错，不能共用缓冲）。
+    // 默认开启；createStreamFilter 会保留尾部 20 字符等待跨 chunk 匹配完成。
+    const filterEnabled = this.opts.filterOutput !== false;
+    const textFilter = createStreamFilter();
+    const reasoningFilter = createStreamFilter();
 
     const emit = (type: ChatEventType, data: unknown): void => {
       // chunk/reasoning 的 LoopEvent.data 形如 { text }：取纯文本推出（否则 UI 会显示 JSON 片段）
       let content: string;
       if (type === "chunk" || type === "reasoning") {
         const text = (data as { text?: unknown } | null)?.text;
-        content = typeof text === "string" ? text : typeof data === "string" ? data : JSON.stringify(data);
+        const raw = typeof text === "string" ? text : typeof data === "string" ? data : JSON.stringify(data);
+        content = filterEnabled ? (type === "chunk" ? textFilter.push(raw) : reasoningFilter.push(raw)) : raw;
+        // 过滤后为空 = 本批全在跨 chunk 缓冲里：先不推空内容，收尾 flush 时再补（避免 UI 出现空块）
+        if (filterEnabled && content.length === 0) return;
       } else {
         content = typeof data === "string" ? data : JSON.stringify(data);
       }
@@ -405,7 +432,33 @@ export class ChatService {
         : [];
 
       const agentLimits = this.opts.getAgentLimits?.() ?? {};
-      const loopOutcome = await runToolLoop({
+
+      // 每轮声称核验：可疑声称（「已保存/已生成…」但文件不存在）且整段没用过工具 → ok=false，
+      // tool_loop 会注入强制工具轮逼模型实际核实。为什么用 usedAnyTool 门控：已经用过工具说明
+      // 模型有动手能力，避免对「工具执行后自然语言总结」的误伤（存在性仍由最终核验兜底）。
+      const verifyRound = platform
+        ? async (info: { round: number; finalText: string; usedAnyTool: boolean }): Promise<{ ok: boolean; note?: string }> => {
+            try {
+              const findings = await auditClaims(info.finalText, (p) => platform.fs.exists(p));
+              const suspicious = findings.filter(
+                (f) => f.verified && !f.exists && f.reason !== "跳过 URL/域名残片",
+              );
+              if (suspicious.length === 0 || info.usedAnyTool) return { ok: true };
+              const paths = suspicious
+                .slice(0, 3)
+                .map((f) => f.path)
+                .join("、");
+              return { ok: false, note: `第 ${info.round} 轮声称的文件不存在：${paths}` };
+            } catch (err) {
+              emit("progress", {
+                note: `声称核验异常（本轮已跳过）：${err instanceof Error ? err.message : String(err)}`,
+              });
+              return { ok: true };
+            }
+          }
+        : undefined;
+
+      const loopInput = {
         llm,
         tools: () => toolList,
         executeTool: executor,
@@ -416,7 +469,7 @@ export class ChatService {
         repeatToolWarnAt: agentLimits.repeatToolWarnAt,
         repeatToolStopAt: agentLimits.repeatToolStopAt,
         budget: { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
-        sink: (event) => {
+        sink: (event: LoopEvent) => {
           // LoopEvent → ChatEventType（type 同名，data 原样传递）
           emit(event.type as ChatEventType, event.data);
         },
@@ -424,11 +477,18 @@ export class ChatService {
         reasoningEffort: input.reasoningEffort,
         steers,
         signal: controller.signal,
-      });
+        verifyRound,
+      } satisfies ToolLoopOpts;
+      // Agent-Loop 注入（ADR-0010）：有 runner 走 LoopRegistry（可插拔 + 安全回退），否则内置循环
+      const loopOutcome = this.opts.runLoop
+        ? await this.opts.runLoop({ ...loopInput, sessionId })
+        : await runToolLoop(loopInput);
 
       outcome = loopOutcome.status;
       reason = loopOutcome.reason;
       finalText = loopOutcome.finalText;
+      // 输出过滤（身份边界）：finalText 整体再过滤一次（流式过滤可能因分批而漏边，这里是最终防线）
+      if (filterEnabled && finalText) finalText = applyOutputFilter(finalText);
       // 空正文兜底：任何非正常收束都必须给出可读原因（配合 UI 的中断横幅，避免"莫名空白"）
       if (!finalText.trim()) {
         finalText = outcome === "done" ? "（模型没有返回文本内容）" : `（任务未完成：${reason}）`;
@@ -449,6 +509,13 @@ export class ChatService {
       emit("error", reason);
     } finally {
       this.aborts.delete(sessionId);
+      // 收尾：把流式过滤器里跨 chunk 缓冲的尾部（<20 字符）补发，否则最后一段正文会丢
+      if (filterEnabled) {
+        const textTail = textFilter.flush();
+        if (textTail) batcher.push({ content: textTail, meta: { type: "chunk" } });
+        const reasoningTail = reasoningFilter.flush();
+        if (reasoningTail) batcher.push({ content: reasoningTail, meta: { type: "reasoning" } });
+      }
       emit("done", { status: outcome, reason, finalText, usage, claims });
       batcher.flushNow();
       batcher.close();
