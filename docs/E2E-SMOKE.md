@@ -97,6 +97,19 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 输入 `/` | 命令面板：/new /clear /stop /settings /compact /help；执行对应动作 |
 | 助手消息头部 | 上下文环按已用/上限显示（不再缺失） |
 
+## 8. 本轮已真机验证（2026-11-02 自动 E2E，证据在 docs/screenshots/）
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| Electron 启动 / 新标签页 / 设置页（语言、广告拦截开关、Agent Loop 选择器） | ✅ | `e2e-round3-main.png`、`e2e-round3-settings.png` |
+| 应用内终端面板打开 + **cmd 持久会话真实启动**（提示符 `D:\...\Parent file>`、工作根/中断/清屏/关闭按钮） | ✅ | `e2e-round3-terminal-session.png` |
+| 广告拦截真实触发（页面请求 doubleclick.net / googlesyndication.com 被 `[browser-guard] [adblock]` 取消；本地回环页面正常放行） | ✅ | 主进程日志 + `e2e-round3-adblock*.png` |
+| 书签：星标收藏 → `bookmarks.json` 持久化 → 书签浮层展示 | ✅ | `e2e-round3-bookmarks.png` |
+| 刷新走 reload / 页面保存 / 快照面板 / ask_user / Loop 回退 / 记忆语义检索 | ⏳ 待真机点验（需真实模型或页面交互） | `docs/E2E-SMOKE.md` 上文清单 |
+| Python / Node / Git Bash 会话、C++（本机缺编译器） | ⏳ 待点验 | 终端面板配置档已真实渲染 |
+
+> E2E 辅助环境变量新增：`LOOPSOAR_E2E_CLICK_GAP_MS`（多步点击间隔，默认 500ms；终端配置档探测等异步内容建议 2500）。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

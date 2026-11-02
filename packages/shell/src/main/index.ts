@@ -192,6 +192,8 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
               await new Promise((r) => setTimeout(r, clickDelay));
             }
             // 支持 "编辑|OpenCode Go" 依次点击多个可见文案，用于截图前展开并填充表单
+            // 两次点击之间的间隔可配（终端配置档探测等异步内容需要更长等待）
+            const clickGapMs = Number(process.env.LOOPSOAR_E2E_CLICK_GAP_MS ?? 500);
             for (const wanted of clickText.split("|").map((item) => item.trim()).filter(Boolean)) {
               const clicked = await win.webContents
                 .executeJavaScript(
@@ -209,7 +211,7 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
                 )
                 .catch(() => false);
               console.log("E2E_CLICK", wanted, clicked);
-              await new Promise((r) => setTimeout(r, 500));
+              await new Promise((r) => setTimeout(r, Number.isFinite(clickGapMs) ? clickGapMs : 500));
             }
             await new Promise((r) => setTimeout(r, 500));
             const postClick = Number(process.env.LOOPSOAR_E2E_POST_CLICK_MS ?? 0);
