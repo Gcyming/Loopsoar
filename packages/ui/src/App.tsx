@@ -117,7 +117,14 @@ export default function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [mode, setMode] = useState<"build" | "plan">("build");
   const [reasoningEffort, setReasoningEffort] = useState<string>("");
-  const [permReq, setPermReq] = useState<{ requestId: string; toolName: string; target?: string; kind?: string } | null>(null);
+  const [permReq, setPermReq] = useState<{
+    requestId: string;
+    toolName: string;
+    target?: string;
+    kind?: string;
+    reason?: string;
+    category?: string;
+  } | null>(null);
   // ask_user 弹窗队列：ask:user 事件入队，逐条回答后出队（理论上同一时刻只有一条，队列兜住连发）
   const [askQueue, setAskQueue] = useState<AskUserRequest[]>([]);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
@@ -766,9 +773,41 @@ export default function App(): React.JSX.Element {
         case "/settings":
           openSettings();
           break;
-        case "/compact":
-          setNotice("上下文超过预算时会自动压缩（保留最近消息）；继续对话即可触发，无需手动操作。");
+        case "/compact": {
+          // 真实压缩：先预览统计 → 用户确认 → 写回持久化并重载当前会话消息
+          if (!api) break;
+          void (async () => {
+            try {
+              const preview = await api.chat.compact({ apply: false });
+              if (!preview.ok) {
+                setNotice(preview.error ?? "压缩失败");
+                return;
+              }
+              if (preview.compressed === false) {
+                setNotice("当前会话未超预算，无需压缩。");
+                return;
+              }
+              const pct = Math.round(preview.savedRatio * 100);
+              const confirmed = window.confirm(
+                `将把 ${preview.before.messages} 条（约 ${preview.before.chars} 字符）压缩为 ${preview.after.messages} 条（约 ${preview.after.chars} 字符），节省 ${pct}%。\n早期内容会汇总为摘要，是否继续？`,
+              );
+              if (!confirmed) return;
+              const applied = await api.chat.compact({ apply: true });
+              if (!applied.ok) {
+                setNotice(applied.error ?? "压缩失败");
+                return;
+              }
+              setNotice(`已压缩：${applied.before.messages} → ${applied.after.messages} 条，节省 ${Math.round(applied.savedRatio * 100)}%`);
+              const history = await api.chat.history().catch(() => null);
+              if (history?.session?.messages?.length) {
+                writeSessionMessages(history.session.sessionId, restoreMessages(history.session.messages, nextId));
+              }
+            } catch (err) {
+              setNotice(`压缩失败：${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
           break;
+        }
         case "/help":
           setNotice("可用命令：/new 新建会话 · /clear 清空输入 · /stop 停止生成 · /settings 打开设置 · /compact 压缩说明 · /help 帮助");
           break;
@@ -776,7 +815,7 @@ export default function App(): React.JSX.Element {
           setNotice(`未知命令：${command}（输入 /help 查看可用命令）`);
       }
     },
-    [newSession, openSettings, setInput, stop],
+    [api, newSession, openSettings, setInput, stop, writeSessionMessages],
   );
 
   const switchSession = useCallback((sessionId: string): void => {

@@ -7,6 +7,7 @@
  */
 import * as React from "react";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 import type { BrowserSnapshotResult } from "./types.js";
 
 export interface SnapshotPanelProps {
@@ -19,6 +20,7 @@ export interface SnapshotPanelProps {
 const MAX_ELEMENTS = 100;
 
 export default function SnapshotPanel({ snapshot, onClose }: SnapshotPanelProps): React.JSX.Element | null {
+  const tr = useT();
   const titleId = React.useId();
   const closeButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const copiedTimerRef = React.useRef<number | null>(null);
@@ -77,33 +79,33 @@ export default function SnapshotPanel({ snapshot, onClose }: SnapshotPanelProps)
     >
       <section className="snapshot-panel" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header className="snapshot-head">
-          <span id={titleId} className="snapshot-title" title={snapshot.title || "（无标题）"}>
-            {snapshot.title || "（无标题）"}
+          <span id={titleId} className="snapshot-title" title={snapshot.title || tr("browser.snapshotNoTitle")}>
+            {snapshot.title || tr("browser.snapshotNoTitle")}
           </span>
           <button
             ref={closeButtonRef}
             type="button"
             className="icon-btn"
-            title="关闭（Esc）"
-            aria-label="关闭快照面板"
+            title={tr("browser.snapshotCloseEsc")}
+            aria-label={tr("browser.snapshotCloseAria")}
             onClick={onClose}
           >
             <Icon name="close" size={14} />
           </button>
         </header>
         <div className="snapshot-url" title={snapshot.url || ""}>
-          {snapshot.url || "（无 URL）"}
+          {snapshot.url || tr("browser.snapshotNoUrl")}
         </div>
         <div className="snapshot-meta">
-          正文 {text.length.toLocaleString("zh-CN")} 字符 · 可交互元素 {elements.length} 个
-          {elements.length > MAX_ELEMENTS ? `（展示前 ${MAX_ELEMENTS} 个）` : ""}
+          {tr("browser.snapshotMeta", { chars: text.length.toLocaleString(), count: elements.length })}
+          {elements.length > MAX_ELEMENTS ? tr("browser.snapshotShown", { max: MAX_ELEMENTS }) : ""}
         </div>
-        <pre className="snapshot-text" tabIndex={0} aria-label="页面正文（可滚动）">
-          {text || "（页面没有可提取的正文）"}
+        <pre className="snapshot-text" tabIndex={0} aria-label={tr("browser.snapshotBodyAria")}>
+          {text || tr("browser.snapshotNoText")}
         </pre>
         {shown.length > 0 ? (
           <div className="snapshot-elements">
-            <div className="snapshot-elements-title">可交互元素</div>
+            <div className="snapshot-elements-title">{tr("browser.snapshotElements")}</div>
             <div className="snapshot-elements-list">
               {shown.map((element, index) => (
                 <div key={`${element.id ?? index}-${index}`} className="snapshot-element">
@@ -113,7 +115,7 @@ export default function SnapshotPanel({ snapshot, onClose }: SnapshotPanelProps)
                     {element.type ? `[${element.type}]` : ""}
                   </span>
                   <span className="snapshot-element-text" title={element.text || ""}>
-                    {element.text || "（无文本）"}
+                    {element.text || tr("browser.snapshotElementNoText")}
                   </span>
                   {element.href ? (
                     <span className="snapshot-element-href" title={element.href}>
@@ -131,21 +133,21 @@ export default function SnapshotPanel({ snapshot, onClose }: SnapshotPanelProps)
             className="snapshot-btn"
             onClick={() => void copy(text, "text")}
             disabled={!text}
-            title="复制整页可读正文"
+            title={tr("browser.snapshotCopyText")}
           >
-            {copied === "text" ? "已复制正文" : "复制正文"}
+            {copied === "text" ? tr("browser.snapshotCopiedText") : tr("browser.snapshotCopyTextLabel")}
           </button>
           <button
             type="button"
             className="snapshot-btn"
             onClick={() => void copy(snapshot.url ?? "", "url")}
             disabled={!snapshot.url}
-            title="复制页面 URL"
+            title={tr("browser.snapshotCopyUrl")}
           >
-            {copied === "url" ? "已复制链接" : "复制链接"}
+            {copied === "url" ? tr("browser.snapshotCopiedUrl") : tr("browser.snapshotCopyUrlLabel")}
           </button>
           <button type="button" className="snapshot-btn snapshot-close" onClick={onClose}>
-            关闭
+            {tr("browser.snapshotCloseBtn")}
           </button>
         </footer>
       </section>

@@ -122,10 +122,10 @@
   4. 测试语料用真实或脱敏的记忆语料（不用合成模板），含中文（Jaccard 阈值校准沿用 slime 0.75/0.70/0.68 不可下调）。
 - **理由**：向量库是记忆系统的地基，换库影响身份包的向量重建逻辑，必须实测而非推断。
 - **替代方案**：直接换 sqlite-vec——被否（无实测）；维持 LanceDB——被否（297MB 体积是硬伤）。
-- **验证方式**：P0 W5 负载测试报告（报告即本 ADR 的裁决附件）。
-- **状态**：🟡 **部分验证（2026-11-02 W5 基准完成）**：默认后端裁决 = 纯 TS 混合检索（FlatVectorIndex + hash embedding + 四阶段 BM25/向量/融合），10 万条 hybrid P95 **17.23ms**（满足 ≤50ms）、零原生依赖；sqlite-vec/LanceDB 与 BGE-M3 语义质量因本机无原生模块/嵌入服务**无法实测**，留打包阶段复测后再决定是否切换。报告：`docs/research/memory-bench-ADR-0007.md`
-- **回退条件**：sqlite-vec 质量或延迟不达标 → 维持 LanceDB（或双后端默认 LanceDB）。
-- **复核时间**：打包阶段（原生模块 + BGE-M3 + 真实语料 A/B 复测）
+- **验证方式**：P0 W5 负载测试报告（报告即本 ADR 的裁决附件）；F8 三路原生索引后端对照（报告 §8）+ Electron ABI 运行时验证。
+- **状态**：🟢 **最终裁决（2026-11-02，F8 收口）**：默认后端 = 纯 TS flat hybrid（FlatVectorIndex + hash embedding + 四阶段），10 万条 hybrid P95 **12.18ms**（满足 ≤50ms）、零原生依赖。F8 三路实测（flat / sqlite-vec / LanceDB，10 万条）显示 flat 综合最优：查询 P95 26.2ms vs 64.1/67.7ms，建索引 166.7ms vs 808.6/1751.6ms，增量写入 83k/s vs 80k/18k/s；**sqlite-vec 已作为显式可选后端接入**（`MemoryService.vectorBackend:"sqlite-vec"`，原生模块缺失/ABI 不匹配自动降级 flat）；**LanceDB 不纳入运行时**（RSS +513MB、构建/写入最慢，默认无 ANN）。Electron ABI：better-sqlite3 13 为 N-API prebuild，**无需 electron-rebuild**，Electron 45 主进程加载 better-sqlite3 + sqlite-vec 实测通过。本地语义模型按用户决定**不引入**（保留 `platform.embed`/llama-server 适配 + hash 回退），语义质量留待 llama-server 可用时复测。报告：`docs/research/memory-bench-ADR-0007.md` §4/§8
+- **回退条件**：未来容量显著增长或需磁盘持久化索引 → 复评 sqlite-vec/ANN；原生后端在目标平台不可用 → 自动降级 flat（已实现，fail-open）；本地模型引入后若质量不达标 → 维持 hash + 关键词混合。
+- **复核时间**：打包阶段（llama-server 语义质量复测；若开放 10 万级容量则复评倒排关键词 + ANN）
 
 ---
 
@@ -175,7 +175,7 @@
 - **理由**：开放与安全在同一枚硬币两面；把「可自定义的」与「不可动的」边界定在「护栏」，而不是「功能」，才能既给自由度又不让 Agent 变砖。
 - **替代方案**：loop 完全硬编码——被否（用户要求彻底开放）；loop 可改护栏——被否（安全失效）。
 - **验证方式**：MVP「Agent-Loop 可插拔」必须项 + P5「loop 贡献点装载 + 安全模式回退演练」；破坏性用例：故意写坏 loop（语法错/死循环/无心跳）→ 断言回退且数据不丢。
-- **状态**：✅ 已验证（用户裁决）；**2026-11-02 已接线**：LoopRegistry 接入 ChatService（runLoop 注入）、builtin core-loop 注册、崩溃/静默超时回退 + `loop:fallback` 可见、`loop:list`/`loop:setActive` + 设置页选择 + `preferences.loopId` 持久化；L1 参数化已随请求上限设置覆盖，L2 声明式/L3 脚本 loop 与「一键修复」仍后置
+- **状态**：✅ 已验证（用户裁决）；**2026-11-02 已接线**：LoopRegistry 接入 ChatService（runLoop 注入）、builtin core-loop 注册、崩溃/静默超时回退 + `loop:fallback` 可见、`loop:list`/`loop:setActive` + 设置页选择 + `preferences.loopId` 持久化；L1 参数化已随请求上限设置覆盖；**2026-11-02 最终收口**：L2 声明式（`<dataDir>/loops/<id>.json`：systemPromptAppend / limits 只可收紧 / 工具白名单「过滤清单 + 执行器二次拦截」）+ L3 脚本 loop（`<dataDir>/loops/<id>/loop.json` + loop.mjs：子进程 JSON-RPC 代理 `ctx.llm`/`ctx.executeTool`/`ctx.emit`，预算护栏，崩溃/超时/非法 outcome 自动回退 builtin）+ `loop:reload` 重扫全部接线并测试；「一键修复」后置
 - **回退条件**：不适用（核心设定）
 - **复核时间**：P5 出口
 
@@ -194,7 +194,7 @@
 - **理由**：slime 的教训是「程序钉死」→ 大改无门；DSH 的教训是「毛坯房」→ 门槛高。插件化内核 + 内置功能可禁用 = 自由；向导 + 校验 + 预览 = 低门槛。
 - **替代方案**：只开放工具/Skills 两层——被否（用户要求 UI 与功能全开放）。
 - **验证方式**：P5 扩展阶段验收（第三方插件装载→贡献→停用→精确撤下）+ 发布门 4；builtin 插件禁用后内核仍可用。
-- **状态**：✅ 已验证（用户裁决）
+- **状态**：✅ 已验证（用户裁决）；**2026-11-02 产品化收口**：PluginStore（插件目录扫描/清单校验/启停持久化/builtin 只读系统根）+ PluginRuntime（每插件独立子进程、JSON-RPC 工具桥接 `plugin__<id>__<tool>`、schema/权限透传、冲突 fail-closed、崩溃/超时隔离、env 白名单）+ 设置·插件面板 + `plugin:list/setEnabled/reload` 通道；**未做（后置）**：插件市场/向导、UI 贡献点（面板/侧栏/菜单）、CSS 沙箱与 trust.json 完整信任链
 - **回退条件**：不适用（核心设定）
 - **复核时间**：P5 出口
 
@@ -265,14 +265,14 @@
 | ADR-0004 | 单栈边界：纯逻辑 + platform 适配层 | ✅ 已验证 |
 | ADR-0005 | Python 退场：目标而非先验，逐项验证 | ✅ 政策已定 / 🟡 三项待验证 |
 | ADR-0006 | 引擎迁移：五问验收门 | ✅ 已验证 |
-| ADR-0007 | 记忆后端：负载测试裁决 | 🟡 部分验证（默认=纯 TS hybrid；sqlite-vec 打包阶段复测） |
+| ADR-0007 | 记忆后端：负载测试裁决 | 🟢 最终裁决（默认 flat hybrid；sqlite-vec 可选；LanceDB 不纳入；Electron ABI 已消解） |
 | ADR-0008 | MVP 范围：最小主链路 | ✅ 已验证 |
 | ADR-0009 | 安全验收：攻击性测试 | ✅ 已验证 |
-| ADR-0010 | Agent-Loop：最小完备 + 开放自定义 + 安全模式后备 | ✅ 已验证 / 已接线（L2/L3 后置） |
-| ADR-0011 | 扩展系统：万物皆插件（内核最小化） | ✅ 已验证 |
+| ADR-0010 | Agent-Loop：最小完备 + 开放自定义 + 安全模式后备 | ✅ 已验证 / 已接线（L1/L2/L3 全部落地） |
+| ADR-0011 | 扩展系统：万物皆插件（内核最小化） | ✅ 已验证 / 工具型插件已产品化（UI 贡献点/市场后置） |
 | ADR-0012 | 易用性策略：三档深度 + 反毛坯房清单 | ✅ 已验证 |
 | ADR-0013 | 会话流按会话隔离 + 会话 UI 纯模块化 | ✅ 已验证 |
 | ADR-0014 | 会话 = 浏览器文件夹（标签按会话隔离 + 本地恢复） | ✅ 已验证（云端待批准） |
 | ADR-0015 | 工作区（挂载项目文件夹）+ 会话级 Git Worktree | ✅ 本地已实现（云端后置） |
-| ADR-0016 | P0 安全门加固 + 持久多环境终端 + 工具参数单一转换 | ✅ 已验证（E2E 真机冒烟待跑） |
+| ADR-0016 | P0 安全门加固 + 持久多环境终端 + 工具参数单一转换 | ✅ 已验证（真机 E2E 已跑：6 终端档/C++ vcvars 会话/广告拦截/书签/页面保存/快照/ask_user/Gateway/插件） |
 | ADR-0017 | 浏览器功能面：书签/广告拦截/页面保存/快照面板 | ✅ 已验证（E2E 待跑） |

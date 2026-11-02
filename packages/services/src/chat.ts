@@ -1,6 +1,7 @@
 // §5 services 包 / ChatService 流式编排（T3 真接线）
 // 流程：buildSystemSegments → runToolLoop（真引擎：四闸/心跳/转向）→ 每轮声称核验 → 事件归一
-// 权限：InternalToolExecutor 内做 sandbox.checkPermission；confirm/deny 走 PermRequestBus（挂起 + 超时按拒绝）
+// 权限：InternalToolExecutor 内做 类别策略 → 敏感步骤写死确认 → sandbox.checkPermission；
+//       confirm/deny 走 PermRequestBus（挂起 + 超时按拒绝）
 // 设计：services 不 import electron；全部能力经注入（llm/platform/registry/sandbox）。
 import type { LlmClient } from "loopsoar-core/llm";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
@@ -23,6 +24,7 @@ import {
   categoryForToolPermissions,
   type Permissions,
 } from "loopsoar-core/permissions";
+import { classifySensitiveStep } from "loopsoar-core/sensitiveSteps";
 import { StreamChunkBatcher } from "./events.js";
 import type { ChunkBatch, ChunkItem } from "./events.js";
 
@@ -88,6 +90,13 @@ export interface ChatServiceOptions {
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
   /**
+   * 敏感步骤（登录 / 支付 / 不可撤销操作）是否**写死确认**：默认 true。
+   * 为什么是「写死」：类别策略（设置·权限）是长期授权，这类动作一旦误触发不可撤销，
+   * 必须每次单独确认，不能被 allow 或「本次会话总是允许」绕过。
+   * 返回 false 仅用于调试/兼容旧行为；生产装配应保持默认值。
+   */
+  sensitiveAlwaysConfirm?: () => boolean;
+  /**
    * Agent-Loop 运行器（shell 注入 LoopRegistry.run）：有则替代直接 runToolLoop，
    * 让「可插拔 loop + 安全模式回退」生效；缺省退回内置 runToolLoop（行为不变）。
    */
@@ -116,6 +125,10 @@ export interface PermissionRequestEvent {
   toolName: string;
   target?: string;
   kind?: string;
+  /** 敏感步骤类别（login/payment/irreversible）；普通确认缺省。 */
+  category?: string;
+  /** 人读原因（敏感步骤时为「敏感步骤：登录/账号（…）」）；普通确认缺省。 */
+  reason?: string;
 }
 
 export interface ChatStreamResult {
@@ -145,7 +158,7 @@ export class PermRequestBus {
 
   constructor(private timeoutMs = 300_000) {}
 
-  request(decision: { requestId: string; toolName: string; target?: string }): Promise<{
+  request(decision: { requestId: string; toolName: string; target?: string; reason?: string }): Promise<{
     choice: "allow-once" | "allow-session" | "deny";
     customReason?: string;
   }> {
@@ -209,6 +222,8 @@ export class InternalToolExecutor {
       sessionId: string;
       /** 当前会话的工作根目录（工作区/ worktree）；作为本次权限判定的作用域根（不回写沙箱全局根）。 */
       resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
+      /** 敏感步骤写死确认开关（默认 true；仅调试/兼容旧行为可关）。 */
+      sensitiveAlwaysConfirm?: () => boolean;
     },
   ) {}
 
@@ -241,6 +256,12 @@ export class InternalToolExecutor {
       ? String((toolCall.args as { path?: unknown }).path)
       : undefined;
 
+    // 敏感步骤闸（登录 / 支付 / 不可撤销）：位置在「类别策略」之后、「沙箱」之前。
+    // 为什么在这：类别策略是长期授权，而敏感动作必须每次单独确认；deny 仍然优先（下一段先返回），
+    // 敏感判定只把「allow / 跳过确认」升级成 confirm，绝不把 deny 降级成 confirm。
+    const sensitive = classifySensitiveStep({ toolName: toolCall.name, params: toolCall.args });
+    const forceSensitiveConfirm = sensitive.sensitive && (this.opts.sensitiveAlwaysConfirm?.() ?? true);
+
     // 按会话解析工作根：作为「本次判定」的作用域（不修改沙箱全局根）
     // —— 并发/后台会话各自用自己的根判定，不会互相把沙箱根改串。
     const sessionRoot = this.opts.resolveWorkspaceRoot?.(this.opts.sessionId);
@@ -257,16 +278,32 @@ export class InternalToolExecutor {
     if (decision.action === "deny") {
       return { ok: false, content: `[错误] 权限拒绝：${decision.reason}`, error: decision.reason };
     }
-    // 沙箱要确认，或策略要求确认 → 统一走一次确认（策略 allow 时跳过沙箱的 confirm）
-    if (decision.action === "confirm" && policyDecision !== "allow") {
+    // 需要确认的三种来源：①敏感步骤写死确认（策略 allow 也要问）②沙箱 confirm（策略非 allow 时）③策略 confirm
+    const needsConfirm = forceSensitiveConfirm || (decision.action === "confirm" && policyDecision !== "allow");
+    if (needsConfirm) {
       const requestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const reason = forceSensitiveConfirm ? sensitive.reason : undefined;
       // 推送到渲染层弹窗（用户点允许/拒绝 → perm:respond → resolvePermission）
-      this.opts.onPermissionRequest?.({ requestId, toolName: toolCall.name, target, kind });
-      const result = await permBus.request({ requestId, toolName: toolCall.name, target });
+      this.opts.onPermissionRequest?.({
+        requestId,
+        toolName: toolCall.name,
+        target,
+        kind,
+        ...(sensitive.sensitive && sensitive.category ? { category: sensitive.category } : {}),
+        ...(reason ? { reason } : {}),
+      });
+      const result = await permBus.request({ requestId, toolName: toolCall.name, target, reason });
       if (result.choice === "deny") {
-        return { ok: false, content: `[错误] 确认被拒绝：${result.customReason ?? "用户拒绝"}`, error: "denied" };
+        return {
+          ok: false,
+          content: `[错误] 确认被拒绝：${result.customReason ?? "用户拒绝"}${reason ? `（${reason}）` : ""}`,
+          error: "denied",
+        };
       }
-      if (result.choice === "allow-session") sandbox.approveToolForSession(this.opts.agentId, toolCall.name);
+      // 敏感步骤**不写会话白名单**：allow-session 对敏感动作降级为 allow-once，下一次仍须单独确认。
+      if (result.choice === "allow-session" && !forceSensitiveConfirm) {
+        sandbox.approveToolForSession(this.opts.agentId, toolCall.name);
+      }
     }
     if (!tool) {
       return { ok: false, content: `[错误] 未知工具 ${toolCall.name}（不在注册表）`, error: "unknown-tool" };
@@ -414,6 +451,7 @@ export class ChatService {
       agentId: agent?.name ?? "loopsoar",
       sessionId,
       resolveWorkspaceRoot: this.opts.resolveWorkspaceRoot,
+      sensitiveAlwaysConfirm: this.opts.sensitiveAlwaysConfirm,
     });
 
     let outcome: LoopRunStatus = "error";

@@ -32,6 +32,8 @@ export const PreferencesSchema = z.object({
   loopId: z.string().max(64).optional(),
   /** 广告/追踪请求拦截开关（默认开启；与 contracts PreferencesSchema 同步）。 */
   adBlockEnabled: z.boolean().optional(),
+  /** 敏感步骤（登录/支付/不可撤销操作）始终强制人工确认（默认 true）。 */
+  sensitiveAlwaysConfirm: z.boolean().optional(),
 });
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
@@ -53,6 +55,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   reasoningEffort: "",
   loopId: "",
   adBlockEnabled: true,
+  sensitiveAlwaysConfirm: true,
 };
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
@@ -75,6 +78,7 @@ export function mergePreferences(raw: unknown): Preferences {
     reasoningEffort: parsed.data.reasoningEffort ?? "",
     loopId: parsed.data.loopId ?? "",
     adBlockEnabled: parsed.data.adBlockEnabled ?? true,
+    sensitiveAlwaysConfirm: parsed.data.sensitiveAlwaysConfirm ?? true,
   };
 }
 

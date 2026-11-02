@@ -9,8 +9,18 @@
   },
   "main": "./dist/index.js",
   "exports": {
-    ".": "./dist/index.js",
-    "./main": "./dist/main.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./app": {
+      "types": "./dist/app.d.ts",
+      "default": "./dist/app.js"
+    },
+    "./main": {
+      "types": "./dist/main.d.ts",
+      "default": "./dist/main.js"
+    }
   },
   "dependencies": {
     "loopsoar-services": "workspace:*",

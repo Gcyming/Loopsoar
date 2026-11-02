@@ -26,6 +26,7 @@
     "./agent": "./src/agent.js",
     "./preferences": "./src/preferences.js",
     "./permissions": "./src/permissions.js",
+    "./sensitiveSteps": "./src/sensitiveSteps.js",
     "./rules": "./src/rules.js",
     "./tool_loop": "./src/tool_loop.js",
     "./memory": "./src/memory/index.js",

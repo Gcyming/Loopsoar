@@ -6,34 +6,39 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 
 export type PermissionChoice = "allow-once" | "allow-session" | "deny";
 
 export interface PermissionDialogProps {
-  request: { toolName: string; target?: string };
+  request: { toolName: string; target?: string; reason?: string; category?: string };
   onRespond: (choice: PermissionChoice) => void;
 }
 
 export default function PermissionDialog({ request, onRespond }: PermissionDialogProps): React.JSX.Element {
+  const tr = useT();
   return (
     <div style={styles.permOverlay}>
       <div style={styles.permCard}>
-        <div style={styles.permTitle}>Agent 请求执行工具</div>
+        <div style={styles.permTitle}>{tr("permission.title")}</div>
         <div style={styles.permTool}>
           <Icon name="bolt" size={14} style={{ marginRight: 6, color: BRAND.ochreHover }} />
           {request.toolName}
           {request.target ? <span style={styles.permTarget}> → {request.target}</span> : null}
         </div>
-        <div style={styles.permHint}>本次操作需要你的确认（权限设置：询问）。</div>
+        {request.reason ? (
+          <div style={styles.permSensitive}>{tr("permission.sensitiveReason", { reason: request.reason })}</div>
+        ) : null}
+        <div style={styles.permHint}>{tr("permission.hint")}</div>
         <div style={styles.permBtns}>
           <button type="button" className="btn-ghost" style={styles.ghostButton} onClick={() => onRespond("deny")}>
-            拒绝
+            {tr("permission.deny")}
           </button>
           <button type="button" className="btn-ghost" style={styles.ghostButton} onClick={() => onRespond("allow-session")}>
-            本会话允许
+            {tr("permission.allowSession")}
           </button>
           <button type="button" className="btn-primary" style={styles.primaryButton} onClick={() => onRespond("allow-once")}>
-            允许一次
+            {tr("permission.allowOnce")}
           </button>
         </div>
       </div>
@@ -62,6 +67,17 @@ const styles: Record<string, React.CSSProperties> = {
   permTitle: { fontSize: 13, fontWeight: 700, marginBottom: 10 },
   permTool: { display: "flex", alignItems: "center", fontSize: 13, color: BRAND.linen },
   permTarget: { color: BRAND.linenMuted, fontSize: 11.5, marginLeft: 4, wordBreak: "break-all" },
+  // 敏感步骤原因（登录/支付/不可撤销）：比普通提示更显眼，避免用户顺手批准
+  permSensitive: {
+    marginTop: 8,
+    padding: "6px 8px",
+    borderRadius: 6,
+    border: `1px solid ${BRAND.ochreHover}55`,
+    background: `${BRAND.ochreHover}14`,
+    color: BRAND.ochreHover,
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
   permHint: { marginTop: 8, fontSize: 11, color: BRAND.linenFaint, lineHeight: 1.6 },
   permBtns: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 },
   ghostButton: {

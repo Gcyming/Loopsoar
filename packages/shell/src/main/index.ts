@@ -37,6 +37,7 @@ import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
 import { registerChatDomain } from "./domains/chat.js";
+import { registerCompactDomain } from "./domains/compact.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
 import {
@@ -76,6 +77,11 @@ import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
+import { registerPluginDomain } from "./domains/plugin.js";
+import { registerGatewayDomain } from "./domains/gateway.js";
+import { PluginStore } from "./pluginStore.js";
+import { PluginRuntime, resolvePluginWorkerPath } from "./pluginRuntime.js";
+import { createGatewayRuntime, type GatewayRuntime } from "./gatewayRuntime.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
@@ -562,6 +568,19 @@ app.whenReady().then(async () => {
   sandbox.setWorkspaceRoot(process.cwd());
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
+  // 插件宿主（ADR-0011 产品化）：默认停用第三方代码；启用项在窗口就绪后异步启动。
+  // onToolsChanged 把插件工具同步进沙箱「已知工具」表（否则未知工具会按最高权限处理）。
+  const plugins = new PluginStore(dirs.dataDir);
+  const pluginRuntime = new PluginRuntime({
+    plugins,
+    registry,
+    workerPath: resolvePluginWorkerPath(__dirname),
+    onUpdate: (id, status) => pushToRenderer("plugins:updated", { action: "status", id, status }),
+    onToolsChanged: () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
+  });
+  // gateway 运行时惰性创建（点设置里的「启动」才装配/监听），退出时 dispose 关闭连接。
+  let gatewayRuntimeRef: GatewayRuntime | null = null;
+
   // 偏好（工作区根 / 记忆库位置 / 自动记忆开关）→ 决定后续装配
   const initialPrefs = loadPreferences(dirs.configDir);
   let workspaceRoot = initialPrefs.workspaceRoot?.trim() || process.cwd();
@@ -701,6 +720,8 @@ app.whenReady().then(async () => {
     onActiveChanged: (id) => {
       savePreferencesPatch(dirs.configDir, { loopId: id });
     },
+    // L2 声明式 / L3 脚本 loop 从 <dataDir>/loops 扫描（坏文件跳过并记录 error）
+    dataDir: dirs.dataDir,
   });
   const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
   // 工作区：挂载项目文件夹。旧偏好里的 workspaceRoot 作为默认工作区，兼容升级用户。
@@ -817,6 +838,8 @@ app.whenReady().then(async () => {
     getSkillPrompt: (text: string) => skills.promptFor(text),
     // 权限策略：设置面板保存后即时生效
     permissionPolicy: () => loadPermissions(dirs.configDir),
+    // 敏感步骤（登录/支付/不可撤销）始终强制确认；用户在设置里显式关闭才放行（缺省 true）
+    sensitiveAlwaysConfirm: () => loadPreferences(dirs.configDir).sensitiveAlwaysConfirm !== false,
     // 工具执行前按会话切换沙箱根（工作区 / worktree，后台会话也不串根）
     resolveWorkspaceRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
     // 供应商：设置面板保存后即时生效
@@ -1012,8 +1035,32 @@ app.whenReady().then(async () => {
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
   registerBrowserDomain({ ...deps, browser: browserHost, downloads });
   registerTerminalDomain(deps, terminals);
+  // 插件域：plugin:list / setEnabled / reload（工具桥接已在 PluginRuntime 内完成）
+  registerPluginDomain({ ...deps, plugins, runtime: pluginRuntime, push: pushToRenderer });
+  // OpenAI 兼容 gateway 域：只监听 127.0.0.1；status/start/stop + gateway:changed
+  registerGatewayDomain({ ...deps, push: pushToRenderer, env: process.env }, async () => {
+    const runtime = await createGatewayRuntime({
+      dataDir: dirs.dataDir,
+      configDir: dirs.configDir,
+      getPlatform: () => platform,
+      env: process.env,
+    });
+    gatewayRuntimeRef = runtime;
+    return runtime;
+  });
   registerLoopDomain(deps, loopRuntime);
   registerAskDomain(deps, askBus);
+  // /compact：真实压缩并写回持久化（预览/应用由 UI 决定；生成中拒绝，避免与落盘竞态）
+  registerCompactDomain({
+    ...deps,
+    sessions,
+    push: pushToRenderer,
+    getContextWindow: () => {
+      const active = providers.active();
+      const spec = active?.models?.find((m) => m.id === active.model);
+      return spec?.contextWindow;
+    },
+  });
   registerBookmarksDomain(deps, bookmarks);
   registerPageSaveDomain({
     ...deps,
@@ -1033,6 +1080,10 @@ app.whenReady().then(async () => {
   // 异步启动已启用扩展（失败互相隔离，不阻塞主窗口）
   setTimeout(() => {
     void extensionRuntime.startEnabled().catch(() => undefined);
+    // 插件启用项：延后启动，不抢窗口首帧；单个插件失败只影响自身状态
+    setTimeout(() => {
+      void pluginRuntime.startEnabled().catch(() => undefined);
+    }, 600);
   }, 500);
 
   registerExtensionsDomain({
@@ -1090,6 +1141,8 @@ app.whenReady().then(async () => {
     saveBrowserStates: saveAllBrowserStates,
     shutdownMcp: () => mcp.shutdown(),
     stopExtensions: () => extensionRuntime.stopAll(),
+    stopPlugins: () => pluginRuntime.stopAll(),
+    stopGateway: () => gatewayRuntimeRef?.dispose(),
     closeTerminals: () => {
       terminals.closeAll();
       askBus.clearAll("应用退出，按取消处理");

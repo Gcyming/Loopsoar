@@ -8,6 +8,7 @@ import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
+import { useT } from "./i18n.js";
 import type {
   WorkspaceGitStatus,
   WorkspaceRecord,
@@ -41,6 +42,7 @@ export default function WorkspacePanel({
   onNotice,
 }: WorkspacePanelProps): React.ReactElement | null {
   const api = useLoopsoarApi();
+  const tr = useT();
   const [workspaces, setWorkspaces] = React.useState<WorkspaceRecord[]>([]);
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -132,14 +134,14 @@ export default function WorkspacePanel({
       if (!api) return;
       const result = await api.workspace.create({});
       if (!result.ok) {
-        if (result.error && !result.error.includes("取消")) onNotice(result.error);
+        if (result.error && !result.error.includes("取消") && !result.error.toLowerCase().includes("cancel")) onNotice(result.error);
         return;
       }
       setWorkspaces(result.workspaces);
       setActiveId(result.activeId);
       if (result.workspace) setSelectedId(result.workspace.id);
-      onChanged("已挂载工作区");
-      onNotice(`已挂载：${result.workspace?.name ?? "工作区"}`);
+      onChanged(tr("workspace.mountSuccess"));
+      onNotice(tr("workspace.mounted", { name: result.workspace?.name ?? tr("workspace.title") }));
     });
   };
 
@@ -149,30 +151,30 @@ export default function WorkspacePanel({
       if (!api) return;
       const result = await api.workspace.select({ id });
       if (!result.ok) {
-        onNotice(result.error ?? "切换失败");
+        onNotice(result.error ?? tr("workspace.switchFailed"));
         return;
       }
       setWorkspaces(result.workspaces);
       setActiveId(result.activeId);
       onChanged();
-      onNotice("已设为当前工作区（新建会话默认归属）");
+      onNotice(tr("workspace.setActive"));
     });
   };
 
   const removeWorkspace = (workspace: WorkspaceRecord): void => {
     if (!api) return;
-    if (!window.confirm(`删除工作区「${workspace.name}」？\n不会删除磁盘上的项目文件夹。`)) return;
+    if (!window.confirm(tr("workspace.deleteConfirm", { name: workspace.name }))) return;
     void run("remove", async () => {
       const result = await api.workspace.remove({ id: workspace.id });
       if (!result.ok) {
-        onNotice(result.error ?? "删除失败");
+        onNotice(result.error ?? tr("workspace.deleteFailed"));
         return;
       }
       setWorkspaces(result.workspaces);
       setActiveId(result.activeId);
       setSelectedId(result.activeId);
-      onChanged("已删除工作区");
-      onNotice("已删除工作区");
+      onChanged(tr("workspace.deleted"));
+      onNotice(tr("workspace.deleted"));
     });
   };
 
@@ -181,57 +183,57 @@ export default function WorkspacePanel({
     void run("worktree-create", async () => {
       const result = await api.worktree.create({ sessionId: currentSessionId });
       if (!result.ok) {
-        onNotice(result.error ?? "创建 worktree 失败");
+        onNotice(result.error ?? tr("workspace.worktreeCreateFailed"));
         return;
       }
       await refreshWorktree();
       await refreshStatus(selectedId);
-      onChanged("已创建隔离 worktree");
-      onNotice("已创建隔离 worktree，后续 Agent 改动只落在这里");
+      onChanged(tr("workspace.worktreeCreated"));
+      onNotice(tr("workspace.worktreeCreatedNote"));
     });
   };
 
   const mergeWorktree = (): void => {
     if (!api || !currentSessionId) return;
-    if (!window.confirm("把 worktree 的改动提交并合并回主工作区？\n主工作区有未提交改动时会拒绝合并。")) return;
+    if (!window.confirm(tr("workspace.mergeConfirm"))) return;
     void run("worktree-merge", async () => {
       const result = await api.worktree.merge({ sessionId: currentSessionId });
       if (!result.ok) {
-        onNotice(result.error ?? "合并失败");
+        onNotice(result.error ?? tr("workspace.mergeFailed"));
         return;
       }
       await refreshWorktree();
       await refreshStatus(selectedId);
-      onChanged("worktree 已合并");
-      onNotice(result.committed ? "已提交 worktree 改动并合并到主工作区" : "已合并到主工作区");
+      onChanged(tr("workspace.mergedNote"));
+      onNotice(result.committed ? tr("workspace.mergedCommitted") : tr("workspace.merged"));
     });
   };
 
   const removeWorktree = (): void => {
     if (!api || !currentSessionId) return;
-    if (!window.confirm("清理 worktree？未合并的改动会丢失（worktree 目录与分支会被删除）。")) return;
+    if (!window.confirm(tr("workspace.cleanupConfirm"))) return;
     void run("worktree-remove", async () => {
       const result = await api.worktree.remove({ sessionId: currentSessionId, force: true, deleteBranch: true });
       if (!result.ok) {
-        onNotice(result.error ?? "清理失败");
+        onNotice(result.error ?? tr("workspace.cleanupFailed"));
         return;
       }
       setWorktree(null);
       setDiff(null);
       await refreshStatus(selectedId);
-      onChanged("worktree 已清理");
-      onNotice("worktree 已清理");
+      onChanged(tr("workspace.cleanedNote"));
+      onNotice(tr("workspace.cleaned"));
     });
   };
 
   return (
     <div className="modal-overlay" style={styles.overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-card" style={styles.card} role="dialog" aria-label="工作区">
+      <div className="modal-card" style={styles.card} role="dialog" aria-label={tr("workspace.dialogAria")}>
         <div style={styles.header}>
           <Icon name="folder" size={16} style={{ color: BRAND.ochre }} />
-          <span style={styles.title}>工作区</span>
-          <span style={styles.subtitle}>挂载项目文件夹 · 会话隔离 worktree</span>
-          <button type="button" className="win-btn" title="关闭" style={styles.close} onClick={onClose}>
+          <span style={styles.title}>{tr("workspace.title")}</span>
+          <span style={styles.subtitle}>{tr("workspace.subtitle")}</span>
+          <button type="button" className="win-btn" title={tr("workspace.close")} style={styles.close} onClick={onClose}>
             <Icon name="close" size={12} />
           </button>
         </div>
@@ -239,9 +241,9 @@ export default function WorkspacePanel({
         <div style={styles.body}>
           <div style={styles.listPane}>
             <div style={styles.listHead}>
-              <span>工作区</span>
+              <span>{tr("workspace.title")}</span>
               <button type="button" className="btn-ghost" style={{ ...styles.btn, ...styles.smallBtn }} disabled={Boolean(action)} onClick={pickFolder}>
-                {action === "create" ? "选择中…" : "＋ 挂载文件夹"}
+                {action === "create" ? tr("workspace.picking") : tr("workspace.pickFolder")}
               </button>
             </div>
             <div style={styles.list}>
@@ -259,11 +261,11 @@ export default function WorkspacePanel({
                       <span style={styles.wsName} title={workspace.name}>{workspace.name}</span>
                       <span style={styles.wsPath} title={workspace.root}>{shortPath(workspace.root)}</span>
                     </span>
-                    {isActive ? <span style={styles.activeBadge}>活动</span> : null}
+                    {isActive ? <span style={styles.activeBadge}>{tr("workspace.activeBadge")}</span> : null}
                     <button
                       type="button"
                       className="msg-action"
-                      title="删除工作区（不删除磁盘文件夹）"
+                      title={tr("workspace.deleteTitle")}
                       style={styles.trash}
                       disabled={Boolean(action)}
                       onClick={(event) => {
@@ -277,9 +279,7 @@ export default function WorkspacePanel({
                 );
               })}
             </div>
-            <div style={styles.hint}>
-              工作区是项目根目录；新建会话默认归属活动工作区，Agent 的读写/终端都被限制在该目录内。
-            </div>
+            <div style={styles.hint}>{tr("workspace.intro")}</div>
           </div>
 
           <div style={styles.detailPane}>
@@ -289,48 +289,48 @@ export default function WorkspacePanel({
                 <div style={styles.rootPath} title={selected.root}>{selected.root}</div>
                 <div style={styles.statusRow}>
                   {loading || !status ? (
-                    <span style={styles.gitChip}>读取 Git 状态…</span>
+                    <span style={styles.gitChip}>{tr("workspace.gitReading")}</span>
                   ) : git?.isRepo ? (
                     <>
                       <span style={styles.gitChip}>{git.branch ?? "detached"}</span>
                       <span style={styles.gitHead}>@{git.head ?? "?"}</span>
                       <span style={{ ...styles.gitChip, ...(git.dirty ? styles.gitDirty : styles.gitClean) }}>
-                        {git.dirty ? `${git.changedFiles} 个未提交文件` : "工作区干净"}
+                        {git.dirty ? tr("workspace.gitDirty", { count: git.changedFiles }) : tr("workspace.gitClean")}
                       </span>
                     </>
                   ) : (
-                    <span style={styles.gitChip}>非 Git 仓库（可创建 worktree 的功能不可用）</span>
+                    <span style={styles.gitChip}>{tr("workspace.gitNotRepo")}</span>
                   )}
-                  <button type="button" className="msg-action" title="刷新" style={styles.refresh} onClick={() => void refreshStatus(selectedId)}>
+                  <button type="button" className="msg-action" title={tr("workspace.refresh")} style={styles.refresh} onClick={() => void refreshStatus(selectedId)}>
                     <Icon name="reload" size={12} />
                   </button>
                 </div>
-                <div style={styles.sectionHead}>项目会话（{sessions.length}）</div>
+                <div style={styles.sectionHead}>{tr("workspace.sessionsHead", { count: sessions.length })}</div>
                 <div style={styles.sessionList}>
                   {sessions.slice(0, 8).map((session) => (
                     <div key={session.id} style={styles.sessionRow}>
                       <span style={{ ...styles.sessionDot, background: session.id === currentSessionId ? BRAND.ochre : "transparent" }} />
                       <span style={styles.sessionTitle} title={session.title}>{session.title}</span>
-                      {session.id === currentSessionId ? <span style={styles.currentBadge}>当前</span> : null}
+                      {session.id === currentSessionId ? <span style={styles.currentBadge}>{tr("workspace.currentBadge")}</span> : null}
                     </div>
                   ))}
-                  {sessions.length === 0 ? <div style={styles.empty}>还没有会话</div> : null}
+                  {sessions.length === 0 ? <div style={styles.empty}>{tr("workspace.noSessions")}</div> : null}
                 </div>
 
                 <div style={styles.sectionHead}>
-                  当前会话 worktree
+                  {tr("workspace.worktreeSection")}
                   {worktree ? <span style={styles.wtBadge}>{worktree.branch}</span> : null}
                 </div>
                 {!currentSessionId ? (
-                  <div style={styles.empty}>先在左侧会话列表选择一个会话</div>
+                  <div style={styles.empty}>{tr("workspace.pickSessionFirst")}</div>
                 ) : worktree ? (
                   <div style={styles.wtBox}>
                     <div style={styles.wtPath} title={worktree.path}>{shortPath(worktree.path)}</div>
                     {diff ? (
                       <>
                         <div style={styles.diffSummary}>
-                          {diff.files.length} 个改动 · {diff.commits.length} 个提交
-                          {diff.dirty ? " · 有未提交改动" : ""}
+                          {tr("workspace.diffSummary", { files: diff.files.length, commits: diff.commits.length })}
+                          {diff.dirty ? tr("workspace.diffDirty") : ""}
                         </div>
                         <div style={styles.diffList}>
                           {diff.files.slice(0, 12).map((file) => (
@@ -340,25 +340,25 @@ export default function WorkspacePanel({
                               <span style={styles.diffStat}>+{file.additions} −{file.deletions}</span>
                             </div>
                           ))}
-                          {diff.files.length === 0 ? <div style={styles.empty}>还没有文件改动</div> : null}
+                          {diff.files.length === 0 ? <div style={styles.empty}>{tr("workspace.noFileChanges")}</div> : null}
                         </div>
                       </>
-                    ) : <div style={styles.empty}>加载改动中…</div>}
+                    ) : <div style={styles.empty}>{tr("workspace.loadingChanges")}</div>}
                     <div style={styles.actions}>
-                      <button type="button" className="btn-ghost" style={styles.btn} disabled={Boolean(action)} onClick={() => void refreshWorktree()}>刷新</button>
+                      <button type="button" className="btn-ghost" style={styles.btn} disabled={Boolean(action)} onClick={() => void refreshWorktree()}>{tr("workspace.refresh")}</button>
                       <button type="button" className="btn-primary" style={styles.btnPrimary} disabled={Boolean(action)} onClick={mergeWorktree}>
-                        {action === "worktree-merge" ? "合并中…" : "合并回主工作区"}
+                        {action === "worktree-merge" ? tr("workspace.merging") : tr("workspace.mergeIntoMain")}
                       </button>
                       <button type="button" className="btn-ghost" style={styles.btn} disabled={Boolean(action)} onClick={removeWorktree}>
-                        {action === "worktree-remove" ? "清理中…" : "清理 worktree"}
+                        {action === "worktree-remove" ? tr("workspace.cleaning") : tr("workspace.cleanupWorktree")}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div style={styles.wtBox}>
                     <div style={styles.wtEmptyText}>
-                      为此会话创建独立 git worktree：Agent 的改动不污染主工作区，确认后再合并。
-                      会话「{currentSessionTitle || "当前会话"}」的后续文件/终端操作会自动落在 worktree 里。
+                      {tr("workspace.worktreeIntro")}{" "}
+                      {tr("workspace.worktreeSessionNote", { title: currentSessionTitle || tr("workspace.currentSession") })}
                     </div>
                     <div style={styles.actions}>
                       <button
@@ -366,21 +366,21 @@ export default function WorkspacePanel({
                         className="btn-primary"
                         style={styles.btnPrimary}
                         disabled={Boolean(action) || !git?.isRepo}
-                        title={git?.isRepo ? undefined : "当前工作区不是 Git 仓库"}
+                        title={git?.isRepo ? undefined : tr("workspace.notGitTitle")}
                         onClick={createWorktree}
                       >
-                        {action === "worktree-create" ? "创建中…" : "创建 worktree"}
+                        {action === "worktree-create" ? tr("workspace.creating") : tr("workspace.createWorktree")}
                       </button>
                     </div>
                   </div>
                 )}
               </>
             ) : (
-              <div style={styles.empty}>选择一个工作区</div>
+              <div style={styles.empty}>{tr("workspace.selectWorkspace")}</div>
             )}
           </div>
         </div>
-        {loading ? <div style={styles.loading}>读取工作区状态…</div> : null}
+        {loading ? <div style={styles.loading}>{tr("workspace.loadingStatus")}</div> : null}
       </div>
     </div>
   );

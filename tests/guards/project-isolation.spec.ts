@@ -62,10 +62,13 @@ describe("守卫：项目隔离（不与被测/旧项目串扰）", () => {
   });
 
   it("gateway 默认端口与 slime 隔离（19210，非 19000/19110）", () => {
+    // 端口常量的单一产地是 app.ts（main.ts 独立进程入口已改为「需宿主注入 runner」的明确提示，
+    // 不再承载监听默认值）；这里同时校验 shell 侧 headless 运行时常量与 app.ts 一致。
     const appSrc = readFileSync(path.join(ROOT, "packages/gateway/src/app.ts"), "utf8");
     const mainSrc = readFileSync(path.join(ROOT, "packages/gateway/src/main.ts"), "utf8");
+    const runtimeSrc = readFileSync(path.join(ROOT, "packages/shell/src/main/gatewayRuntime.ts"), "utf8");
     expect(appSrc).toContain("19210");
-    expect(mainSrc).toContain("19210");
+    expect(runtimeSrc).toContain("19210");
     // 默认值不许回退到 slime 的端口（出现 19000/19110 只允许在注释里，不允许在代码字符串里）
     expect(appSrc).not.toMatch(/\?\?\s*Number\([^)]*\|\|\s*"19(000|110)"\)/);
     expect(mainSrc).not.toMatch(/:\s*19(000|110)\b/);

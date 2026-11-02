@@ -24,6 +24,11 @@ export interface PersistedMessage {
   /** 生成本条回复的供应商/模型（用于悬停显示历史真实模型，而不是当前选择）。 */
   provider?: string;
   model?: string;
+  /**
+   * 该条是「上下文压缩摘要」（/compact apply 写入的合成消息，不是模型真实回复）。
+   * 为什么落盘要带标记：UI/后续压缩都要能把它和真实消息区分开，避免被再次压缩或误当模型输出。
+   */
+  compacted?: boolean;
 }
 
 export interface PersistedWorktree {
@@ -215,6 +220,43 @@ export class SessionStore {
       const last = data.messages[data.messages.length - 1];
       meta.messageCount = data.messages.length;
       meta.preview = last ? last.text.slice(0, 80) : "";
+      meta.updatedAt = data.updatedAt;
+      this.saveIndex(index);
+    }
+    return data;
+  }
+
+  /**
+   * 用给定消息「整体替换」某会话的历史（/compact apply 的唯一落盘入口）。
+   *
+   * 与 truncate 的区别：truncate 只按条数截断前缀（回滚语义），replaceMessages
+   * 接受调用方算好的完整消息数组（压缩摘要 + 保留的最近消息），并同步索引元信息。
+   * 语义约束：
+   *   - 只做替换 + 元信息同步；压缩判断全部在 core/contextCompress，壳层不重复实现；
+   *   - 会话不存在 / ID 非法 → null（fail-closed），绝不新建会话文件；
+   *   - 超过 MAX_MESSAGES 时保留最后 MAX_MESSAGES 条（与 save 一致，防空转膨胀）；
+   *   - 调用方负责传入「已保留字段」的消息（timeline/provider/model 不会被改写）。
+   */
+  replaceMessages(
+    sessionId: string | null | undefined,
+    messages: PersistedMessage[],
+  ): PersistedSession | null {
+    const id = this.targetId(sessionId);
+    if (!id) return null;
+    const file = this.sessionFile(id);
+    if (!file) return null;
+    const data = this.readJson<PersistedSession>(file);
+    if (!data) return null;
+    const next = Array.isArray(messages) ? messages.slice(-MAX_MESSAGES) : [];
+    data.messages = next;
+    data.updatedAt = Date.now();
+    this.writeJson(file, data);
+    const index = this.index();
+    const meta = index.items.find((i) => i.id === id);
+    if (meta) {
+      const last = next[next.length - 1];
+      meta.messageCount = next.length;
+      meta.preview = last ? last.text.replace(/\s+/g, " ").slice(0, 80) : "";
       meta.updatedAt = data.updatedAt;
       this.saveIndex(index);
     }

@@ -1017,16 +1017,14 @@
     .terminal-profiles {
       display: flex;
       align-items: center;
+      /* 允许换行：配置档最多 6 个（cmd / PowerShell / Git Bash / Python / Node / C++），
+         单行 + overflow 隐藏会把最后一个 C++ 藏掉，用户以为不可用。换行后全部可见。 */
+      flex-wrap: wrap;
       gap: 4px;
       flex: 1;
       min-width: 0;
       padding: 2px 0;
-      overflow-x: auto;
-      overflow-y: hidden;
-      scrollbar-width: none;
-    }
-    .terminal-profiles::-webkit-scrollbar {
-      height: 0;
+      overflow: visible;
     }
     .terminal-profile {
       display: inline-flex;

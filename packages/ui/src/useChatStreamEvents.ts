@@ -190,7 +190,16 @@ export interface ChatStreamEventOptions {
   tailSeqRef: MutableRef<number>;
   metaFor: (sessionId: string) => SessionStreamMeta;
   updateSessionMessages: (sessionId: string, updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
-  setPermReq: (value: { requestId: string; toolName: string; target?: string; kind?: string } | null) => void;
+  setPermReq: (
+    value: {
+      requestId: string;
+      toolName: string;
+      target?: string;
+      kind?: string;
+      reason?: string;
+      category?: string;
+    } | null,
+  ) => void;
   setAskQueue: React.Dispatch<React.SetStateAction<AskUserRequest[]>>;
   setThinkingOpen: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setDownloads: (value: DownloadItem[]) => void;
@@ -320,9 +329,23 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
       }),
       api.on("chat:stream:heartbeat", () => {}),
       api.on("perm:request", (payload) => {
-        const req = payload as { requestId?: string; toolName?: string; target?: string; kind?: string };
+        const req = payload as {
+          requestId?: string;
+          toolName?: string;
+          target?: string;
+          kind?: string;
+          reason?: string;
+          category?: string;
+        };
         if (req?.requestId) {
-          setPermReq({ requestId: req.requestId, toolName: req.toolName ?? "工具", target: req.target, kind: req.kind });
+          setPermReq({
+            requestId: req.requestId,
+            toolName: req.toolName ?? "工具",
+            target: req.target,
+            kind: req.kind,
+            reason: req.reason,
+            category: req.category,
+          });
         }
       }),
       // 新增事件用 try/catch 包裹：旧 shell 的 preload 白名单未登记时会抛错，降级为不订阅

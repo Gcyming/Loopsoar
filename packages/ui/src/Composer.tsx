@@ -11,7 +11,7 @@ import type { PermissionsState, ProviderStatus } from "./types.js";
 import type { ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
-import { useT } from "./i18n.js";
+import { useT, getLanguage, t } from "./i18n.js";
 import Popover from "./AnchoredPopover.js";
 
 export interface ComposerProps {
@@ -74,18 +74,19 @@ const SLASH_COMMANDS: SlashCommand[] = [
 
 /** File → base64（去掉 dataURL 前缀，只留纯 base64 给 fs.saveImage）。 */
 function readFileAsBase64(file: File): Promise<string> {
+  const readFailed = (): Error => new Error(t(getLanguage(), "composer.imageReadFailed"));
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : "";
       const comma = result.indexOf(",");
       if (comma < 0) {
-        reject(new Error("读取图片失败"));
+        reject(readFailed());
         return;
       }
       resolve(result.slice(comma + 1));
     };
-    reader.onerror = () => reject(reader.error ?? new Error("读取图片失败"));
+    reader.onerror = () => reject(reader.error ?? readFailed());
     reader.readAsDataURL(file);
   });
 }

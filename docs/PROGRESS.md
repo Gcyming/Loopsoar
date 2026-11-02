@@ -323,6 +323,18 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机冒烟**：Electron 启动通过（E2E 截图自动退出）；新标签页/书签/保存/快照/状态栏终端入口/Composer 提示均正常；设置·通用可见语言切换、广告拦截开关、Agent Loop 选择器（证据：`docs/screenshots/e2e-round3-main.png`、`e2e-round3-settings.png`）
 - 验证基线：**typecheck 6/6、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm build` 6/6、vitest 114 文件 / 915 tests 全绿**
 
+## 二·三十二、2026-11-02 第二十九次增量（除打包外全部清零）
+- **Gateway 真接线（OpenAI 兼容）**：`packages/gateway` 由占位改为真实服务（`/v1/chat/completions` 流式 SSE/非流式、tool_calls 透传、usage、`/v1/models`、`/healthz`、Bearer 鉴权、OpenAI 错误形状）；新增 shell `gatewayRuntime.ts`（headless Agent 装配：platform/registry/沙箱/Memory/ChatService，工作区隔离 `<dataDir>/gateway-workspace`，`x-loopsoar-session` 多轮复用）+ `domains/gateway.ts`（status/start/stop + `gateway:changed`，只监听 127.0.0.1）；真机 E2E：设置页启动 → `/healthz`、`/v1/models` 正常，配 mock 供应商后非流式返回完整回复、流式输出标准 OpenAI chunk。**打包注意**：gateway 内部 fastify 为 CJS，已改为 external + dist 编译产物（避免 ESM bundle 动态 require 崩溃）
+- **插件体系产品化（ADR-0011）**：PluginStore（扫描/校验/启停落盘/builtin 只读）+ PluginRuntime（每插件独立子进程、JSON-RPC 工具桥接、权限透传、冲突 fail-closed、8s/20s 超时、env 白名单、崩溃隔离）+ `plugin:list/setEnabled/reload` + 设置·插件面板；真机 E2E：demo-plugin 独立子进程 ready、工具 `greet` 成功接入工具表并在面板展示
+- **权限 L0–L5 形式化 + 敏感步骤写死规则**：core `SANDBOX_LEVELS/levelForTool` 与沙箱对齐；新增 `sensitiveSteps.ts`（登录/支付/不可撤销三类，覆盖 click/type/navigate/terminal_run，NFKC 归一化、URL 只看 host+path、误报口径明确）；执行器在类别策略之后、沙箱之前**强制确认**（即使权限 allow 也确认、不写会话白名单）；权限弹窗展示「敏感步骤」原因；设置页新增开关（默认开）；44 条单测
+- **Agent-Loop L2/L3**：L2 声明式循环（JSON：提示追加/limits 只可收紧/工具白名单过滤+执行器二次拦截）；L3 脚本循环（子进程 worker + JSON-RPC 代理 `ctx.llm/executeTool/emit`、预算护栏、崩溃/超时/非法 outcome 自动回退 builtin）；`loop:reload` 重扫；设置页显示真实 kind
+- **记忆后端最终裁决（ADR-0007 🟢）**：better-sqlite3 13 为 N-API prebuild（Electron 45 主进程实测加载通过，**无需 electron-rebuild**）；三路 10 万条实测：flat（默认）查询 P95 26.2ms/建索引 166.7ms/增量 83k/s 全面优于 sqlite-vec（64.1ms/808.6ms/80k/s）与 LanceDB（67.7ms/1751.6ms/18k/s，RSS +513MB）→ **默认 flat hybrid，sqlite-vec 显式可选，LanceDB 不纳入**；按用户决定不引入本地 BGE/onnxruntime
+- **/compact 真压缩**：`chat:compact` 预览（不写盘）/ apply（写回「摘要 + 最近 14 条」并同步索引、push `chat:compacted`）；Composer `/compact` 接真实预览+确认+重载；未超预算幂等无副作用
+- **全站 i18n 完成**：Settings（351 key）+ 15 个浏览器/会话组件（172 key）+ 插件面板（39 key），中英双语全覆盖、即时切换；真机 en-US 截图验证
+- **真机 E2E（新增证据）**：6 个终端档全部启动（cmd/PowerShell/Git Bash/Python 3/Node.js/C++，C++ vcvars 会话提示符）；MSVC 编译运行 hello world 通过；广告拦截真实取消 doubleclick/googlesyndication；书签收藏持久化；页面保存落盘；快照面板；ask_user 弹窗→点击选项→Agent 继续；插件子进程 ready；Gateway 真实 HTTP/SSE；英文 UI
+- **质量**：浏览器桥行为级用例（preload vm 沙箱/window.open handler/IPC 冒用/CDP 全仓断言）、品牌/webview/主题/popover 缺失测试、/compact 15 用例、插件 27 用例、gateway 29 用例、loop 39 用例、敏感步骤 44 用例
+- 验证基线：**typecheck 6/6、gen/check 逐字节一致、build 6/6、vitest 133 文件 / 1106 tests 全绿**
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

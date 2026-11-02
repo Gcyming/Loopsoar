@@ -8,6 +8,7 @@ import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 
 export interface StatusBarProps {
   /** shell 启动状态（boot?.status）；未取到前为 undefined。 */
@@ -27,6 +28,7 @@ export default function StatusBar({
   terminalOpen,
   onToggleTerminal,
 }: StatusBarProps): React.JSX.Element {
+  const tr = useT();
   return (
     <footer style={{ ...styles.statusBar, height: LAYOUT.STATUS_BAR_HEIGHT }}>
       <span style={styles.statusItem}>
@@ -40,13 +42,13 @@ export default function StatusBar({
         type="button"
         className="chip"
         style={{ ...styles.chip, ...styles.terminalToggle, ...(terminalOpen ? styles.terminalToggleOpen : {}) }}
-        title={terminalOpen ? "收起应用内终端" : "打开应用内终端（cmd / PowerShell / Git Bash / Python / Node / C++）"}
-        aria-label={terminalOpen ? "收起终端面板" : "打开终端面板"}
+        title={terminalOpen ? tr("browser.terminalToggleOpen") : tr("browser.terminalToggleClose")}
+        aria-label={terminalOpen ? tr("browser.terminalToggleAriaOpen") : tr("browser.terminalToggleAriaClose")}
         aria-pressed={terminalOpen}
         onClick={onToggleTerminal}
       >
         <Icon name="terminal" size={12} />
-        终端
+        {tr("browser.terminalToggleLabel")}
       </button>
     </footer>
   );

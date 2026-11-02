@@ -4,10 +4,9 @@
  * 内存估算与召回质量，输出 docs/research/memory-bench-ADR-0007.md。
  *
  * 为什么用纯 TS + hash embedding 做基准：
- *   · 本仓当前不允许新增原生依赖（better-sqlite3 / sqlite-vec 需要 Electron ABI 重编译与联网安装）；
- *   · llama-server（BGE-M3, 127.0.0.1:8991）在本机不可用，无法得到真实语义向量；
- *   · 先回答「纯 TS 方案在 10 万条下能否达标」，据此给出默认后端建议；sqlite-vec/LanceDB 对照
- *     留到打包阶段（报告里明确标注差距与后续路径）。
+ *   · 默认后端已按数据裁决为纯 TS（flat + hash）；F8 已完成 sqlite-vec / LanceDB 三路对照（见报告 §8）；
+ *   · llama-server（BGE-M3, 127.0.0.1:8991）在本机不可用，无法得到真实语义向量（按用户决定不引入本地 BGE）；
+ *   · 本脚本回答「纯 TS 方案在 10 万条下能否达标」，并保留 §8 的原生后端对照数据。
  *
  * 运行：在仓库根目录（Parent file）执行 `node scripts/memory-bench.mjs`
  * 无子进程、无硬网络依赖；llama-server / 原生模块探测为可选尽力（失败只记录，不影响基准）。
@@ -17,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
 
@@ -534,7 +534,16 @@ function measurePath(name, queryList, runQuery) {
 
 async function probeEnvironment() {
   const nativeModules = {};
+  // 原生依赖挂在 packages/shell（可选后端），从仓库根直接 import 解析不到 → 先按 shell 包的解析路径探测。
+  const requireFromShell = createRequire(path.join(ROOT, "packages", "shell", "package.json"));
   for (const name of ["better-sqlite3", "sqlite-vec", "@lancedb/lancedb"]) {
+    try {
+      requireFromShell.resolve(name);
+      nativeModules[name] = "可用（packages/shell 依赖）";
+      continue;
+    } catch {
+      // 回退到普通 import（例如根依赖/全局链接）
+    }
     try {
       await import(name);
       nativeModules[name] = "可用";
@@ -825,10 +834,9 @@ const fmtPercent = (value) => `${(value * 100).toFixed(1)}%`;
 const report = `# ADR-0007 W5 记忆基准报告（10 万条，纯 TS 方案）
 
 > 生成方式：\`node scripts/memory-bench.mjs\`（可复现；参数 count=${CONFIG.count} queries=${CONFIG.queries} dim=${CONFIG.dim} repeat=${CONFIG.repeat} seed=${CONFIG.seed}）。
-> 本报告是 ADR-0007「记忆后端裁决」的实测附件，但**不能替代** W5 要求的 sqlite-vec vs LanceDB 对照：
-> 本环境无法安装原生模块（better-sqlite3/sqlite-vec）且 llama-server（BGE-M3）不可用，原因与后续路径见 §6。
-> 结论：**默认后端 = 纯 TS 混合检索（FlatVectorIndex + deterministic hash embedding），零原生依赖**；
-> sqlite-vec 保留为打包阶段可选后端，需在具备 BGE-M3 与原生 ABI 的环境复测后再裁决是否替换。
+> 本报告是 ADR-0007「记忆后端裁决」的实测附件。F8 收口已补充原生索引后端对照（§8）：
+> sqlite-vec/LanceDB 三路实测 + Electron ABI 验证；**最终裁决：默认 flat（纯 TS hybrid）、sqlite-vec 可选、LanceDB 不纳入运行时**。
+> 本地语义模型按用户决定**不引入**（保留 \`platform.embed\`/llama-server 适配 + hash 回退），因此语义质量结论仍受限制。
 
 ## 1. 测试环境
 
@@ -931,27 +939,27 @@ ${dimSweep
    → 若产品未来把容量提到 10 万级，优先把 \`retrieval.keywordCandidates\` 换成倒排/前缀索引（纯 TS 即可，无需原生模块）。
 3. **hybrid 实测**：P95 = **${paths.find((p) => p.name === "hybrid")?.latency.p95.toFixed(2)} ms**，recall@5 = ${fmtPercent(paths.find((p) => p.name === "hybrid")?.recall5 ?? 0)}（其中 exact 桶 ${fmtPercent(paths.find((p) => p.name === "hybrid")?.recallByKind.exact ?? 0)}，证明索引/候选/融合链路正确）；
    ${(paths.find((p) => p.name === "hybrid")?.latency.p95 ?? 999) <= 50 ? "在 10 万条下满足 P95 ≤ 50ms 目标。" : "在 10 万条下未满足 P95 ≤ 50ms，需倒排关键词 + 更快的向量后端（或 ANN）。"}
-4. **sqlite-vec / LanceDB 裁决**：本环境**无法实测**（原生模块未安装且不能在本会话安装；llama-server/BGE-M3 不可用）。
-   因此本报告不宣称「sqlite-vec 优于/劣于 LanceDB」，只裁决**当前可落地默认**：纯 TS 方案先上线，
-   sqlite-vec 留作打包阶段可选后端（接口已就绪，见 §6 后续路径）。
+4. **sqlite-vec / LanceDB 裁决**：F8 已完成三路实测（§8）：10 万条下 flat TS 查询/构建/内存综合最优，
+   sqlite-vec 与 LanceDB 均更慢（查询 P95 64.1 / 67.7 ms vs flat 26.2 ms），故**默认 flat、sqlite-vec 可选、LanceDB 不纳入运行时**。
+   本报告不宣称 LanceDB 的 ANN 能力优劣（未建 ANN 索引）；语义质量仍受「无本地模型」限制（llama-server/BGE-M3 不可用，按决定不引入本地 BGE）。
 5. **与 W5 通过标准逐条对照**：
    - 检索 P95 ≤ 50ms @ 10 万条：hybrid ${passP95(paths.find((p) => p.name === "hybrid")?.latency ?? { p95: 999 }) ? "通过" : "未通过"}（${paths.find((p) => p.name === "hybrid")?.latency.p95.toFixed(2)} ms）；裸向量扫描 ${paths.find((p) => p.name === "vector-hash")?.latency.p95.toFixed(2)} ms ${passP95(paths.find((p) => p.name === "vector-hash")?.latency ?? { p95: 999 }) ? "贴近阈值（余量不足）" : "未通过"}（这也验证了「关键词候选 + 向量重排」四阶段不是冗余设计）；keyword-linear ${paths.find((p) => p.name === "keyword-linear")?.latency.p95.toFixed(2)} ms（${passP95(paths.find((p) => p.name === "keyword-linear")?.latency ?? { p95: 999 }) ? "临界" : "未通过"}）。以本机 Node 单线程实测，非 Electron 渲染进程。
    - 检索质量不劣于 LanceDB 基线：**未验证**（无 LanceDB/BGE-M3；hash embedding 是词法向量，不能冒充语义基线）。需在打包阶段用真实 BGE-M3 复测。
    - 备份恢复/归档查回 100%：**未在本基准范围**（记忆持久化是 JSON 快照，恢复=读 JSON；归档查回由五闸软归档保证）。建议打包阶段补专项用例。
    - 增量写入无死锁：单线程索引 upsert/remove 实测 ${((incrementalCount / incrementalUpsertMs) * 1000).toFixed(0)} 条/秒，无并发写场景（Node 单线程），并发写需上层串行化。
 
-## 6. 未接原生模块 / llama-server 的原因与后续路径
+## 6. 原生模块 / llama-server 现状与后续路径
 
 **原因（可复核）**：
-1. 本会话禁止安装新原生依赖：better-sqlite3 / sqlite-vec 需要联网下载 + 预编译二进制或本地编译，并且必须与 Electron 45 的 Node ABI 匹配（打包阶段统一处理）；当前 \`NodeSqliteAdapter\` 仍是 P4 前的 \`LoopsoarNotImplementedError\`（packages/core/src/platform/node.ts:153-158）。
-2. llama-server（BGE-M3，127.0.0.1:8991）本机探测结果：${environment.llamaServer}；\`platform.embed\` 有实现但无服务时只能降级。
+1. F8 已接入**可选** sqlite-vec 后端（better-sqlite3 13.0.3 N-API + sqlite-vec 0.1.9，见 §8）；但主基准与默认运行时仍走纯 TS：10 万条实测 flat 查询/构建最快（§8.3），且默认后端按数据裁决为 flat。\`NodeSqliteAdapter\` 仍是 P4 前的 \`LoopsoarNotImplementedError\`（packages/core/src/platform/node.ts:153-158），与本可选向量后端无关。
+2. llama-server（BGE-M3，127.0.0.1:8991）本机探测结果：${environment.llamaServer}；\`platform.embed\` 有实现但无服务时只能降级；按用户最新决定不引入本地 BGE/onnxruntime。
 3. 因此本基准用 \`hash embedding\` 做**可运行**的向量能力对照，并明确它只是词法向量（质量不代表 BGE-M3 语义检索）。
 
-**后续路径（打包阶段，按优先级）**：
-1. 接入 better-sqlite3 + sqlite-vec：在 \`MemoryService\` 注入 \`FlatVectorIndex\` 的替换实现（\`vector.ts\` 接口不变：upsert/remove/search/memoryBytes），跑本脚本同一套 10 万条基准做 A/B；
-2. 接入 llama-server BGE-M3（\`platform.embed\` 已就绪）：本报告的 \`hybrid\` 路径与 \`searchAsync\` 自动切到真实语义向量，重测 recall@5 与 P95；
-3. 若 hybrid 的向量阶段在 10 万条仍需更低延迟：先加倒排关键词（纯 TS，本基准已证明有效），再评估 HNSW/IVF 或 sqlite-vec 的 ANN 能力。
-4. 裁决门槛：真实 BGE-M3 + 真实语料下 P95 ≤ 50ms 且 recall@5 不劣于 LanceDB 基线，才把默认后端切到 sqlite-vec；否则维持纯 TS（可在设置面板提供「启用本地嵌入模型」开关）。
+**后续路径（按优先级）**：
+1. ~~接入 better-sqlite3 + sqlite-vec~~ **已由 F8 完成**（见 §8）：sqlite-vec 作为显式可选后端接入 \`MemoryService.vectorBackend="sqlite-vec"\`，不可用自动降级 flat；三路 10 万条实测后默认仍 flat；
+2. 接入 llama-server BGE-M3（\`platform.embed\` 已就绪）：本报告的 \`hybrid\` 路径与 \`searchAsync\` 自动切到真实语义向量，重测 recall@5 与 P95（不引入本地 BGE/onnxruntime，仅保留 llama-server 适配）；
+3. 若 hybrid 的向量阶段在 10 万条仍需更低延迟：先加倒排关键词（纯 TS，本基准已证明有效），再评估 HNSW/IVF 或 sqlite-vec 的 ANN 能力；
+4. 裁决门槛（F8 后更新）：默认 flat 已由 §8 数据裁决（10 万条下 flat 查询/构建最优）；只有未来容量显著增长或需要磁盘持久化索引时，才复评 sqlite-vec/ANN，并用真实语义模型重测质量。
 
 ## 7. 复现
 
@@ -963,12 +971,25 @@ node scripts/memory-bench.mjs --count=20000   # 快速冒烟
 
 - 脚本无子进程、无强网络依赖（llama-server/原生模块探测失败只记录）。
 - 随机种子固定（${CONFIG.seed}），语料与查询可复现。
-- 结果随 CPU 调度/热降频波动约 ±10%（见 §4 测量噪声），判定看阈值余量；用 \`--repeat=5\` 可增稳。
+- 结果随 CPU 调度/热降频波动约 ±10–20%（见 §4 测量噪声），判定看阈值余量；用 \`--repeat=5\` 可增稳。
 - 单次总耗时：${formatMs(totalMs)}（含索引构建；纯检索延迟见 §4）。
+
+> **§8（F8 原生后端对照）由独立项目 \`.tmp/membench/\` 实测补充**：重跑本脚本时会把已有 §8 原样保留
+> （脚本从旧报告提取 \`## 8.\` 起的内容附回），避免外部实验数据被覆盖；§8 数字不参与本脚本重算。
 `;
 
+// §8（F8 原生后端对照）由 .tmp/membench 独立实测补充，本脚本无法重算：重跑时把旧报告里的 §8 原样附回，
+// 避免外部实验数据被覆盖。首次生成（无旧文件/无 §8）时为空。
+let preservedNativeSection = "";
+try {
+  const previous = fs.readFileSync(OUT_FILE, "utf8");
+  const markerIndex = previous.indexOf("\n## 8. ");
+  if (markerIndex >= 0) preservedNativeSection = previous.slice(markerIndex);
+} catch {
+  // 首次生成
+}
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
-fs.writeFileSync(OUT_FILE, report, "utf8");
+fs.writeFileSync(OUT_FILE, report + preservedNativeSection, "utf8");
 
 console.log(`\n记忆基准完成 → ${OUT_FILE}`);
 console.log(

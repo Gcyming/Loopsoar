@@ -36,6 +36,37 @@ async function defaultResolveIps(host: string): Promise<string[]> {
   }
 }
 
+/* ───────────────────────── window.open 逃逸防护（可单测） ───────────────────────── */
+
+/**
+ * 新标签 URL 白名单：window.open / target=_blank 只允许 http(s)。
+ * 为什么必须白名单：网页里的 `window.open("file:///…")`、`javascript:`、`loopsoar://…`
+ * 一旦被 Electron 默认处理，就能打开本地文件或应用内页面（浏览器桥逃逸攻击路径之一）。
+ */
+export function isNewTabUrlAllowed(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    // 相对地址 / 空串 / 非法串：没有可信协议，一律不放行
+    return false;
+  }
+}
+
+/**
+ * 可测的 window.open 处理器工厂（抽出纯逻辑，不依赖 electron 实例）：
+ *   - 无论 URL 是什么都返回 { action: "deny" }，绝不产生 Electron 独立窗口；
+ *   - 仅 http(s) 转成应用内新标签（openInNewTab），其余协议静默忽略。
+ */
+export function createWindowOpenHandler(
+  openInNewTab: (url: string) => void,
+): (details: { url: string }) => { action: "deny" } {
+  return ({ url }) => {
+    if (isNewTabUrlAllowed(url)) openInNewTab(url);
+    return { action: "deny" };
+  };
+}
+
 /**
  * 模块级防重复注册：`onBeforeRequest` 是「追加监听」语义，重复注册会让同一个请求被判定多次，
  * 且没有任何 API 能单独移除——所以必须在进程内只装一次。
@@ -107,11 +138,7 @@ export function createElectronBrowserHost(
           partition: SESSION_PARTITION,
         },
       });
-      view.webContents.setWindowOpenHandler(({ url }) => {
-        // 在应用内开新标签，拒绝 Electron 默认新建窗口
-        openInNewTab(url);
-        return { action: "deny" };
-      });
+      view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
       return view as unknown as HostView;
     },
     attachView: (view) => {

@@ -673,6 +673,55 @@
       "hasRequest": true
     },
     {
+      "channel": "plugin:list",
+      "domain": "plugin",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "plugin:setEnabled",
+      "domain": "plugin",
+      "method": "setEnabled",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "plugin:reload",
+      "domain": "plugin",
+      "method": "reload",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "gateway:status",
+      "domain": "gateway",
+      "method": "status",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "gateway:start",
+      "domain": "gateway",
+      "method": "start",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "gateway:stop",
+      "domain": "gateway",
+      "method": "stop",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "chat:compact",
+      "domain": "chat",
+      "method": "compact",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "loop:list",
       "domain": "loop",
       "method": "list",
@@ -685,6 +734,13 @@
       "method": "setActive",
       "sensitive": true,
       "hasRequest": true
+    },
+    {
+      "channel": "loop:reload",
+      "domain": "loop",
+      "method": "reload",
+      "sensitive": true,
+      "hasRequest": false
     },
     {
       "channel": "bookmarks:list",
@@ -744,6 +800,9 @@
     "terminal:state",
     "ask:user",
     "loop:fallback",
-    "loop:changed"
+    "loop:changed",
+    "plugins:updated",
+    "gateway:changed",
+    "chat:compacted"
   ]
 }

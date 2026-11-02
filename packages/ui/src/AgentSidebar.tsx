@@ -9,6 +9,7 @@ import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
+import { useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import type { SessionMeta, WorkspaceRecord } from "./types.js";
 import type { TimelineStep } from "./timeline.js";
@@ -37,17 +38,20 @@ export interface AgentSidebarProps {
   children: React.ReactNode;
 }
 
+/** useT 返回的翻译函数类型（组件内传入，避免纯函数直接依赖 hook）。 */
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
 /** 把当前会话导出为 Markdown（用户/AI 气泡 + 引用式思考过程）。 */
-function conversationToMarkdown(messages: ChatMessage[]): string {
+function conversationToMarkdown(messages: ChatMessage[], tr: Translate): string {
   return messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => {
-      const who = m.role === "user" ? (m.steer ? "用户（转向）" : "用户") : "Loopsoar";
+      const who = m.role === "user" ? (m.steer ? tr("chat.userSteer") : tr("chat.user")) : "Loopsoar";
       const thinkText = (m.timeline ?? [])
         .filter((step): step is Extract<TimelineStep, { kind: "think" }> => step.kind === "think")
         .map((step) => step.text)
         .join("\n");
-      const think = thinkText ? `> 思考过程：${thinkText.replace(/\n/g, "\n> ")}\n\n` : "";
+      const think = thinkText ? `> ${tr("chat.thinkingPrefix")}${thinkText.replace(/\n/g, "\n> ")}\n\n` : "";
       return `### ${who}\n\n${think}${m.text}`;
     })
     .join("\n\n---\n\n");
@@ -71,31 +75,32 @@ export default function AgentSidebar({
   onNotice,
   children,
 }: AgentSidebarProps): React.JSX.Element {
+  const tr = useT();
   const copyConversation = (): void => {
-    const markdown = conversationToMarkdown(messages);
+    const markdown = conversationToMarkdown(messages, tr);
     if (!markdown.trim()) {
-      onNotice("会话为空，没有可复制的内容");
+      onNotice(tr("chat.copyConversationEmpty"));
       return;
     }
     void navigator.clipboard
       ?.writeText(markdown)
-      .then(() => onNotice("整段会话已复制为 Markdown"))
-      .catch(() => onNotice("复制失败：剪贴板不可用"));
+      .then(() => onNotice(tr("chat.copyConversationDone")))
+      .catch(() => onNotice(tr("chat.copyFailed")));
   };
 
   const activeSession = sessions.find((x) => x.id === currentSession) ?? null;
   const currentWorkspaceId = activeSession?.workspaceId ?? activeWorkspaceId;
-  const workspaceName = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.name ?? "工作区";
+  const workspaceName = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.name ?? tr("chat.workspaceFallback");
 
   return (
     <aside style={{ ...styles.sidebar, width }}>
       <div style={styles.sidebarHeader}>
         <span style={styles.sidebarTitle}>
           <Icon name="agent" size={14} style={{ marginRight: 6 }} />
-          Agent 对话
+          {tr("chat.sidebarTitle")}
         </span>
         <span style={styles.sidebarActions}>
-          <button type="button" className="icon-btn" title="复制整段会话为 Markdown" onClick={copyConversation}>
+          <button type="button" className="icon-btn" title={tr("chat.copyConversationTitle")} onClick={copyConversation}>
             <Icon name="file" size={13} />
           </button>
           <span style={styles.sidebarAgent}>{agentLabel}</span>
@@ -106,13 +111,13 @@ export default function AgentSidebar({
           type="button"
           className="chip"
           style={{ ...styles.chip, ...styles.workspaceChip }}
-          title="工作区：挂载项目文件夹 / 会话 worktree"
+          title={tr("chat.workspaceTitle")}
           onClick={onOpenWorkspacePanel}
         >
           <Icon name="folder" size={12} style={{ marginRight: 5 }} />
           <span style={styles.workspaceChipName}>{workspaceName}</span>
         </button>
-        <button type="button" className="icon-btn" title="管理工作区" onClick={onOpenWorkspacePanel}>
+        <button type="button" className="icon-btn" title={tr("chat.manageWorkspace")} onClick={onOpenWorkspacePanel}>
           <Icon name="plus" size={12} />
         </button>
       </div>
@@ -123,20 +128,22 @@ export default function AgentSidebar({
             className="chip"
             style={{ ...styles.chip, maxWidth: 220, ...(compactUi ? styles.chipCompact : {}) }}
             onClick={onToggleSession}
-            title={`切换会话：${activeSession?.title ?? "新会话"}${compactUi ? "（空间不足，已折叠）" : ""}`}
-            aria-label="切换会话"
+            title={tr("chat.switchSessionTitle", {
+              title: `${activeSession?.title ?? tr("chat.newSessionLabel")}${compactUi ? tr("chat.compactHint") : ""}`,
+            })}
+            aria-label={tr("chat.switchSessionAria")}
           >
             <Icon name="notes" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-            {compactUi ? null : activeSession?.title ?? "新会话"}
+            {compactUi ? null : activeSession?.title ?? tr("chat.newSessionLabel")}
           </button>
         </span>
-        <button type="button" className="icon-btn" title="新建会话" onClick={onNewSession}>
+        <button type="button" className="icon-btn" title={tr("chat.newSession")} onClick={onNewSession}>
           <Icon name="plus" size={13} />
         </button>
         {sessionOpen ? (
           <div data-popover style={styles.sessionMenu}>
-            <div style={menuStyles.dropTitle}>会话历史</div>
-            {sessions.length === 0 ? <div style={menuStyles.dropEmpty}>还没有会话</div> : null}
+            <div style={menuStyles.dropTitle}>{tr("chat.sessionHistory")}</div>
+            {sessions.length === 0 ? <div style={menuStyles.dropEmpty}>{tr("chat.noSessions")}</div> : null}
             {sessions.map((x) => (
               <div key={x.id} style={styles.sessionRow}>
                 <button
@@ -149,7 +156,7 @@ export default function AgentSidebar({
                   <span style={styles.sessionTitle}>{x.title}</span>
                   <span style={styles.sessionMeta}>{new Date(x.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
                 </button>
-                <button type="button" className="icon-btn" title="删除会话" onClick={() => onDeleteSession(x.id)}>
+                <button type="button" className="icon-btn" title={tr("chat.deleteSession")} onClick={() => onDeleteSession(x.id)}>
                   <Icon name="close" size={11} />
                 </button>
               </div>

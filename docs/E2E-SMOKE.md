@@ -105,8 +105,15 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 应用内终端面板打开 + **cmd 持久会话真实启动**（提示符 `D:\...\Parent file>`、工作根/中断/清屏/关闭按钮） | ✅ | `e2e-round3-terminal-session.png` |
 | 广告拦截真实触发（页面请求 doubleclick.net / googlesyndication.com 被 `[browser-guard] [adblock]` 取消；本地回环页面正常放行） | ✅ | 主进程日志 + `e2e-round3-adblock*.png` |
 | 书签：星标收藏 → `bookmarks.json` 持久化 → 书签浮层展示 | ✅ | `e2e-round3-bookmarks.png` |
-| 刷新走 reload / 页面保存 / 快照面板 / ask_user / Loop 回退 / 记忆语义检索 | ⏳ 待真机点验（需真实模型或页面交互） | `docs/E2E-SMOKE.md` 上文清单 |
-| Python / Node / Git Bash 会话、C++（本机缺编译器） | ⏳ 待点验 | 终端面板配置档已真实渲染 |
+| 页面保存（真实落盘 `saved-pages/*.html`） | ✅ | `e2e-round3-snapshot-save.png` + 落盘文件 |
+| 快照面板（标题/URL/正文/可交互元素/复制） | ✅ | `e2e-round3-snapshot-save.png` |
+| ask_user：mock 模型发起提问 → 弹窗选项 → 点击「生产」→ Agent 继续并收束 | ✅ | `e2e-round3-ask-user.png` |
+| Gateway：设置页启动 → `/healthz`+`/v1/models`；配 mock 供应商后非流式回复 + 标准 OpenAI SSE | ✅ | `e2e-round3-gateway*.png` + curl 输出 |
+| 插件：demo-plugin 子进程 ready、工具 `greet` 接入并在设置面板展示 | ✅ | `e2e-round3-plugins.png` + 主进程日志 |
+| Python / Node / Git Bash / C++ 终端会话 | ✅ 6 档全部 spawn；C++ 走 vcvars（另用 MSVC 编译运行 hello world 验证） | `e2e-round3-terminals-all.png` |
+| 全站 i18n：语言切到 en-US | ✅ 设置/Composer/状态栏/浏览器全部英文 | `e2e-round3-i18n-en.png` |
+| 用户数据目录隔离的 Loop L2 声明式 loop 列表 | ✅ `review-only` 出现在设置列表（kind 徽标） | 设置·通用截图 |
+| 记忆语义检索（llama-server 可用时） | ⏳ 环境无嵌入服务（按用户决定不引入本地模型） | platform.embed 适配已就绪 |
 
 > E2E 辅助环境变量新增：`LOOPSOAR_E2E_CLICK_GAP_MS`（多步点击间隔，默认 500ms；终端配置档探测等异步内容建议 2500）。
 

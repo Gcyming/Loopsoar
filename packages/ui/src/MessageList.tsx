@@ -14,6 +14,7 @@ import TopicRail from "./TopicRail.js";
 import ChatMessageView from "./ChatMessageView.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import { decideFollow, hasInnerScroller, type ScrollBox } from "./scrollFollow.js";
+import { useT } from "./i18n.js";
 
 export interface MessageListProps {
   messages: ChatMessage[];
@@ -44,6 +45,7 @@ export default function MessageList({
   onRegenerate,
   onOpenUrl,
 }: MessageListProps): React.ReactElement {
+  const tr = useT();
   const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   const atBottomRef = React.useRef(true);
   const [atBottom, setAtBottom] = React.useState(true);
@@ -196,7 +198,7 @@ export default function MessageList({
         onWheel={handleWheel}
       >
         {messages.length === 0 ? (
-          <div style={styles.emptyHint}>和 Loopsoar 说点什么，例如「帮我总结当前网页」。</div>
+          <div style={styles.emptyHint}>{tr("chat.emptyHint")}</div>
         ) : (
           messages.map((message) => (
             <ChatMessageView
@@ -220,8 +222,8 @@ export default function MessageList({
       <div className={`scroll-fade-mask is-top${atTop ? " is-hidden" : ""}`} aria-hidden />
       <div className={`scroll-fade-mask is-bottom${atBottom ? " is-hidden" : ""}`} aria-hidden />
       {!atBottom ? (
-        <button type="button" className="jump-latest" title="回到最新" onClick={jumpToLatest}>
-          ↓ 回到最新
+        <button type="button" className="jump-latest" title={tr("chat.jumpLatest")} onClick={jumpToLatest}>
+          {tr("chat.jumpLatest")}
         </button>
       ) : null}
       <TopicRail scroller={() => scrollerRef.current} />

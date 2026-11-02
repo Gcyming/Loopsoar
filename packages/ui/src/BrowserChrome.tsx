@@ -12,6 +12,7 @@ import { Icon } from "./Icon.js";
 import Popover from "./AnchoredPopover.js";
 import { usePopover } from "./popover.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
+import { useT } from "./i18n.js";
 import type { BookmarkItem, TabState } from "./types.js";
 
 export interface BrowserChromeProps {
@@ -78,6 +79,7 @@ export default function BrowserChrome({
   onNewTab,
 }: BrowserChromeProps): React.ReactElement {
   const api = useLoopsoarApi();
+  const tr = useT();
   const active = tabs.find((tab) => tab.active);
   const historyButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const downloadsButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -123,7 +125,7 @@ export default function BrowserChrome({
       if (currentBookmark) {
         const result = await api.bookmarks.remove({ id: currentBookmark.id });
         setBookmarks((prev) => prev.filter((item) => item.id !== currentBookmark.id));
-        onNotice(result?.ok ? "已取消收藏" : "书签已不存在（可能已被删除）");
+        onNotice(result?.ok ? tr("browser.bookmarkRemoved") : tr("browser.bookmarkMissing"));
         return;
       }
       const result = await api.bookmarks.add({
@@ -131,15 +133,15 @@ export default function BrowserChrome({
         ...(active?.title ? { title: active.title } : {}),
       });
       if (!result?.ok) {
-        onNotice(`收藏失败：${result?.error ?? "未知错误"}`);
+        onNotice(tr("browser.bookmarkAddFailed", { error: result?.error ?? tr("common.unknownError") }));
         return;
       }
-      onNotice(result.duplicate ? "该页面已在书签中" : "已加入书签");
+      onNotice(result.duplicate ? tr("browser.bookmarkExists") : tr("browser.bookmarkAdded"));
       await refreshBookmarks();
     } catch (err) {
-      onNotice(`收藏失败：${err instanceof Error ? err.message : String(err)}`);
+      onNotice(tr("browser.bookmarkAddFailed", { error: err instanceof Error ? err.message : String(err) }));
     }
-  }, [api, active?.title, canBookmark, currentBookmark, currentUrl, onNotice, refreshBookmarks]);
+  }, [api, active?.title, canBookmark, currentBookmark, currentUrl, onNotice, refreshBookmarks, tr]);
 
   const removeBookmark = React.useCallback(
     async (item: BookmarkItem): Promise<void> => {
@@ -147,29 +149,29 @@ export default function BrowserChrome({
       try {
         const result = await api.bookmarks.remove({ id: item.id });
         setBookmarks((prev) => prev.filter((x) => x.id !== item.id));
-        onNotice(result?.ok ? "已删除书签" : "书签已不存在（可能已被删除）");
+        onNotice(result?.ok ? tr("browser.bookmarkRemoved") : tr("browser.bookmarkMissing"));
       } catch (err) {
-        onNotice(`删除书签失败：${err instanceof Error ? err.message : String(err)}`);
+        onNotice(tr("browser.bookmarkRemoveFailed", { error: err instanceof Error ? err.message : String(err) }));
       }
     },
-    [api, onNotice],
+    [api, onNotice, tr],
   );
 
   return (
     <>
       <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
         <div style={styles.navGroup}>
-          <button type="button" className="icon-btn" title="后退" disabled={!active?.canBack} onClick={onBack}>
+          <button type="button" className="icon-btn" title={tr("browser.back")} disabled={!active?.canBack} onClick={onBack}>
             <Icon name="back" size={16} />
           </button>
-          <button type="button" className="icon-btn" title="前进" disabled={!active?.canForward} onClick={onForward}>
+          <button type="button" className="icon-btn" title={tr("browser.forward")} disabled={!active?.canForward} onClick={onForward}>
             <Icon name="forward" size={16} />
           </button>
-          <button type="button" className="icon-btn" title="刷新" disabled={!currentUrl} onClick={onReload}>
+          <button type="button" className="icon-btn" title={tr("browser.reload")} disabled={!currentUrl} onClick={onReload}>
             <Icon name="reload" size={16} />
           </button>
           <span style={styles.anchor} data-popover-trigger>
-            <button ref={historyButtonRef} type="button" className="icon-btn" title="历史记录" onClick={onToggleHistory}>
+            <button ref={historyButtonRef} type="button" className="icon-btn" title={tr("browser.history")} onClick={onToggleHistory}>
               <Icon name="history" size={16} />
             </button>
             <Popover anchorRef={historyButtonRef} open={historyOpen} onClose={onToggleHistory} width={380}>
@@ -187,9 +189,9 @@ export default function BrowserChrome({
               if (event.key === "Enter") onNavigate();
             }}
             ref={omniboxRef}
-            placeholder="输入地址或搜索内容，回车导航…"
+            placeholder={tr("browser.addressPlaceholder")}
             style={styles.omnibox}
-            aria-label="地址与搜索"
+            aria-label={tr("browser.addressAria")}
           />
           <span style={styles.starWrap} data-popover-trigger>
             <button
@@ -198,12 +200,12 @@ export default function BrowserChrome({
               style={styles.omniboxStar}
               title={
                 !canBookmark
-                  ? "当前页面不可收藏（仅支持 http/https）"
+                  ? tr("browser.bookmarkUnavailable")
                   : currentBookmark
-                    ? "取消收藏当前页面"
-                    : "收藏当前页面"
+                    ? tr("browser.bookmarkRemove")
+                    : tr("browser.bookmarkAdd")
               }
-              aria-label={currentBookmark ? "取消收藏当前页面" : "收藏当前页面"}
+              aria-label={currentBookmark ? tr("browser.bookmarkRemove") : tr("browser.bookmarkAdd")}
               aria-pressed={Boolean(currentBookmark)}
               disabled={!canBookmark}
               onClick={() => void toggleBookmark()}
@@ -215,8 +217,8 @@ export default function BrowserChrome({
               type="button"
               className="icon-btn bookmark-list-btn"
               style={styles.bookmarkListBtn}
-              title="书签列表"
-              aria-label="书签列表"
+              title={tr("browser.bookmarkList")}
+              aria-label={tr("browser.bookmarkList")}
               onClick={() => setBookmarksOpen((value) => !value)}
             >
               <Icon name="more" size={13} />
@@ -224,13 +226,13 @@ export default function BrowserChrome({
             <Popover anchorRef={bookmarkListRef} open={bookmarksOpen} onClose={() => setBookmarksOpen(false)} width={340}>
               <div className="bookmark-panel">
                 <div className="bookmark-head">
-                  <span>书签</span>
+                  <span>{tr("browser.bookmarks")}</span>
                   <span className="bookmark-count">{bookmarks.length}</span>
                 </div>
                 {bookmarks.length === 0 ? (
-                  <div className="bookmark-empty">还没有书签：点地址栏的星标收藏当前页面</div>
+                  <div className="bookmark-empty">{tr("browser.bookmarkEmpty")}</div>
                 ) : (
-                  <div className="bookmark-list" aria-label="书签列表">
+                  <div className="bookmark-list" aria-label={tr("browser.bookmarkList")}>
                     {bookmarks.map((item) => (
                       <div key={item.id} className="bookmark-row">
                         <button
@@ -248,8 +250,8 @@ export default function BrowserChrome({
                         <button
                           type="button"
                           className="icon-btn bookmark-del"
-                          title="删除书签"
-                          aria-label={`删除书签：${item.title || item.url}`}
+                          title={tr("browser.bookmarkDelete")}
+                          aria-label={tr("browser.bookmarkDeleteAria", { label: item.title || item.url })}
                           onClick={() => void removeBookmark(item)}
                         >
                           <Icon name="close" size={10} />
@@ -269,7 +271,7 @@ export default function BrowserChrome({
               ref={downloadsButtonRef}
               type="button"
               className="icon-btn"
-              title="下载"
+              title={tr("browser.downloads")}
               onClick={onToggleDownloads}
               style={{ position: "relative" }}
             >
@@ -283,20 +285,26 @@ export default function BrowserChrome({
           <button
             type="button"
             className="icon-btn"
-            title={currentUrl ? "保存页面（HTML 全页）" : "先打开一个网页"}
-            aria-label="保存页面"
+            title={currentUrl ? tr("browser.savePage") : tr("browser.openPageFirst")}
+            aria-label={tr("browser.savePage")}
             onClick={onSavePage}
             disabled={!currentUrl}
           >
             <Icon name="file" size={16} />
           </button>
-          <button type="button" className="icon-btn" title={currentUrl ? "页面快照" : "先打开一个网页"} onClick={onSnapshot} disabled={!currentUrl}>
+          <button
+            type="button"
+            className="icon-btn"
+            title={currentUrl ? tr("browser.snapshot") : tr("browser.openPageFirst")}
+            onClick={onSnapshot}
+            disabled={!currentUrl}
+          >
             <Icon name="capture" size={17} />
           </button>
-          <button type="button" className="icon-btn" title="设置" onClick={onOpenSettings}>
+          <button type="button" className="icon-btn" title={tr("browser.browserSettings")} onClick={onOpenSettings}>
             <Icon name="settings" size={17} />
           </button>
-          <button type="button" className="icon-btn" title="更多（待接）" disabled>
+          <button type="button" className="icon-btn" title={tr("browser.morePending")} disabled>
             <Icon name="more" size={17} />
           </button>
         </div>
@@ -311,11 +319,11 @@ export default function BrowserChrome({
             onClick={() => onSelectTab(tab.id)}
             title={tab.url || tab.title}
           >
-            <span style={styles.tabTitle}>{tab.title || "新建标签页"}</span>
+            <span style={styles.tabTitle}>{tab.title || tr("browser.startNewTabTitle")}</span>
             <button
               type="button"
               className="icon-btn tab-close"
-              title="关闭标签"
+              title={tr("browser.closeTab")}
               style={styles.tabClose}
               onClick={(event) => {
                 event.stopPropagation();
@@ -326,7 +334,7 @@ export default function BrowserChrome({
             </button>
           </div>
         ))}
-        <button type="button" className="icon-btn" title="新建标签页" style={styles.tabAdd} onClick={onNewTab}>
+        <button type="button" className="icon-btn" title={tr("browser.newTab")} style={styles.tabAdd} onClick={onNewTab}>
           <Icon name="plus" size={13} />
         </button>
       </div>

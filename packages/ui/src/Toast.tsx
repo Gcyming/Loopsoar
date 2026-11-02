@@ -6,6 +6,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 
 export interface ToastProps {
   text: string;
@@ -13,8 +14,9 @@ export interface ToastProps {
 }
 
 export default function Toast({ text, onDismiss }: ToastProps): React.JSX.Element {
+  const tr = useT();
   return (
-    <button type="button" className="toast" style={styles.toast} onClick={onDismiss} title="点击关闭">
+    <button type="button" className="toast" style={styles.toast} onClick={onDismiss} title={tr("common.dismiss")}>
       <Icon name="bolt" size={13} style={{ marginRight: 6, verticalAlign: "-2px" }} />
       {text.slice(0, 260)}
       {text.length > 260 ? "…" : ""}

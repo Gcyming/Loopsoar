@@ -15,6 +15,7 @@ import { ProductPanel } from "./ArtifactPanels.js";
 import { collectProducts, stripDiffMarkers } from "./artifacts.js";
 import { baseName, splitAttachments } from "./attachments.js";
 import { renderRich } from "./Markdown.js";
+import { useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import type { LoopsoarAPI } from "./types.js";
 
@@ -52,6 +53,7 @@ export default function ChatMessageView({
   onRegenerate,
   onOpenUrl,
 }: ChatMessageViewProps): React.ReactElement {
+  const tr = useT();
   const timelineSteps = m.timeline ?? [];
   const hasStructuredTimeline = timelineSteps.some((step) => step.kind !== "body");
   const products = hasStructuredTimeline ? collectProducts(timelineSteps) : [];
@@ -65,9 +67,9 @@ export default function ChatMessageView({
   if (m.role === "user") {
     const { body, docs } = splitAttachments(m.text);
     return (
-      <div className="msg-row" style={styles.msgRowUser} data-rail-label={`你：${m.text.slice(0, 24)}`} data-rail-role="user">
+      <div className="msg-row" style={styles.msgRowUser} data-rail-label={tr("chat.railUser", { text: m.text.slice(0, 24) })} data-rail-role="user">
         <div className={`msg-user-bubble${m.steer ? " is-steer" : ""}`} style={{ ...styles.userBubble, ...(m.steer ? styles.userBubbleSteer : {}) }}>
-          {m.steer ? <span style={styles.steerBadge}>转向</span> : null}
+          {m.steer ? <span style={styles.steerBadge}>{tr("chat.steerBadge")}</span> : null}
           {docs.length > 0 ? (
             <div style={styles.attachRow}>
               {docs.map((path) =>
@@ -87,10 +89,10 @@ export default function ChatMessageView({
         <div className="msg-hover" style={styles.msgHover}>
           <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
           <span>· {timeText}</span>
-          <button type="button" className="msg-action" title="回滚：撤销此消息及之后的对话（内容放回输入框）" onClick={() => onRollback(m.id)}>
+          <button type="button" className="msg-action" title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
             <Icon name="reload" size={12} />
           </button>
-          <button type="button" className="msg-action" title="复制消息" onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
+          <button type="button" className="msg-action" title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
             <Icon name="file" size={12} />
           </button>
         </div>
@@ -104,7 +106,7 @@ export default function ChatMessageView({
     <div
       className="msg-row msg-row-assistant"
       style={styles.msgRowAssistant}
-      data-rail-label={`Loopsoar：${(displayText || "回复").slice(0, 26)}`}
+      data-rail-label={tr("chat.railAssistant", { text: (displayText || tr("chat.replyFallback")).slice(0, 26) })}
       data-rail-role="assistant"
     >
       <span style={styles.avatar}>L</span>
@@ -124,7 +126,7 @@ export default function ChatMessageView({
           <button
             type="button"
             className="msg-action"
-            title="复制回复"
+            title={tr("chat.copyReplyTitle")}
             onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
           >
             <Icon name="file" size={12} />
@@ -133,9 +135,9 @@ export default function ChatMessageView({
           {m.model ? <span title={m.provider ? `${m.provider} · ${m.model}` : m.model}>· {m.model}</span> : null}
           {m.timing ? (
             <span style={styles.msgTiming}>
-              · 回复耗时 {fmtMs(m.timing.totalMs)}
+              {tr("chat.replyTime", { time: fmtMs(m.timing.totalMs) })}
               {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
-              {m.timing.toolCalls ? ` · ${m.timing.toolCalls} 次工具` : ""}
+              {m.timing.toolCalls ? tr("chat.toolCalls", { count: m.timing.toolCalls }) : ""}
             </span>
           ) : (
             <span>· {timeText}</span>
@@ -144,15 +146,15 @@ export default function ChatMessageView({
             <button
               type="button"
               className={`msg-think-toggle${thinkingOpen ? " is-open" : ""}`}
-              title={thinkingOpen ? "收起思考过程" : "展开思考过程"}
+              title={thinkingOpen ? tr("chat.thinkingCollapse") : tr("chat.thinkingExpand")}
               onClick={onToggleThinking}
             >
               <Icon name="notes" size={11} />
-              <span>思考</span>
+              <span>{tr("chat.thinkingLabel")}</span>
             </button>
           ) : null}
           {!streaming && m.text ? (
-            <button type="button" className="msg-action" title="重新生成（回滚到上一条提问并重发）" onClick={() => onRegenerate(m.id)}>
+            <button type="button" className="msg-action" title={tr("chat.regenerateTitle")} onClick={() => onRegenerate(m.id)}>
               <Icon name="reload" size={12} />
             </button>
           ) : null}
@@ -175,13 +177,18 @@ export default function ChatMessageView({
             <span className="compress-note-mark" aria-hidden>⤵</span>
             <span style={styles.compressText}>
               {m.compressStats
-                ? `上下文自动压缩 ${m.compressStats.dropped} 条早期消息 · ${m.compressStats.beforeChars} → ${m.compressStats.afterChars} 字符（节省 ${Math.max(
-                    0,
-                    Math.round((1 - m.compressStats.afterChars / Math.max(1, m.compressStats.beforeChars)) * 100),
-                  )}%）`
+                ? tr("chat.compressSummary", {
+                    dropped: m.compressStats.dropped,
+                    before: m.compressStats.beforeChars,
+                    after: m.compressStats.afterChars,
+                    pct: Math.max(
+                      0,
+                      Math.round((1 - m.compressStats.afterChars / Math.max(1, m.compressStats.beforeChars)) * 100),
+                    ),
+                  })
                 : m.compressNote}
             </span>
-            {m.compressStats ? <span style={styles.compressHint}>已保留最近原文，早期内容为确定性摘要</span> : null}
+            {m.compressStats ? <span style={styles.compressHint}>{tr("chat.compressHint")}</span> : null}
           </div>
         ) : null}
 
@@ -193,7 +200,7 @@ export default function ChatMessageView({
             /* 正文后置闸门：本轮结束前正文不开闸，只显示阶段占位；
                期间穿插正文由时间线的 body 节点（13.5px）承载，避免"正文抢跑" */
             <span className="stream-gate">
-              <span className="text-scan-light">{runningTool ? "思考与工具调用进行中" : "正在思考"}</span>
+              <span className="text-scan-light">{runningTool ? tr("chat.runningTool") : tr("chat.thinkingActive")}</span>
               <span className="stream-dot-row">
                 <span className="stream-dot" />
                 <span className="stream-dot" style={{ animationDelay: "0.2s" }} />
@@ -211,7 +218,7 @@ export default function ChatMessageView({
         {m.interrupted ? (
           <div style={styles.interruptBox}>
             <span style={styles.interruptTag}>{m.interrupted.status}</span>
-            <span>本轮已中断：{m.interrupted.reason}</span>
+            <span>{tr("chat.interrupted", { reason: m.interrupted.reason })}</span>
           </div>
         ) : null}
         {streaming ? <LiveStatus startedAt={m.createdAt ?? Date.now()} contextPct={contextPct} runningTool={runningTool} hasText={m.text.length > 0} /> : null}
@@ -224,6 +231,7 @@ const thumbCache = new Map<string, string>();
 
 /** 图片附件缩略图：通过 fs:readImage 读 data URL（6MB/扩展名白名单在壳层兜底）。 */
 function AttachmentThumb({ path }: { path: string }): React.ReactElement {
+  const tr = useT();
   const [src, setSrc] = React.useState<string | null>(thumbCache.get(path) ?? null);
   const [failed, setFailed] = React.useState(false);
   React.useEffect(() => {
@@ -258,7 +266,7 @@ function AttachmentThumb({ path }: { path: string }): React.ReactElement {
     );
   }
   return (
-    <span style={styles.attachChip} title={failed ? `${path}（无法预览）` : path}>
+    <span style={styles.attachChip} title={failed ? tr("chat.attachPreviewFailed", { path }) : path}>
       <Icon name="file" size={11} style={{ marginRight: 4 }} />
       {baseName(path)}
     </span>
@@ -268,6 +276,17 @@ function AttachmentThumb({ path }: { path: string }): React.ReactElement {
 const styles: Record<string, React.CSSProperties> = {
   msgRowUser: { display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 14 },
   msgRowAssistant: { display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 18 },
+  /** 助手流式输出中的小圆点（头部状态指示，避免 0/0 上下文环之外的空白）。 */
+  streamDot: {
+    display: "inline-block",
+    width: 6,
+    height: 6,
+    marginLeft: 2,
+    borderRadius: "50%",
+    background: BRAND.ochre,
+    animation: "pulseDot 1.2s ease-in-out infinite",
+    flexShrink: 0,
+  },
   userBubble: {
     maxWidth: "82%",
     padding: "8px 12px",

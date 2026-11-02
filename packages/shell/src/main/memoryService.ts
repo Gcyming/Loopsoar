@@ -4,17 +4,18 @@
  *
  * 向量能力（ADR-0007 裁决后的默认方案）：
  *   · 默认 = 纯 TS：FlatVectorIndex + 确定性 hash embedding（零原生依赖，离线可用）；
+ *   · 可选 = sqlite-vec（better-sqlite3+sqlite-vec 原生索引，vectorBackend: "sqlite-vec"）：
+ *     原生模块缺失 / Electron ABI 不匹配 / 加载失败 → 自动降级 flat，绝不抛；
  *   · 若注入了 embed（或平台 platform.embed = llama-server BGE-M3 127.0.0.1:8991 可用），
  *     load/写入后维护外部向量索引，searchAsync() 走真实语义检索；任何失败自动降级 hash，
  *     绝不让记忆检索因为本地模型没起来而不可用（fail-open 到可用的词法检索）。
- *   · 为什么不直接上 sqlite-vec：需要 better-sqlite3 原生模块（Electron ABI 重编译 + 联网安装），
- *     按 ADR-0007 留到打包阶段；当前接口（FlatVectorIndex）保持可替换。
+ *   · 默认 flat 的裁决依据：docs/research/memory-bench-ADR-0007.md §8（10 万条实测 sqlite-vec 无优势，
+ *     且原生依赖带来 Electron ABI 重建/打包复杂度；小容量（≤2000）flat 更快更稳）。
  */
 import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_EMBED_DIM,
-  FlatVectorIndex,
   MemoryStore,
   extractMemoryCandidates,
   hashEmbedding,
@@ -25,6 +26,7 @@ import {
   type VectorLookup,
 } from "loopsoar-core/memory";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
+import { resolveVectorBackend, type VectorBackend, type VectorBackendKind } from "./sqliteVectorBackend.js";
 
 /** 外部 embedding 注入签名（与 llama-server /v1/embeddings 同构；失败必须 throw，由服务降级）。 */
 export type MemoryEmbedder = (texts: string[]) => Promise<number[][]>;
@@ -51,11 +53,27 @@ export interface MemoryServiceOptions {
   embedTimeoutMs?: number;
   /** 默认 agent 归属（多 Agent 第 5 闸跨 agent 指针；默认 "loopsoar"）。 */
   agentId?: string;
+  /**
+   * 向量索引后端（ADR-0007 F8 收口）：
+   *   · "flat"（默认）= 纯 TS FlatVectorIndex，零原生依赖、启动零开销；
+   *   · "sqlite-vec" = better-sqlite3 + sqlite-vec 原生索引；模块缺失 / Electron ABI 不匹配 /
+   *     加载失败时自动降级 flat（绝不抛，vectorStats().backendNote 记录原因）。
+   * 默认 flat 的原因见 docs/research/memory-bench-ADR-0007.md §8（10 万条实测 sqlite-vec 无优势）。
+   */
+  vectorBackend?: VectorBackendKind;
+  /** 后端工厂覆盖（测试/高级用法）：返回 null 表示不可用 → 自动降级 flat。 */
+  vectorBackendFactory?: (dimension: number) => VectorBackend | null;
 }
 
 /** 向量诊断信息（设置·诊断/基准报告/测试用）。 */
 export interface MemoryVectorStats {
   mode: MemoryEmbeddingMode;
+  /** 配置请求的后端（flat / sqlite-vec）。 */
+  requestedBackend: VectorBackendKind;
+  /** 实际生效的后端（请求 sqlite-vec 但不可用时会降级为 flat）。 */
+  backend: VectorBackendKind;
+  /** 降级/初始化说明（正常为 undefined）。 */
+  backendNote?: string;
   hashDimension: number;
   hashIndexSize: number;
   hashIndexBytes: number;
@@ -114,7 +132,9 @@ export class MemoryService {
   private store: MemoryStore;
   private loaded = false;
   private readonly hashDim: number;
-  private hashIndex: FlatVectorIndex;
+  private hashIndex: VectorBackend;
+  private readonly backendRequested: VectorBackendKind;
+  private readonly backendNote?: string;
   private externalVectors: Map<string, Float32Array> | null = null;
   private externalDim = 0;
   /** 外部 embedding 已确认不可用（连接失败/维度非法）→ 本进程内不再重试，避免每次写入都付探测成本。 */
@@ -125,7 +145,15 @@ export class MemoryService {
   constructor(private opts: MemoryServiceOptions) {
     this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
     this.hashDim = Number.isInteger(opts.vectorDim) && (opts.vectorDim as number) > 0 ? (opts.vectorDim as number) : DEFAULT_EMBED_DIM;
-    this.hashIndex = new FlatVectorIndex(this.hashDim, 64);
+    const resolved = resolveVectorBackend({
+      requested: opts.vectorBackend,
+      dimension: this.hashDim,
+      capacity: 64,
+      factory: opts.vectorBackendFactory,
+    });
+    this.hashIndex = resolved.backend;
+    this.backendRequested = resolved.requested;
+    this.backendNote = resolved.note;
     this.embedFn = opts.embed ?? resolvePlatformEmbedder(opts.platform);
     this.embedTimeoutMs = opts.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
   }
@@ -222,6 +250,11 @@ export class MemoryService {
     await this.save();
   }
 
+  /** 释放向量后端资源（sqlite-vec 的连接；flat 无操作）。应用退出/测试清理时调用。 */
+  dispose(): void {
+    this.hashIndex.close();
+  }
+
   /**
    * 召回提示词片段（供 ChatService 注入 volatile 段）。
    * 门控开启时（默认）：core recallGate 无信号命中 → 返回 ""，即不检索、不注入。
@@ -296,11 +329,14 @@ export class MemoryService {
     return this.externalVectors ? "external" : "hash";
   }
 
-  /** 向量索引诊断（内存/条数/维度）。 */
+  /** 向量索引诊断（内存/条数/维度/后端）。 */
   vectorStats(): MemoryVectorStats {
     const stats = this.hashIndex.stats();
     return {
       mode: this.embeddingMode(),
+      requestedBackend: this.backendRequested,
+      backend: this.hashIndex.kind,
+      backendNote: this.backendNote,
       hashDimension: this.hashDim,
       hashIndexSize: stats.size,
       hashIndexBytes: stats.memoryBytes,
@@ -338,9 +374,9 @@ export class MemoryService {
   /** 重建 hash 索引（同步、毫秒级）+ 尝试重建外部向量索引（超时/失败降级）。 */
   private async rebuildVectorIndex(): Promise<void> {
     const facts = this.store.list();
-    const index = new FlatVectorIndex(this.hashDim, Math.max(64, facts.length));
-    for (const fact of facts) index.upsert(fact.id, hashEmbedding(fact.content, this.hashDim));
-    this.hashIndex = index;
+    // 复用同一后端实例（sqlite 后端复用连接）；先清空，避免 relocate 换库后残留旧条目
+    this.hashIndex.clear();
+    for (const fact of facts) this.hashIndex.upsert(fact.id, hashEmbedding(fact.content, this.hashDim));
     this.externalVectors = await this.buildExternalIndex(facts);
     this.externalDim = this.externalVectors ? this.externalDim : 0;
   }

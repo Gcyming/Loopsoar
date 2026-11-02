@@ -6,9 +6,11 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import { useT } from "./i18n.js";
 
 /** 代码块：带语言标签与「复制」按钮。 */
 function CodeBlock({ code, lang, compact = false }: { code: string; lang: string; compact?: boolean }): React.ReactElement {
+  const tr = useT();
   const [copied, setCopied] = React.useState(false);
   const copy = (): void => {
     void navigator.clipboard
@@ -23,8 +25,8 @@ function CodeBlock({ code, lang, compact = false }: { code: string; lang: string
     <div style={styles.codeWrap}>
       <div style={styles.codeHead}>
         <span style={styles.codeLang}>{lang || "code"}</span>
-        <button type="button" className="msg-action" title="复制代码" onClick={copy} style={styles.codeCopy}>
-          {copied ? "已复制" : "复制"}
+        <button type="button" className="msg-action" title={tr("chat.markdownCopyCode")} onClick={copy} style={styles.codeCopy}>
+          {copied ? tr("chat.markdownCopied") : tr("chat.markdownCopy")}
         </button>
       </div>
       <pre style={{ ...styles.codeBlock, ...(compact ? styles.codeBlockCompact : null) }}>

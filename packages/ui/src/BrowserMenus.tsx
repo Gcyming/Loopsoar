@@ -9,6 +9,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 import type { DownloadItem, HistoryEntry, LoopsoarAPI } from "./types.js";
 
 /** 下拉菜单的公共视觉（历史/下载/会话列表共用）。 */
@@ -40,11 +41,12 @@ export interface HistoryPanelProps {
 
 /** 历史记录（本标签）：点击条目由 App 负责导航并收起浮层。 */
 export function HistoryPanel({ entries, onSelect }: HistoryPanelProps): React.JSX.Element {
+  const tr = useT();
   return (
     <div>
-      <div style={menuStyles.dropTitle}>历史记录（本标签）</div>
+      <div style={menuStyles.dropTitle}>{tr("browser.historyTitle")}</div>
       {entries.length === 0 ? (
-        <div style={menuStyles.dropEmpty}>暂无历史</div>
+        <div style={menuStyles.dropEmpty}>{tr("browser.historyEmpty")}</div>
       ) : (
         entries.map((h) => (
           <button
@@ -72,11 +74,12 @@ export interface DownloadsPanelProps {
 
 /** 下载列表：进行中可取消，完成后可打开/定位，记录可移除。 */
 export function DownloadsPanel({ downloads, api, onRefresh }: DownloadsPanelProps): React.JSX.Element {
+  const tr = useT();
   return (
     <div>
-      <div style={menuStyles.dropTitle}>下载</div>
+      <div style={menuStyles.dropTitle}>{tr("browser.downloads")}</div>
       {downloads.length === 0 ? (
-        <div style={menuStyles.dropEmpty}>暂无下载</div>
+        <div style={menuStyles.dropEmpty}>{tr("browser.downloadEmpty")}</div>
       ) : (
         downloads.map((d) => (
           <div key={d.id} style={styles.dlRow}>
@@ -84,32 +87,32 @@ export function DownloadsPanel({ downloads, api, onRefresh }: DownloadsPanelProp
               <span style={styles.dlName} title={d.savePath}>{d.filename}</span>
               <span style={styles.dlState}>
                 {d.state === "completed"
-                  ? "已完成"
+                  ? tr("browser.downloadCompleted")
                   : d.state === "progressing"
                     ? `${Math.round((d.received / Math.max(1, d.total)) * 100)}%`
                     : d.state === "cancelled"
-                      ? "已取消"
-                      : "失败"}
+                      ? tr("browser.downloadCancelled")
+                      : tr("browser.downloadFailed")}
               </span>
             </div>
             <div style={styles.dlActions}>
               {d.state === "progressing" ? (
-                <button type="button" className="icon-btn" title="取消" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "cancel" })}>
+                <button type="button" className="icon-btn" title={tr("browser.downloadCancel")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "cancel" })}>
                   <Icon name="close" size={12} />
                 </button>
               ) : null}
               {d.state === "completed" ? (
-                <button type="button" className="icon-btn" title="打开" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" })}>
+                <button type="button" className="icon-btn" title={tr("browser.downloadOpen")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" })}>
                   <Icon name="arrow-go" size={12} />
                 </button>
               ) : null}
-              <button type="button" className="icon-btn" title="打开所在文件夹" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
+              <button type="button" className="icon-btn" title={tr("browser.downloadShowInFolder")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
                 <Icon name="folder" size={12} />
               </button>
               <button
                 type="button"
                 className="icon-btn"
-                title="移除记录"
+                title={tr("browser.downloadRemove")}
                 onClick={() => void api?.browser.downloadAction({ id: d.id, action: "remove" }).then(() => onRefresh())}
               >
                 <Icon name="close" size={12} />

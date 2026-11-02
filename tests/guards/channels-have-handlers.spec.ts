@@ -26,6 +26,11 @@ import type { LoopRuntime } from "../../packages/shell/src/main/loopRuntime.ts";
 import { registerBookmarksDomain } from "../../packages/shell/src/main/domains/bookmarks.ts";
 import { BookmarksStore } from "../../packages/shell/src/main/bookmarksStore.ts";
 import { registerPageSaveDomain } from "../../packages/shell/src/main/domains/pageSave.ts";
+import { registerPluginDomain } from "../../packages/shell/src/main/domains/plugin.ts";
+import { registerGatewayDomain } from "../../packages/shell/src/main/domains/gateway.ts";
+import { registerCompactDomain } from "../../packages/shell/src/main/domains/compact.ts";
+import { PluginStore } from "../../packages/shell/src/main/pluginStore.ts";
+import { SessionStore } from "../../packages/shell/src/main/sessionStore.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
@@ -95,6 +100,17 @@ function assemble(): void {
   registerLoopDomain(deps, fakeLoopRuntime());
   registerBookmarksDomain(deps, new BookmarksStore("C:/tmp/loopsoar-data-test/bookmarks"));
   registerPageSaveDomain({ ...deps, dataDir: "C:/tmp/loopsoar-data-test" });
+  registerPluginDomain({
+    ...deps,
+    plugins: new PluginStore("C:/tmp/loopsoar-data-test/plugins-data"),
+    push: () => {},
+  });
+  registerGatewayDomain({ ...deps, push: () => {} }, async () => ({}) as never);
+  registerCompactDomain({
+    ...deps,
+    sessions: new SessionStore("C:/tmp/loopsoar-data-test/sessions"),
+    push: () => {},
+  });
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,

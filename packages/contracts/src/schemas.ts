@@ -191,6 +191,21 @@ export const AskRespondSchema = z.object({
 
 export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 
+/* ───────────────────────── 插件（ADR-0011 产品化） ───────────────────────── */
+
+export const PluginSetEnabledSchema = z.object({
+  id: z.string().min(1).max(64).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "插件 id 不合法"),
+  enabled: z.boolean(),
+});
+
+/* ───────────────────────── 会话压缩（/compact） ───────────────────────── */
+
+export const ChatCompactSchema = z.object({
+  sessionId: SessionIdSchema.optional(),
+  /** false=只预览（默认）；true=真的把压缩结果写回会话持久化。 */
+  apply: z.boolean().optional(),
+});
+
 /* ───────────────────────── 书签（浏览器功能面 MVP） ───────────────────────── */
 
 export const BookmarkAddSchema = z.object({
@@ -269,6 +284,8 @@ export const PreferencesSchema = z.object({
   reasoningEffort: z.string().max(64).optional(),
   /** 当前 Agent-Loop id（缺省 = 内置 loop）；自定义 loop 接线后持久化选择。 */
   loopId: z.string().max(64).optional(),
+  /** 敏感步骤（登录/支付/不可撤销操作）是否始终强制人工确认（默认 true，写死规则兜底）。 */
+  sensitiveAlwaysConfirm: z.boolean().optional(),
 });
 
 /** 权限策略（设置 · 权限）：工具类别的默认决策。 */
@@ -917,6 +934,54 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     sensitive: true,
   },
 
+  /* ── 插件（ADR-0011 产品化） ── */
+  "plugin:list": {
+    domain: "plugin",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "plugin:setEnabled": {
+    domain: "plugin",
+    method: "setEnabled",
+    request: PluginSetEnabledSchema,
+    sensitive: true,
+  },
+  "plugin:reload": {
+    domain: "plugin",
+    method: "reload",
+    request: null,
+    sensitive: true,
+  },
+
+  /* ── OpenAI 兼容 gateway（嵌入式启停） ── */
+  "gateway:status": {
+    domain: "gateway",
+    method: "status",
+    request: null,
+    sensitive: true,
+  },
+  "gateway:start": {
+    domain: "gateway",
+    method: "start",
+    request: null,
+    sensitive: true,
+  },
+  "gateway:stop": {
+    domain: "gateway",
+    method: "stop",
+    request: null,
+    sensitive: true,
+  },
+
+  /* ── 会话压缩（/compact，真实压缩持久化） ── */
+  "chat:compact": {
+    domain: "chat",
+    method: "compact",
+    request: ChatCompactSchema,
+    sensitive: true,
+  },
+
   /* ── Agent-Loop（ADR-0010：内置 loop + 安全回退 + 选择） ── */
   "loop:list": {
     domain: "loop",
@@ -928,6 +993,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "loop",
     method: "setActive",
     request: LoopSetActiveSchema,
+    sensitive: true,
+  },
+  "loop:reload": {
+    domain: "loop",
+    method: "reload",
+    request: null,
     sensitive: true,
   },
 
@@ -993,6 +1064,9 @@ export const EVENTS = [
   "ask:user",
   "loop:fallback",
   "loop:changed",
+  "plugins:updated",
+  "gateway:changed",
+  "chat:compacted",
 ] as const;
 
 /**

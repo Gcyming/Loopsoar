@@ -64,6 +64,8 @@ export interface Preferences {
   reasoningEffort?: string;
   /** 当前 Agent-Loop id（缺省 = 内置 loop；主进程按需持久化）。 */
   loopId?: string;
+  /** 敏感步骤（登录/支付/不可撤销操作）始终强制人工确认（默认 true）。 */
+  sensitiveAlwaysConfirm?: boolean;
 }
 
 export interface PermissionCategory {
@@ -464,6 +466,12 @@ export interface LoopInfo {
   builtin: boolean;
   /** 是否为当前活动 loop。 */
   active: boolean;
+  /** 三档 loop 类型（builtin / 声明式 / 脚本）；旧后端可缺省。 */
+  kind?: "builtin" | "declarative" | "script" | "custom";
+  /** 定义是否可用（坏 JSON / 脚本缺失时 false，UI 应灰显）。 */
+  valid?: boolean;
+  error?: string;
+  description?: string;
 }
 
 /** 安全回退记录（自定义 loop 失败 → 用同一 ctx 回退 builtin）。 */
@@ -473,6 +481,48 @@ export interface LoopFallbackRecord {
 }
 
 /** loop:list 返回：可选 loop 列表 + 当前选择 + 回退历史。 */
+/** 插件条目（用户插件 + 内置系统条目）。 */
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  origin: "builtin" | "local" | "market" | string;
+  builtin: boolean;
+  enabled: boolean;
+  state: "loaded" | "disabled" | "error" | "idle";
+  description?: string;
+  tools: Array<{ name: string; description?: string }>;
+  error?: string;
+}
+
+/** OpenAI 兼容 gateway 状态。 */
+export interface GatewayStatus {
+  running: boolean;
+  url: string;
+  port: number;
+  tokenRequired: boolean;
+  sessions: number;
+  error?: string;
+}
+
+/** /compact 结果。 */
+export interface CompactResult {
+  ok: boolean;
+  before: { messages: number; chars: number };
+  after: { messages: number; chars: number };
+  dropped: number;
+  savedRatio: number;
+  applied: boolean;
+  /** 是否真的超出预算（false 时 apply 也幂等无副作用）。 */
+  compressed?: boolean;
+  sessionId?: string;
+  /** 压缩摘要正文（apply 时写入会话）。 */
+  summary?: string;
+  /** 预览条目（apply=false 时最多 24 条）。 */
+  preview?: Array<{ role?: string; text: string }>;
+  error?: string;
+}
+
 export interface LoopListResult {
   loops: LoopInfo[];
   activeId: string | null;
@@ -577,7 +627,10 @@ export type LoopsoarEvent =
   | "terminal:state"
   | "ask:user"
   | "loop:changed"
-  | "loop:fallback";
+  | "loop:fallback"
+  | "plugins:updated"
+  | "gateway:changed"
+  | "chat:compacted";
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
@@ -596,6 +649,8 @@ export interface LoopsoarAPI {
     newSession(): Promise<{ session: { sessionId: string } | null; sessions: SessionMeta[]; currentId: string | null }>;
     switchSession(payload: { sessionId: string }): Promise<{ ok: boolean; session: { sessionId: string; messages: ChatHistoryMessage[] } | null }>;
     deleteSession(payload: { sessionId: string }): Promise<{ removed: boolean; sessions: SessionMeta[]; currentId: string | null }>;
+    /** /compact：压缩会话历史（apply=false 只预览统计；apply=true 写回持久化）。 */
+    compact(payload?: { sessionId?: string; apply?: boolean }): Promise<CompactResult>;
   };
   perm: LoopsoarDomain;
   ask: LoopsoarDomain & {
@@ -607,6 +662,18 @@ export interface LoopsoarAPI {
     list(): Promise<LoopListResult>;
     /** 切换活动 loop（builtin 与自定义都允许；不存在或校验失败返回 ok:false+error）。 */
     setActive(payload: { id: string }): Promise<LoopSetActiveResult>;
+    /** 重新扫描 loops/ 目录（L2 声明式 / L3 脚本）。 */
+    reload(): Promise<LoopListResult>;
+  };
+  plugin: LoopsoarDomain & {
+    list(): Promise<{ plugins: PluginInfo[] }>;
+    setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; plugins?: PluginInfo[]; error?: string }>;
+    reload(): Promise<{ plugins: PluginInfo[] }>;
+  };
+  gateway: LoopsoarDomain & {
+    status(): Promise<GatewayStatus>;
+    start(): Promise<GatewayStatus & { ok: boolean; error?: string }>;
+    stop(): Promise<GatewayStatus & { ok: boolean; error?: string }>;
   };
   file: LoopsoarDomain;
   workspace: LoopsoarDomain & {

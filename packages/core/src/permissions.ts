@@ -63,3 +63,116 @@ export function categoryForToolPermissions(permissions?: Record<string, unknown>
 export function decisionFor(permissions: Permissions, category: "read" | "write" | "terminal" | "network"): PermissionDecision {
   return permissions[category];
 }
+
+/* ───────────────────── 权限等级 L0–L5（形式化分级） ───────────────────── */
+
+/**
+ * 沙箱等级与 core/sandbox.ts 的 `SandboxLevel` 是**同一刻度**（0–5），这里补的是「命名 + 元信息」。
+ * 为什么不直接 import sandbox 的 SandboxLevel：permissions 是纯策略层，sandbox 是执行层，
+ * 策略反向依赖执行器会让「策略可单测」变成「策略依赖实现」；两处一致性由
+ * tests/core/permissionLevels.spec.ts 断言（levelForPermissionKind 必须与 kindToLevel 逐项相等）。
+ */
+export const SANDBOX_LEVELS = {
+  0: "L0_READ",
+  1: "L1_INSPECT",
+  2: "L2_WRITE",
+  3: "L3_EXEC",
+  4: "L4_NETWORK",
+  5: "L5_SYSTEM",
+} as const;
+
+/** 0=L0_READ … 5=L5_SYSTEM（数字即优先级刻度，可直接比较大小）。 */
+export type PermissionLevel = 0 | 1 | 2 | 3 | 4 | 5;
+
+export interface PermissionLevelMeta {
+  level: PermissionLevel;
+  name: string;
+  zh: string;
+  en: string;
+  description: string;
+}
+
+/** 供 UI / 诊断 / 报告直接展示的分级元信息（顺序即 0→5）。 */
+export const PERMISSION_LEVELS: readonly PermissionLevelMeta[] = [
+  {
+    level: 0,
+    name: SANDBOX_LEVELS[0],
+    zh: "读取",
+    en: "read",
+    description: "读取工作目录内文件内容（无副作用）",
+  },
+  {
+    level: 1,
+    name: SANDBOX_LEVELS[1],
+    zh: "查看/探测",
+    en: "inspect",
+    description: "页面快照、列表、状态、历史等只读探测（仍无副作用）",
+  },
+  {
+    level: 2,
+    name: SANDBOX_LEVELS[2],
+    zh: "写入",
+    en: "write",
+    description: "新建、修改、删除工作区内文件",
+  },
+  {
+    level: 3,
+    name: SANDBOX_LEVELS[3],
+    zh: "执行命令",
+    en: "exec",
+    description: "在本机运行命令行程序（副作用取决于命令）",
+  },
+  {
+    level: 4,
+    name: SANDBOX_LEVELS[4],
+    zh: "网络访问",
+    en: "network",
+    description: "抓取网页、调用外部服务、浏览器导航与点击",
+  },
+  {
+    level: 5,
+    name: SANDBOX_LEVELS[5],
+    zh: "系统级",
+    en: "system",
+    description: "系统/不可归类操作：默认强制拒绝（fail-closed）",
+  },
+] as const;
+
+/** 只读但「查看/探测」语义的工具名特征（read 类内部分 L0 与 L1）。 */
+const INSPECT_TOOL_NAME_RE = /(snapshot|inspect|scroll|list|stat|exists|search|grep|glob|history|tabs|status|diagnostic|describe)/i;
+
+/** 工具权限声明的最小形状（与 core/tools/registry.ts 的 ToolPermissions 结构兼容）。 */
+export interface PermissionFlags {
+  read?: boolean;
+  write?: boolean;
+  terminal?: boolean;
+  network?: boolean;
+}
+
+/** 权限类别 → 等级（与 sandbox.kindToLevel 严格一致：read=0 / write=2 / terminal=3 / network=4）。 */
+export function levelForPermissionKind(kind: "read" | "write" | "terminal" | "network"): PermissionLevel {
+  switch (kind) {
+    case "read":
+      return 0;
+    case "write":
+      return 2;
+    case "terminal":
+      return 3;
+    case "network":
+      return 4;
+  }
+}
+
+/**
+ * 工具声明 → 权限等级（与 categoryForToolPermissions 同优先级：terminal > network > write > read）。
+ * read 类再细分：纯读取 = L0；快照/列表/历史等「查看」类 = L1（两者在 DEFAULT_LEVEL_POLICY 都是 auto，
+ * 分级只用于展示与审计，不改变放行行为）。没有任何已知标志位 = 无法归类 → L5（fail-closed）。
+ */
+export function levelForTool(toolName: string, permissions?: PermissionFlags | null): PermissionLevel {
+  if (!permissions) return 5;
+  if (permissions.terminal) return 3;
+  if (permissions.network) return 4;
+  if (permissions.write) return 2;
+  if (permissions.read) return INSPECT_TOOL_NAME_RE.test(toolName) ? 1 : 0;
+  return 5;
+}

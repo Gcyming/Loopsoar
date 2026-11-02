@@ -7,6 +7,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 
 export interface StartPageProps {
   /** 当前活动标签的 URL；空串 = 新建标签页。 */
@@ -14,31 +15,34 @@ export interface StartPageProps {
 }
 
 export default function StartPage({ currentUrl }: StartPageProps): React.JSX.Element {
+  const tr = useT();
   return (
     <section style={styles.browserPane}>
       <div style={styles.startPage}>
         <div style={styles.startMark}>
           <img src="./logo.png" alt="Loopsoar" width={64} height={64} />
         </div>
-        <div style={styles.startTitle}>{currentUrl ? "Loopsoar" : "新建标签页"}</div>
+        <div style={styles.startTitle}>{currentUrl ? "Loopsoar" : tr("browser.startNewTabTitle")}</div>
         <div style={styles.startSubtitle}>
-          {currentUrl ? "浏览器优先的本地 AI Agent" : "在顶部输入网址或搜索内容，回车开始"}
+          {currentUrl ? tr("browser.tagline") : tr("browser.startSubtitle")}
         </div>
         <div style={styles.startHints}>
           <div style={styles.hintRow}>
             <Icon name="arrow-go" size={14} style={styles.hintIcon} />
-            <span>在顶部输入网址或搜索内容，回车打开页面</span>
+            <span>{tr("browser.startHintNavigate")}</span>
           </div>
           <div style={styles.hintRow}>
             <Icon name="agent" size={14} style={styles.hintIcon} />
-            <span>右侧与 Agent 对话：授权范围内读写文件、执行命令、操控网页</span>
+            <span>{tr("browser.startHintAgent")}</span>
           </div>
           <div style={styles.hintRow}>
             <Icon name="capture" size={14} style={styles.hintIcon} />
-            <span>原生浏览器视图会覆盖此区域（WebContentsView · D0 已验证）</span>
+            <span>{tr("browser.startHintNative")}</span>
           </div>
         </div>
-        <div style={styles.startUrl}>{currentUrl ? `当前页面：${currentUrl}` : "尚未打开网页"}</div>
+        <div style={styles.startUrl}>
+          {currentUrl ? tr("browser.currentPage", { url: currentUrl }) : tr("browser.noPageOpen")}
+        </div>
       </div>
     </section>
   );

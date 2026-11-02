@@ -4,6 +4,7 @@ packages:
 allowBuilds:
   esbuild: true
   electron: true
+  better-sqlite3: true
 
 catalog:
   typescript: ^5.6

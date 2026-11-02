@@ -70,7 +70,7 @@ const ALLOWED_RUNTIME_DEPS: Record<string, readonly string[]> = {
   contracts: [],
   core: ["loopsoar-contracts"],
   services: ["loopsoar-contracts", "loopsoar-core"],
-  shell: ["loopsoar-contracts", "loopsoar-core", "loopsoar-services"],
+  shell: ["loopsoar-contracts", "loopsoar-core", "loopsoar-services", "loopsoar-gateway"],
   // UI 只允许契约层（布局/协议常量）与自身相对模块；禁止直接依赖 core/services/shell。
   ui: ["loopsoar-contracts"],
 };

@@ -12,6 +12,8 @@
  * 约定：词典 key 用点分命名空间；`{name}` 占位符由 t() 的 params 替换。
  */
 import * as React from "react";
+import { SETTINGS_I18N } from "./i18nSettings.js";
+import { BROWSER_I18N } from "./i18nBrowser.js";
 
 export type Lang = "zh-CN" | "en-US";
 
@@ -381,6 +383,15 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.about.onboardingHint": "Revisit the product intro and initial setup steps",
   },
 };
+
+/**
+ * 合并按归属拆分的词典（Settings 与浏览器/通用组件各自维护自己的文件，
+ * 避免多人同时改本文件冲突）。key 同名时后者覆盖前者（以拆分文件为准）。
+ */
+for (const [key, entry] of Object.entries({ ...SETTINGS_I18N, ...BROWSER_I18N })) {
+  DICT["zh-CN"][key] = entry.zh;
+  DICT["en-US"][key] = entry.en;
+}
 
 /** 读取上次缓存的界面语言（App 会用 preferences.language 覆盖；这里只做启动兜底）。 */
 export function getInitialLang(): Lang {

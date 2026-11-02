@@ -106,8 +106,16 @@ export const IPC_CHANNELS = {
   "terminal:interrupt": { domain: "terminal", method: "interrupt", sensitive: true, hasRequest: true },
   "terminal:close": { domain: "terminal", method: "close", sensitive: true, hasRequest: true },
   "ask:respond": { domain: "ask", method: "respond", sensitive: true, hasRequest: true },
+  "plugin:list": { domain: "plugin", method: "list", sensitive: true, hasRequest: false },
+  "plugin:setEnabled": { domain: "plugin", method: "setEnabled", sensitive: true, hasRequest: true },
+  "plugin:reload": { domain: "plugin", method: "reload", sensitive: true, hasRequest: false },
+  "gateway:status": { domain: "gateway", method: "status", sensitive: true, hasRequest: false },
+  "gateway:start": { domain: "gateway", method: "start", sensitive: true, hasRequest: false },
+  "gateway:stop": { domain: "gateway", method: "stop", sensitive: true, hasRequest: false },
+  "chat:compact": { domain: "chat", method: "compact", sensitive: true, hasRequest: true },
   "loop:list": { domain: "loop", method: "list", sensitive: true, hasRequest: false },
   "loop:setActive": { domain: "loop", method: "setActive", sensitive: true, hasRequest: true },
+  "loop:reload": { domain: "loop", method: "reload", sensitive: true, hasRequest: false },
   "bookmarks:list": { domain: "bookmarks", method: "list", sensitive: true, hasRequest: false },
   "bookmarks:add": { domain: "bookmarks", method: "add", sensitive: true, hasRequest: true },
   "bookmarks:remove": { domain: "bookmarks", method: "remove", sensitive: true, hasRequest: true },
@@ -139,7 +147,7 @@ export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEn
 export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
-    "chat": ["stream", "steer", "rollback", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession"],
+    "chat": ["stream", "steer", "rollback", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession", "compact"],
     "fs": ["readImage", "saveImage"],
     "perm": ["respond"],
     "workspace": ["read", "write", "list", "create", "select", "remove", "status"],
@@ -156,7 +164,9 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "mcp": ["list", "add", "remove", "connect", "disconnect"],
     "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"],
     "ask": ["respond"],
-    "loop": ["list", "setActive"],
+    "plugin": ["list", "setEnabled", "reload"],
+    "gateway": ["status", "start", "stop"],
+    "loop": ["list", "setActive", "reload"],
     "bookmarks": ["list", "add", "remove"]
     },
   };
@@ -188,4 +198,7 @@ export const EVENT_NAMES = [
   "ask:user",
   "loop:fallback",
   "loop:changed",
+  "plugins:updated",
+  "gateway:changed",
+  "chat:compacted",
 ] as const;
