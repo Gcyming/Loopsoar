@@ -2749,16 +2749,36 @@
         border-radius: 0;
         box-shadow: none;
       }
+      /* 小窗化：真正的「浮动小窗」（fixed 浮在应用右下角，不占满整列高度）。
+         为什么 fixed：docked 时只是同一条侧栏换皮，用户实机反馈「小窗化后啥效果都没有」；
+         现在它缩成 340×min(68vh,620px) 的浮动卡片，四周留白可见应用底，和常驻态一眼可区分。
+         ⚠️ 原生网页视图只覆盖左侧浏览器区，右侧预留列是 DOM 区域，所以浮窗不会被网页盖住。 */
+      .agent-sidebar[data-mode="float"],
+      .agent-sidebar.is-float {
+        position: fixed !important;
+        right: 10px;
+        bottom: 44px;
+        top: auto;
+        left: auto;
+        width: 340px !important;
+        max-width: calc(100vw - 20px);
+        height: min(68vh, 620px);
+        margin: 0 !important;
+        z-index: 40;
+        border-radius: var(--ls-radius-lg, 16px);
+        overflow: hidden;
+        box-shadow: var(--ls-shadow-float, 0 24px 64px rgba(0, 0, 0, 0.55));
+        transition: right 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1)),
+          bottom 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1)),
+          height 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1)),
+          border-radius 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1));
+      }
       html:not([data-theme="classic"]) .agent-sidebar[data-mode="float"],
       html:not([data-theme="classic"]) .agent-sidebar.is-float {
-        margin: 8px;
-        width: 340px !important;
-        max-width: calc(100vw - 16px);
-        border: 1px solid var(--ls-border);
-        border-radius: var(--ls-radius-lg);
-        background: var(--ls-surface-raised);
-        box-shadow: var(--ls-shadow-float);
-        overflow: hidden;
+        border: none;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 28%),
+          var(--ls-surface-raised);
       }
 
       /* 6) 终端面板：顶部圆角 + 240ms 高度过渡；全宽 hook */

@@ -18,6 +18,10 @@ export interface WebContentsLike {
   setZoomFactor?(factor: number): void;
   /** 页面事件（真实 Electron WebContents 兼容；测试可只实现用到的部分）。 */
   on(event: string, cb: (...args: unknown[]) => void): void;
+  /** 静音（关闭标签时先静音，保证被移除的页面立即停止出声；旧 Electron/测试可不实现）。 */
+  setAudioMuted?(muted: boolean): void;
+  /** 关闭并销毁 WebContents（Electron 30+ 支持；不实现时退回仅 detach）。 */
+  close?(): void;
 }
 
 export interface WebContentsViewLike {
@@ -209,6 +213,18 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
     },
 
     async close() {
+      // 关闭标签必须真正销毁页面：只 detach 视图时 WebContents 仍活着，
+      // 正在播放的音视频会继续出声（用户实机反馈）。先静音兜底，再销毁。
+      try {
+        wc.setAudioMuted?.(true);
+      } catch {
+        // 忽略：页面已崩溃/已销毁
+      }
+      try {
+        wc.close?.();
+      } catch {
+        // 忽略：部分平台/版本关闭失败时仍由外壳 detach
+      }
       opts.onClose?.();
     },
   };

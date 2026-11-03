@@ -244,7 +244,8 @@ export const BrowserBottomInsetSchema = z.object({
   bottom: z.number().int().min(0).max(2000),
 });
 
-export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(240).max(720) });
+// 收起态宽度可以是 48（图标条）：下限不能沿用拖拽宽度 240，否则收起后原生视图仍让出 240px
+export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(0).max(720) });
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),

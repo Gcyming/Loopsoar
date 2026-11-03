@@ -7,6 +7,7 @@ import { createWebContentsViewAdapter } from "../../packages/shell/src/browserAd
 function fakeView() {
   const handlers = new Map<string, (...args: unknown[]) => void>();
   let zoom = 1;
+  const wcExtra = { muted: false, closed: false };
   const view = {
     webContents: {
       async loadURL() {},
@@ -23,9 +24,15 @@ function fakeView() {
       on(event: string, cb: (...args: unknown[]) => void) {
         handlers.set(event, cb);
       },
+      setAudioMuted(muted: boolean) {
+        wcExtra.muted = muted;
+      },
+      close() {
+        wcExtra.closed = true;
+      },
     },
   };
-  return { view, handlers, zoom: () => zoom };
+  return { view, handlers, zoom: () => zoom, wcExtra };
 }
 
 describe("WebContentsView 适配器", () => {
@@ -39,6 +46,14 @@ describe("WebContentsView 适配器", () => {
     handlers.get("page-title-updated")?.(new Event("x"), "真实标题");
     expect(navigated).toEqual(["https://example.com/next"]);
     expect(titles).toEqual(["真实标题"]);
+  });
+
+  it("关闭标签：先静音再销毁页面（防止关标签后音视频继续出声）", async () => {
+    const ctx = fakeView();
+    const adapter = createWebContentsViewAdapter({ view: ctx.view });
+    await adapter.close();
+    expect(ctx.wcExtra.muted).toBe(true);
+    expect(ctx.wcExtra.closed).toBe(true);
   });
 
   it("Ctrl + = / - / 0 调整页面缩放并 preventDefault", () => {

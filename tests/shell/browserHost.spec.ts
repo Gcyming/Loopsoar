@@ -9,6 +9,8 @@ interface FakeView extends HostView {
   navigated: string[];
   visible: boolean;
   closed: boolean;
+  wcMuted: boolean;
+  wcClosed: boolean;
 }
 
 function makeHost(size = { width: 1360, height: 860 }) {
@@ -20,6 +22,8 @@ function makeHost(size = { width: 1360, height: 860 }) {
         navigated: [],
         visible: true,
         closed: false,
+        wcMuted: false,
+        wcClosed: false,
         setBounds(b) {
           view.bounds = b;
         },
@@ -42,6 +46,12 @@ function makeHost(size = { width: 1360, height: 860 }) {
             return 3;
           },
           on() {},
+          setAudioMuted(muted: boolean) {
+            view.wcMuted = muted;
+          },
+          close() {
+            view.wcClosed = true;
+          },
         },
       };
       created.push(view);
@@ -75,6 +85,16 @@ describe("BrowserHost（多标签）", () => {
     expect(created[0].navigated[0]).toBe("https://example.com/");
     // 1360x860：y = 36+48+34 = 118，height = 860-36-34-48-32 = 710
     expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+  });
+
+  it("关闭标签会真正销毁 WebContents（音视频不再继续播放）", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://example.com/");
+    const tabId = host.listTabs()[0].id;
+    expect(await host.closeTab(tabId)).toBe(true);
+    expect(created[0].wcMuted).toBe(true);
+    expect(created[0].wcClosed).toBe(true);
+    expect(host.listTabs().length).toBe(0);
   });
 
   it("新建标签并切换：同一时刻只有一个活动标签可见", async () => {

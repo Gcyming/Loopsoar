@@ -176,7 +176,9 @@ export class BrowserHost {
 
   /** 侧栏拖拽调宽：原生视图区域随之重算。 */
   setSidebarWidth(width: number): void {
-    this.sidebarWidth = Math.max(240, Math.min(720, Math.round(width)));
+    // 收起态宽度可以是 48（甚至 0）：不能沿用拖拽最小值 240，否则收起后原生网页视图
+    // 仍让出 240px，用户看到的就是「左侧没有铺满」。
+    this.sidebarWidth = Math.max(0, Math.min(720, Math.round(width)));
     this.applyLayout();
   }
 

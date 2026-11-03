@@ -362,6 +362,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **二次调优（用户反馈「没变化」）**：像素采样确认 soft 已生效但无框力度太弱 → soft token 再调（bg #0a0c10、3 级明度拉大、`--ls-border` 归零、圆角 10/14/20、阴影加深）+ 新增 soft 专属规则（会话栏改浮动卡片：docked 四周 8px 留白/圆角/阴影；header/工作区/会话条内部分隔线全去；chip 无边框；输入区去框、focus 才出品牌描边；应用底加极轻品牌光晕；终端全宽面板大圆角浮起）；真机截图确认观感明显变化
 - 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5、vitest 130 文件 / 1150 tests 全绿、bundle 739KB**；真机截图：`e2e-round6-soft-default.png`、`e2e-round6-classic-theme.png`、`e2e-round6-sidebar-collapsed.png`、`e2e-round6-sidebar-float.png`、`e2e-round6-terminal-fullwidth.png`
 
+## 二·三十六、2026-11-03 第三十三次增量（用户实机 bug 修复：收起/小窗/关标签音频）
+- **收起后网页不铺满（根因）**：主进程 `BrowserHost.setSidebarWidth` 最小值锁死 240，IPC 契约 `BrowserSidebarWidthSchema` 也 `.min(240)` → 收起态传 48 被 zod 拒绝、即使到达也被夹回 240，原生 WebContentsView 仍让出 240px，表现为「左侧不铺满」；修复：契约下限改 0、宿主 clamp 改 0..720；真机 E2E 探针 `sidebarWidth:48`、`page.innerWidth=1146`（1200 窗口 = 1200-48-6），最大化/还原全部同步
+- **小窗化没有任何效果（根因）**：原实现只是把同一列侧栏加 8px 外边距换皮，与常驻态几乎无差别；修复：改为真正的**浮动小窗**（`position:fixed`，右下角 10px/44px 定位，340×min(68vh,620px)，圆角 20px + 浮阴影），常驻态仍是整列浮动卡片，三态一眼可区分；浮窗内容/输入/滚动全部照常
+- **关闭标签后音视频继续播放（根因）**：WebContentsView 适配器 `close()` 只调 `onClose` 回调而宿主未传（实际只从窗口 detach 视图），**WebContents 从未销毁**，正在播放的媒体继续出声；修复：`close()` 先 `setAudioMuted(true)` 再 `webContents.close()` 真正销毁；新增适配器测试 + BrowserHost closeTab 销毁断言
+- 验证：vitest **130 文件 / 1152 tests 全绿**（新增 2 条音频/销毁用例）；真机 E2E：收起态原生视图宽度探针、小窗浮动态截图；截图 `e2e-round6-sidebar-collapsed.png`、`e2e-round6-sidebar-float.png` 已更新
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

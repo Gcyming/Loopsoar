@@ -150,6 +150,14 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 终端全宽底部拉起（VS Code 式） | ✅ 横跨浏览器区+会话栏；网页视图让位 `bottomInset:260`，`actual.height == page.innerHeight`（166/491） | `e2e-round6-terminal-fullwidth.png` + `E2E_RESIZE_STEP` 日志 |
 | 终端拖拽时网页不吞事件 | ✅ `onResizeStart/End` → `browser:setOverlay` 临时隐藏原生视图 | 代码 + 手动拖拽 |
 
+## 12. 2026-11-03 实机 bug 修复复验
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 收起后网页视图铺满（不再留 240px 空隙） | ✅ 探针 `sidebarWidth:48`、`bounds.width=1146`、`page.innerWidth=1146`（1200 窗口） | `E2E_RESIZE_STEP` 日志 + `e2e-round6-sidebar-collapsed.png` |
+| 小窗化变成真正的浮动小窗 | ✅ 340×min(68vh,620) 右下角悬浮卡片，与常驻态明显不同 | `e2e-round6-sidebar-float.png` |
+| 关闭标签后音视频立即停止 | ✅ 适配器 close 先静音再销毁 WebContents；两层测试覆盖 | `webContentsAdapter.spec.ts` / `browserHost.spec.ts` |
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
