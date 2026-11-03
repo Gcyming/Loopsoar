@@ -153,6 +153,27 @@
       html:not([data-theme="classic"]) .live-dot {
         box-shadow: 0 0 8px rgba(var(--ls-teal-rgb), 0.55);
       }
+      /* ── 真·小窗化：独立 Agent 窗口（?mini=1）──
+         该窗口只渲染会话栏，无浏览器工具条/状态栏；会话栏铺满整窗并保留主题。 */
+      html[data-mini],
+      html[data-mini] body,
+      html[data-mini] #root {
+        background: var(--ls-bg);
+      }
+      html[data-mini] .agent-sidebar,
+      html[data-mini] .agent-sidebar[data-mode="docked"] {
+        width: 100% !important;
+        height: 100%;
+        margin: 0 !important;
+        border: none !important;
+        border-radius: var(--ls-radius-md, 12px) !important;
+        box-shadow: none !important;
+        background: var(--ls-surface) !important;
+      }
+      html[data-mini] .agent-sidebar .agent-sidebar-inner {
+        border-radius: var(--ls-radius-md, 12px);
+      }
+
       /* 主题切换：只做颜色过渡（200ms，无位移）；reduced-motion 下直接切换 */
       html.theme-switching,
       html.theme-switching *,

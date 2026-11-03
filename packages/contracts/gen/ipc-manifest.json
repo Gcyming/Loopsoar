@@ -701,6 +701,20 @@
       "hasRequest": true
     },
     {
+      "channel": "ui:openAgentWindow",
+      "domain": "ui",
+      "method": "openAgentWindow",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "ui:closeAgentWindow",
+      "domain": "ui",
+      "method": "closeAgentWindow",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "chat:compact",
       "domain": "chat",
       "method": "compact",
@@ -788,6 +802,7 @@
     "loop:fallback",
     "loop:changed",
     "chrome:popoverAction",
+    "chrome:agentWindowClosed",
     "chat:compacted"
   ]
 }

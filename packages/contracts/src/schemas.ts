@@ -219,6 +219,13 @@ export const ChromePopoverActionSchema = z.object({
   payload: z.unknown().optional(),
 });
 
+/* ───────────────────────── Agent 会话栏独立窗口（真·小窗化） ───────────────────────── */
+
+/** 打开会话栏独立窗口：可指定要展示的会话（缺省 = 当前会话）。 */
+export const OpenAgentWindowSchema = z.object({
+  sessionId: z.string().max(128).optional(),
+});
+
 export const ChatCompactSchema = z.object({
   sessionId: SessionIdSchema.optional(),
   /** false=只预览（默认）；true=真的把压缩结果写回会话持久化。 */
@@ -989,6 +996,20 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     sensitive: true,
   },
 
+  /* ── Agent 会话栏独立窗口（真·窗口化：独立 BrowserWindow，可拖动/缩放/最小化） ── */
+  "ui:openAgentWindow": {
+    domain: "ui",
+    method: "openAgentWindow",
+    request: OpenAgentWindowSchema,
+    sensitive: true,
+  },
+  "ui:closeAgentWindow": {
+    domain: "ui",
+    method: "closeAgentWindow",
+    request: null,
+    sensitive: true,
+  },
+
   /* ── 会话压缩（/compact，真实压缩持久化） ── */
   "chat:compact": {
     domain: "chat",
@@ -1080,6 +1101,7 @@ export const EVENTS = [
   "loop:fallback",
   "loop:changed",
   "chrome:popoverAction",
+  "chrome:agentWindowClosed",
   "chat:compacted",
 ] as const;
 

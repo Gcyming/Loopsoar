@@ -80,6 +80,8 @@ import { registerFileTools } from "./fileTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
 import { createChromePopoverManager } from "./chromePopover.js";
 import { registerChromePopoverDomain } from "./domains/chromePopover.js";
+import { createAgentWindowManager, type AgentWindowManager } from "./agentWindow.js";
+import { registerAgentWindowDomain } from "./domains/agentWindow.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
@@ -139,6 +141,8 @@ function pushToRenderer(event: string, payload: unknown): void {
 
 let mainWindow: BrowserWindow | null = null;
 let browserHost: BrowserHost | null = null;
+// Agent 会话栏独立窗口管理器（main() 内创建；createMainWindow 的 closed 回调需在模块作用域访问）
+let agentWindow: AgentWindowManager | null = null;
 
 /**
  * 退出清理：MCP/扩展子进程、终端会话、标签落盘、审计 flush 必须收尾。
@@ -409,6 +413,63 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             }
           }
 
+          // E2E：Agent 会话栏独立窗口验证（LOOPSOAR_E2E_CAPTURE_AGENT_WINDOW=1）——
+          // 点「小窗化」后应出现第二个系统窗口（URL 带 ?mini=1），窗口内只渲染会话栏。
+          if (process.env.LOOPSOAR_E2E_CAPTURE_AGENT_WINDOW) {
+            const others = BrowserWindow.getAllWindows().filter((w) => w !== win);
+            console.log(
+              "E2E_AGENT_WINDOW_WINDOWS",
+              others.length,
+              JSON.stringify(
+                others.map((w) => ({ bounds: w.getBounds(), title: w.getTitle(), visible: w.isVisible() })),
+              ),
+            );
+            console.log(
+              "E2E_AGENT_WINDOW_MAIN",
+              JSON.stringify({ contentSize: win.getContentSize(), browser: browserHost ? browserHost.debugBounds() : null }),
+            );
+            if (others[0]) {
+              const agentWin = others[0];
+              try {
+                console.log("E2E_AGENT_WINDOW_URL", agentWin.webContents.getURL());
+                const dom = await agentWin.webContents.executeJavaScript(
+                  `JSON.stringify({
+                    qs: location.search,
+                    mini: document.documentElement.dataset.mini ?? null,
+                    sidebar: (() => { const el = document.querySelector('.agent-sidebar'); if (!el) return null; const r = el.getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; })(),
+                    titlebar: !!document.querySelector('.titlebar'),
+                    chrome: !!document.querySelector('.browser-chrome'),
+                    rootW: Math.round(document.getElementById('root').getBoundingClientRect().width),
+                  })`,
+                  true,
+                );
+                console.log("E2E_AGENT_WINDOW_DOM", dom);
+                const img = await agentWin.capturePage();
+                const agentPath = shotPath.replace(/\.png$/, "-agent-window.png");
+                fs.writeFileSync(agentPath, img.toPNG());
+                console.log("AGENT_WINDOW_SHOT_SAVED", agentPath);
+                // 铺满证据：主窗口整窗截图（DOM 层；原生视图不入 capturePage，宽度以 debugBounds 为准）
+                if (process.env.LOOPSOAR_E2E_CLOSE_AGENT_WINDOW) {
+                  fs.writeFileSync(shotPath.replace(/.png$/, "-main-fullwidth.png"), (await win.capturePage()).toPNG());
+                  agentWin.close();
+                  await new Promise((r) => setTimeout(r, 1500));
+                  const restored = await win.webContents
+                    .executeJavaScript(
+                      `(() => { const side = document.querySelector(".agent-sidebar"); const wrap = side ? side.parentElement : null; return JSON.stringify({ display: wrap ? getComputedStyle(wrap).display : null, splitter: !!document.querySelector("[title=\\"拖动调整面板宽度\\"]") }); })()`,
+                      true,
+                    )
+                    .catch(() => null);
+                  console.log(
+                    "E2E_AGENT_WINDOW_RESTORED",
+                    JSON.stringify({ restored, browser: browserHost ? browserHost.debugBounds() : null }),
+                  );
+                }
+              } catch (err) {
+                console.warn("AGENT_WINDOW_CAPTURE_FAILED", err instanceof Error ? err.message : String(err));
+              }
+            }
+          }
+
           // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
           const anyWin = win as unknown as { capturePage?: () => Promise<{ toPNG(): Buffer }> };
           const image =
@@ -651,6 +712,8 @@ function createMainWindow(): void {
   mainWindow.on("leave-full-screen", () => scheduleBoundsSync.schedule());
   mainWindow.on("closed", () => {
     scheduleBoundsSync.cancel();
+    // 独立 Agent 窗口若常驻，主窗口关掉后 window-all-closed 不会触发，进程会残留成“只有小窗”
+    agentWindow?.close();
     mainWindow = null;
   });
 
@@ -1080,6 +1143,19 @@ app.whenReady().then(async () => {
       `--loopsoar-events=${JSON.stringify(EVENTS)}`,
     ],
   });
+  // Agent 会话栏「独立窗口」（真·窗口化）：无 parent 的顶层系统窗口，可拖动/缩放/最小化/贴边，
+  // 主窗口隐藏侧栏、网页铺满；与 chromePopover（悬停浮层子窗口）刻意区分，不要合并。
+  const agentWindowManager = createAgentWindowManager({
+    loadUrlFor: (sessionId) =>
+      `${PROTOCOL}://app/index.html?mini=1${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ""}`,
+    preloadPath: preloadPath(),
+    additionalArguments: [
+      `--loopsoar-bindings=${JSON.stringify(buildBindings())}`,
+      `--loopsoar-events=${JSON.stringify(EVENTS)}`,
+    ],
+    // 不传 onClosed：registerAgentWindowDomain 内部已订阅并 push chrome:agentWindowClosed（避免双推）
+  });
+  agentWindow = agentWindowManager;
   browserHost = createElectronBrowserHost(
     () => mainWindow,
     (url) => {
@@ -1236,6 +1312,11 @@ app.whenReady().then(async () => {
     { ...deps, push: pushToRenderer, getMainWebContentsId: () => mainWindow?.webContents.id ?? null },
     chromePopover,
   );
+  // Agent 会话栏独立窗口域：ui:openAgentWindow 仅主窗口可调；用户关窗 → push chrome:agentWindowClosed
+  registerAgentWindowDomain(
+    { ...deps, push: pushToRenderer, getMainWebContentsId: () => mainWindow?.webContents.id ?? null },
+    agentWindowManager,
+  );
   // /compact：真实压缩并写回持久化（预览/应用由 UI 决定；生成中拒绝，避免与落盘竞态）
   registerCompactDomain({
     ...deps,
@@ -1327,6 +1408,7 @@ app.whenReady().then(async () => {
       terminals.closeAll();
       askBus.clearAll("应用退出，按取消处理");
       chromePopover.dispose();
+      agentWindow?.dispose();
     },
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });

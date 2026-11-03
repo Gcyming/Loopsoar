@@ -119,7 +119,8 @@ export function useBootstrapData(options: BootstrapDataOptions): void {
         setReasoningEffort(prefs.reasoningEffort ?? "");
         if (prefs.sidebarWidth) {
           setSidebarWidth(prefs.sidebarWidth);
-          void api.browser.setSidebarWidth({ width: prefs.sidebarWidth }).catch(() => {});
+          // 原生视图宽度只由 App 的 effectiveSidebarWidth 单一来源下发：
+          // 这里再按偏好直发会把「收起态/独立 Agent 窗口态」覆盖回偏好宽度（曾导致网页不铺满）。
         }
         // 恢复上次会话（设置 · 通用 · 恢复上次会话）
         if (prefs.restoreSession) {

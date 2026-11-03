@@ -158,6 +158,26 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 小窗化变成真正的浮动小窗 | ✅ 340×min(68vh,620) 右下角悬浮卡片，与常驻态明显不同 | `e2e-round6-sidebar-float.png` |
 | 关闭标签后音视频立即停止 | ✅ 适配器 close 先静音再销毁 WebContents；两层测试覆盖 | `webContentsAdapter.spec.ts` / `browserHost.spec.ts` |
 
+## 13. 2026-11-03 会话栏真·独立窗口验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 点「小窗化」出现独立顶层窗口 | ✅ 非主窗口列表 1 项：`{"bounds":{"x":814,"y":192,"width":422,"height":720},"title":"Loopsoar","visible":true}`，可独立缩放/最大化 | `docs/screenshots/e2e-round8-agent-window-agent-window.png` + `E2E_AGENT_WINDOW_WINDOWS` 日志 |
+| 小窗加载同一套 UI 的 mini 形态 | ✅ URL `loopsoar://app/index.html?mini=1&sessionId=sess-…`；DOM 探针 `{"mini":"1","sidebar":{"left":8,"top":8,"w":391,"h":667},"titlebar":false,"chrome":false}` | 同上 + `E2E_AGENT_WINDOW_DOM` 日志 |
+| 主窗口网页真正铺满（侧栏让位） | ✅ `sidebarWidth:0`，浏览器视图 `bounds/actual` 宽度 1355（contentSize 1361），网页区无残留侧栏空隙 | `docs/screenshots/e2e-round8-agent-window-main-fullwidth.png` + `E2E_AGENT_WINDOW_MAIN` 日志 |
+| 关闭小窗后主窗口恢复 | ✅ `E2E_AGENT_WINDOW_RESTORED {"restored":"{\"display\":\"flex\",\"splitter\":true}","browser":{"width":936,"sidebarWidth":419}}` | 同一次 E2E（`LOOPSOAR_E2E_CLOSE_AGENT_WINDOW=1`） |
+| 小窗内「收回」也能恢复主窗口 | ✅ 域层主动关闭后补推 `chrome:agentWindowClosed`（单测覆盖） | `tests/shell/agentWindow.spec.ts` |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\tool\AI\real-project\Loopsoar\Parent file\.loopsoar-data'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round8-agent-window.png'
+$env:LOOPSOAR_E2E_HOVER_TITLE='小窗化'
+$env:LOOPSOAR_E2E_CAPTURE_AGENT_WINDOW='1'
+$env:LOOPSOAR_E2E_CLOSE_AGENT_WINDOW='1'
+node scripts/dev-gui.mjs
+```
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

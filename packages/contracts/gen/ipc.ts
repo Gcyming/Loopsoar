@@ -110,6 +110,8 @@ export const IPC_CHANNELS = {
   "ui:openPopover": { domain: "ui", method: "openPopover", sensitive: true, hasRequest: true },
   "ui:closePopover": { domain: "ui", method: "closePopover", sensitive: true, hasRequest: false },
   "ui:popoverAction": { domain: "ui", method: "popoverAction", sensitive: true, hasRequest: true },
+  "ui:openAgentWindow": { domain: "ui", method: "openAgentWindow", sensitive: true, hasRequest: true },
+  "ui:closeAgentWindow": { domain: "ui", method: "closeAgentWindow", sensitive: true, hasRequest: false },
   "chat:compact": { domain: "chat", method: "compact", sensitive: true, hasRequest: true },
   "loop:list": { domain: "loop", method: "list", sensitive: true, hasRequest: false },
   "loop:setActive": { domain: "loop", method: "setActive", sensitive: true, hasRequest: true },
@@ -162,7 +164,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "mcp": ["list", "add", "remove", "connect", "disconnect"],
     "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"],
     "ask": ["respond"],
-    "ui": ["openPopover", "closePopover", "popoverAction"],
+    "ui": ["openPopover", "closePopover", "popoverAction", "openAgentWindow", "closeAgentWindow"],
     "loop": ["list", "setActive", "reload"],
     "bookmarks": ["list", "add", "remove"]
     },
@@ -196,5 +198,6 @@ export const EVENT_NAMES = [
   "loop:fallback",
   "loop:changed",
   "chrome:popoverAction",
+  "chrome:agentWindowClosed",
   "chat:compacted",
 ] as const;

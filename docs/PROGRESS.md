@@ -368,6 +368,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **关闭标签后音视频继续播放（根因）**：WebContentsView 适配器 `close()` 只调 `onClose` 回调而宿主未传（实际只从窗口 detach 视图），**WebContents 从未销毁**，正在播放的媒体继续出声；修复：`close()` 先 `setAudioMuted(true)` 再 `webContents.close()` 真正销毁；新增适配器测试 + BrowserHost closeTab 销毁断言
 - 验证：vitest **130 文件 / 1152 tests 全绿**（新增 2 条音频/销毁用例）；真机 E2E：收起态原生视图宽度探针、小窗浮动态截图；截图 `e2e-round6-sidebar-collapsed.png`、`e2e-round6-sidebar-float.png` 已更新
 
+## 二·三十七、2026-11-03 第三十四次增量（会话栏「真·窗口化」：独立 Agent 窗口）
+- **诉求**：用户反馈「小窗化还是坏的，无法真正窗口化，参考 slime 都做差不多了」→ 不再做页内浮窗，改为独立顶层窗口。
+- **主进程新模块**：`packages/shell/src/main/agentWindow.ts`（无 parent 顶层 BrowserWindow、frame:true、420×720、最小 340×480、可缩放/最大化、标题「Loopsoar · Agent 对话」、ready-to-show、单实例时聚焦已有窗口、用户关窗只回调一次、程序性 close/dispose 不推事件；惰性 require electron + 可注入假窗口便于单测）；`packages/shell/src/main/domains/agentWindow.ts` 注册 `ui:openAgentWindow`（仅主窗口可调，带 sessionId）/`ui:closeAgentWindow`（主窗口与小窗自身都可调），用户关窗或主动关闭都会 push `chrome:agentWindowClosed`。
+- **小窗复用同一套 UI**：URL 为 `loopsoar://app/index.html?mini=1[&sessionId=…]`；App 识别 `mini=1` 后隐藏标题栏 / 浏览器网址栏 / 启动页 / 分隔条 / 状态栏，会话栏铺满整窗（四周 8px 留白、无边框），从根上区别于「主窗口里的浮窗」。
+- **原生网页视图让位（根因修复）**：小窗打开时主窗口 `effectiveSidebarWidth = 0`，网页铺满；关窗（含在小窗内点「收回」）后侧栏恢复。排查发现 `useChatStreamEvents.ts` 挂载期会用偏好里的 sidebarWidth 直发 `browser:setSidebarWidth`，把 App 已发送的 0 覆盖回 419 → 删除该直发，原生视图宽度改由 `App.tsx` 的 `effectiveSidebarWidth` 单一来源同步。
+- **生命周期**：主窗口关闭时同时关闭 Agent 窗口（否则 `window-all-closed` 不触发、进程残留成「只剩小窗」）；shutdown 时 dispose；layering 守卫按 chromePopover 同理由放行惰性 require electron；channels-have-handlers 守卫补假 manager 装配。
+- **契约**：新增 `ui:openAgentWindow`、`ui:closeAgentWindow` 通道与 `chrome:agentWindowClosed` 事件（`pnpm gen/check` 逐字节一致）。
+- **验证**：typecheck 5/5、gen/check 一致、build 5/5、vitest **131 文件 / 1176 tests 全绿**（agentWindow 24 条：窗口行为/事件语义/域守卫/参数归一化）；真机 E2E：点「小窗化」→ 独立窗口 422×720、URL 含 `?mini=1`、DOM `mini=1` 且 titlebar/chrome 均不存在、会话栏铺满；主窗口 `sidebarWidth:0`、网页视图宽度 1355 铺满；关窗后 `E2E_AGENT_WINDOW_RESTORED` 侧栏 `display:flex`、`sidebarWidth:419` 恢复；截图 `e2e-round8-agent-window-agent-window.png`、`e2e-round8-agent-window-main-fullwidth.png`。
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）
@@ -400,7 +408,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 依赖方向：contracts ← core ← services ← shell ← ui；禁止 shell→ui 反向依赖
 - 所有 IPC：`packages/contracts/src/schemas.ts` 注册 channel（domain/method/request/sensitive）→
   `handleTrusted` 使用 → `pnpm gen` + `pnpm check`
-- 只有 `main/index.ts` / `main/electronBrowser.ts` 可 import electron
+- 只有 `main/index.ts` / `main/electronBrowser.ts` / `main/chromePopover.ts` / `main/agentWindow.ts` 可 import electron（后两者为必须建窗口的惰性 require，已由 layering 守卫显式允许）
 - 三子系统隔离：扩展 `extensions/`+`extensions.json`、技能 `skills/`+`skills.json`、MCP `mcp.json`；
   通道前缀 `extensions:*`/`skills:*`/`mcp:*`
 - 视觉：Loopsoar 品牌（深墨 #111318 / 亚麻白 #f4efe6 / 赭石 #c8763c），不直接复制 slime 配色

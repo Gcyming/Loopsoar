@@ -123,6 +123,8 @@ describe("守卫：分层依赖（contracts ← core ← services ← shell ← 
           file.rel === "src/main/electronBrowser.ts" ||
           // 浮层管理器：为「工具栏浮层浮在原生网页之上」而创建 Electron 子窗口（惰性 require）
           file.rel === "src/main/chromePopover.ts" ||
+          // Agent 会话栏「真·窗口化」：创建独立顶层 BrowserWindow（惰性 require，可注入假窗口测试）
+          file.rel === "src/main/agentWindow.ts" ||
           // preload 本身运行在 Electron 预加载环境，只允许用它做 contextBridge 白名单暴露
           file.rel === "src/preload/index.cjs");
       if (!allowed) offenders.push(`${file.pkg}/${file.rel}`);

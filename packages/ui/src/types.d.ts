@@ -613,6 +613,7 @@ export type LoopsoarEvent =
   | "loop:changed"
   | "loop:fallback"
   | "chrome:popoverAction"
+  | "chrome:agentWindowClosed"
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
@@ -657,6 +658,10 @@ export interface LoopsoarAPI {
     openPopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US" }): Promise<{ ok: boolean; error?: string }>;
     closePopover(): Promise<{ ok: boolean }>;
     popoverAction(payload: { action: string; payload?: unknown }): Promise<{ ok: boolean }>;
+    /** 打开 Agent 会话栏独立窗口（真·窗口化；可拖动/缩放/最小化）。 */
+    openAgentWindow(payload: { sessionId?: string }): Promise<{ ok: boolean; error?: string }>;
+    /** 关闭会话栏独立窗口。 */
+    closeAgentWindow(): Promise<{ ok: boolean }>;
   };
   loop: LoopsoarDomain & {
     /** 可运行的 Agent-Loop 列表 + 当前选择 + 回退历史。 */

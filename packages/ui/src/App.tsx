@@ -118,8 +118,20 @@ export default function App(): React.JSX.Element {
   React.useEffect(() => {
     applyTheme(theme === "classic" ? "classic" : "soft");
   }, [theme]);
-  // 右侧会话栏三态：常驻 / 收起 / 小窗化（持久化到偏好）
-  const sidebarMode: SidebarMode = preferences?.sidebarMode ?? "docked";
+  // 右侧会话栏：常驻 / 收起；「小窗化」= 打开独立 BrowserWindow（真窗口，可拖动/缩放）
+  const storedSidebarMode: SidebarMode = preferences?.sidebarMode ?? "docked";
+  const sidebarMode: SidebarMode = storedSidebarMode === "float" ? "docked" : storedSidebarMode;
+  // 独立窗口模式：?mini=1 时本渲染器只画 Agent 会话栏（由主进程 Agent 窗口加载）
+  const miniWindow =
+    typeof location !== "undefined" && new URLSearchParams(location.search).get("mini") === "1";
+  const [agentWindowOpen, setAgentWindowOpen] = useState(false);
+  React.useEffect(() => {
+    if (!miniWindow) return;
+    document.documentElement.dataset.mini = "1";
+    return () => {
+      delete document.documentElement.dataset.mini;
+    };
+  }, [miniWindow]);
   // 浏览器管理整页（历史/下载/收藏夹/设置）：由浮层「查看更多」或动作打开
   const [chromePage, setChromePage] = useState<ChromePageKind | null>(null);
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
@@ -351,25 +363,51 @@ export default function App(): React.JSX.Element {
     [api, preferences, sidebarWidth],
   );
 
-  /** 侧栏模式切换：写偏好（持久化）+ 立即同步原生视图宽度。 */
+  /** 侧栏模式切换：收起/展开写偏好；「小窗化」改为打开独立 Agent 窗口（真窗口化）。 */
   const changeSidebarMode = useCallback(
     (next: SidebarMode): void => {
-      if (!api || !preferences) return;
+      if (!api) return;
       setSessionOpen(false);
+      if (next === "float") {
+        if (agentWindowOpen) {
+          void api.ui.closeAgentWindow().catch(() => {});
+          return;
+        }
+        void api.ui
+          .openAgentWindow({ sessionId: currentSession ?? undefined })
+          .then((r) => {
+            if (r.ok) setAgentWindowOpen(true);
+            else setNotice(`小窗打开失败：${r.error ?? "未知错误"}`);
+          })
+          .catch(() => setNotice("小窗打开失败"));
+        return;
+      }
+      if (!preferences) return;
       void api.settings
         .setPreferences({ ...preferences, sidebarMode: next })
         .then((r) => setPreferences(r.preferences))
         .catch(() => {});
     },
-    [api, preferences],
+    [api, preferences, agentWindowOpen, currentSession],
   );
 
-  /** 生效的侧栏宽度（收起态只用图标条宽度，让网页区自然变宽）。 */
-  const effectiveSidebarWidth = sidebarMode === "collapsed" ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
+  // 独立窗口被用户关闭（或主进程回收）→ 主窗口恢复侧栏
   React.useEffect(() => {
-    if (!api) return;
+    if (!api || miniWindow) return;
+    return api.on("chrome:agentWindowClosed", () => setAgentWindowOpen(false));
+  }, [api, miniWindow]);
+
+  /** 生效的侧栏宽度（收起态只用图标条宽度，让网页区自然变宽）。 */
+  // 独立窗口模式下主窗口侧栏完全隐藏 → 网页区铺满（宽度 0）
+  const effectiveSidebarWidth = agentWindowOpen
+    ? 0
+    : sidebarMode === "collapsed"
+      ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH
+      : sidebarWidth;
+  React.useEffect(() => {
+    if (!api || miniWindow) return;
     void api.browser.setSidebarWidth({ width: effectiveSidebarWidth }).catch(() => {});
-  }, [api, effectiveSidebarWidth]);
+  }, [api, effectiveSidebarWidth, miniWindow]);
 
   // 全宽终端占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
   React.useEffect(() => {
@@ -996,8 +1034,9 @@ export default function App(): React.JSX.Element {
 
   return (
     <div style={styles.app}>
-      <TitleBar maximized={maximized} />
+      {miniWindow ? null : <TitleBar maximized={maximized} />}
 
+      {miniWindow ? null : (
       <BrowserChrome
         tabs={tabs}
         address={address}
@@ -1014,29 +1053,43 @@ export default function App(): React.JSX.Element {
         onCloseTab={closeTab}
         onNewTab={newTab}
       />
+      )}
 
       <div style={styles.body}>
-        <StartPage currentUrl={currentUrl} />
+        {miniWindow ? null : <StartPage currentUrl={currentUrl} />}
 
-        {sidebarMode === "docked" ? (
+        {!miniWindow && !agentWindowOpen && sidebarMode === "docked" ? (
           <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
         ) : null}
         {/* docked：会话栏以「浮动卡片」呈现（8px 留白 + 圆角 + 阴影，不贴窗口边） */}
         <div
           style={{
-            width: effectiveSidebarWidth,
+            width: miniWindow ? "100%" : effectiveSidebarWidth,
             flexShrink: 0,
             boxSizing: "border-box",
-            display: "flex",
+            display: agentWindowOpen ? "none" : "flex",
             minWidth: 0,
-            // collapsed 保持贴边竖条；docked 四周留 8px 形成浮动卡片；float 由 CSS 负责外边距
-            padding: sidebarMode === "docked" ? 8 : 0,
+            // collapsed 保持贴边竖条；docked 四周留 8px 形成浮动卡片；独立窗口模式铺满
+            padding: miniWindow ? 8 : sidebarMode === "docked" ? 8 : 0,
           }}
         >
         <AgentSidebar
-          width={sidebarMode === "docked" ? Math.max(240, effectiveSidebarWidth - 16) : effectiveSidebarWidth}
-          mode={sidebarMode}
-          onModeChange={changeSidebarMode}
+          width={
+            miniWindow
+              ? Math.max(240, window.innerWidth - 16)
+              : sidebarMode === "docked"
+                ? Math.max(240, effectiveSidebarWidth - 16)
+                : effectiveSidebarWidth
+          }
+          mode={miniWindow ? "docked" : sidebarMode}
+          onModeChange={
+            miniWindow
+              ? (m: SidebarMode): void => {
+                  // 独立窗口里点「小窗化/收起」= 收回主窗口
+                  if (m !== "docked") void api?.ui.closeAgentWindow().catch(() => {});
+                }
+              : changeSidebarMode
+          }
           agentLabel={agentLabel}
           messages={messages}
           sessions={sessions}
@@ -1152,6 +1205,7 @@ export default function App(): React.JSX.Element {
         />
       </div>
 
+      {miniWindow ? null : (
       <StatusBar
         shellStatus={boot?.status}
         agentLabel={agentLabel}
@@ -1160,6 +1214,7 @@ export default function App(): React.JSX.Element {
         terminalOpen={terminalOpen}
         onToggleTerminal={() => setTerminalOpen((value) => !value)}
       />
+      )}
 
       <WorkspacePanel
         open={workspacePanelOpen}
