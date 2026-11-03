@@ -19,6 +19,9 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "permission.allowSession": { zh: "本会话允许", en: "Allow for this session" },
   "permission.allowOnce": { zh: "允许一次", en: "Allow once" },
 
+  /* ── Agent 独立窗口（自绘标题栏） ── */
+  "agentWindow.title": { zh: "Agent 对话", en: "Agent Chat" },
+
   /* ── 浏览器顶栏（BrowserChrome） ── */
   "browser.back": { zh: "后退", en: "Back" },
   "browser.forward": { zh: "前进", en: "Forward" },

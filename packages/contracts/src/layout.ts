@@ -60,7 +60,11 @@ export function computeBrowserViewBounds(
 ): BrowserViewBounds {
   const sidebarWidth = Math.max(0, options.sidebarWidth ?? layout.SIDEBAR_WIDTH);
   const bottomInset = Math.max(0, Math.min(options.bottomInset ?? 0, size.height));
-  const width = Math.max(0, size.width - sidebarWidth - layout.SPLITTER_WIDTH);
+  // 分隔条只在「停靠且展开」时渲染：收起态（48px rail）与窗口化（侧栏让位为 0）都没有分隔条，
+  // 此时再扣 SPLITTER_WIDTH 会让原生网页右侧留一条 6px 的 DOM 缝（网页不铺满，用户可见）。
+  const splitterWidth =
+    sidebarWidth > 0 && sidebarWidth !== layout.SIDEBAR_COLLAPSED_WIDTH ? layout.SPLITTER_WIDTH : 0;
+  const width = Math.max(0, size.width - sidebarWidth - splitterWidth);
   const height = Math.max(
     0,
     size.height -

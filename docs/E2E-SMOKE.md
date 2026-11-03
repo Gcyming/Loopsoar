@@ -178,6 +178,42 @@ $env:LOOPSOAR_E2E_CAPTURE_AGENT_WINDOW='1'
 $env:LOOPSOAR_E2E_CLOSE_AGENT_WINDOW='1'
 node scripts/dev-gui.mjs
 ```
+## 14. 2026-11-03 定制窗口 chrome / 图标 / 中断 / hover / 动效收敛验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| Agent 小窗无系统标题栏，自绘最小化/关闭 | ✅ `frame:false`；DOM 探针 `titlebar:false`、`chrome:false`；截图仅「Agent 对话」品牌标题栏 + 两个 SVG 图标按钮 | `docs/screenshots/e2e-round9-agent-window-agent-window.png` |
+| 小窗贴主窗口右缘并从右缘滑入（非 OS 默认放置） | ✅ bounds `{"x":662,"y":118,"width":422,"height":722}`；`AGENT_TRACE` 逐帧 `x 686→662`（200ms，起点=目标+24） | `E2E_AGENT_TRACE` 日志 + 同上截图 |
+| 打开小窗时主窗口原生网页视图同曲线让位 | ✅ `sidebarWidth 507→0` 逐帧插值（非瞬跳），网页宽度铺满 | `E2E_AGENT_TRACE` 日志 |
+| 关闭/最小化后主窗口侧栏恢复 | ✅ `E2E_AGENT_WINDOW_RESTORED {"display":"flex","splitter":true,"sidebarWidth":507}`；事件改到窗口销毁后推送 | 同一次 E2E（`LOOPSOAR_E2E_CLOSE_AGENT_WINDOW=1`）+ 单测 |
+| 主窗口最小化/最大化/关闭按钮 hover 有反馈 | ✅ `E2E_HOVER_WIN_BUTTON {"hover":true,"bg":"rgb(196,43,28)","color":"rgb(255,255,255)"}`（关闭键红色 hover） | `docs/screenshots/e2e-round9-titlebar-hover-hover.png` |
+| 生成中主按钮=中断（红色停止图标、可点击） | ✅ `E2E_EVAL {"title":"停止生成","disabled":false,"icon":"url(./icons/stop.svg)","bg":"rgb(239,120,103)","busyText":"生成中"}` | `docs/screenshots/e2e-round9-composer-stop.png` |
+| 运行中输入内容后立即变回发送按钮 | ✅ `{"before":"停止生成","after":"发送转向提示（运行中发送 = 转向，下一轮生效）","icon":"url(./icons/send.svg)","value":"补充一句"}` | `docs/screenshots/e2e-round9-composer-typing.png` |
+| 本地 SVG 图标库替换 emoji | ✅ 42 个 1024 viewBox SVG 入库（`SOURCE.md` 映射）；`tests/ui/icons.spec.ts` 断言所有 `<Icon name>` 均有资源 | `packages/ui/public/icons/` + 截图 |
+
+复跑命令（PowerShell）：
+
+```powershell
+# 1) 无边框小窗 + 滑入轨迹 + hover + 关闭恢复
+$env:LOOPSOAR_DATA_DIR='D:\tool\AI\real-project\Loopsoar\Parent file\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round9-agent-window.png'
+$env:LOOPSOAR_E2E_HOVER_TITLE='小窗化'
+$env:LOOPSOAR_E2E_AGENT_TRACE='1'
+$env:LOOPSOAR_E2E_CAPTURE_AGENT_WINDOW='1'
+$env:LOOPSOAR_E2E_CLOSE_AGENT_WINDOW='1'
+$env:LOOPSOAR_E2E_HOVER_WIN_BUTTON='2'
+node scripts/dev-gui.mjs
+
+# 2) Composer 发送↔中断（需 mock 上游）
+node scripts/mock-openai-server.mjs 19500
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=200'
+$env:LOOPSOAR_E2E_POST_CLICK_MS='3000'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round9-composer-stop.png'
+$env:LOOPSOAR_E2E_EVAL="(() => { const b = document.querySelector('.send-btn'); return JSON.stringify({ title: b.getAttribute('title'), icon: b.querySelector('.icon').style.getPropertyValue('--icon') }); })()"
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

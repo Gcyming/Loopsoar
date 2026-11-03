@@ -1,5 +1,6 @@
 /**
- * 输入区（Composer）：多行输入 + Build/权限/模型/附件 chip + 模型菜单 + 推理等级 + 发送/停止。
+ * 输入区（Composer）：多行输入 + Build/权限/模型/附件 chip + 模型菜单 + 推理等级 +
+ * 单按钮「发送 ↔ 中断」状态机（运行中且输入为空 = 中断，运行中且输入非空 = 转向发送）。
  *
  * 纯展示 + 回调注入：所有业务动作（发送/转向/权限保存/模型切换）由 App 提供；
  * 组件的菜单开合是本地 UI 状态，不进入会话数据。
@@ -125,7 +126,6 @@ export default function Composer({
 }: ComposerProps): React.ReactElement {
   // 权限/模型菜单互斥：同一时刻只开一个（打开另一个会自动收起）。
   const [openMenu, setOpenMenu] = React.useState<"perm" | "model" | null>(null);
-  const [askSteer, setAskSteer] = React.useState(false);
   const permAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   const modelAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   const sendAnchorRef = React.useRef<HTMLButtonElement | null>(null);
@@ -315,16 +315,18 @@ export default function Composer({
     }
   };
 
-  usePopover("composer-steer", askSteer, setAskSteer);
-  /** 运行中发送先询问：编辑 / 直接引导 / 取消（对齐 slime 的中断插入选择）。 */
+  /**
+   * 发送入口（Enter 与发送按钮共用）：运行中直接 onSend（App 走 steer 注入，不打断生成）。
+   * 「运行中且输入为空」的中断动作由主按钮状态机单独处理（onStop，不经此函数）。
+   */
   const requestSend = (): void => {
     if (!value.trim()) return;
-    if (busy) {
-      setAskSteer(true);
-      return;
-    }
     onSend();
   };
+  // 主按钮三态：运行中+空输入 = 中断（不禁用）；运行中+有输入 = 转向发送；
+  // 非运行中 = 普通发送（无可发送内容时禁用）。
+  const interruptMode = busy && value.trim() === "";
+  const sendDisabled = !busy && !canSend;
   usePopover("composer-perm", openMenu === "perm", (next) => {
     if (!next) setOpenMenu(null);
   });
@@ -555,66 +557,23 @@ export default function Composer({
             {compactUi ? null : tr("composer.attachLabel")}
           </button>
           <span style={styles.spacer} />
-          {busy ? (
-            <>
-              <Icon name="spinner" size={14} className="spinner" style={styles.spinnerInline} />
-              <button
-                type="button"
-                className="chip"
-                style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-                onClick={onStop}
-                title={`${tr("composer.stop")}${compactUi ? tr("composer.compactHint") : ""}`}
-                aria-label={tr("composer.stop")}
-              >
-                <Icon name="stop" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                {compactUi ? null : tr("composer.stop")}
-              </button>
-            </>
-          ) : null}
           <button
             ref={sendAnchorRef}
             type="button"
             className="send-btn"
-            style={{ ...styles.sendBtn, opacity: canSend ? 1 : 0.45 }}
-            onClick={requestSend}
-            disabled={!canSend}
-            title={busy ? tr("composer.sendSteer") : tr("composer.send")}
-            aria-label={busy ? tr("composer.sendSteer") : tr("composer.send")}
+            style={{
+              ...styles.sendBtn,
+              ...(interruptMode ? styles.sendBtnInterrupt : {}),
+              opacity: sendDisabled ? 0.45 : 1,
+            }}
+            onClick={interruptMode ? onStop : requestSend}
+            disabled={sendDisabled}
+            title={interruptMode ? tr("composer.stop") : busy ? tr("composer.sendSteer") : tr("composer.send")}
+            aria-label={interruptMode ? tr("composer.stop") : busy ? tr("composer.sendSteer") : tr("composer.send")}
           >
-            <Icon name={busy ? "forward" : "send"} size={15} />
+            <Icon name={interruptMode ? "stop" : "send"} size={15} />
           </button>
         </div>
-        <Popover anchorRef={sendAnchorRef} open={askSteer} onClose={() => setAskSteer(false)} width={280}>
-          <div style={styles.steerAskTitle}>{tr("composer.steerTitle")}</div>
-          <div style={styles.steerAskText}>{tr("composer.steerText")}</div>
-          <div style={styles.steerAskActions}>
-            <button
-              type="button"
-              className="chip"
-              style={styles.chip}
-              onClick={() => {
-                setAskSteer(false);
-                window.setTimeout(() => textareaRef.current?.focus(), 0);
-              }}
-            >
-              {tr("composer.steerEdit")}
-            </button>
-            <button
-              type="button"
-              className="chip"
-              style={{ ...styles.chip, ...styles.chipActive }}
-              onClick={() => {
-                setAskSteer(false);
-                onSend();
-              }}
-            >
-              {tr("composer.steerDirect")}
-            </button>
-            <button type="button" className="chip" style={styles.chip} onClick={() => setAskSteer(false)}>
-              {tr("common.cancel")}
-            </button>
-          </div>
-        </Popover>
         {/* 斜杠命令面板：行首 / 触发；键盘上下选择、Enter 执行、Tab 补全、Esc 关闭 */}
         <Popover anchorRef={sendAnchorRef} open={commandOpen} onClose={() => setCommandDismissed(true)} width={300}>
           <div className="command-panel">
@@ -698,7 +657,6 @@ const styles: Record<string, React.CSSProperties> = {
   chipActive: { borderColor: BRAND.ochre, color: BRAND.ochreHover, background: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.10)" },
   anchor: { position: "relative", display: "inline-flex" },
   spacer: { flex: 1 },
-  spinnerInline: { color: BRAND.ochreHover },
   sendBtn: {
     width: 28,
     height: 28,
@@ -712,9 +670,8 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     flexShrink: 0,
   },
-  steerAskTitle: { fontSize: 12, fontWeight: 650, color: BRAND.linen, padding: "2px 4px 4px" },
-  steerAskText: { fontSize: 11, lineHeight: 1.65, color: BRAND.linenMuted, padding: "0 4px 8px" },
-  steerAskActions: { display: "flex", gap: 6, justifyContent: "flex-end", borderTop: `1px solid ${BRAND.border}`, paddingTop: 8 },
+  /** 中断态：运行中且输入为空时，主按钮切换为「停止」动作（红色强调，不禁用）。 */
+  sendBtnInterrupt: { background: BRAND.danger },
   composerFoot: { display: "flex", gap: 8, marginTop: 4, fontSize: 10.5, color: BRAND.linenFaint, minHeight: 14 },
   notice: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   modelMenuHead: { fontSize: 10.5, color: BRAND.linenFaint, padding: "2px 4px 6px" },

@@ -289,6 +289,8 @@
       }
 
       .win-btn {
+        background: transparent;
+        color: var(--ls-text-muted);
         transition: background-color 120ms ease, color 120ms ease, transform 80ms;
       }
       .win-btn:hover {
@@ -301,6 +303,21 @@
       .win-close:hover {
         background: #c42b1c;
         color: #ffffff;
+      }
+
+      /* 标签页 / 会话条等可点条目：统一补 hover 反馈（此前只有 active 态，鼠标悬停无变化） */
+      .tab-item:hover:not(.is-active) {
+        background: var(--ls-surface-hover);
+        color: var(--ls-text);
+      }
+      /* chip 的内联 background:transparent 会压过普通 :hover 规则，这里用 !important 拿回反馈 */
+      .agent-sidebar .chip:hover {
+        background: var(--ls-surface-hover) !important;
+        color: var(--ls-text);
+      }
+      .agent-sidebar .model-item:hover {
+        background: var(--ls-surface-hover);
+        color: var(--ls-text);
       }
 
       /* ── 动画（全部可在 prefers-reduced-motion 下降级） ── */
@@ -2730,76 +2747,26 @@
       }
 
       /* 5) 侧栏三态 hook（结构由 AgentSidebar 任务加类名）
-            · docked 默认；collapsed 宽 48px；float 340px 浮动卡片
-            · 内容淡出约定：需要淡出的子树加 .agent-sidebar-fade（常驻 DOM！）
-            · 淡出结束后才 visibility:hidden（延迟 = 320ms + 120ms，避免末帧跳变） */
+            · docked 默认；collapsed 宽 48px；float 已改为独立系统窗口（本文件不再有浮窗样式）
+            · 宽度动画全部交给外层 wrapper（App.tsx：width/padding 320ms 同曲线）； */
       .agent-sidebar {
-        transition: width var(--ls-dur-sidebar) var(--ls-ease),
-          opacity var(--ls-dur-sidebar) var(--ls-ease),
-          margin var(--ls-dur-sidebar) var(--ls-ease),
+        transition: opacity var(--ls-dur-sidebar) var(--ls-ease),
           border-radius var(--ls-dur-sidebar) var(--ls-ease),
           box-shadow var(--ls-dur-sidebar) var(--ls-ease);
       }
       html:not([data-theme="classic"]) .agent-sidebar {
         border-color: var(--ls-border);
       }
+      /* collapsed 的宽度由外层 wrapper 动画（AgentSidebar 根节点恒为 100% 跟随父级）；
+         这里绝不能再写 width:48px !important —— 否则收起瞬间内容被瞬间裁成 48px，动画看不见。 */
       .agent-sidebar[data-mode="collapsed"],
       .agent-sidebar.is-collapsed {
-        width: 48px !important;
-        min-width: 48px;
         overflow: hidden;
-      }
-      .agent-sidebar .agent-sidebar-fade {
-        opacity: 1;
-        visibility: visible;
-        transition: opacity var(--ls-dur-sidebar) var(--ls-ease),
-          visibility 0ms linear 0ms,
-          transform var(--ls-dur-sidebar) var(--ls-ease);
-      }
-      .agent-sidebar[data-mode="collapsed"] .agent-sidebar-fade,
-      .agent-sidebar.is-collapsed .agent-sidebar-fade {
-        opacity: 0;
-        pointer-events: none;
-        visibility: hidden;
-        transition: opacity var(--ls-dur-sidebar) var(--ls-ease),
-          visibility 0ms linear 440ms,
-          transform var(--ls-dur-sidebar) var(--ls-ease);
       }
       .agent-sidebar[data-mode="docked"] {
         margin: 0;
         border-radius: 0;
         box-shadow: none;
-      }
-      /* 小窗化：真正的「浮动小窗」（fixed 浮在应用右下角，不占满整列高度）。
-         为什么 fixed：docked 时只是同一条侧栏换皮，用户实机反馈「小窗化后啥效果都没有」；
-         现在它缩成 340×min(68vh,620px) 的浮动卡片，四周留白可见应用底，和常驻态一眼可区分。
-         ⚠️ 原生网页视图只覆盖左侧浏览器区，右侧预留列是 DOM 区域，所以浮窗不会被网页盖住。 */
-      .agent-sidebar[data-mode="float"],
-      .agent-sidebar.is-float {
-        position: fixed !important;
-        right: 10px;
-        bottom: 44px;
-        top: auto;
-        left: auto;
-        width: 340px !important;
-        max-width: calc(100vw - 20px);
-        height: min(68vh, 620px);
-        margin: 0 !important;
-        z-index: 40;
-        border-radius: var(--ls-radius-lg, 16px);
-        overflow: hidden;
-        box-shadow: var(--ls-shadow-float, 0 24px 64px rgba(0, 0, 0, 0.55));
-        transition: right 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1)),
-          bottom 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1)),
-          height 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1)),
-          border-radius 220ms var(--ls-ease, cubic-bezier(0.2, 0, 0.2, 1));
-      }
-      html:not([data-theme="classic"]) .agent-sidebar[data-mode="float"],
-      html:not([data-theme="classic"]) .agent-sidebar.is-float {
-        border: none;
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 28%),
-          var(--ls-surface-raised);
       }
 
       /* 6) 终端面板：顶部圆角 + 240ms 高度过渡；全宽 hook */

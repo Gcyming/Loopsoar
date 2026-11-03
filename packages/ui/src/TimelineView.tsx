@@ -15,6 +15,7 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import { Icon } from "./Icon.js";
 import StreamFadeText from "./StreamFade.js";
 import DiffBlock from "./DiffBlock.js";
 import { RefPanel, UrlPanel } from "./ArtifactPanels.js";
@@ -82,7 +83,7 @@ export default function Timeline({ steps, liveStream = false, expandAll = false,
   return (
     <div className="think-card">
       <button type="button" className="think-card-title" onClick={onToggleOpen} title={open ? "收起思考过程" : "展开思考过程"}>
-        <span className="think-card-brain" aria-hidden>✦</span>
+        <span className="think-card-brain" aria-hidden><Icon name="sparkle" size={12} /></span>
         <span className="think-card-label">思考过程</span>
         {toolCount > 0 ? <span className="think-card-count">{toolCount} 个动作</span> : null}
         <span style={{ marginLeft: "auto", display: "inline-flex" }}>
@@ -249,7 +250,7 @@ function TimelineNode({
       <div className="think-step">
         <span className={`think-step-mark todo-step-mark${done ? " is-done" : ""}`} />
         <div className={`todo-announce${done ? " is-done" : ""}`}>
-          <span className="todo-announce-mark" aria-hidden>{done ? "✓" : "▶"}</span>
+          <span className="todo-announce-mark" aria-hidden>{done ? <Icon name="check" size={9} /> : <Icon name="play" size={9} />}</span>
           <span className="todo-announce-text" title={step.text}>{step.text}</span>
           <span className="todo-announce-tag">{done ? "已完成" : "开始"}</span>
         </div>
@@ -298,7 +299,7 @@ function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
           <div className="plan-card-list">
             {items.map((item, index) => (
               <div key={`${index}-${item.content}`} className="plan-item" data-status={item.status}>
-                <span className="plan-item-mark" aria-hidden>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "▶" : "○"}</span>
+                <span className="plan-item-mark" aria-hidden>{item.status === "completed" ? <Icon name="check" size={10} /> : item.status === "in_progress" ? <Icon name="play" size={10} /> : <Icon name="circle" size={9} />}</span>
                 <span className="plan-item-text">{item.content}</span>
               </div>
             ))}
@@ -355,7 +356,7 @@ function ToolNode({
         title={hasBody ? (expanded ? "点击收起详情" : "点击展开详情") : undefined}
         style={{ cursor: hasBody ? "pointer" : "default" }}
       >
-        <span className="think-tool-glyph" aria-hidden>{glyphFor(category)}</span>
+        <span className="think-tool-glyph" aria-hidden><Icon name={glyphFor(category)} size={12} /></span>
         <span className="think-tool-name" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
         {category ? <span className="think-tool-cat">{category}</span> : null}
         {diffStats ? (
@@ -407,7 +408,7 @@ function ToolNode({
           <div className="think-tool-detail-box">
             {step.detail ? (
               <div className="think-tool-detail-line">
-                <span aria-hidden>{isUrl ? "🔗" : "↳"}</span>
+                <span aria-hidden>{isUrl ? <Icon name="link" size={11} style={{ verticalAlign: "-1px" }} /> : "↳"}</span>
                 <span className="think-tool-detail-text">{step.detail}</span>
               </div>
             ) : null}
@@ -419,7 +420,7 @@ function ToolNode({
                 <pre className="think-terminal">{resultText.slice(0, 6000)}{resultText.length > 6000 ? "\n…（已截断）" : ""}</pre>
               ) : (
                 <div className="think-tool-result" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.linenMuted }}>
-                  <span className="think-tool-result-mark" aria-hidden>{failed ? "✕" : "✓"}</span>
+                  <span className="think-tool-result-mark" aria-hidden>{failed ? <Icon name="close" size={10} /> : <Icon name="check" size={10} />}</span>
                   <span className="think-tool-result-text">{resultText.slice(0, 600)}{resultText.length > 600 ? "…" : ""}</span>
                 </div>
               )
@@ -437,7 +438,7 @@ function ToolNode({
                       onOpenUrl?.(url);
                     }}
                   >
-                    🔗 {url.replace(/^https?:\/\//, "").slice(0, 48)}
+                    <Icon name="link" size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} /> {url.replace(/^https?:\/\//, "").slice(0, 48)}
                   </a>
                 ))}
               </div>
@@ -449,23 +450,24 @@ function ToolNode({
   );
 }
 
+/** 工具分类 → 本地图标名（mask 图标随 currentColor 着色，尺寸由调用处给）。 */
 function glyphFor(category: string): string {
   switch (category) {
     case "执行命令":
-      return "⌘";
+      return "terminal";
     case "写入":
-      return "✎";
+      return "edit";
     case "删除":
-      return "⌫";
+      return "close";
     case "网页访问":
-      return "🌐";
+      return "globe";
     case "读取":
-      return "◫";
+      return "file";
     case "规划":
-      return "☑";
+      return "checkbox";
     case "委派子代理":
-      return "⇢";
+      return "arrow-go";
     default:
-      return "⚙";
+      return "settings";
   }
 }

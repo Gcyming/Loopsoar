@@ -715,6 +715,13 @@
       "hasRequest": false
     },
     {
+      "channel": "ui:minimizeAgentWindow",
+      "domain": "ui",
+      "method": "minimizeAgentWindow",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "chat:compact",
       "domain": "chat",
       "method": "compact",

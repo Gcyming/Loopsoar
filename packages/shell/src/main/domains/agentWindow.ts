@@ -1,11 +1,13 @@
 /**
  * agentWindow 域：「Agent 会话栏独立窗口」的 IPC 入口（真·窗口化）。
  *
- * 两条通道（契约 manifest 已含，sensitive）：
- *   · ui:openAgentWindow  —— 打开/聚焦会话栏独立窗口（{sessionId?}）；**只允许主窗口调用**
- *                            （Agent 窗口自己再开一个窗口没有意义，也防递归/多实例）；
- *   · ui:closeAgentWindow —— 关闭会话栏窗口；主窗口与 Agent 窗口自身都允许调用
- *                            （窗口内的关闭按钮/快捷键需要能关自己），程序性关闭不推事件。
+ * 三条通道（契约 manifest 已含，sensitive）：
+ *   · ui:openAgentWindow     —— 打开/聚焦会话栏独立窗口（{sessionId?}）；**只允许主窗口调用**
+ *                               （Agent 窗口自己再开一个窗口没有意义，也防递归/多实例）；
+ *   · ui:closeAgentWindow    —— 关闭会话栏窗口；主窗口与 Agent 窗口自身都允许调用
+ *                               （窗口内的关闭按钮/快捷键需要能关自己），程序性关闭不推事件；
+ *   · ui:minimizeAgentWindow —— 最小化自己（无边框窗口的标题栏最小化按钮）；**只允许 Agent 窗口自身**
+ *                               （主窗口的最小化由系统标题栏/其它入口负责，这里不越权）。
  *
  * 事件：窗口被用户/系统关闭时，经 manager.onClosed 订阅 → `deps.push("chrome:agentWindowClosed", {})`
  *       通知主窗口渲染层（主窗口据此把侧栏恢复显示/更新按钮状态）。程序性 close/dispose 不推。
@@ -69,6 +71,36 @@ function normalizeSessionId(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * 包裹一层「只允许 Agent 窗口自身」的发送者校验（ui:minimizeAgentWindow 专用）。
+ * 与 withMainSenderGuard 同理：handleTrusted 只能保证帧来源可信（主窗口与 Agent 窗口同源），
+ * 这里在真正的 ipcMain handler 之前按 event.sender.id 比对当前 Agent 窗口的 webContents.id；
+ * 窗口未打开（webContentsId 为 null）或来源不匹配 → 审计 rejected 并拒绝（fail-closed）。
+ */
+function withAgentSenderGuard(deps: AgentWindowDomainDeps, manager: AgentWindowManager): TrustedIpcDeps {
+  return {
+    audit: deps.audit,
+    ipc: {
+      handle(channel, fn) {
+        deps.ipc.handle(channel, async (event, payload) => {
+          const expected = manager.webContentsId();
+          const senderId = (event as { sender?: { id?: number } } | null)?.sender?.id;
+          if (expected === null || typeof expected !== "number" || senderId !== expected) {
+            deps.audit({
+              channel,
+              sender: typeof senderId === "number" ? String(senderId) : "-",
+              status: "rejected",
+              reason: "仅 Agent 会话栏窗口可最小化自身",
+            });
+            throw new Error("IPC 拒绝：仅 Agent 会话栏窗口可最小化自身");
+          }
+          return fn(event, payload);
+        });
+      },
+    },
+  };
+}
+
 /** 注册 Agent 会话栏窗口通道；manager 由 index 用真实 Electron 装配，测试注入假对象。 */
 export function registerAgentWindowDomain(deps: AgentWindowDomainDeps, manager: AgentWindowManager): void {
   // 用户/系统关闭窗口 → 通知主窗口渲染层（程序性 close/dispose 不触发，避免 UI 自己关时收到二次通知）
@@ -89,18 +121,26 @@ export function registerAgentWindowDomain(deps: AgentWindowDomainDeps, manager: 
   });
 
   // 关闭通道不限制发送者：主窗口可关，Agent 窗口内的「关闭」按钮也可关自己；任何可信帧都是本应用窗口。
-  // 注意：程序性 close 不会触发 manager.onClosed，但主动关闭同样要让主窗口恢复侧栏
-  //（例如用户在 Agent 窗口内点「收回主窗口」），因此这里在真的关掉窗口后补一次事件推送。
+  // 关闭通知由 manager.onClosed 统一驱动（滑出动画结束后才触发），这里不再补推：
+  // 提前 push 会让主窗口侧栏在窗口还盖在右侧时就展开，正是用户说的「收起位置反逻辑」。
   handleTrusted(deps, "ui:closeAgentWindow", () => {
-    const wasOpen = manager.isOpen();
     manager.close();
-    if (wasOpen) {
+    return { ok: true };
+  });
+
+  // 最小化自己：只接受当前 Agent 窗口 webContents 的调用（主窗口无权替它最小化，避免误操作）。
+  // 最小化后窗口滑到任务栏，主窗口右侧必须把侧栏让回来（否则主窗口侧栏仍隐藏、没有可见的再次打开入口）。
+  // 复用 closed 事件语义「窗口已不在右缘」：主窗口据 agentWindowOpen=false 恢复侧栏；
+  // 用户再点「小窗化」时 manager.open() 对已存在窗口走 focus()，会 restore 最小化窗口，届时 UI 重新隐藏侧栏。
+  handleTrusted(withAgentSenderGuard(deps, manager), "ui:minimizeAgentWindow", (): { ok: boolean } => {
+    const ok = manager.minimize();
+    if (ok) {
       try {
         deps.push?.("chrome:agentWindowClosed", {});
       } catch {
-        // 推送失败不影响窗口已关闭的事实
+        // 推送失败不影响窗口已最小化的事实
       }
     }
-    return { ok: true };
+    return { ok };
   });
 }

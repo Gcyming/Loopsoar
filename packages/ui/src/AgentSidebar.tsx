@@ -8,6 +8,13 @@
  *               用 opacity 淡出 + 指针禁用，宽度与透明度同步过渡 → 展开时布局不跳变
  *   · float     浮动小窗：外面包一层 `floatCard`（圆角/阴影/外边距由 .is-float/.floatCard 的 CSS 负责）
  *
+ * 宽度所有权（避免「收起/展开位置反逻辑」）：
+ *   · 外层 wrapper（App.tsx）拥有唯一可过渡的 width；本组件根节点恒为 width:100% 跟随父级，
+ *     这样收起/展开时是父级裁切窗口在动，而不是组件内部宽度和父级各动一套（会被父级瞬间裁掉）。
+ *   · 内容 `.agent-sidebar-inner` 固定为展开态基准宽度（`width` prop）并用 margin-left:auto 钉右缘：
+ *     宽度变窄时裁掉左侧、内容不重排（slime 的不变式：右边栏始终钉住窗口右缘）。
+ *   · rail 绝对定位在右缘，只有 48px 宽，因此收起到 48px 时正好露出的就是 rail。
+ *
  * 约定类名（V1 主题任务按此写 CSS，组件只提供结构与内联骨架）：
  *   `.agent-sidebar[data-mode="docked|collapsed|float"]`、`.agent-sidebar.is-float`、`.agent-sidebar.is-collapsed`、
  *   `.agent-sidebar-inner`、`.agent-sidebar-content`、`.floatCard`、`.agent-sidebar-rail`、`.sidebar-mode-btn`
@@ -16,7 +23,6 @@
  * 宽度拖拽仍由 App 的 splitter 控制。
  */
 import * as React from "react";
-import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, MOTION, RADIUS, SHADOW } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
@@ -27,7 +33,10 @@ import type { SessionMeta, SidebarMode, WorkspaceRecord } from "./types.js";
 import type { TimelineStep } from "./timeline.js";
 
 export interface AgentSidebarProps {
-  /** 侧栏宽度（px），由 App 的 splitter 拖拽维护（collapsed 态组件内部固定为 48px）。 */
+  /**
+   * 内容基准宽度（px）：展开态下会话栏内容的固定宽度（收起/展开过程中不重排）。
+   * 传 0 表示铺满父容器（Agent 独立窗口 / mini 模式）。
+   */
   width: number;
   /** 侧栏模式：docked 常驻 / collapsed 收起 / float 小窗浮动（App 持久化到 preferences.sidebarMode）。 */
   mode: SidebarMode;
@@ -144,16 +153,16 @@ export default function AgentSidebar({
   const switchLabel = localized("chat.sidebarRailSwitch", "切换会话", "Switch session");
   const newLabel = localized("chat.sidebarRailNew", "新建会话", "New session");
 
-  const rootWidth = isCollapsed ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH : width;
+  const fill = width <= 0;
+  const contentWidth = fill ? "100%" : width;
   const rootClassName = `agent-sidebar${isFloat ? " is-float" : ""}${isCollapsed ? " is-collapsed" : ""}`;
   const innerClassName = isFloat ? "floatCard agent-sidebar-inner" : "agent-sidebar-inner";
 
   return (
-    <aside className={rootClassName} data-mode={mode} style={{ ...styles.sidebar, width: rootWidth, ...(isFloat ? styles.sidebarFloat : {}) }}>
+    <aside className={rootClassName} data-mode={mode} style={{ ...styles.sidebar, ...(isFloat ? styles.sidebarFloat : {}) }}>
       {/* 收起态：48px 竖条（Agent 图标 / 展开 / 会话切换 / 新建）。内容仍在下面 DOM 中以 opacity 淡出 */}
       {isCollapsed ? (
-        <div className="agent-sidebar-rail" style={styles.rail} role="toolbar" aria-label={railLabel}>
-          <span style={styles.railLogo} title={agentLabel} aria-hidden="true">
+        <div className="agent-sidebar-rail" style={styles.rail} role="toolbar" aria-label={railLabel}>          <span style={styles.railLogo} title={agentLabel} aria-hidden="true">
             <Icon name="agent" size={16} />
           </span>
           <button
@@ -198,6 +207,7 @@ export default function AgentSidebar({
         style={{
           ...styles.inner,
           ...(isFloat ? styles.floatCard : {}),
+          width: contentWidth,
           opacity: isCollapsed ? 0 : 1,
           pointerEvents: isCollapsed ? "none" : "auto",
         }}
@@ -230,9 +240,7 @@ export default function AgentSidebar({
                 aria-pressed={isFloat}
                 onClick={() => onModeChange(isFloat ? "docked" : "float")}
               >
-                <span aria-hidden="true" style={styles.modeGlyph}>
-                  {isFloat ? "▣" : "⧉"}
-                </span>
+                <Icon name={isFloat ? "maximize" : "restore"} size={13} />
               </button>
             </span>
           </div>
@@ -311,14 +319,16 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     position: "relative",
     flexShrink: 0,
-    // 收起态由 48px 裁切内容：不能保留旧 minWidth 280（否则收不起来）
+    // 宽度由外层 wrapper 唯一拥有（收起/展开靠父级 width 过渡 + overflow 裁切）；
+    // 这里恒为 100%，不能再自己再动一套 width（父级会瞬间裁掉，动画就看不见了）。
+    width: "100%",
     minWidth: 0,
     overflow: "hidden",
     boxSizing: "border-box",
     borderLeft: `1px solid ${BRAND.border}`,
     background: BRAND.inkPanel,
-    // 宽度/透明度/圆角同步过渡（collapsed ⇄ docked/float）
-    transition: MOTION.sidebar,
+    // 只过渡颜色类属性：width 由父级驱动，不能在本节点再过渡（否则每一帧都落后于父级）
+    transition: `opacity ${MOTION.sidebarDuration} ${MOTION.ease}, border-radius ${MOTION.sidebarDuration} ${MOTION.ease}, box-shadow ${MOTION.sidebarDuration} ${MOTION.ease}`,
   },
   /** 小窗：外层透明，卡片视觉交给 floatCard（CSS 负责 8px 外边距与视口宽度夹取）。 */
   sidebarFloat: {
@@ -330,8 +340,10 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     flex: 1,
     minHeight: 0,
-    // 收起过程中内容保持 280 最小宽度（由根节点 overflow:hidden 裁切），避免文字重排跳变
-    minWidth: 280,
+    // 内容固定为展开态宽度（由 width prop 内联），收起过程中由父级 overflow 裁掉左侧：
+    // 文字不重排、不换行，展开时也不会出现「先挤扁再撑开」的跳变。
+    minWidth: 0,
+    marginLeft: "auto",
     transition: `opacity ${MOTION.sidebarDuration} ${MOTION.ease}`,
   },
   /** 浮动卡片骨架：圆角/阴影用主题 token（与 V1 设计规范一致，CSS 可再覆写）。 */
@@ -349,10 +361,13 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minHeight: 0,
   },
-  /** 收起态竖条：绝对定位覆盖在内容之上（48px 宽由根节点决定）。 */
+  /** 收起态竖条：绝对定位钉在父级右缘（48px 宽），父级收窄时正好露出这一条。 */
   rail: {
     position: "absolute",
-    inset: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 48,
     zIndex: 2,
     display: "flex",
     flexDirection: "column",
@@ -374,7 +389,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   railBtn: { width: 32, height: 32 },
   spacer: { flex: 1 },
-  modeGlyph: { fontSize: 13, lineHeight: 1, fontFamily: "system-ui, sans-serif" },
   sidebarHeader: {
     display: "flex",
     alignItems: "center",

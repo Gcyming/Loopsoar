@@ -7,6 +7,7 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import { Icon } from "./Icon.js";
 import DiffBlock from "./DiffBlock.js";
 import type { ProductFile, ReferenceGroups } from "./artifacts.js";
 
@@ -40,7 +41,7 @@ export function UrlPanel({ urls, onOpenUrl }: { urls: ReferenceGroups["urls"]; o
   if (urls.length === 0) return null;
   return (
     <div className="ref-panel">
-      <div className="ref-panel-head"><span aria-hidden>🌐</span> 访问来源 <span className="ref-panel-count">{urls.length}</span></div>
+      <div className="ref-panel-head"><Icon name="globe" size={12} /> 访问来源 <span className="ref-panel-count">{urls.length}</span></div>
       <div className="ref-panel-list">
         {urls.map((item) => (
           <a
@@ -68,7 +69,7 @@ export function RefPanel({ files }: { files: ReferenceGroups["files"] }): React.
     <div className="ref-panel">
       <button type="button" className="ref-panel-head is-button" onClick={() => setOpen((value) => !value)} title={open ? "收起参考文件" : "展开参考文件"}>
         <Chevron open={open} />
-        <span aria-hidden>📄</span>
+        <Icon name="file" size={12} />
         <span>参考内容</span>
         <span className="ref-panel-count">{files.length}</span>
       </button>
@@ -96,7 +97,7 @@ export function ProductPanel({ products, defaultOpen = false }: { products: Prod
             <div key={product.path} className={`product-card${open ? " is-open" : ""}`}>
               <button type="button" className="product-card-head" onClick={() => setOpenPath(open ? null : product.path)} title={open ? "收起改动" : "展开改动"}>
                 <Chevron open={open} />
-                <span className="product-card-icon" aria-hidden>📄</span>
+                <span className="product-card-icon" aria-hidden><Icon name="file" size={11} /></span>
                 <span className="product-card-name" title={product.path}>{product.label}</span>
                 <span className="product-card-stat">
                   <span className="think-diff-add">+{product.add}</span>

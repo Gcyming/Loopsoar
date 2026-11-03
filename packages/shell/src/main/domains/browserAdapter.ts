@@ -40,10 +40,12 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     tabs: deps.browser?.listTabs() ?? [],
   }));
 
-  // 侧栏拖拽调宽：原生视图区域随之重算
+  // 侧栏调宽：拖拽（animate 缺省 = false）必须立即跟手；收起/展开按钮传 animate:true，
+  // 由宿主用与 DOM 侧栏相同的曲线/时长逐帧重算原生视图，消除「侧栏先动、网页后动」。
   handleTrusted(deps, "browser:setSidebarWidth", (payload) => {
-    const width = (payload as { width: number }).width;
-    deps.browser?.setSidebarWidth(width);
+    const p = (payload ?? {}) as { width?: unknown; animate?: unknown };
+    const width = typeof p.width === "number" ? p.width : 0;
+    deps.browser?.setSidebarWidth(width, p.animate === true);
     return { width };
   });
 

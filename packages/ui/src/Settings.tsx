@@ -1017,7 +1017,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   <Btn label={tr("settings.providers.testConnection")} onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default", headers: parseHeaderLines(pHeaders, tr) }).then(setTestRes).catch(bad)} />
                   <Btn label={tr("settings.providers.saveEnable")} primary onClick={() => void commit()} />
                   <Btn label={tr("settings.cancel")} onClick={() => setEditingProviderId(null)} />
-                  {testRes ? <span style={testRes.ok ? S.okText : S.errText}>{testRes.ok ? "✓ " : "✕ "}{testRes.message}</span> : null}
+                  {testRes ? (
+                    <span style={testRes.ok ? S.okText : S.errText}>
+                      <Icon name={testRes.ok ? "check" : "close"} size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                      {testRes.message}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             )}

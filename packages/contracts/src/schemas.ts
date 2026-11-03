@@ -252,7 +252,11 @@ export const BrowserBottomInsetSchema = z.object({
 });
 
 // 收起态宽度可以是 48（图标条）：下限不能沿用拖拽宽度 240，否则收起后原生视图仍让出 240px
-export const BrowserSidebarWidthSchema = z.object({ width: z.number().int().min(0).max(720) });
+export const BrowserSidebarWidthSchema = z.object({
+  width: z.number().int().min(0).max(720),
+  /** true = 原生网页视图用与 DOM 相同的曲线/时长平滑过渡（收起/展开侧栏、窗口化时保持同拍）。 */
+  animate: z.boolean().optional(),
+});
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),
@@ -1006,6 +1010,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
   "ui:closeAgentWindow": {
     domain: "ui",
     method: "closeAgentWindow",
+    request: null,
+    sensitive: true,
+  },
+  "ui:minimizeAgentWindow": {
+    domain: "ui",
+    method: "minimizeAgentWindow",
     request: null,
     sensitive: true,
   },

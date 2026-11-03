@@ -112,6 +112,7 @@ export const IPC_CHANNELS = {
   "ui:popoverAction": { domain: "ui", method: "popoverAction", sensitive: true, hasRequest: true },
   "ui:openAgentWindow": { domain: "ui", method: "openAgentWindow", sensitive: true, hasRequest: true },
   "ui:closeAgentWindow": { domain: "ui", method: "closeAgentWindow", sensitive: true, hasRequest: false },
+  "ui:minimizeAgentWindow": { domain: "ui", method: "minimizeAgentWindow", sensitive: true, hasRequest: false },
   "chat:compact": { domain: "chat", method: "compact", sensitive: true, hasRequest: true },
   "loop:list": { domain: "loop", method: "list", sensitive: true, hasRequest: false },
   "loop:setActive": { domain: "loop", method: "setActive", sensitive: true, hasRequest: true },
@@ -164,7 +165,7 @@ export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
     "mcp": ["list", "add", "remove", "connect", "disconnect"],
     "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history"],
     "ask": ["respond"],
-    "ui": ["openPopover", "closePopover", "popoverAction", "openAgentWindow", "closeAgentWindow"],
+    "ui": ["openPopover", "closePopover", "popoverAction", "openAgentWindow", "closeAgentWindow", "minimizeAgentWindow"],
     "loop": ["list", "setActive", "reload"],
     "bookmarks": ["list", "add", "remove"]
     },

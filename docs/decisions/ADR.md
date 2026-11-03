@@ -318,6 +318,30 @@
 - **复核时间**：打包阶段（多显示器 / 多 DPI / 窗口置顶与焦点 / 开机恢复）
 
 ---
+
+## ADR-0021 定制窗口 chrome + 交互反馈 + 动效规范收敛
+
+- **背景**：用户第 9 轮五点诉求：① 独立 Agent 小窗不要系统默认标题栏，最小化/关闭换成定制图标；② 使用其本地收录的图标库、不得再用 emoji 当图标，发送按钮图标也要改；③ 发送后发送按钮变中断按钮，点击立即中断生成，但用户再次输入时变回发送按钮；④ 主界面最小化/最大化/关闭按钮悬停无反馈；⑤ 「loopsoar 也出现了跟 slime 一样的动画逻辑错误，出现位置、收起位置全部反逻辑」，要求以 `D:\pilot project` 的 slime 为基准根除此类问题。
+- **根因**：
+  1. Agent 小窗仍是 `frame:true`，系统标题栏与自绘 UI 叠加，且窗口位置交给 OS 默认放置（录屏逐帧：打开时先出现在偏右位置、右侧被屏幕截断，再瞬间补全，没有从主窗口右缘滑入的轨迹；关闭是 1–2 帧硬切）。
+  2. `TitleBar` 的 `styles.windowButton` 内联 `background:"transparent"`，内联样式优先级压过 `index.html` 的 `.win-btn:hover`，主窗口按钮 hover 永远不生效（小窗是系统按钮所以有反馈）。
+  3. 发送/中断是两个并排控件，且运行中输入会弹「编辑/直接引导/取消」询问，不符合「单按钮随状态切换」的预期。
+  4. 动效三处不同源：DOM 侧栏过渡 `cubic-bezier(0.2,0,0.2,1)` 与主进程原生视图插值 `cubic-bezier(0,0,0.2,1)` 不同曲线（同 320ms 下 160ms 处进度 0.815 vs 0.838，371px 位移差 8–9px → 原生网页盖住侧栏边缘）；侧栏外层 `display:none` 瞬切；窗口最小化/关闭事件在动画前推送，导致侧栏提前展开；收起/窗口化时仍扣 6px splitter 留缝；启动水合时误播动画。
+- **决策**：
+  1. **独立 Agent 窗口改无边框自绘**：`frame:false` + `titleBarStyle:"hidden"` + `roundedCorners:true`；复用 `TitleBar variant="agent"`（品牌标 + 「Agent 对话」+ 仅最小化/关闭，拖拽区 `-webkit-app-region: drag`，双击不最大化）；新增 `ui:minimizeAgentWindow` 通道（仅 Agent 窗口可调），最小化后主窗口恢复侧栏避免无入口。
+  2. **窗口几何由主进程显式管理**：`computeAgentWindowBounds` 以主窗口 `contentBounds` 贴右缘（`right-420-8`、`top+118`），按显示器 `workArea` 四边夹取；打开时隐藏创建、首帧在 `target.x+24`，200ms 同曲线滑入淡入；关闭 160ms 滑出后销毁；`chrome:agentWindowClosed` 改为**窗口真正销毁后**推送；主窗口 7 类几何事件 16ms 防抖 `reposition()` 跟随。
+  3. **发送↔中断单按钮状态机**：`busy && 输入为空` → 停止图标（点击立即中断、不置灰）；`busy && 有输入` → 发送图标（走 steer）；`idle` → 发送；删除独立停止块与运行中询问弹窗。
+  4. **hover 根因修复**：删除 `windowButton` 内联背景/颜色，统一由 `.win-btn`/`:hover` 提供；补标签页/chip/模型项 hover，chip 用 `!important` 覆盖内联背景；关闭键 hover 变红。
+  5. **本地图标库替代 emoji**：从用户 `Loopsoar/icon/icon_fpbc119q3rk` 迁入 42 个 1024 viewBox SVG 到 `packages/ui/public/icons`（ASCII 命名 + `SOURCE.md` 映射），发送=`guide-arrow`、中断=`终止`、最小化=`minus`，自绘 maximize/restore/checkbox 等；`Icon` 走 CSS mask + currentColor；替换全部 emoji/几何符号并新增图标存在性测试。
+  6. **动效规范收敛（`docs/design/sidebar-motion.md`，10 条不变式）**：右缘钉住（`margin-left:auto`/`justify-content:flex-end`）；禁用 auto 宽过渡、过渡期 px 目标宽 + `!important`；wrapper 与内容同 duration/curve；退场独立类；内容常驻 DOM；预捕获 + 时间驱动；CSS token 单一产地（JS 读回）；动画与拖拽互斥。据此统一 DOM 侧栏与原生视图为 320ms `cubic-bezier(0.2,0,0.2,1)`；splitter 仅 docked 扣 6px；删除侧栏 `display:none` 瞬切与死 CSS；启动水合不播动画。
+- **理由**：原生 `WebContentsView` 的层级与 OS 窗口行为是硬约束，只有独立 BrowserWindow + 自绘 chrome 才能实现用户要的「全自定制窗口」；单按钮状态机符合成熟聊天产品的交互直觉；动效必须「曲线/时长/几何三者同源」才能避免出现/收起位置反逻辑（参考项目已用注释与逐帧追踪验证过同类故障）。
+- **替代方案**：保留系统标题栏只换图标（否，用户明确「不要系统默认顶部控制页」）；用第三方 UI 库图标（否，用户已提供本地图标库）；把中断做成独立按钮并保留（否，用户要单按钮切换）；仅调时长不改曲线（否，根因是两条曲线不同源）。
+- **验证方式**：`tests/shell/agentWindow.spec.ts`（42：无边框创建/贴边+夹取/滑入/滑出/关闭事件时序/最小化/reposition/域守卫）、`tests/shell/browserHost.spec.ts`（23：同曲线插值/收起态宽度/splitter 语义）、`tests/ui/icons.spec.ts`（5）、`tests/core/layout.spec.ts`（splitter 仅 docked）、`tests/guards/channels-have-handlers.spec.ts`；全量 **132 文件 / 1205 tests 全绿**，typecheck 5/5、gen/check 逐字节一致、build 5/5；真机 E2E 见 `docs/E2E-SMOKE.md` 第 14 节（无边框小窗、滑入轨迹 x 686→662、原生视图 507→0 插值、hover 变红、Composer stop→输入后 send）。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：无边框窗口在个别桌面环境无法拖动/缩放 → 恢复 `frame:true` 系统标题栏；单按钮状态机与用户预期冲突 → 可回退为独立停止按钮（Composer 局部改动）；动效异常 → 设置中关闭动效（`data-animations` / reduced-motion）即可降级。
+- **复核时间**：打包阶段（多显示器 / 多 DPI / 窗口贴边吸附 / 输入法与快捷键）
+
+---
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -342,3 +366,4 @@
 | ADR-0018 | 工具栏浮层独立窗口 / 管理整页 / 窗口自适应 / 全局历史 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0019 | 柔和无框双主题 / 会话栏三态 / 全宽底部终端 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0020 | 会话栏「小窗化」= 独立 Agent 窗口（真·窗口化） | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0021 | 定制窗口 chrome / 本地图标库 / 发送↔中断 / hover / 动效规范收敛 | ✅ 已验证（自动化 + 真机 E2E） |

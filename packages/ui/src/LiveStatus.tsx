@@ -8,6 +8,7 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import { Icon } from "./Icon.js";
 
 export interface LiveStatusProps {
   startedAt: number;
@@ -33,7 +34,8 @@ export default function LiveStatus({ startedAt, contextPct, runningTool, hasText
       : seconds >= 5
         ? "已发出请求，等待上游返回"
         : "正在思考";
-  const cheer = seconds >= 5 ? "别急，好东西值得多等几秒 🍀" : null;
+  // 不用 emoji：陪伴语前挂本地图标（bulb），颜色随文字主题走
+  const cheer = seconds >= 5 ? "别急，好东西值得多等几秒" : null;
 
   return (
     <div style={styles.wrap}>
@@ -49,7 +51,12 @@ export default function LiveStatus({ startedAt, contextPct, runningTool, hasText
             : ""}
         </span>
       </div>
-      {cheer ? <span style={styles.cheer}>{cheer}</span> : null}
+      {cheer ? (
+        <span style={styles.cheer}>
+          <Icon name="bulb" size={12} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+          {cheer}
+        </span>
+      ) : null}
     </div>
   );
 }

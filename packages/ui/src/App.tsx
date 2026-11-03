@@ -15,7 +15,7 @@ import type {
   TabState,
   WorkspaceRecord,
 } from "./types.js";
-import { BRAND, applyTheme } from "./theme.js";
+import { BRAND, MOTION, applyTheme } from "./theme.js";
 import Settings from "./Settings.js";
 import ChromePage from "./ChromePage.js";
 import MessageList from "./MessageList.js";
@@ -152,6 +152,12 @@ export default function App(): React.JSX.Element {
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
+  /** 侧栏拖拽中：拖拽时宽度必须逐帧跟手，不能开 CSS 过渡（否则手感变「橡皮筋」）。 */
+  const [sidebarDragging, setSidebarDragging] = useState(false);
+  /** 供 IPC effect 同步读取（state 更新是异步的，拖拽时序里必须用 ref）。 */
+  const sidebarDraggingRef = React.useRef(false);
+  /** 原生视图宽度是否已完成启动水合：首次同步必须瞬时落位（不播动画），之后才允许 320ms 过渡。 */
+  const nativeSidebarReadyRef = React.useRef(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
   const [, setDownloads] = useState<DownloadItem[]>([]);
@@ -339,6 +345,8 @@ export default function App(): React.JSX.Element {
       const maxForWindow = (): number => Math.max(minWidth + 40, Math.min(720, window.innerWidth - 320));
       // 拖拽期间隐藏原生 WebContentsView，否则鼠标移入浏览器区后 mousemove 会被它吞掉
       void api?.browser.setOverlay({ open: true }).catch(() => {});
+      sidebarDraggingRef.current = true;
+      setSidebarDragging(true);
       const onMove = (e: MouseEvent): void => {
         const next = Math.max(minWidth, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
         setSidebarWidth(next);
@@ -346,10 +354,13 @@ export default function App(): React.JSX.Element {
       const onUp = (e: MouseEvent): void => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        sidebarDraggingRef.current = false;
+        setSidebarDragging(false);
         const next = Math.max(minWidth, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
         setSidebarWidth(next);
         void api?.browser.setOverlay({ open: false }).catch(() => {});
-        void api?.browser.setSidebarWidth({ width: next }).catch(() => {});
+        // 松手时原生视图宽度直接落位（拖拽过程视图是隐藏的，不需要补动画）
+        void api?.browser.setSidebarWidth({ width: next, animate: false }).catch(() => {});
         if (api && preferences) {
           void api.settings
             .setPreferences({ ...preferences, sidebarWidth: next })
@@ -405,9 +416,14 @@ export default function App(): React.JSX.Element {
       ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH
       : sidebarWidth;
   React.useEffect(() => {
-    if (!api || miniWindow) return;
-    void api.browser.setSidebarWidth({ width: effectiveSidebarWidth }).catch(() => {});
-  }, [api, effectiveSidebarWidth, miniWindow]);
+    if (!api || miniWindow || !preferences) return;
+    // 收起/展开/窗口化：DOM 侧栏用 CSS 过渡 320ms，原生网页视图必须用同一曲线同步让位，
+    // 否则会出现「DOM 拉丝、网页瞬移」的不同拍。拖拽时禁用动画（逐帧跟手）。
+    // 启动水合（默认宽度 360 → 偏好里的宽度/收起态）必须瞬时落位，否则启动瞬间会误播一次收起动画。
+    const animate = nativeSidebarReadyRef.current && !sidebarDraggingRef.current;
+    nativeSidebarReadyRef.current = true;
+    void api.browser.setSidebarWidth({ width: effectiveSidebarWidth, animate }).catch(() => {});
+  }, [api, effectiveSidebarWidth, miniWindow, preferences]);
 
   // 全宽终端占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
   React.useEffect(() => {
@@ -1034,7 +1050,8 @@ export default function App(): React.JSX.Element {
 
   return (
     <div style={styles.app}>
-      {miniWindow ? null : <TitleBar maximized={maximized} />}
+      {/* Agent 独立窗口（?mini=1）也走自绘标题栏：无系统边框，只有最小化/关闭 */}
+      <TitleBar maximized={maximized} variant={miniWindow ? "agent" : "main"} />
 
       {miniWindow ? null : (
       <BrowserChrome
@@ -1061,26 +1078,28 @@ export default function App(): React.JSX.Element {
         {!miniWindow && !agentWindowOpen && sidebarMode === "docked" ? (
           <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
         ) : null}
-        {/* docked：会话栏以「浮动卡片」呈现（8px 留白 + 圆角 + 阴影，不贴窗口边） */}
+        {/* 侧栏外框：唯一拥有 width 过渡的节点（收起/展开/窗口化都在这里动）。
+            右对齐 + overflow:hidden：宽度变窄时裁掉内容左侧、右缘钉住窗口右边；
+            原生网页视图由 browser:setSidebarWidth({animate:true}) 用同曲线同步让位。 */}
         <div
           style={{
             width: miniWindow ? "100%" : effectiveSidebarWidth,
             flexShrink: 0,
             boxSizing: "border-box",
-            display: agentWindowOpen ? "none" : "flex",
+            display: "flex",
+            justifyContent: "flex-end",
+            overflow: "hidden",
             minWidth: 0,
-            // collapsed 保持贴边竖条；docked 四周留 8px 形成浮动卡片；独立窗口模式铺满
-            padding: miniWindow ? 8 : sidebarMode === "docked" ? 8 : 0,
+            // collapsed / 窗口化时贴边收起；docked 四周留 8px 形成浮动卡片
+            padding: miniWindow ? 8 : agentWindowOpen || sidebarMode === "collapsed" ? 0 : 8,
+            transition:
+              miniWindow || sidebarDragging
+                ? "none"
+                : `width ${MOTION.sidebarDuration} ${MOTION.ease}, padding ${MOTION.sidebarDuration} ${MOTION.ease}`,
           }}
         >
         <AgentSidebar
-          width={
-            miniWindow
-              ? Math.max(240, window.innerWidth - 16)
-              : sidebarMode === "docked"
-                ? Math.max(240, effectiveSidebarWidth - 16)
-                : effectiveSidebarWidth
-          }
+          width={miniWindow ? 0 : Math.max(240, sidebarWidth - 16)}
           mode={miniWindow ? "docked" : sidebarMode}
           onModeChange={
             miniWindow

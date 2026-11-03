@@ -193,6 +193,26 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             await new Promise((r) => setTimeout(r, Number(process.env.LOOPSOAR_E2E_NAV_WAIT_MS ?? 2500))); // 等真实页面渲染完成
           }
           // 验收辅助：按可见文案点击一次（如设置页「编辑」），用于截图前展开表单
+          // E2E：动画轨迹采样（LOOPSOAR_E2E_AGENT_TRACE=1）——点击前开始每 16ms 记录
+          // 非主窗口 bounds 与原生视图 sidebarWidth，验证「滑入 / 侧栏让位」是逐帧插值而非瞬跳。
+          const traceStart = Date.now();
+          const traceTimer =
+            process.env.LOOPSOAR_E2E_AGENT_TRACE === "1"
+              ? setInterval(() => {
+                  const others = BrowserWindow.getAllWindows()
+                    .filter((w) => w !== win)
+                    .map((w) => w.getBounds());
+                  console.log(
+                    "AGENT_TRACE",
+                    JSON.stringify({
+                      t: Date.now() - traceStart,
+                      wins: others,
+                      browser: browserHost ? browserHost.debugBounds() : null,
+                    }),
+                  );
+                }, 16)
+              : null;
+
           const clickText = process.env.LOOPSOAR_E2E_CLICK_TEXT;
           if (clickText) {
             const clickDelay = Number(process.env.LOOPSOAR_E2E_CLICK_DELAY_MS ?? 0);
@@ -225,6 +245,45 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             const postClick = Number(process.env.LOOPSOAR_E2E_POST_CLICK_MS ?? 0);
             if (Number.isFinite(postClick) && postClick > 0) {
               await new Promise((r) => setTimeout(r, postClick));
+            }
+          }
+          // 动画轨迹：点击后再采 800ms，然后停止
+          if (traceTimer) {
+            await new Promise((r) => setTimeout(r, 800));
+            clearInterval(traceTimer);
+            console.log("AGENT_TRACE_DONE");
+          }
+
+          // E2E：主窗口标题栏按钮 hover 反馈（LOOPSOAR_E2E_HOVER_WIN_BUTTON=0|1|2）——
+          // 用真实 mouseMove 触发 CSS :hover，截图验证「最小化/最大化/关闭」有可见反馈。
+          if (process.env.LOOPSOAR_E2E_HOVER_WIN_BUTTON) {
+            const index = Number(process.env.LOOPSOAR_E2E_HOVER_WIN_BUTTON);
+            const rect = await win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const buttons = Array.from(document.querySelectorAll('.win-btn'));
+                  const el = buttons[${JSON.stringify(Number.isFinite(index) ? index : 2)}];
+                  if (!el) return null;
+                  const r = el.getBoundingClientRect();
+                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), count: buttons.length, bg: getComputedStyle(el).backgroundColor };
+                })()`,
+                true,
+              )
+              .catch(() => null);
+            if (rect) {
+              win.webContents.sendInputEvent({ type: "mouseMove", x: rect.x, y: rect.y });
+              await new Promise((r) => setTimeout(r, 350));
+              const hovered = await win.webContents
+                .executeJavaScript(
+                  `(() => { const el = document.querySelectorAll('.win-btn')[${JSON.stringify(Number.isFinite(index) ? index : 2)}]; return el ? { hover: el.matches(':hover'), bg: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null; })()`,
+                  true,
+                )
+                .catch(() => null);
+              console.log("E2E_HOVER_WIN_BUTTON", JSON.stringify({ rect, hovered }));
+              const hoverShot = shotPath.replace(/\.png$/, "-hover.png");
+              fs.mkdirSync(path.dirname(hoverShot), { recursive: true });
+              fs.writeFileSync(hoverShot, (await win.capturePage()).toPNG());
+              console.log("E2E_HOVER_SHOT", hoverShot);
             }
           }
 
@@ -704,16 +763,26 @@ function createMainWindow(): void {
   // 先发「中间尺寸」的 resize 再定格；全屏切换甚至可能不伴随 resize —— 只挂 resize 会让
   // WebContentsView 停在旧 bounds，表现就是「窗口变大了但网页没跟着自适应」。
   const scheduleBoundsSync = createDebouncedRunner(() => browserHost?.syncBounds(), 50);
-  mainWindow.on("resize", () => scheduleBoundsSync.schedule());
-  mainWindow.on("maximize", () => scheduleBoundsSync.schedule());
-  mainWindow.on("unmaximize", () => scheduleBoundsSync.schedule());
-  mainWindow.on("restore", () => scheduleBoundsSync.schedule());
-  mainWindow.on("enter-full-screen", () => scheduleBoundsSync.schedule());
-  mainWindow.on("leave-full-screen", () => scheduleBoundsSync.schedule());
+  // Agent 独立窗口贴在主窗口右缘：主窗口移动/缩放时必须跟着走，否则会「留在原地」变成位置反逻辑。
+  // 16ms 防抖 ≈ 一帧：跟手，但不用每个 move 事件都 setBounds。
+  const scheduleAgentWindowFollow = createDebouncedRunner(() => agentWindow?.reposition(), 16);
+  const syncWindowGeometry = (): void => {
+    scheduleBoundsSync.schedule();
+    scheduleAgentWindowFollow.schedule();
+  };
+  mainWindow.on("move", syncWindowGeometry);
+  mainWindow.on("resize", syncWindowGeometry);
+  mainWindow.on("maximize", syncWindowGeometry);
+  mainWindow.on("unmaximize", syncWindowGeometry);
+  mainWindow.on("restore", syncWindowGeometry);
+  mainWindow.on("enter-full-screen", syncWindowGeometry);
+  mainWindow.on("leave-full-screen", syncWindowGeometry);
   mainWindow.on("closed", () => {
     scheduleBoundsSync.cancel();
+    scheduleAgentWindowFollow.cancel();
     // 独立 Agent 窗口若常驻，主窗口关掉后 window-all-closed 不会触发，进程会残留成“只有小窗”
-    agentWindow?.close();
+    // 主窗口销毁场景不需要滑出动画（目标屏幕/工作区可能已不可用），立即关闭。
+    agentWindow?.close({ animate: false });
     mainWindow = null;
   });
 
@@ -1154,6 +1223,14 @@ app.whenReady().then(async () => {
       `--loopsoar-events=${JSON.stringify(EVENTS)}`,
     ],
     // 不传 onClosed：registerAgentWindowDomain 内部已订阅并 push chrome:agentWindowClosed（避免双推）
+    // 贴边：会话栏窗口默认贴主窗口右缘、顶部对齐浏览器视图（坐标随主窗口移动/缩放实时更新）。
+    getMainWindowContentBounds: () => {
+      try {
+        return mainWindow && !mainWindow.isDestroyed() ? mainWindow.getContentBounds() : null;
+      } catch {
+        return null;
+      }
+    },
   });
   agentWindow = agentWindowManager;
   browserHost = createElectronBrowserHost(

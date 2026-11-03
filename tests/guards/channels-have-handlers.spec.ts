@@ -121,6 +121,9 @@ function assemble(): void {
     close: () => {},
     isOpen: () => false,
     focus: () => false,
+    minimize: () => false,
+    reposition: () => false,
+    webContentsId: () => null,
     onClosed: () => () => {},
     dispose: () => {},
   });

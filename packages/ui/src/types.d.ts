@@ -662,6 +662,8 @@ export interface LoopsoarAPI {
     openAgentWindow(payload: { sessionId?: string }): Promise<{ ok: boolean; error?: string }>;
     /** 关闭会话栏独立窗口。 */
     closeAgentWindow(): Promise<{ ok: boolean }>;
+    /** 最小化会话栏独立窗口（自绘无系统边框后由标题栏按钮调用）。 */
+    minimizeAgentWindow(): Promise<{ ok: boolean }>;
   };
   loop: LoopsoarDomain & {
     /** 可运行的 Agent-Loop 列表 + 当前选择 + 回退历史。 */
@@ -720,7 +722,7 @@ export interface LoopsoarAPI {
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[] }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
-    setSidebarWidth(payload: { width: number }): Promise<{ width: number }>;
+    setSidebarWidth(payload: { width: number; animate?: boolean }): Promise<{ width: number }>;
     /** 底部 DOM 面板（全宽终端）占用高度：原生网页视图让出，避免被遮挡。 */
     setBottomInset(payload: { bottom: number }): Promise<{ bottom: number }>;
     back(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;

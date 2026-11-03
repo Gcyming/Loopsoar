@@ -22,6 +22,12 @@ import {
 } from "../browserAdapter/backends/webContentsView.js";
 import type { BrowserAdapter, BrowserSnapshot } from "../browserAdapter/types.js";
 import { sanitizeBrowserState, type PersistedBrowserState, type PersistedBrowserTab } from "./browserSessionState.js";
+import { easeCubicBezier } from "./agentWindow.js";
+
+/** 侧栏展开/收起动画时长：与 UI 侧栏 DOM 过渡同一条 cubic-bezier(0.2,0,0.2,1) 曲线（单产地在 agentWindow.easeCubicBezier）。 */
+export const SIDEBAR_ANIMATION_MS = 320;
+/** 动画帧间隔（约 60fps）。 */
+export const SIDEBAR_ANIMATION_TICK_MS = 16;
 
 export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
 
@@ -52,6 +58,12 @@ export interface BrowserHostDeps {
   openInNewTab?: (url: string) => void;
   /** 初始会话（默认 default）。 */
   initialSessionId?: string;
+  /**
+   * 测试注入：定时器（缺省全局 setInterval/clearInterval）。
+   * 侧栏宽度动画需要逐帧触发 applyLayout；测试用手动 scheduler 驱动，避免真实等待 320ms。
+   */
+  setIntervalFn?: (callback: () => void, ms: number) => unknown;
+  clearIntervalFn?: (handle: unknown) => void;
 }
 
 export interface TabState {
@@ -97,6 +109,8 @@ export class BrowserHost {
   private overlayOpen = false;
   /** 侧栏当前宽度（用户可拖拽；偏好持久化在 UI 层）。 */
   private sidebarWidth: number = LAYOUT.SIDEBAR_WIDTH;
+  /** 侧栏宽度动画的 interval 句柄（同一时刻至多一个；新调用取消旧动画）。 */
+  private sidebarAnimation: unknown = null;
   /** 底部 DOM 面板（全宽终端）占用的高度：原生视图必须让出，否则会被面板盖住。 */
   private bottomInset = 0;
   private seq = 0;
@@ -174,12 +188,63 @@ export class BrowserHost {
     return group.activeId ? group.tabs.get(group.activeId) ?? null : null;
   }
 
-  /** 侧栏拖拽调宽：原生视图区域随之重算。 */
-  setSidebarWidth(width: number): void {
-    // 收起态宽度可以是 48（甚至 0）：不能沿用拖拽最小值 240，否则收起后原生网页视图
-    // 仍让出 240px，用户看到的就是「左侧没有铺满」。
-    this.sidebarWidth = Math.max(0, Math.min(720, Math.round(width)));
-    this.applyLayout();
+  /**
+   * 侧栏宽度：
+   *   · animate=false（拖拽/首帧恢复）→ 直接设置，立即重算原生视图（必须跟手，不能有动画延迟）；
+   *   · animate=true（侧栏收起/展开按钮、快捷键）→ 用 320ms cubic-bezier(0,0,0.2,1) 逐帧插值，
+   *     每一帧都 applyLayout，让原生网页视图与 DOM 侧栏**同拍**滑动（此前侧栏是 CSS 过渡、
+   *     网页视图瞬间跳变，用户看到的就是「侧栏先动、网页后动」）。
+   *
+   * 收起态宽度可以是 48（甚至 0）：不能沿用拖拽最小值 240，否则收起后原生网页视图
+   * 仍让出 240px，用户看到的就是「左侧没有铺满」。
+   * 新调用会取消尚未完成的旧动画，从**当前插值位置**继续，避免来回点击时跳变。
+   */
+  setSidebarWidth(width: number, animate = false): void {
+    const target = Math.max(0, Math.min(720, Number.isFinite(width) ? Math.round(width) : 0));
+    this.cancelSidebarAnimation();
+    if (!animate || target === this.sidebarWidth) {
+      this.sidebarWidth = target;
+      this.applyLayout();
+      return;
+    }
+    const from = this.sidebarWidth;
+    const totalFrames = Math.max(1, Math.round(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
+    let frame = 0;
+    const setIntervalImpl =
+      this.deps.setIntervalFn ??
+      ((callback: () => void, ms: number): unknown => setInterval(callback, ms));
+    this.sidebarAnimation = setIntervalImpl(() => {
+      frame += 1;
+      const linear = Math.min(1, frame / totalFrames);
+      this.sidebarWidth = from + (target - from) * easeCubicBezier(linear);
+      this.applyLayout();
+      if (linear >= 1) {
+        this.cancelSidebarAnimation();
+        // 最后一帧对齐精确目标值（插值在 1 处应已相等，这里防御浮点误差）
+        this.sidebarWidth = target;
+        this.applyLayout();
+      }
+    }, SIDEBAR_ANIMATION_TICK_MS);
+  }
+
+  /** 当前侧栏宽度（debugBounds 之外的显式读取；诊断/测试断言用）。 */
+  getSidebarWidth(): number {
+    return this.sidebarWidth;
+  }
+
+  /** 取消正在进行的侧栏宽度动画（停止逐帧重排；不改变当前宽度）。 */
+  cancelSidebarAnimation(): void {
+    if (this.sidebarAnimation === null) return;
+    const handle = this.sidebarAnimation;
+    this.sidebarAnimation = null;
+    try {
+      const clearIntervalImpl =
+        this.deps.clearIntervalFn ??
+        ((value: unknown): void => clearInterval(value as ReturnType<typeof setInterval>));
+      clearIntervalImpl(handle);
+    } catch {
+      // 句柄已失效：忽略
+    }
   }
 
   /**

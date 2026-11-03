@@ -2,7 +2,13 @@
  * BrowserHost（多标签）：懒创建 / URL 白名单 / 标签切换 / 浮层遮挡 / 布局同步（假 View，无 electron）。
  */
 import { describe, expect, it } from "vitest";
-import { BrowserHost, type HostView } from "../../packages/shell/src/main/browserHost.ts";
+import {
+  BrowserHost,
+  SIDEBAR_ANIMATION_MS,
+  SIDEBAR_ANIMATION_TICK_MS,
+  type BrowserHostDeps,
+  type HostView,
+} from "../../packages/shell/src/main/browserHost.ts";
 
 interface FakeView extends HostView {
   bounds: { x: number; y: number; width: number; height: number } | null;
@@ -13,7 +19,7 @@ interface FakeView extends HostView {
   wcClosed: boolean;
 }
 
-function makeHost(size = { width: 1360, height: 860 }) {
+function makeHost(size = { width: 1360, height: 860 }, extraDeps: Partial<BrowserHostDeps> = {}) {
   const created: FakeView[] = [];
   const host = new BrowserHost({
     createView: (): HostView => {
@@ -62,8 +68,40 @@ function makeHost(size = { width: 1360, height: 860 }) {
       (view as FakeView).closed = true;
     },
     getWindowSize: () => size,
+    ...extraDeps,
   });
   return { host, created };
+}
+
+/** 侧栏宽度动画测试：手动调度器 + 假 View，便于逐帧断言。 */
+function makeAnimatedHost() {
+  const tasks = new Map<number, () => void>();
+  let seq = 0;
+  const scheduler = {
+    setIntervalFn: (callback: () => void): unknown => {
+      seq += 1;
+      tasks.set(seq, callback);
+      return seq;
+    },
+    clearIntervalFn: (handle: unknown): void => {
+      tasks.delete(handle as number);
+    },
+    tick(frames = 1): void {
+      for (let i = 0; i < frames; i += 1) {
+        for (const [id, callback] of [...tasks]) {
+          if (tasks.has(id)) callback();
+        }
+      }
+    },
+    pending(): number {
+      return tasks.size;
+    },
+  };
+  const harness = makeHost(undefined, {
+    setIntervalFn: scheduler.setIntervalFn,
+    clearIntervalFn: scheduler.clearIntervalFn,
+  });
+  return { ...harness, scheduler };
 }
 
 describe("BrowserHost（多标签）", () => {
@@ -291,5 +329,85 @@ describe("BrowserHost（底部让位：全宽终端面板）", () => {
     expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 410 });
     host.setBottomInset(0);
     expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+  });
+});
+
+describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
+  it("animate=false（拖拽）→ 立即生效、不创建定时器", async () => {
+    const { host, created, scheduler } = makeAnimatedHost();
+    await host.navigate("https://example.com");
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+    host.setSidebarWidth(542);
+    expect(host.getSidebarWidth()).toBe(542);
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 812, height: 710 });
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("animate=true → 320ms 逐帧插值，每帧都重算原生视图 bounds", async () => {
+    const { host, created, scheduler } = makeAnimatedHost();
+    await host.navigate("https://example.com");
+    host.setSidebarWidth(48, true);
+    // 首帧前不改（下一 tick 才动），避免动画启动瞬间闪跳
+    expect(created[0].bounds?.width).toBe(994);
+    expect(scheduler.pending()).toBe(1);
+
+    scheduler.tick(1);
+    const firstFrameWidth = created[0].bounds?.width as number;
+    // 侧栏变窄 → 网页视图变宽（从 994 向 1312 过渡，第一帧只走了一小段）
+    expect(firstFrameWidth > 994).toBe(true);
+    expect(firstFrameWidth < 1312).toBe(true);
+
+    scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
+    // 收起态：无分隔条让位（1360-48=1312），定时器清理
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 1312, height: 710 });
+    expect(host.getSidebarWidth()).toBe(48);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("动画中途再次调用 → 取消旧动画，从当前插值位置继续（不跳变）", async () => {
+    const { host, created, scheduler } = makeAnimatedHost();
+    await host.navigate("https://example.com");
+    host.setSidebarWidth(48, true);
+    scheduler.tick(4);
+    const midWidth = host.getSidebarWidth();
+    expect(midWidth < 360).toBe(true);
+    expect(midWidth > 48).toBe(true);
+
+    // 用户中途点「展开」：从当前宽度继续动画到 360，而不是先跳回 48 或 360
+    host.setSidebarWidth(360, true);
+    expect(host.getSidebarWidth()).toBe(midWidth);
+    expect(scheduler.pending()).toBe(1);
+
+    scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
+    expect(host.getSidebarWidth()).toBe(360);
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 994, height: 710 });
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("动画进行中拖拽（animate=false）→ 立即定格并取消动画", async () => {
+    const { host, created, scheduler } = makeAnimatedHost();
+    await host.navigate("https://example.com");
+    host.setSidebarWidth(48, true);
+    scheduler.tick(3);
+    host.setSidebarWidth(500);
+    expect(host.getSidebarWidth()).toBe(500);
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 854, height: 710 });
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("无标签时也可预设动画目标：后续导航直接落在最终几何", async () => {
+    const { host, created, scheduler } = makeAnimatedHost();
+    host.setSidebarWidth(48, true);
+    scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
+    await host.navigate("https://example.com");
+    expect(created[0].bounds).toEqual({ x: 0, y: 118, width: 1312, height: 710 });
+  });
+
+  it("目标与当前相同 → 不启动动画（避免无意义的逐帧重排）", async () => {
+    const { host, scheduler } = makeAnimatedHost();
+    await host.navigate("https://example.com");
+    host.setSidebarWidth(360, true);
+    expect(scheduler.pending()).toBe(0);
+    expect(host.getSidebarWidth()).toBe(360);
   });
 });

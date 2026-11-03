@@ -61,15 +61,15 @@ describe("computeBrowserViewBounds：bottomInset（全宽终端让位）", () =>
 });
 
 describe("computeBrowserViewBounds：sidebarWidth（侧栏实际宽度）", () => {
-  it("收起态 48 / 拖拽值 542 覆盖默认 360", () => {
-    expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 48 }).width).toBe(1280 - 48 - 6);
+  it("收起态 48 不扣分隔条（rail 无 splitter）／拖拽值 542 扣 6px", () => {
+    expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 48 }).width).toBe(1280 - 48);
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 542 }).width).toBe(1280 - 542 - 6);
     // 高度不受侧栏影响
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 542 }).height).toBe(650);
   });
 
-  it("负数归零（等于只剩分隔条让位）；大于窗口宽 → 宽度夹到 0", () => {
-    expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: -10 }).width).toBe(1280 - 0 - 6);
+  it("负数归零（无侧栏/无分隔条，网页铺满）；大于窗口宽 → 宽度夹到 0", () => {
+    expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: -10 }).width).toBe(1280);
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 2000 }).width).toBe(0);
   });
 
@@ -83,7 +83,7 @@ describe("computeBrowserViewBounds：sidebarWidth（侧栏实际宽度）", () =
     expect(computeBrowserViewBounds(BASE, undefined, { sidebarWidth: 48, bottomInset: 100 })).toEqual({
       x: 0,
       y: TOP_OFFSET,
-      width: 1280 - 48 - 6,
+      width: 1280 - 48,
       height: 650 - 100,
     });
   });

@@ -376,6 +376,20 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **生命周期**：主窗口关闭时同时关闭 Agent 窗口（否则 `window-all-closed` 不触发、进程残留成「只剩小窗」）；shutdown 时 dispose；layering 守卫按 chromePopover 同理由放行惰性 require electron；channels-have-handlers 守卫补假 manager 装配。
 - **契约**：新增 `ui:openAgentWindow`、`ui:closeAgentWindow` 通道与 `chrome:agentWindowClosed` 事件（`pnpm gen/check` 逐字节一致）。
 - **验证**：typecheck 5/5、gen/check 一致、build 5/5、vitest **131 文件 / 1176 tests 全绿**（agentWindow 24 条：窗口行为/事件语义/域守卫/参数归一化）；真机 E2E：点「小窗化」→ 独立窗口 422×720、URL 含 `?mini=1`、DOM `mini=1` 且 titlebar/chrome 均不存在、会话栏铺满；主窗口 `sidebarWidth:0`、网页视图宽度 1355 铺满；关窗后 `E2E_AGENT_WINDOW_RESTORED` 侧栏 `display:flex`、`sidebarWidth:419` 恢复；截图 `e2e-round8-agent-window-agent-window.png`、`e2e-round8-agent-window-main-fullwidth.png`。
+
+## 二·三十八、2026-11-03 第三十五次增量（自绘窗口 chrome / 本地图标库 / 发送↔中断 / hover / slime 动效收敛）
+
+用户五点诉求（第 9 轮）：① 独立 Agent 小窗不要系统标题栏，最小化/关闭换成定制图标；② 使用本地图标库，禁止 emoji 当图标；③ 发送后按钮变中断、输入内容则变回发送；④ 主界面窗口按钮 hover 无反馈；⑤ 按 slime 的动画实现根除「出现/收起位置反逻辑」。
+
+- **独立 Agent 窗口去系统边框**：`agentWindow.ts` 改 `frame:false` + `titleBarStyle:"hidden"` + `roundedCorners:true`，自绘标题栏（`TitleBar variant="agent"`：品牌标 + 「Agent 对话」+ 仅最小化/关闭，`-webkit-app-region: drag` 拖动、双击不最大化）；新增契约通道 `ui:minimizeAgentWindow`（仅 Agent 窗口可调），最小化后主窗口恢复侧栏，保证仍有可见入口。
+- **贴主窗口右缘 + 连贯滑入/滑出（根因）**：窗口不再交给 OS 默认放置。`computeAgentWindowBounds` 以主窗口 `contentBounds` 为基准：`x = right - 420 - 8`、`y = top + 118`，按所在显示器 `workArea` 四边夹取；打开时隐藏创建、首帧即 `target.x + 24`，200ms `cubic-bezier(0.2,0,0.2,1)` 滑入并淡入；关闭 160ms 滑出后销毁，`chrome:agentWindowClosed` 改到**窗口真正销毁后**推送（此前滑出前就推，导致主窗口侧栏提前展开）；主窗口 move/resize/maximize 等 7 类几何事件统一走 16ms 防抖 `reposition()`，小窗始终贴右缘。
+- **发送 ↔ 中断单按钮**：删除 Composer 独立停止块与「运行中发送」询问弹窗；主按钮三态——`busy && 输入为空` → 红色停止图标（点击 `onStop` 立即中断，不置灰）；`busy && 有输入` → 发送图标（走 steer 转向）；`idle` → 发送。E2E 探针实测 `title/icon/bg` 随输入即时切换。
+- **窗口按钮 hover 根因**：`TitleBar` 的 `styles.windowButton` 内联 `background:"transparent"` 覆盖了 `index.html` 的 `.win-btn:hover` → 移除内联背景/颜色，基类统一给 hover；关闭键 hover 变红（真机 `rgb(196,43,28)`/白字）；同时补标签页/chip/模型项 hover（chip 内联背景用 `!important` 覆盖）。
+- **本地图标库替换 emoji**：从用户 `Loopsoar/icon/icon_fpbc119q3rk` 迁入 42 个 1024 viewBox SVG 到 `packages/ui/public/icons`（ASCII 命名 + `SOURCE.md` 映射表）：发送=`guide-arrow`、中断=`终止`、最小化=`minus`，另自绘 maximize/restore/checkbox 等；替换 ArtifactPanels/LiveStatus/Settings/TimelineView 中的 emoji 与几何符号；`Icon` 统一走 CSS mask + currentColor；新增 `tests/ui/icons.spec.ts`。
+- **按 slime 规范收敛动效（根因，新增 `docs/design/sidebar-motion.md`）**：提炼 10 条不变式（右缘钉住、禁用 auto 宽过渡、px 目标宽 + `!important`、wrapper 与内容同曲线、独立退场类、内容常驻 DOM、预捕获时间驱动、CSS token 单一产地、与拖拽互斥等）；据此修复：DOM 侧栏与原生 WebContentsView 曲线同源 `cubic-bezier(0.2,0,0.2,1)`、同为 320ms（此前两套曲线 8–9px 不同拍）；`computeBrowserViewBounds` 仅在 docked 态扣 6px splitter（收起/窗口化不再留 DOM 缝）；侧栏外层删除 `display:none` 瞬切，改宽度+padding 过渡并右缘钉住；启动水合不播动画；删除 `.agent-sidebar-fade`/`[data-mode="float"]` 死 CSS；修正关闭事件时序与最小化语义。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5（ui 603.56 kB / gzip 176.59 kB）、`vitest` **132 文件 / 1205 tests 全绿**。
+- **真机 E2E 证据**：无边框 Agent 窗口 422×722（`e2e-round9-agent-window-agent-window.png`）、主窗口网页铺满（`-main-fullwidth.png`）；滑入轨迹 `x 686→662`（200ms）、主窗口原生视图 `sidebarWidth 507→0` 逐帧插值；窗口按钮 hover（`e2e-round9-titlebar-hover-hover.png`）；Composer 生成中=停止图标（`e2e-round9-composer-stop.png`）、运行中输入后即变回发送（`e2e-round9-composer-typing.png`）。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）
