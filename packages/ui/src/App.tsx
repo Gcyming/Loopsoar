@@ -1021,8 +1021,20 @@ export default function App(): React.JSX.Element {
         {sidebarMode === "docked" ? (
           <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
         ) : null}
+        {/* docked：会话栏以「浮动卡片」呈现（8px 留白 + 圆角 + 阴影，不贴窗口边） */}
+        <div
+          style={{
+            width: effectiveSidebarWidth,
+            flexShrink: 0,
+            boxSizing: "border-box",
+            display: "flex",
+            minWidth: 0,
+            // collapsed 保持贴边竖条；docked 四周留 8px 形成浮动卡片；float 由 CSS 负责外边距
+            padding: sidebarMode === "docked" ? 8 : 0,
+          }}
+        >
         <AgentSidebar
-          width={effectiveSidebarWidth}
+          width={sidebarMode === "docked" ? Math.max(240, effectiveSidebarWidth - 16) : effectiveSidebarWidth}
           mode={sidebarMode}
           onModeChange={changeSidebarMode}
           agentLabel={agentLabel}
@@ -1112,6 +1124,7 @@ export default function App(): React.JSX.Element {
             notice={notice}
           />
         </AgentSidebar>
+        </div>
       </div>
 
       {/* 应用内终端：全宽底部面板（VS Code 风格，从整个程序底部拉起） */}

@@ -95,7 +95,7 @@ describe("品牌色板（BRAND）与主题 token", () => {
     for (const token of ["--ls-bg", "--ls-surface", "--ls-text", "--ls-accent", "--ls-border"]) {
       expect(SOFT.has(token), `soft 缺少 ${token}`).toBe(true);
     }
-    expect(SOFT.get("--ls-bg")?.toUpperCase()).toBe("#0D0F13");
+    expect(SOFT.get("--ls-bg")?.toUpperCase()).toBe("#0A0C10");
     expect(CLASSIC.get("--ls-bg")?.toUpperCase()).toBe("#111318");
     expect(CLASSIC.get("--ls-border")?.toUpperCase()).toBe("#262A31");
     // BRAND 引用到的每个 token 必须在前景（soft 或 classic）有定义

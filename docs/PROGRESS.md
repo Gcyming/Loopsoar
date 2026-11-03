@@ -359,6 +359,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **柔和无框双主题 + token 体系**：theme.ts 的 BRAND 全部改为 `var(--ls-…, fallback)`（内联样式自动跟随主题），新增 RADIUS/SHADOW/MOTION/applyTheme；index.html 定义 soft 默认 30 token + classic 覆盖 23 token（旧观感逐像素保留）+ 58 条无框化规则（去 1px 硬边、大圆角、明度分层、hover 不位移、统一缓动、主题切换 200ms、reduced-motion 降级），310 处颜色字面量收敛到 token；设置·外观新增 soft/classic 分段选择（默认 soft），切换即时生效
 - **动效与减噪**：侧栏收起/展开、终端拉起/收起、浮层进出统一 120–450ms decelerate；会话栏头部/工作区分隔线移除、消息/输入区去硬框；参考 `D:\pilot project` 的 collapse/float 参数与「折叠内容常驻 DOM + 延迟 visibility」经验（未拷贝代码）
 - **清理**：会话栏 i18n 补 7 个 key；theme.spec.ts 重写为双主题 token/对比度断言；删除会暴露本机桌面的 E2E 桌面截图（改为窗口级证据）
+- **二次调优（用户反馈「没变化」）**：像素采样确认 soft 已生效但无框力度太弱 → soft token 再调（bg #0a0c10、3 级明度拉大、`--ls-border` 归零、圆角 10/14/20、阴影加深）+ 新增 soft 专属规则（会话栏改浮动卡片：docked 四周 8px 留白/圆角/阴影；header/工作区/会话条内部分隔线全去；chip 无边框；输入区去框、focus 才出品牌描边；应用底加极轻品牌光晕；终端全宽面板大圆角浮起）；真机截图确认观感明显变化
 - 验证基线：**typecheck 5/5、gen/check 逐字节一致、build 5/5、vitest 130 文件 / 1150 tests 全绿、bundle 739KB**；真机截图：`e2e-round6-soft-default.png`、`e2e-round6-classic-theme.png`、`e2e-round6-sidebar-collapsed.png`、`e2e-round6-sidebar-float.png`、`e2e-round6-terminal-fullwidth.png`
 
 ## 三、未完成 / 已知问题（下次继续）

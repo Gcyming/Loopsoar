@@ -289,7 +289,8 @@
   1. **终端改为应用级全宽底部 dock**：从窗口最底部拉起，横跨浏览器区与会话栏；高度可拖拽（契约 140–560），开关 240ms 高度过渡；原生 WebContentsView 必须同步让出底部高度（新增 `browser:setBottomInset` → `computeBrowserViewBounds({bottomInset})`），否则面板会被原生视图盖住；拖拽期间用 `setOverlay({open:true})` 临时隐藏视图，防止 mousemove 被网页吞掉；
   2. **会话栏三态**：`docked`（常驻）/ `collapsed`（48px 图标条）/ `float`（8px 外边距 + 16px 圆角 + 浮阴影的卡片）；模式持久化到 `preferences.sidebarMode`，`effectiveSidebarWidth` 变化时实时同步原生视图宽度；收起态内容**常驻 DOM 只做宽度+透明度过渡**（条件卸载会导致动画生硬），320ms decelerate；
   3. **双主题 token 体系**：BRAND 全部改为 `var(--ls-…, fallback)` 引用 → 所有内联样式自动跟随主题；`:root` 定义 soft 默认 30 个 token，`html[data-theme="classic"]` 覆盖 23 个旧值（逐像素复刻旧观感）；58 条 soft 专属无框化规则（去硬边/大圆角/明度分层/hover 只变色/统一缓动）；310 处颜色字面量收敛到 token；设置·外观提供 soft/classic 分段选择，切换 200ms 颜色过渡，`prefers-reduced-motion` 降级；
-  4. **动效参数对齐参考项目经验**：布局/面板过渡 240–450ms `cubic-bezier(0.2,0,0.2,1)`；折叠内容常驻 DOM + 可插值属性（grid/宽度/高度），收起结束后延迟 120ms 再 `visibility:hidden`；禁止在包含原生网页视图的祖先上使用 `backdrop-filter`（Electron 命中测试失效雷区）。
+  4. **动效参数对齐参考项目经验**：布局/面板过渡 240–450ms `cubic-bezier(0.2,0,0.2,1)`；折叠内容常驻 DOM + 可插值属性（grid/宽度/高度），收起结束后延迟 120ms 再 `visibility:hidden`；禁止在包含原生网页视图的祖先上使用 `backdrop-filter`（Electron 命中测试失效雷区）；
+  5. **二次调优（用户反馈「没变化」）**：首版 soft 无框力度不足（像素采样确认主题已生效，只是边框仍可感知）→ soft token 再收紧（`--ls-border` 归零、明度层级拉开、圆角 10/14/20、阴影加深），会话栏 docked 态也改为「8px 留白浮动卡片」，内部 header/工作区/会话条分隔线全部移除，输入区去框、focus 才出现品牌描边，应用底加极轻品牌光晕。
 - **理由**：终端全宽是编辑器类应用的成熟模式；三态侧栏兼顾「专注网页」与「随手对话」；token 化是主题可切换的前提，且顺带消除了大量散落色值；借鉴参考项目的动效参数而非代码，规避隔离红线。
 - **替代方案**：终端继续留在侧栏（否，用户明确否决）；小窗做成覆盖网页的 DOM 浮窗（否，原生视图层级更高必被盖）；仅换配色不取消边框（否，用户核心诉求是「没有条条框框」）。
 - **验证方式**：`tests/ui/theme.spec.ts`（8：双主题 token/对比度/格式）、`tests/core/layout.spec.ts`（14：bottomInset/sidebarWidth 几何）、`tests/shell/browserHost.spec.ts`（+5 inset）；全量 130 文件 / 1150 tests；真机 E2E：soft/classic 两主题截图、侧栏 collapsed/float 截图、终端全宽截图、`config/preferences.json` 持久化验证（theme/sidebarMode）、终端打开后 `E2E_RESIZE_STEP` 显示 `bottomInset:260` 且 `actual.height == bounds.height == page.innerHeight`。

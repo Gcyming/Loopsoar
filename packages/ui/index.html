@@ -17,12 +17,13 @@
          ══════════════════════════════════════════════════════════════════ */
       :root {
         /* 表面：3 级明度分层，soft 用近黑蓝灰、低对比（不靠 1px 描边建立层次） */
-        --ls-bg: #0d0f13;
-        --ls-surface: #14171c;
-        --ls-surface-raised: #191d24;
-        --ls-surface-hover: #20252e;
-        --ls-border: rgba(255, 255, 255, 0.06);
-        --ls-border-strong: rgba(255, 255, 255, 0.1);
+        --ls-bg: #0a0c10;
+        --ls-surface: #101318;
+        --ls-surface-raised: #171b22;
+        --ls-surface-hover: #21262f;
+        /* soft = 真无框：默认描边完全透明，层次只靠明度/阴影；需要边界时用 border-strong */
+        --ls-border: rgba(255, 255, 255, 0);
+        --ls-border-strong: rgba(255, 255, 255, 0.08);
         --ls-text: #ece9e2;
         --ls-text-muted: #a09b93;
         --ls-text-faint: #6d6862;
@@ -35,11 +36,11 @@
         --ls-teal-rgb: 110, 231, 208;
         --ls-danger: #f87171;
         --ls-danger-soft: rgba(248, 113, 113, 0.14);
-        --ls-radius-sm: 8px;
-        --ls-radius-md: 12px;
-        --ls-radius-lg: 16px;
-        --ls-shadow-card: 0 8px 32px rgba(0, 0, 0, 0.35);
-        --ls-shadow-float: 0 24px 64px rgba(0, 0, 0, 0.55);
+        --ls-radius-sm: 10px;
+        --ls-radius-md: 14px;
+        --ls-radius-lg: 20px;
+        --ls-shadow-card: 0 10px 40px rgba(0, 0, 0, 0.45);
+        --ls-shadow-float: 0 24px 64px rgba(0, 0, 0, 0.6);
         --ls-ease: cubic-bezier(0.2, 0, 0.2, 1);
         --ls-dur-fast: 120ms;
         --ls-dur-active: 80ms;
@@ -73,6 +74,84 @@
         --ls-radius-lg: 14px;
         --ls-shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
         --ls-shadow-float: 0 14px 40px rgba(0, 0, 0, 0.55);
+      }
+
+      /* ────────────────────────────────────────────────────────────────
+         soft 主题 · 第二轮「真无框」调优（第 6 轮用户反馈：变化不够明显）
+         原则：不画线；用明度分层 + 圆角 + 柔和阴影 + 极轻的品牌光晕建立层次。
+         classic 下全部不生效（html:not([data-theme="classic"]) 前缀）。
+         ──────────────────────────────────────────────────────────────── */
+      /* 应用底：极轻的品牌色光晕，避免大面积纯黑发闷 */
+      html:not([data-theme="classic"]) #root > div {
+        background-image:
+          radial-gradient(1100px 520px at 16% -14%, rgba(var(--ls-accent-rgb), 0.07), transparent 62%),
+          radial-gradient(900px 520px at 100% -6%, rgba(var(--ls-teal-rgb), 0.045), transparent 58%);
+        background-repeat: no-repeat;
+      }
+      /* 右侧会话栏：抬高一档的实面（不靠分隔线），顶部一层极轻高光 */
+      html:not([data-theme="classic"]) .agent-sidebar {
+        border: none !important;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 32%),
+          var(--ls-surface-raised) !important;
+        border-radius: var(--ls-radius-lg);
+        box-shadow: var(--ls-shadow-card);
+      }
+      html:not([data-theme="classic"]) .agent-sidebar.is-collapsed,
+      html:not([data-theme="classic"]) .agent-sidebar.is-float {
+        border-radius: var(--ls-radius-lg) !important;
+        box-shadow: var(--ls-shadow-float) !important;
+      }
+      /* 头部 / 工作区 / 会话条：内部不再画任何分隔线 */
+      html:not([data-theme="classic"]) .agent-sidebar-header,
+      html:not([data-theme="classic"]) .agent-sidebar-workspace,
+      html:not([data-theme="classic"]) .agent-sidebar-sessionbar {
+        border: none !important;
+        border-bottom: none !important;
+        background: transparent !important;
+      }
+      /* chip / 小徽标：默认无边框、hover 才浮出底色 */
+      html:not([data-theme="classic"]) .chip {
+        border-color: transparent !important;
+        background: rgba(255, 255, 255, 0.035);
+      }
+      html:not([data-theme="classic"]) .chip:hover {
+        background: rgba(255, 255, 255, 0.07);
+        border-color: transparent !important;
+      }
+      /* 输入区：一体化浮起面（去框、圆角更大、focus 时才出现品牌描边） */
+      html:not([data-theme="classic"]) textarea,
+      html:not([data-theme="classic"]) input[type="text"],
+      html:not([data-theme="classic"]) input[type="search"] {
+        border-color: transparent !important;
+      }
+      html:not([data-theme="classic"]) textarea:focus,
+      html:not([data-theme="classic"]) input:focus {
+        border-color: rgba(var(--ls-accent-rgb), 0.55) !important;
+        outline: none !important;
+      }
+      /* 聊天：分隔线更淡；消息块留白更松（阅读更安静） */
+      html:not([data-theme="classic"]) .msg-body-divider {
+        background: rgba(255, 255, 255, 0.05) !important;
+      }
+      html:not([data-theme="classic"]) .msg-row {
+        padding-top: 2px;
+        padding-bottom: 2px;
+      }
+      html:not([data-theme="classic"]) .chat-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+      }
+      /* 终端面板（全宽底部）：浮起的大圆角面板 + 顶部柔和阴影 */
+      html:not([data-theme="classic"]) .terminal-panel.is-fullwidth {
+        border-top: none !important;
+        border-radius: var(--ls-radius-lg) var(--ls-radius-lg) 0 0 !important;
+        background: var(--ls-surface) !important;
+        box-shadow: 0 -16px 48px rgba(0, 0, 0, 0.4);
+      }
+      /* 状态栏：无分隔线，文字/状态轻量 */
+      html:not([data-theme="classic"]) .live-dot {
+        box-shadow: 0 0 8px rgba(var(--ls-teal-rgb), 0.55);
       }
       /* 主题切换：只做颜色过渡（200ms，无位移）；reduced-motion 下直接切换 */
       html.theme-switching,
