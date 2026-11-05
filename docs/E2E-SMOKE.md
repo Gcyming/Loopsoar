@@ -591,6 +591,33 @@ node scripts/dev-gui.mjs
 
 > 实测结果：`E2E_EVAL {"toolbarRight":852.6,"paneRight":848.6,"sidebarLeft":854.6,"paneGap":6,"msgPadRight":"20px"}`。
 
+## 29. 2026-11-05 拖拽命中区对齐视觉交界 + 会话内容再收窄验证
+
+> 承接第 28 节；用户反馈「鼠标悬置到能拖拽的位置在灰黑交界处右侧一点点」，要求命中区对齐视觉交界，并把对话内容再收窄几像素。本节验证 ADR-0036。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 命中区左缘 | DOM 探针取页框右缘（`.browser-toolbar` 父节点第二个子元素）与 `.sidebar-splitter` rect | `splitterLeft === paneRight`（hitOffset = **0**；之前差 4px） |
+| 命中区宽度 | `.sidebar-splitter` rect | **6px**（2px 净占位 + 4px 向左扩展），交界到会话栏之间整段可拖拽 |
+| 交界处命中元素 | `document.elementFromPoint(paneRight + 1, 400)` | `sidebar-splitter`（视觉交界处即可按下拖拽） |
+| 布局数值不变 | `E2E_EVAL` 取 paneRight / sidebarLeft | 848.6 / 854.6，与第 28 节一致（负 margin 不改变 flex 占位） |
+| 对话内容再收窄 | `.chat-scroll` computed padding-right | **24px**（原 20px）；气泡/代码块与卷轴之间更松 |
+| 卷轴/头部/输入框 | `.topic-rail` / `.agent-sidebar-header` / composer rect | 位置与宽度不变（不受 messageList padding 影响） |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1212 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='chat'
+$env:LOOPSOAR_E2E_HOLD_MS='900'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round12-seam.png'
+$env:LOOPSOAR_E2E_EVAL='(() => { const tb=document.querySelector(".browser-toolbar").getBoundingClientRect(); const col=document.querySelector(".browser-toolbar").parentElement; const pane=col.children[1]?.getBoundingClientRect(); const sp=document.querySelector(".sidebar-splitter")?.getBoundingClientRect(); const sb=document.querySelector(".agent-sidebar").getBoundingClientRect(); const sc=document.querySelector(".chat-scroll"); const el=document.elementFromPoint(Math.round(pane.right)+1, 400); return { paneRight:+pane.right.toFixed(1), splitterLeft:sp?+sp.left.toFixed(1):null, hitOffset:sp?+(sp.left-pane.right).toFixed(1):null, hitWidth:sp?+sp.width.toFixed(1):null, elementAtSeam:el?String(el.className):null, sidebarLeft:+sb.left.toFixed(1), msgPadRight:sc?getComputedStyle(sc).paddingRight:null }; })()'
+node scripts/dev-gui.mjs
+```
+
+> 实测结果：`E2E_EVAL {"paneRight":848.6,"splitterLeft":848.6,"hitOffset":0,"hitWidth":6,"elementAtSeam":"sidebar-splitter","sidebarLeft":854.6,"msgPadRight":"24px"}`；截图 `docs/screenshots/e2e-round12-seam.png`。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

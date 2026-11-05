@@ -571,6 +571,18 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round12-gap2.png`；DOM 探针 `E2E_EVAL`：页框右缘 848.6、会话栏左缘 854.6 → **paneGap=6px**，splitter 热区 2px，`.chat-scroll` `padding-right: 20px`，`.scroll-fade-mask.is-top` 不存在。
 - 文档：ADR-0035、E2E-SMOKE 第 28 节。
 
+## 二·五十三、2026-11-05 第五十次增量（拖拽命中区对齐视觉交界 + 会话内容再收窄 4px）
+
+用户反馈（m04830）：「左右侧会话与网页的比例拖拽调整的位置有点问题啊，正常应该是在如图的灰黑交界处，但鼠标悬置到能拖拽的位置却是在交界处右侧一点点……然后把会话内容整体再收窄一点点，现在还是与右侧卷轴有点拥挤。」
+
+- **根因**：splitter 只有 2px 且在页框右侧 4px 留白之外 —— 视觉交界在「网页深色面板边缘」，命中区却在交界右侧 4px（用户看到的「悬停位置不对」）。
+- **改动**：
+  1. `App.tsx` 的 splitter 改为「净占位 2px、命中区 6px」：`width: LAYOUT.SPLITTER_WIDTH + 4` + `marginLeft: -4`（负 margin 把热区左缘拉到页框右缘），净 flex 占位不变 → 原生视图几何与布局数值完全不变；新增 `className="sidebar-splitter"` 便于 E2E 探针。
+  2. `MessageList` 的 messageList 右侧 padding 20→**24px**：气泡/代码块再右收 4px；卷轴、头部、输入框不受影响。
+- **验证基线**：`pnpm typecheck` 5/5、`vitest` **133 文件 / 1212 tests 全绿**（几何契约未变，无需改测试）。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round12-seam.png`；DOM 探针 `E2E_EVAL`：页框右缘 848.6、splitter 命中区左缘 848.6（`hitOffset=0`，宽 6px）、该点 `elementFromPoint` = `sidebar-splitter`、`.chat-scroll` 右 padding 24px。
+- 文档：ADR-0036、E2E-SMOKE 第 29 节。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

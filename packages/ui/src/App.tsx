@@ -1095,7 +1095,7 @@ export default function App(): React.JSX.Element {
         )}
 
         {!miniWindow && !agentWindowOpen && sidebarMode === "docked" ? (
-          <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
+          <div className="sidebar-splitter" style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
         ) : null}
         {/* 侧栏外框：唯一拥有 width 过渡的节点（收起/展开/窗口化都在这里动）。
             右对齐 + overflow:hidden：宽度变窄时裁掉内容左侧、右缘钉住窗口右边；
@@ -1364,10 +1364,13 @@ const styles: Record<string, React.CSSProperties> = {
   // 网页列：导航工具条（第二行）只覆盖这一列；页框在 StartPage 里内缩成圆角面板。
   pageColumn: { display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" },
   splitter: {
-    width: LAYOUT.SPLITTER_WIDTH,
+    // 净占位仍是 2px，但命中区向左多覆盖 4px，正好盖住页框右侧留白 —— 鼠标停在
+    // 「网页深色面板 ↔ 抬高外壳」的视觉交界处就能拖拽（用户 m04830：之前命中区在交界右侧 4px）。
+    width: LAYOUT.SPLITTER_WIDTH + 4,
+    marginLeft: -4,
     flexShrink: 0,
     cursor: "col-resize",
-    // 不再画分隔线：网页区与会话区之间只靠「页框 8px 内缩 + 2px 热区」形成一道细缝。
+    // 不画分隔线：网页区与会话区之间只靠「页框内缩 + 2px 热区」形成一道细缝。
     background: "transparent",
     transition: "background 120ms",
   },
