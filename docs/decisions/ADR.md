@@ -412,11 +412,11 @@
   2. 卷轴渲染模型不同：旧实现是「两条细 sin 线 + 视口段高亮」，slime 是「两股反相/反向/不同波长的粗线 + 每股 glow pass + 纵向亮度渐变」，两者视觉量级差一个数量级。
 - **决策**：
   1. 输入区恢复 `transparent` 外层（会话面底色），只把 `composerBox` 下沉到 `BRAND.ink` + 圆角 14 + 1px 边框；变色对象 = 输入框本体。
-  2. `TopicRail` 按 slime `strokeWave` 重写：两股线 `key=±1`、`phi=0/π`、波长 `lam0/lam1`，`sep = amp*taper*(1-0.55*focusAt)` 编织；主线 + glow 双 pass；`lineStyle` 纵向渐变；`scrollPhase`；悬停「捏拢 + 推开」；删除圆点与旧高亮段。配色沿用 Loopsoar 品牌（linen + ochre），不照搬 slime 蓝白。
-  3. `amp` 从 `(width/2-4)*amp%` 放大到 `min(width/2-2, (width/2-2)*amp%*1.9)`（默认约 5.2px），并对 x 做 1.2px 安全边夹取，避免粗线被画布裁切。
+  2. `TopicRail` 按 slime `strokeWave` 重写：两股线 `key=±1`、**同一波长**（`min(lam0, lam1)`）、`sep = amp*taper*(1-0.55*focusAt)` 编织；主线 + glow 双 pass；`lineStyle` 纵向渐变；`scrollPhase`；悬停「捏拢 + 推开」；删除圆点与旧高亮段。配色沿用 Loopsoar 品牌（linen + ochre），不照搬 slime 蓝白。
+  3. `amp` 收敛为 `min(width/2-3, (width/2-3)*amp%*1.2)`（默认约 2.9px），主线 1.5～1.8px、光晕 3～3.8px、光晕 alpha 0.10～0.15；x 夹取留 2px 安全边，避免被画布裁切。首版用不同波长 + 5px 振幅 + 宽光晕，两股漂移分离被用户评价为「越来越乱」，故改为同波长规整交叉。
 - **理由**：用户要的是「输入框本体与会话面不同色」和「slime 那种编织发光」，两者都是视觉层级问题，用色阶 + 线宽/光晕量级解决最直接；`scrollPhase` 让卷轴在滚动时保持「内容在动」的感知，悬停收拢则保留 slime 的「捏住」手感。
 - **替代方案**：继续加深周围色带（否，与用户诉求相反）；只把单线加粗（否，没有编织交叉结构与双股光晕，仍不像 slime）；直接复制 slime 蓝白配色（否，违反品牌约定，且 Loopsoar 是暖色墨底）。
-- **验证方式**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**；真机 E2E `docs/screenshots/e2e-round11-rail-braid.png` 显示双股编织卷轴 + 输入框本体色块 + 悬停卡片，日志 `[E2E] RAIL_HOVER hovered`。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**；真机 E2E `docs/screenshots/e2e-round11-rail-braid.png`（静止态：规整双股麻花 + 输入框本体色块）与 `e2e-round11-rail-braid-hover.png`（悬停收拢 + 卡片），日志 `[E2E] RAIL_HOVER hovered`。
 - **状态**：✅ 已验证（自动化 + 真机 E2E）
 - **回退条件**：编织线在窄窗口/低分屏显拥挤 → 调 `railParams` 的 width/amp 或降低 lineWidth 系数，不改结构；用户要求严格 slime 配色 → 只改两个 RGB 常量，不动几何；输入框对比过强 → 调 `--ls-bg` 与 raised 的关系，不改结构。
 - **复核时间**：打包阶段（经典主题、极窄窗口、多显示器 DPI、系统减少动画）

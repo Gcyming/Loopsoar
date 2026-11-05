@@ -106,7 +106,10 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const innerH = height - padTop - padBottom;
       const vpCenter = padTop + ratio * innerH;
       const vpLen = Math.max(26, (sc.clientHeight / Math.max(1, sc.scrollHeight)) * innerH);
-      const amp = Math.max(2.2, Math.min(width / 2 - 2, (width / 2 - 2) * (p.amp / 100) * 1.9));
+      // 两股用同一波长、反向摆动才会形成规整的麻花（不同波长会漂移成几条乱线）；
+      // 摆幅按轨道宽度收敛，避免线条被画布裁边。
+      const lambda = Math.max(20, Math.min(p.lam0, p.lam1));
+      const amp = Math.max(1.6, Math.min(width / 2 - 3, (width / 2 - 3) * (p.amp / 100) * 1.2));
       const phase = phaseRef.current;
       // 滚动时波形随内容流动（slime 的 scrollPhase）：拖动/滚轮时线条不是死的。
       const scrollPhase = sc.scrollTop * 0.0105;
@@ -132,16 +135,15 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const hovering = hoverRef.current && ptrY >= 0;
       const focusAt = (y: number): number => (hovering ? Math.exp(-(((y - ptrY) / 46) ** 2) / 2) : 0);
       const pointerPush = (y: number): number => dir * amp * 0.8 * focusAt(y);
-      // 两股线反相、反向、不同波长 → 编织成麻花辫（slime 的 key + phi=π）
-      const xAt = (y: number, lambda: number, phi: number, key: number): number => {
+      // 两股同一波长、key=±1 反向摆动：在 y = n·λ/2 处交叉，形成规整麻花。
+      const xAt = (y: number, key: number): number => {
         const sep = amp * taper(y) * (1 - 0.55 * focusAt(y));
         const raw =
           cx +
           pushAt(y) +
           pointerPush(y) +
-          sep * key * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + scrollPhase + phi);
-        // 线的摆幅接近轨道宽度时容易被画布裁掉，这里留 1.2px 安全边。
-        return Math.max(1.2, Math.min(width - 1.2, raw));
+          sep * key * Math.sin((Math.PI * 2 * y) / lambda + phase + scrollPhase);
+        return Math.max(2, Math.min(width - 2, raw));
       };
 
       // 沿纵向渐变：视口中心最亮、上下渐暗、两端再乘 taper 渐隐（slime 的 lineStyle）
@@ -167,10 +169,10 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       };
 
       // 单股：按 xAt 采样成一条竖向曲线（step=2，画布高度有限，足够顺滑且省 CPU）
-      const wave = (lambda: number, phi: number, key: number, lineWidth: number, style: CanvasGradient): void => {
+      const wave = (key: number, lineWidth: number, style: CanvasGradient): void => {
         ctx.beginPath();
         for (let y = 0; y <= height; y += 2) {
-          const x = xAt(y, lambda, phi, key);
+          const x = xAt(y, key);
           if (y === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
@@ -180,14 +182,12 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
         ctx.stroke();
       };
 
-      // ① 亮股：linen 白，宽 → slime 的浅色主股
-      wave(p.lam0, 0, 1, Math.max(1.8, width * 0.17), lineStyle("244,239,230", 0.96, 0.58));
-      // ② 亮股光晕（同股更宽的半透明描边 = slime 的 glow pass）
-      wave(p.lam0, 0, 1, Math.max(3.2, width * 0.34), lineStyle("244,239,230", 0.16, 0.10));
-      // ③ 暗股：赭石，窄、反相、反向 → 与亮股编成麻花
-      wave(p.lam1, Math.PI, -1, Math.max(1.4, width * 0.11), lineStyle("216,142,88", 0.85, 0.50));
-      // ④ 暗股光晕
-      wave(p.lam1, Math.PI, -1, Math.max(2.6, width * 0.26), lineStyle("216,142,88", 0.22, 0.14));
+      // 先铺两股光晕，再叠主线（slime 的 glow pass + main pass）。
+      wave(1, Math.max(3, width * 0.24), lineStyle("244,239,230", 0.10, 0.05));
+      wave(-1, Math.max(3, width * 0.22), lineStyle("216,142,88", 0.15, 0.08));
+      // 主线：linen 亮股 + ochre 暗股，同一波长反向 → 规整麻花辫。
+      wave(1, Math.max(1.5, width * 0.11), lineStyle("244,239,230", 0.95, 0.55));
+      wave(-1, Math.max(1.4, width * 0.1), lineStyle("216,142,88", 0.9, 0.5));
     };
 
     const frame = (t: number): void => {
