@@ -443,6 +443,21 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证基线**：typecheck 5/5、`pnpm check` 逐字节一致、build 5/5、vitest **133 文件 / 1209 tests 全绿**。
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-final.png`（静止态＝原始细线外观）、`e2e-round11-rail-bump.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：指针高度处明显鼓包 + 提亮段，日志 `[E2E] RAIL_HOVER hovered`）。
 
+## 二·四十四、2026-11-05 第四十一次增量（卷轴突起平滑化 + 悬停卡片对比度）
+
+用户反馈（第 11 轮追加）：「如图，不对啊，你测试的这样（第二张图）才差不多啊。」「不对，就是有问题。」——即实机悬停突起仍不像测试图里那种平滑鼓包。
+
+- **排查（像素测量用户截图）**：用户截图里卷轴在指针高度确有 **-8.5 ~ -14px 的左移**（说明突起已生效、构建是新的），问题在**形状**而不是幅度：基础荡漾（两股 λ0/λ1 相位不同）叠加突起后，两条线在平移中心附近交叉，形成 S 形/打结感；同时悬停卡片背景用了 `--ls-surface-raised`，与会话面同色，soft 主题下 `--ls-border` 又是透明，导致卡片几乎不可见。
+- **修复**（`packages/ui/src/TopicRail.tsx`、`packages/ui/index.html`）：
+  1. **突起区压平荡漾**：新增 `waveDamp(y) = 1 - 0.85 * bumpAmt * exp(-((y-ptrY)/(bumpSigma*1.15))²/2)`，正弦项乘以它——指针处两股线重合成一条平滑外鼓曲线，离开后逐渐恢复波纹，不再打结。
+  2. **高斯窗加宽**：`bumpSigma` 由 `max(26, height*0.045)` 改为 `max(34, height*0.06)`，窄窗口边缘也不过陡。
+  3. **突起幅度略增**：`reach` 由 `max(8, width*0.75)` 改为 `max(10, width*0.9)`（16px 轨道约 14.4px）。
+  4. **不依赖 rAF**：`onPointerMove` / `onPointerEnter` 更新状态后立即 `paint()`；系统减少动画（`reducedRef`）时把 `bumpRef` 直接置 0/1，避免 rAF 被降频/暂停时「悬停没反应」。
+  5. **卡片对比度**：`.topic-rail-tip` 背景改 `var(--ls-bg)`（比会话面 raised 更暗）、描边改 `1px solid rgba(255,255,255,0.12)`，保留阴影/圆角，卡片一眼可见。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-smooth.png`（静止态外观不变）、`e2e-round11-rail-smooth-bump.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：突起为单一平滑包络、无 S 形打结；深色卡片显示「● 1 / 1 你：你好，请简单介绍一下你自己」，日志 `[E2E] RAIL_HOVER moved` 与 `RAIL_TIP`）。
+- **备注**：E2E 合成鼠标偶发被下一帧的 pointerleave 清掉悬停状态（首次复跑 `RAIL_TIP display:none`，重跑正常），属合成输入时序抖动，不是功能回归；真机悬停稳定。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

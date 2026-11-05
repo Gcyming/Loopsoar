@@ -365,6 +365,31 @@ $env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-bump.png'
 node scripts/dev-gui.mjs
 ```
 
+## 20. 2026-11-05 卷轴突起平滑化 + 悬停卡片对比度验证
+
+> 承接第 19 节：突起幅度已生效，但用户实机仍觉得「打结」、卡片不可见；本节验证 ADR-0027 的平滑包络与卡片对比度修复。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 静止外观不变 | 打开聊天页截图（`e2e-round11-rail-smooth.png`） | 仍为极细双股波浪线 + 视口提亮段 + 话题圆点，无粗编织/大光晕 |
+| 突起平滑（无打结） | `LOOPSOAR_E2E_HOVER_RAIL=1`（`e2e-round11-rail-smooth-bump.png`） | 指针高度处为**单一平滑外鼓包络**，两股线在突起区重合、无 S 形交叉；离开后回缩并恢复波纹 |
+| 悬停卡片对比度 | 同上 | 深色卡片（`--ls-bg`）+ 可见描边 + 阴影，显示「● n / total 标签」，不再与会话面融为一体 |
+| 卡片文案/序号 | `RAIL_TIP` 日志 | `display:flex`、`text` 形如 `1 / 1你：…`，tipRect 非零 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='chat'
+$env:LOOPSOAR_E2E_HOVER_RAIL='1'
+$env:LOOPSOAR_E2E_HOLD_MS='2000'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-smooth-bump.png'
+node scripts/dev-gui.mjs
+```
+
+> 合成鼠标偶发被下一帧 pointerleave 清掉悬停态（`RAIL_TIP display:none`），重跑即可；真机悬停稳定。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

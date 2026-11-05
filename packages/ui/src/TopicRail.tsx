@@ -141,15 +141,26 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const ptrY = pointerYRef.current;
       const hovering = hoverRef.current && ptrY >= 0;
       const bumpAmt = bumpRef.current;
-      const bumpSigma = Math.max(26, height * 0.045);
+      // 高斯窗要足够宽（窄窗口也不小于 34px），否则突起边缘过陡，看起来像折角而不是鼓包。
+      const bumpSigma = Math.max(34, height * 0.06);
+      const bumpReach = Math.max(10, width * 0.9);
       const pointerPush = (y: number): number => {
         if (bumpAmt <= 0.001 || ptrY < 0) return 0;
         const d = (y - ptrY) / bumpSigma;
-        const reach = Math.max(8, width * 0.75);
-        return -bumpAmt * reach * Math.exp(-(d * d) / 2);
+        return -bumpAmt * bumpReach * Math.exp(-(d * d) / 2);
+      };
+      // 突起区内压平基础荡漾：两股线（λ0/λ1 相位不同）在平移中心附近会交叉成 S 形/打结，
+      // 把正弦项乘以 1-0.85*bumpAmt*高斯，指针处两股重合为一条平滑外鼓曲线，离开后逐渐恢复波纹。
+      const waveDamp = (y: number): number => {
+        if (bumpAmt <= 0.001 || ptrY < 0) return 1;
+        const d = (y - ptrY) / (bumpSigma * 1.15);
+        return 1 - 0.85 * bumpAmt * Math.exp(-(d * d) / 2);
       };
       const xAt = (y: number, lambda: number, phi: number): number =>
-        cx + pushAt(y) + pointerPush(y) + amp * taper(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
+        cx +
+        pushAt(y) +
+        pointerPush(y) +
+        amp * taper(y) * waveDamp(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
 
       const stroke = (
         lambda: number,
@@ -314,6 +325,9 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       pointerYRef.current = Math.max(0, Math.min(height, event.clientY - host.getBoundingClientRect().top));
       if (dragRef.current) jump(event.clientY);
       showTip(event.clientY);
+      // 指针移动后立即重绘：即使 rAF 被系统降频/暂停，突起也不会看起来「没反应」。
+      if (reducedRef.current) bumpRef.current = 1;
+      paint();
     };
     const onPointerUp = (event: PointerEvent): void => {
       dragRef.current = false;
@@ -321,10 +335,18 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     };
     const onPointerEnter = (): void => {
       hoverRef.current = true;
+      if (reducedRef.current) {
+        bumpRef.current = pointerYRef.current >= 0 ? 1 : 0;
+        paint();
+      }
     };
     const onPointerLeave = (): void => {
       hoverRef.current = false;
       // 保留 pointerYRef 让突起从最后一次位置平滑收回；tip 立即隐藏即可。
+      if (reducedRef.current) {
+        bumpRef.current = 0;
+        paint();
+      }
       if (!dragRef.current) tip.classList.remove("on");
     };
     const onScroll = (): void => {

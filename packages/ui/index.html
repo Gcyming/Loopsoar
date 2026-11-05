@@ -722,8 +722,9 @@
       max-width: 300px;
       padding: 6px 10px;
       border-radius: 8px;
-      background: var(--ls-surface-raised);
-      border: 1px solid var(--ls-border);
+      /* 会话面本身是 raised 色，卡片必须比它更暗 + 可见描边才像一张浮起的卡片 */
+      background: var(--ls-bg);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
       font-size: 12.5px;
       color: var(--ls-text);
