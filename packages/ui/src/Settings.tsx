@@ -467,6 +467,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       {tr("settings.appearance.flip")}
                     </label>
                   </div>
+                  <div style={S.note}>{tr("settings.appearance.pauseHint")}</div>
                   <div style={S.btns}>
                     <Btn label={tr("settings.appearance.restoreDefault")} onClick={() => setRail(saveRailParams({ ...DEFAULT_CHAT_RAIL }))} />
                   </div>

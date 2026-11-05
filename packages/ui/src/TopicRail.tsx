@@ -12,7 +12,7 @@
  * 约束：纯 UI 组件（无 IPC / 无 electron），不改变 Loopsoar 分层。
  */
 import * as React from "react";
-import { DEFAULT_CHAT_RAIL, loadRailParams, onRailParams, type RailParams } from "./railParams.js";
+import { DEFAULT_CHAT_RAIL, loadRailParams, onRailParams, shouldPauseWave, type RailParams } from "./railParams.js";
 
 export interface TopicRailProps {
   scroller: () => HTMLElement | null;
@@ -273,7 +273,12 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     const frame = (t: number): void => {
       if (disposed) return;
       const p = paramsRef.current;
-      const frozen = reducedRef.current || (p.pause && hoverRef.current) || dragRef.current || p.spd === 0;
+      // 是否冻结荡漾：悬停是否暂停由用户设置 `pause` 决定（ADR-0033，默认不暂停）。
+      const frozen = shouldPauseWave(p, {
+        reduced: reducedRef.current,
+        hovering: hoverRef.current,
+        dragging: dragRef.current,
+      });
       if (!frozen) phaseRef.current = t * 0.0009 * p.spd;
       // 悬停突起：向目标缓动（进入约 150ms、离开自然收回），不受荡漾暂停影响。
       const bumpTarget = hoverRef.current && pointerYRef.current >= 0 ? 1 : 0;

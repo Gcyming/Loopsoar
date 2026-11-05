@@ -102,7 +102,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.appearance.slider.tap": { zh: "两端渐隐", en: "Edge fade" },
   "settings.appearance.slider.bumpReach": { zh: "悬停突起幅度", en: "Hover bump size" },
   "settings.appearance.slider.bumpSigma": { zh: "悬停突起宽度", en: "Hover bump width" },
-  "settings.appearance.pause": { zh: "悬停时暂停荡漾", en: "Pause the wave on hover" },
+  "settings.appearance.pause": { zh: "悬停时暂停流动", en: "Pause motion on hover" },
+  "settings.appearance.pauseHint": {
+    zh: "开关决定鼠标停在卷轴上时波浪是否停止流动；默认关闭（继续流动）。悬停突起与话题卡片不受影响。",
+    en: "Whether the wave stops flowing while the pointer rests on the rail; default off (keeps flowing). The hover bump and topic card are unaffected.",
+  },
   "settings.appearance.flip": { zh: "衬托方向翻转", en: "Flip the backlight direction" },
   "settings.appearance.restoreDefault": { zh: "恢复默认", en: "Restore defaults" },
   "settings.appearance.motion": { zh: "动效", en: "Motion" },

@@ -531,6 +531,20 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-compact.png`（悬停：紧凑突起 + 凹陷完整不裁切 + 卡片）、`docs/screenshots/e2e-round11-rail-compact-crop.png`（右缘 4× 放大）、`docs/screenshots/e2e-round11-rail-settings.png`（设置 → 外观：新增两个突起滑杆）。像素测量：基线 x≈1683（窗口宽 1702，右侧留 19px），突起/凹陷整体保持在窗口内。
 - 文档：ADR-0032、E2E-SMOKE 第 25 节。
 
+## 二·五十、2026-11-05 第四十七次增量（卷轴悬停流动开关：交给用户选择）
+
+用户反馈：「还差最后项就收工：首先是一个开关，鼠标悬置在卷轴上，卷轴是否停止“流动”的开关设置，现在都是直接停止的，我希望交由用户自行选择。」
+
+- **现状**：`railParams.pause` 早已存在（设置→外观→卷轴参数里的「悬停时暂停荡漾」复选框），但默认值为 `true`，所以开箱即停；用户误以为写死。
+- **改动**：
+  1. **默认改为不暂停**：`DEFAULT_CHAT_RAIL.pause` true→**false**（悬停时波浪继续流动，是否停止交给用户选择）；旧 v3 数据不会重置（用户自己勾选过则保留）。
+  2. **文案与说明更明确**：`i18nSettings.ts` 标签改为「悬停时暂停流动」，新增 `pauseHint` 说明「开关决定鼠标停在卷轴上时波浪是否停止流动；默认关闭（继续流动）。悬停突起与话题卡片不受影响。」，`Settings.tsx` 在复选框下方展示该说明。
+  3. **逻辑抽成纯函数**：`packages/ui/src/railParams.ts` 新增 `shouldPauseWave(params, { reduced, hovering, dragging })`（reduced/拖拽/速度 0 始终暂停；悬停是否暂停只看用户 `pause` 设置），`TopicRail.tsx` 的 `frame()` 改用它，便于单测与后续扩展。
+  4. **新增单测**：`tests/ui/railParams.spec.ts` 增加 3 个用例（默认不暂停、开启后悬停才暂停、reduced/拖拽/速度 0 始终暂停）。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1212 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-pause-switch.png`（设置→外观：默认未勾选的「悬停时暂停流动」+ 说明文案）。
+- 文档：ADR-0033、E2E-SMOKE 第 26 节。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

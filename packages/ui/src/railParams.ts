@@ -35,7 +35,8 @@ export const DEFAULT_CHAT_RAIL: RailParams = {
   lam1: 112,
   spd: 0.8,
   flip: false,
-  pause: true,
+  // 默认「悬停不暂停」：是否停止流动交给用户在外观设置里选择（ADR-0033）。
+  pause: false,
   tap: 130,
   // 突起参数（ADR-0032）：默认值 = 原版外观 + 更紧凑的 slime 式悬停突起。
   bumpReach: 13,
@@ -119,4 +120,27 @@ export function onRailParams(cb: (params: RailParams) => void): () => void {
   };
   window.addEventListener(RAIL_PARAMS_EVENT, handler);
   return () => window.removeEventListener(RAIL_PARAMS_EVENT, handler);
+}
+
+/** 卷轴流动的运行时状态（用于决定这一帧是否冻结荡漾）。 */
+export interface RailMotionState {
+  /** 系统「减少动画」或数据动效关闭 */
+  reduced: boolean;
+  /** 指针在卷轴上 */
+  hovering: boolean;
+  /** 正在拖拽滚动 */
+  dragging: boolean;
+}
+
+/**
+ * 是否暂停卷轴荡漾（纯函数，便于单测）。
+ *
+ * 规则：
+ *  - 系统减少动画 / 卷轴速度 0 / 拖拽中：必须暂停；
+ *  - 悬停是否暂停由用户设置 `pause` 决定（ADR-0033：默认不暂停，交给用户选择）。
+ */
+export function shouldPauseWave(p: Pick<RailParams, "pause" | "spd">, state: RailMotionState): boolean {
+  if (state.reduced || state.dragging) return true;
+  if (!(p.spd > 0)) return true;
+  return Boolean(p.pause) && state.hovering;
 }

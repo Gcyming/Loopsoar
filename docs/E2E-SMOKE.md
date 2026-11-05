@@ -517,6 +517,28 @@ $env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-compact.png'
 node scripts/dev-gui.mjs
 ```
 
+## 26. 2026-11-05 卷轴悬停流动开关验证
+
+> 用户要求：鼠标悬停在卷轴上时是否停止流动，交给用户自行选择。本节验证 ADR-0033。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 默认不暂停 | 全新数据目录启动 → 聊天页悬停卷轴 | 波浪继续流动（`DEFAULT_CHAT_RAIL.pause=false`），突起与卡片仍正常 |
+| 开关可开 | 设置 → 外观 → 卷轴参数 → 勾选「悬停时暂停流动」 | 勾选后悬停时波浪冻结；取消勾选恢复流动，设置即时生效并持久化 |
+| 说明文案 | 同一卡片 | 复选框下方显示说明：「开关决定鼠标停在卷轴上时波浪是否停止流动；默认关闭（继续流动）。悬停突起与话题卡片不受影响。」 |
+| 强制暂停场景 | 系统「减少动画」/ 拖拽卷轴 / 荡漾速度为 0 | 始终暂停，与开关无关 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1212 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='settings&section=appearance'
+$env:LOOPSOAR_E2E_HOLD_MS='1200'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-pause-switch.png'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
