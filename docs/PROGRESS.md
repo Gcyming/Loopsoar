@@ -423,6 +423,16 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**（新增 dataDir 4 用例）。
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-composer.png`（mock LLM 对话 + 卷轴悬停：卡片显示「● 1 / 1 你：请用一句话介绍 Loopsoar 的卷轴设计」；输入区为深色带、卡片抬起；日志 `[E2E] RAIL_HOVER hovered`）。
 
+## 二·四十二、2026-11-05 第三十九次增量（输入框本体色块 + slime 式双股编织卷轴）
+
+用户诉求（第 11 轮追加修正）：「对于输入框，我希望变色的是输入框而非输入框周围」；并给出 slime 卷轴截图，要求卷轴做出 slime 的编织发光效果，而不只是改悬停卡片。
+
+- **输入框本体色块（根因：上一轮把「周围整条」涂深，方向反了）**：`Composer` 外层去掉 `background: BRAND.ink` 深色带，恢复为会话栏底色；只把 `composerBox`（输入卡片）从 `BRAND.inkRaised` 下沉到 `BRAND.ink`（soft 主题 `#0a0c10`），保留 1px 边框 + 圆角 14 —— 现在变色的是输入框本体，周围与消息区同一平面。
+- **slime 式双股编织卷轴（根因：旧实现只画两条细线 + 视口高亮段）**：`TopicRail.paint()` 重写为 slime 的 `strokeWave` 结构：两股线 `xAt(y, λ, φ, key)` 反相（φ=0/π）、反向（key=+1/-1）、不同波长（lam0/lam1），`sep = amp*taper(y)*(1-0.55*focusAt(y))` 形成编织麻花；每股一条主线 + 一条更宽的低 alpha 光晕（glow pass）；`lineStyle(rgb, aLit, aDim)` 沿纵向渐变（视口中心最亮、上下渐暗、两端乘 taper 渐隐）；新增 `scrollPhase = scrollTop*0.0105` 让滚动时波纹流动；悬停改为「捏拢 + 推开」（`focusAt` 高斯窗、`pointerPush`），删除旧的话题圆点与局部高光段。
+- **配色遵循品牌约定**：亮股 `244,239,230`（linen）、暗股 `216,142,88`（ochre 亮一档），光晕同色低 alpha；不直接复制 slime 的蓝白配色（沿用「不照搬 slime 配色」的约定，仅借算法与交互）。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-braid.png`（mock 会话 + `LOOPSOAR_E2E_HOVER_RAIL=1`：右侧卷轴呈 linen/ochre 双股交织麻花、可见光晕；底部输入框本体为深色圆角块、周围保持会话面底色；悬停卡片「● 1 / 1 …」正常）。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

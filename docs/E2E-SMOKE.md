@@ -322,6 +322,26 @@ $env:LOOPSOAR_E2E_SHOT='.tmp/rel-dir-check.png'
 node scripts/dev-gui.mjs
 ```
 
+## 18. 2026-11-05 输入框本体色块 / slime 式编织卷轴验证
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 输入框本体变色 | 打开聊天页截图（`e2e-round11-rail-braid.png`） | 输入框本体为深色（`--ls-bg`）圆角块，周围/消息区保持会话面 raised 底色（修正第 17 节「整条色带」方案） |
+| 卷轴双股编织 | `LOOPSOAR_E2E_HOVER_RAIL=1` + 有消息的会话 | 卷轴呈 linen/ochre 两股反相编织麻花 + 光晕，滚动时波纹流动；日志 `[E2E] RAIL_HOVER hovered` |
+| 悬停收拢 | 悬停卷轴中部 | 指针附近两股收拢并侧推，卡片显示「● n / total 标签」 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\tool\AI\real-project\Loopsoar\Parent file\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='chat'
+$env:LOOPSOAR_E2E_HOVER_RAIL='1'
+$env:LOOPSOAR_E2E_HOLD_MS='1400'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-braid.png'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

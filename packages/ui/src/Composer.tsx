@@ -615,9 +615,9 @@ export default function Composer({
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  // 输入区做成独立色块：外层下沉一档（BRAND.ink），输入卡片抬高一档（BRAND.inkRaised）。
-  // 与上方会话面的 raised 底色形成两段清晰对比，不再依赖分隔线。
-  composer: { flex: "none", padding: "10px 12px 8px", background: BRAND.ink },
+  // 只让「输入框本身」是一个独立色块：外层保持会话栏底色（raised），
+  // 卡片下沉到更深的 ink 一档并保留圆角，形成清晰的凹陷输入区，而不是把周围整条涂深。
+  composer: { flex: "none", padding: "10px 12px 8px" },
   composerBox: {
     display: "flex",
     flexDirection: "column",
@@ -625,7 +625,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 10px",
     borderRadius: 14,
     border: `1px solid ${BRAND.border}`,
-    background: BRAND.inkRaised,
+    background: BRAND.ink,
   },
   measureRow: { display: "flex", gap: 6, height: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" },
   measureChip: { display: "inline-flex", alignItems: "center", fontSize: 12, whiteSpace: "nowrap" },

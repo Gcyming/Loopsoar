@@ -106,8 +106,10 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const innerH = height - padTop - padBottom;
       const vpCenter = padTop + ratio * innerH;
       const vpLen = Math.max(26, (sc.clientHeight / Math.max(1, sc.scrollHeight)) * innerH);
-      const amp = Math.max(0.8, (width / 2 - 4) * (p.amp / 100));
+      const amp = Math.max(2.2, Math.min(width / 2 - 2, (width / 2 - 2) * (p.amp / 100) * 1.9));
       const phase = phaseRef.current;
+      // 滚动时波形随内容流动（slime 的 scrollPhase）：拖动/滚轮时线条不是死的。
+      const scrollPhase = sc.scrollTop * 0.0105;
       const dir = p.flip ? -1 : 1;
 
       ctx.clearRect(0, 0, width, height);
@@ -123,109 +125,69 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       // 视口附近的轻微侧移（slime 的「衬托」）：不要大动作，只要看得出"当前段"
       const pushAt = (y: number): number => {
         const d = (y - vpCenter) / (vpLen * 1.1 + 1);
-        return dir * amp * 0.7 * Math.exp(-(d * d) / 2);
+        return dir * amp * 0.4 * Math.exp(-(d * d) / 2);
       };
-      // slime 的「衬托」：指针附近把曲线推开一段（不是画光点），高斯窗避免生硬
+      // 指针附近把麻花辫「捏拢」并推开一点（slime 的 wOsc + push，不画光点）
       const ptrY = pointerYRef.current;
       const hovering = hoverRef.current && ptrY >= 0;
-      const pointerPush = (y: number): number => {
-        if (!hovering) return 0;
-        const d = (y - ptrY) / 34;
-        return dir * amp * 2.1 * Math.exp(-(d * d) / 2);
+      const focusAt = (y: number): number => (hovering ? Math.exp(-(((y - ptrY) / 46) ** 2) / 2) : 0);
+      const pointerPush = (y: number): number => dir * amp * 0.8 * focusAt(y);
+      // 两股线反相、反向、不同波长 → 编织成麻花辫（slime 的 key + phi=π）
+      const xAt = (y: number, lambda: number, phi: number, key: number): number => {
+        const sep = amp * taper(y) * (1 - 0.55 * focusAt(y));
+        const raw =
+          cx +
+          pushAt(y) +
+          pointerPush(y) +
+          sep * key * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + scrollPhase + phi);
+        // 线的摆幅接近轨道宽度时容易被画布裁掉，这里留 1.2px 安全边。
+        return Math.max(1.2, Math.min(width - 1.2, raw));
       };
-      const xAt = (y: number, lambda: number, phi: number): number =>
-        cx + pushAt(y) + pointerPush(y) + amp * taper(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
 
-      const stroke = (
-        lambda: number,
-        phi: number,
-        from: number,
-        to: number,
-        lineWidth: number,
-        color: string,
-        blur: number,
-      ): void => {
+      // 沿纵向渐变：视口中心最亮、上下渐暗、两端再乘 taper 渐隐（slime 的 lineStyle）
+      const lineStyle = (rgb: string, aLit: number, aDim: number): CanvasGradient => {
+        const blend = Math.max(14, height * 0.07);
+        const stopYs = [0, p.tap, vpCenter - blend, vpCenter + blend, height - p.tap, height]
+          .map((v) => Math.min(height, Math.max(0, v)))
+          .sort((a, b) => a - b);
+        const gradient = ctx.createLinearGradient(0, 0, 0, height);
+        let last = -1;
+        for (const y of stopYs) {
+          if (Math.abs(y - last) < 0.5) continue;
+          last = y;
+          const a =
+            y <= vpCenter - blend
+              ? aLit
+              : y >= vpCenter + blend
+                ? aDim
+                : aLit + (aDim - aLit) * ((y - (vpCenter - blend)) / (2 * blend));
+          gradient.addColorStop(y / height, `rgba(${rgb},${Math.max(0, a * taper(y)).toFixed(3)})`);
+        }
+        return gradient;
+      };
+
+      // 单股：按 xAt 采样成一条竖向曲线（step=2，画布高度有限，足够顺滑且省 CPU）
+      const wave = (lambda: number, phi: number, key: number, lineWidth: number, style: CanvasGradient): void => {
         ctx.beginPath();
-        for (let y = from; y <= to; y += 1) {
-          const x = xAt(y, lambda, phi);
-          if (y === from) ctx.moveTo(x, y);
+        for (let y = 0; y <= height; y += 2) {
+          const x = xAt(y, lambda, phi, key);
+          if (y === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
         ctx.lineWidth = lineWidth;
         ctx.lineCap = "round";
-        ctx.strokeStyle = color;
-        if (blur > 0) {
-          ctx.shadowBlur = blur;
-          ctx.shadowColor = "rgba(255, 205, 160, 0.85)";
-        }
+        ctx.strokeStyle = style;
         ctx.stroke();
-        ctx.shadowBlur = 0;
       };
 
-      const top = padTop;
-      const bottom = height - padBottom;
-
-      // ① 暗线（完整、细、低透明度）
-      stroke(p.lam1, Math.PI / 2, top, bottom, 1, "rgba(200, 128, 74, 0.30)", 0);
-      // ② 亮线（完整、稍亮）
-      stroke(p.lam0, 0, top, bottom, 1.25, "rgba(245, 190, 140, 0.55)", 0);
-
-      // ③ 视口段：两股线一起提亮 + 光晕（没有滚动块，只有"这一段在发光"）
-      const litFrom = Math.max(top, vpCenter - vpLen / 2);
-      const litTo = Math.min(bottom, vpCenter + vpLen / 2);
-      const litGrad = ctx.createLinearGradient(0, litFrom, 0, litTo);
-      litGrad.addColorStop(0, "rgba(255, 214, 170, 0.10)");
-      litGrad.addColorStop(0.5, "rgba(255, 232, 205, 0.98)");
-      litGrad.addColorStop(1, "rgba(255, 214, 170, 0.10)");
-      ctx.shadowBlur = 0;
-      // 用渐变作为 strokeStyle（渐变是竖直的，正好形成"中间亮两头暗"）
-      ctx.beginPath();
-      for (let y = litFrom; y <= litTo; y += 1) {
-        const x = xAt(y, p.lam0, 0);
-        if (y === litFrom) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.lineWidth = 1.9;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = litGrad;
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = "rgba(255, 205, 160, 0.55)";
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // ④ 话题锚点：轨道右侧的小圆点（稀疏，仅用户消息）
-      const dotX = width - 4.5;
-      for (const point of pointsRef.current) {
-        const y = padTop + (point.y / Math.max(1, sc.scrollHeight)) * innerH;
-        if (y < top - 2 || y > bottom + 2) continue;
-        ctx.beginPath();
-        ctx.fillStyle = hoverRef.current ? "rgba(255, 214, 170, 0.95)" : "rgba(245, 190, 140, 0.7)";
-        ctx.arc(dotX, y, 1.7, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // ⑤ 悬停：指针附近的一小段线被提亮（衬托 + 局部高光），不画光点
-      if (hovering) {
-        const from = Math.max(top, ptrY - 46);
-        const to = Math.min(bottom, ptrY + 46);
-        const hoverGrad = ctx.createLinearGradient(0, from, 0, to);
-        hoverGrad.addColorStop(0, "rgba(255, 224, 190, 0.10)");
-        hoverGrad.addColorStop(0.5, "rgba(255, 236, 214, 1)");
-        hoverGrad.addColorStop(1, "rgba(255, 224, 190, 0.10)");
-        ctx.beginPath();
-        for (let y = from; y <= to; y += 1) {
-          const x = xAt(y, p.lam0, 0);
-          if (y === from) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.lineWidth = 2.4;
-        ctx.lineCap = "round";
-        ctx.strokeStyle = hoverGrad;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = "rgba(255, 214, 170, 0.75)";
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-      }
+      // ① 亮股：linen 白，宽 → slime 的浅色主股
+      wave(p.lam0, 0, 1, Math.max(1.8, width * 0.17), lineStyle("244,239,230", 0.96, 0.58));
+      // ② 亮股光晕（同股更宽的半透明描边 = slime 的 glow pass）
+      wave(p.lam0, 0, 1, Math.max(3.2, width * 0.34), lineStyle("244,239,230", 0.16, 0.10));
+      // ③ 暗股：赭石，窄、反相、反向 → 与亮股编成麻花
+      wave(p.lam1, Math.PI, -1, Math.max(1.4, width * 0.11), lineStyle("216,142,88", 0.85, 0.50));
+      // ④ 暗股光晕
+      wave(p.lam1, Math.PI, -1, Math.max(2.6, width * 0.26), lineStyle("216,142,88", 0.22, 0.14));
     };
 
     const frame = (t: number): void => {
