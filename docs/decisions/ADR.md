@@ -384,6 +384,26 @@
 
 ---
 
+## ADR-0024 输入区独立色块 / 卷轴悬停卡片 / 数据目录绝对化
+
+- **背景**：第 11 轮追加反馈：①「会话栏的输入框，我希望那个区域做成其他色块区分一下」——上一轮只把输入卡片改成 raised，但它与会话栏同色，视觉上仍分不出来；②「如图，这个地方（聊天区右缘波纹卷轴），鼠标放上去后的表现形式仍旧不是我要的样子，你给我仔细研究 slime 项目」——Loopsoar 的卷轴悬停是一条窄 tooltip，slime 是带圆点、序号与标签的浮动卡片；③ 调试中用 `LOOPSOAR_DATA_DIR=.loopsoar-data` 启动，Electron 抛 `Error: Path must be absolute`，主进程直接退出并弹错误框。
+- **根因**：
+  1. `Composer` 外层背景 `transparent`、卡片 `BRAND.inkRaised`，而会话面本身也是 raised —— 输入区与聊天区同色，只剩 1px 边框，达不到「独立色块」。
+  2. `TopicRail` 的 tip 只输出一行百分比文本，缺少 slime 的卡片容器、序号与主题化排版；显隐用 opacity，且无序号/标签分层。
+  3. `app.setPath("userData", value)` 要求绝对路径；`LOOPSOAR_DATA_DIR` 直接透传，相对值在 Electron 加载阶段抛错（这是开发/CI 脚本的常见写法，不是用户配置错误）。
+- **决策**：
+  1. **三段色阶**：输入区外层改用 `BRAND.ink`（`--ls-bg`，深一档的整条色带），输入卡片保持 `BRAND.inkRaised`（`--ls-surface-raised`）+ 圆角 14 + 1px 边框；soft 主题下为 `#0a0c10` 色带上的 `#171b22` 卡片，与会话面 `#171b22` 形成清晰分层，不再依赖分隔线。
+  2. **slime 式悬停卡片**：`TopicRail` tip 改为 `<i class="dot"/> + <span class="ord"/> + <span class="txt"/>`：6px 强调色圆点、`n / total` 等宽序号、话题标签（无标签时显示上下文百分比）；`right:22px` 悬浮在卷轴左侧、`translate3d` 跟随鼠标（合成器属性，不触发布局）、`display:none→flex` 显隐；样式全部走主题变量（`--ls-surface-raised` / `--ls-border` / `--ls-accent`），最大宽 300、12.5px、圆角 8、阴影 `0 6px 22px rgba(0,0,0,.5)`。
+  3. **数据目录归一化**：新增无 Electron 依赖的 `packages/shell/src/main/dataDir.ts`：`resolveDataDir(override, appDataPath)` = `trim()` 后非空则 `path.resolve(...)`，否则 `path.join(appDataPath, "loopsoar")`；`index.ts` 的 `app.setPath("userData", …)` 与 `pastedImage.ts` 共用该归一化，相对路径也能启动。
+- **理由**：色块区分比描边更稳（不依赖主题的边界色，也不受窗口缩放/显示缩放影响）；悬停卡片把「这是第几条话题」这一信息显式化，与 slime 的操作心智一致，同时沿用其「只动 transform」的性能约束；数据目录属于基础设施输入，必须在进入 Electron API 前归一，否则错误发生在能捕获之前（主进程加载阶段）。
+- **替代方案**：输入区加深色边框/阴影（否，用户要的是色块）；保留单行 tooltip 只改配色（否，缺少序号与卡片结构，仍不是 slime 的样式）；在 `app.whenReady` 后再修正相对路径（否，`app.setPath` 在模块顶层执行，来不及）；只在 `dev-gui.mjs` 里改成绝对路径（否，治标不治本，其他脚本/CI 同样会踩）。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**（新增 `tests/shell/dataDir.spec.ts` 4 用例：未设置/空白回落、相对路径绝对化、绝对路径去空白保持）；真机 E2E `docs/screenshots/e2e-round11-composer.png` 显示色带 + 卡片 + 卷轴悬停卡片「● 1 / 1 你：…」，日志 `[E2E] RAIL_HOVER hovered`；相对路径启动日志 `dataDir=D:\…\.loopsoar-data-mock` 正常。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：深色带在经典主题下对比过强 → 经典主题单独覆盖 `--ls-bg`/`--ls-surface-raised` 的色带关系，不改结构；悬停卡片遮挡消息 → 调 `right` 偏移或 `max-width`，不改信息结构；`LOOPSOAR_DATA_DIR` 指向不存在目录 → 已由后续 `mkdirSync` 处理，保持归一化职责单一。
+- **复核时间**：打包阶段（经典主题、极窄窗口、多显示器 DPI、CI 相对路径启动）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -411,3 +431,4 @@
 | ADR-0021 | 定制窗口 chrome / 本地图标库 / 发送↔中断 / hover / 动效规范收敛 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0022 | 顶部标签行 + chrome 闭环外壳（网页面板内缩/圆角） | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0023 | 会话栏星标折叠开关 / 地址栏随列伸缩 / 聊天滚动条单一化 | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0024 | 输入区独立色块 / 卷轴悬停卡片 / 数据目录绝对化 | ✅ 已验证（自动化 + 真机 E2E） |

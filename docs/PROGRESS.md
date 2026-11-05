@@ -413,6 +413,16 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **132 文件 / 1205 tests 全绿**。
 - **真机 E2E 证据（DOM 探针 + 截图）**：展开态 `omni.w=667`、toggle `62×32`；点击后（900ms 落定）`mode=collapsed`、`omni.w=1132`、toggle `32×32`、`.chat-scroll` 滚动条厚度 = 0；展开动画采样 `32→47→62`（100ms/600ms 两点，连续无跳变）。截图 `e2e-round11-expanded.png`、`e2e-round11-collapsed.png`、`e2e-round11-toggle-mid.png`（动画中帧：长方形、星标在左、箭头渐入）。
 
+## 二·四十一、2026-11-05 第三十八次增量（输入区独立色块 + 卷轴悬停卡片 + 数据目录绝对化）
+
+用户诉求（第 11 轮追加）：「会话栏的输入框，我希望那个区域做成其他色块区分一下」，以及「如图，这个地方，鼠标放上去后的表现形式仍旧不是我要的样子，你给我仔细研究 "D:\pilot project" 的 slime 项目」——指向聊天区右缘波纹卷轴的悬停提示。
+
+- **输入区独立色块**：`Composer` 外层从 `transparent` 改为 `BRAND.ink`（下沉一档，padding `10px 12px 8px`），输入卡片保持 `BRAND.inkRaised` + 1px 边框 + 圆角 14 —— 会话面是 raised、输入区是深色带、卡片再抬起，三段层次取代任何分隔线（soft 主题下分别为 `#171b22` / `#0a0c10` / `#171b22`）。
+- **卷轴悬停卡片对齐 slime**：`TopicRail` 的 tip 由「单行 `百分比 · 标签 · 上下文%`」改为 slime 结构 `<i class="dot"/><span class="ord"/><span class="txt"/>`：左侧 6px 强调色圆点、`n / total` 等宽序号、话题标签（无标签时退回上下文百分比）；卡片 `right:22px` 悬浮在卷轴左外侧、跟随鼠标只动 `translate3d`（合成器属性，不触发布局），`display:none→flex` 显隐，样式全部改用主题变量（`--ls-surface-raised` / `--ls-border` / `--ls-accent`），最大宽 300、12.5px、圆角 8、阴影 `0 6px 22px rgba(0,0,0,.5)`。
+- **启动崩溃修复（用户截图报错）**：`LOOPSOAR_DATA_DIR=.loopsoar-data` 这类相对路径会让 Electron `app.setPath("userData", …)` 抛 `Error: Path must be absolute`，主进程加载失败。新增无 Electron 依赖的 `packages/shell/src/main/dataDir.ts` 的 `resolveDataDir(override, appDataPath)`（trim + `path.resolve`；未设置才回落到 appData 下的品牌目录），`index.ts` 与 `pastedImage.ts` 共用同一归一化；`tests/shell/dataDir.spec.ts` 4 用例锁回归。真机复跑：相对路径启动日志 `dataDir=D:\…\.loopsoar-data-mock` 正常、截图保存成功。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**（新增 dataDir 4 用例）。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-composer.png`（mock LLM 对话 + 卷轴悬停：卡片显示「● 1 / 1 你：请用一句话介绍 Loopsoar 的卷轴设计」；输入区为深色带、卡片抬起；日志 `[E2E] RAIL_HOVER hovered`）。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

@@ -709,25 +709,37 @@
     /* ── 卷轴：隐藏原生滚动条，右侧由 canvas 卷轴代替 ── */
     .chat-scroll { scrollbar-width: none; scrollbar-gutter: auto; }
     .chat-scroll::-webkit-scrollbar { width: 0; height: 0; }
+    /* 卷轴悬停卡片（对齐 slime 的设计）：左侧圆点 + 「n / total」序号 + 话题标签。
+       悬浮在卷轴左外侧、跟随鼠标纵向移动；只动 transform，不触发布局。 */
     .topic-rail-tip {
       position: absolute;
-      right: calc(100% + 10px);
+      right: 22px;
       top: 0;
-      padding: 4px 8px;
-      border-radius: 8px;
-      background: rgba(17, 19, 24, 0.94);
-      border: 1px solid #2c2c31;
-      color: #c9c3b6;
-      font-size: 11px;
-      line-height: 1.4;
+      display: none;
+      align-items: center;
+      gap: 8px;
       white-space: nowrap;
-      opacity: 0;
-      transform: translateY(0);
-      transition: opacity 120ms ease;
+      max-width: 300px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--ls-surface-raised);
+      border: 1px solid var(--ls-border);
+      box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
+      font-size: 12.5px;
+      color: var(--ls-text);
+      transform: translate3d(0, 0, 0);
       pointer-events: none;
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+      z-index: 4;
     }
-    .topic-rail-tip.on { opacity: 1; }
+    .topic-rail-tip.on { display: flex; }
+    .topic-rail-tip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ls-accent); flex: none; }
+    .topic-rail-tip .ord {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: var(--ls-accent);
+      opacity: 0.9;
+    }
+    .topic-rail-tip .txt { overflow: hidden; text-overflow: ellipsis; }
 
     /* ══════════════════════════════════════════════════════════════════════
        slime 式交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导）

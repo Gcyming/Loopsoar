@@ -615,9 +615,9 @@ export default function Composer({
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  // 输入区不加硬分隔线：靠输入卡片自身的底色与周围区分（用户反馈「输入框颜色要和周围不同」）。
-  // 外层透明 = 会话栏底色；卡片用 raised 亮一档，形成清晰的独立输入面板。
-  composer: { flex: "none", padding: "8px 10px 6px", background: "transparent" },
+  // 输入区做成独立色块：外层下沉一档（BRAND.ink），输入卡片抬高一档（BRAND.inkRaised）。
+  // 与上方会话面的 raised 底色形成两段清晰对比，不再依赖分隔线。
+  composer: { flex: "none", padding: "10px 12px 8px", background: BRAND.ink },
   composerBox: {
     display: "flex",
     flexDirection: "column",

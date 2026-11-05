@@ -26,6 +26,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const tipRef = React.useRef<HTMLDivElement | null>(null);
+  const tipOrdRef = React.useRef<HTMLSpanElement | null>(null);
   const tipTextRef = React.useRef<HTMLSpanElement | null>(null);
   const paramsRef = React.useRef<RailParams>(DEFAULT_CHAT_RAIL);
   const pointsRef = React.useRef<RailPoint[]>([]);
@@ -55,9 +56,10 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     const host = hostRef.current;
     const canvas = canvasRef.current;
     const tip = tipRef.current;
+    const tipOrd = tipOrdRef.current;
     const tipText = tipTextRef.current;
     const el = scroller();
-    if (!host || !canvas || !tip || !tipText || !el) return;
+    if (!host || !canvas || !tip || !tipOrd || !tipText || !el) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -256,18 +258,28 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const maxScroll = Math.max(1, sc.scrollHeight - sc.clientHeight);
       const scrollTop = f * maxScroll;
       let nearest: RailPoint | null = null;
+      let nearestIndex = -1;
       let best = Infinity;
-      for (const point of pointsRef.current) {
-        const d = Math.abs(point.y - scrollTop);
+      const points = pointsRef.current;
+      for (let i = 0; i < points.length; i++) {
+        const d = Math.abs(points[i].y - scrollTop);
         if (d < best) {
           best = d;
-          nearest = point;
+          nearest = points[i];
+          nearestIndex = i;
         }
       }
       const pct = Math.round(f * 100);
-      const ctxPct = contextRatio ? Math.round(contextRatio() * 100) : null;
-      tipText.textContent = `${pct}%${nearest?.label ? ` · ${nearest.label.slice(0, 24)}` : ""}${ctxPct !== null ? ` · 上下文 ${ctxPct}%` : ""}`;
-      tip.style.transform = `translateY(${Math.min(height - 30, Math.max(4, y - 12))}px)`;
+      // slime 的悬停卡片：左侧圆点 + 「n / total」序号 + 话题标签（不再挤一行百分比）。
+      tipOrd.textContent = nearestIndex >= 0 ? `${nearestIndex + 1} / ${points.length}` : `${pct}%`;
+      tipText.textContent = nearest?.label
+        ? nearest.label.slice(0, 80)
+        : contextRatio
+          ? `上下文 ${Math.round(contextRatio() * 100)}%`
+          : "";
+      // 跟随鼠标，只动 transform（合成器属性，不触发布局）。
+      const half = 16;
+      tip.style.transform = `translate3d(0, ${Math.min(height - half, Math.max(half, y)) - half}px, 0)`;
       tip.classList.add("on");
     };
 
@@ -346,7 +358,9 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     >
       <canvas ref={canvasRef} style={{ display: "block", pointerEvents: "none" }} />
       <div ref={tipRef} className="topic-rail-tip">
-        <span ref={tipTextRef} />
+        <i className="dot" />
+        <span className="ord" ref={tipOrdRef} />
+        <span className="txt" ref={tipTextRef} />
       </div>
     </div>
   );

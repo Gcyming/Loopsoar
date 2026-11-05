@@ -26,7 +26,10 @@ export interface SavePastedImageResult {
 }
 
 function fallbackDir(): string {
-  return path.join(process.env.LOOPSOAR_DATA_DIR || path.join(process.cwd(), ".loopsoar-data"), "pasted-images");
+  const override = process.env.LOOPSOAR_DATA_DIR?.trim();
+  // 与 index.ts 的 userData 归一化保持一致：相对路径统一解析成绝对路径。
+  const base = override ? path.resolve(override) : path.join(process.cwd(), ".loopsoar-data");
+  return path.join(base, "pasted-images");
 }
 
 /**

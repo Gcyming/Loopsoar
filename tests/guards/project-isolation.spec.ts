@@ -75,8 +75,12 @@ describe("守卫：项目隔离（不与被测/旧项目串扰）", () => {
   it("shell 把 userData 显式落到品牌目录（%APPDATA%\\loopsoar）", () => {
     const idx = readFileSync(path.join(ROOT, "packages/shell/src/main/index.ts"), "utf8");
     expect(idx).toContain('setPath("userData"');
-    expect(idx).toContain("DATA_DIR_NAME");
-    expect(idx).toContain("appData");
+    // 目录归一化抽到无 Electron 依赖的 dataDir.ts（相对 LOOPSOAR_DATA_DIR 也能启动）
+    expect(idx).toContain("resolveDataDir");
+    const dataDir = readFileSync(path.join(ROOT, "packages/shell/src/main/dataDir.ts"), "utf8");
+    expect(dataDir).toContain("DATA_DIR_NAME");
+    expect(dataDir).toContain("path.resolve");
+    expect(dataDir).toContain("appData");
   });
 
   it("品牌资产为仓库内自持的官方资产（shell/resources + ui/public）", () => {

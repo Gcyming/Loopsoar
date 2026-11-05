@@ -21,7 +21,8 @@ import { createAnthropicClient, createOpenAiClient, inferApiFormat, type LlmClie
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
 import { loadPreferences, loadPermissions } from "./domains/settings.js";
-import { APP_NAME, DATA_DIR_NAME, PROTOCOL } from "../shared/brand.js";
+import { resolveDataDir } from "./dataDir.js";
+import { APP_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import {
   ensureLoopsoarDirs,
@@ -104,11 +105,10 @@ protocol.registerSchemesAsPrivileged([
 
 // 项目隔离：userData 显式落到品牌目录（%APPDATA%\loopsoar），与其他 Electron 应用数据区完全分开。
 // LOOPSOAR_DATA_DIR 可覆盖（受限/只读环境下用可写目录，如 CI 或沙箱会话）。
+// 覆盖值必须归一为绝对路径：Electron 的 app.setPath 只接受绝对路径，
+// 脚本里传相对目录（如 LOOPSOAR_DATA_DIR=.loopsoar-data）会在启动时报 “Path must be absolute”。
 app.setName(APP_NAME);
-app.setPath(
-  "userData",
-  process.env.LOOPSOAR_DATA_DIR || path.join(app.getPath("appData"), DATA_DIR_NAME),
-);
+app.setPath("userData", resolveDataDir(process.env.LOOPSOAR_DATA_DIR, app.getPath("appData")));
 
 /** 审计：内存环形缓冲（诊断快照，最多 200 条）+ JSONL 落盘（发布门：审计可追溯）。 */
 const AUDIT_RING_MAX = 200;

@@ -290,6 +290,38 @@ $env:LOOPSOAR_E2E_EVAL='(async () => { document.querySelector(".sidebar-toggle")
 node scripts/dev-gui.mjs
 ```
 
+## 17. 2026-11-05 输入区色块 / 卷轴悬停卡片 / 数据目录绝对化验证
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 输入区独立色块 | 打开聊天页截图（`e2e-round11-composer.png`） | 底部输入区为深色带（`--ls-bg`），输入卡片 raised + 圆角，与会话面分层明确 |
+| 卷轴悬停卡片 | `LOOPSOAR_E2E_HOVER_RAIL=1` + 一条用户消息 | 卡片显示「● n / total 话题标签」，悬浮在卷轴左侧、跟随鼠标；日志 `[E2E] RAIL_HOVER hovered` |
+| 无话题标签时降级 | 空会话 hover | 卡片序号显示百分比，文本显示上下文占用（不出现空白卡片） |
+| 相对数据目录启动 | `LOOPSOAR_DATA_DIR=.loopsoar-data` 启动 | 不弹 `Error: Path must be absolute`；日志 `dataDir=<绝对路径>` |
+| 归一化单测 | `vitest run tests/shell/dataDir.spec.ts` | 4/4 通过 |
+
+复跑命令（PowerShell；先启动 mock LLM 与本地测试页）：
+
+```powershell
+# mock LLM（终端 1）与本地测试页（终端 2）
+node scripts/mock-openai-server.mjs 19500
+node .tmp/adpage-server.mjs 19444
+
+$env:LOOPSOAR_DATA_DIR='D:\tool\AI\real-project\Loopsoar\Parent file\.loopsoar-data-mock'
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=200'
+$env:LOOPSOAR_E2E_CHAT_TEXT='请用一句话介绍 Loopsoar 的卷轴设计'
+$env:LOOPSOAR_E2E_HOVER_RAIL='1'
+$env:LOOPSOAR_E2E_HOLD_MS='2800'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-composer.png'
+node scripts/dev-gui.mjs
+
+# 相对路径数据目录回归（应正常启动并保存截图）
+$env:LOOPSOAR_DATA_DIR='.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_SHOT='.tmp/rel-dir-check.png'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
