@@ -138,13 +138,14 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       };
       // slime 的「突起」：指针所在高度把线向左（聊天区一侧）鼓出一个**局部**的包，
       // 强度由 bumpRef 每帧缓动，离开时自然收回。
-      // 关键：高斯宽度必须是固定值（约 20px），不能按轨道高度百分比缩放 ——
+      // 关键：高斯宽度必须是固定值，不能按轨道高度百分比缩放 ——
       // 否则窗口越高包越长，整条线会被拉成缓慢的 S 形大弯（用户反馈「又崩了」）。
+      // 宽度/幅度按用户反馈收小：16px 窗口下峰值约 10px，只做「轻微提示」，不挡正文。
       const ptrY = pointerYRef.current;
       const hovering = hoverRef.current && ptrY >= 0;
       const bumpAmt = bumpRef.current;
-      const bumpSigma = 20;
-      const bumpReach = Math.max(12, Math.min(18, width * 1.0));
+      const bumpSigma = 16;
+      const bumpReach = Math.max(8, Math.min(12, width * 0.7));
       // 突起形状沿用 slime 的 bulge + dip：中心高斯向外鼓，两翼轻微回缩，
       // 这样线与线的过渡是圆的、没有折角（纯高斯在窄线上会显得像「肘部」）。
       const BULGE = 2.8;

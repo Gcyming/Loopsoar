@@ -469,6 +469,29 @@ node scripts/dev-gui.mjs
 
 > 若窗口为高 DPI / 最大化，仍应看到同样「局部」的突起（`bumpSigma=20` 与轨道高度无关）。
 
+## 24. 2026-11-05 卷轴突起幅度调小验证
+
+> 承接第 23 节：用户反馈突起仍偏大。本节验证 ADR-0031（宽度 20→16、峰值 16→11.2px）。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 突起幅度 | `LOOPSOAR_E2E_HOVER_RAIL=1`（`e2e-round11-rail-bump-small.png`） | 指针处轻微外鼓，峰值约 11px（逻辑），只到正文边缘、不压文字 |
+| 突起形态 | 右缘 4× 放大目视 | 圆润单包、无折角；上下沿用原版细双线 |
+| 像素测量 | 逐行取最亮线像素算位移 | 峰值约 -14 物理像素（逻辑 11.2px），突起中心 y≈487 与指针 487.85 一致 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=300'
+$env:LOOPSOAR_E2E_HOVER_RAIL='1'
+$env:LOOPSOAR_E2E_HOLD_MS='1800'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-bump-small.png'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
