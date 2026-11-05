@@ -629,17 +629,48 @@ function scheduleE2ERailHover(win: BrowserWindow): void {
         .executeJavaScript(
           `(() => {
             const rail = document.querySelector('.topic-rail');
-            if (!rail) return 'no-rail';
+            if (!rail) return null;
             const r = rail.getBoundingClientRect();
-            const x = r.left + r.width / 2;
-            const y = r.top + r.height * 0.45;
-            for (const type of ['pointerenter', 'pointermove']) {
-              rail.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: 1, bubbles: true }));
-            }
-            return 'hovered';
+            return { x: r.left + r.width / 2, y: r.top + r.height * 0.45 };
           })()`,
         )
-        .then((r) => console.log(`[E2E] RAIL_HOVER ${r}`))
+        .then((pos: { x: number; y: number } | null) => {
+          if (!pos) {
+            console.log("[E2E] RAIL_HOVER no-rail");
+            return;
+          }
+          // 走真实 Chromium 输入管线（sendInputEvent），避免 DOM 合成事件与真机鼠标行为不一致
+          win.webContents.sendInputEvent({
+            type: "mouseMove",
+            x: Math.round(pos.x),
+            y: Math.round(pos.y),
+          });
+          console.log(`[E2E] RAIL_HOVER moved ${JSON.stringify(pos)}`);
+          // 400ms 后回读 hover 卡片状态，确认「悬停卡片」在真实鼠标路径下也可见。
+          setTimeout(() => {
+            void win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const tip = document.querySelector('.topic-rail-tip');
+                  const rail = document.querySelector('.topic-rail');
+                  if (!tip || !rail) return null;
+                  const tr = tip.getBoundingClientRect();
+                  const rr = rail.getBoundingClientRect();
+                  const cs = getComputedStyle(tip);
+                  return {
+                    cls: tip.className,
+                    display: cs.display,
+                    opacity: cs.opacity,
+                    tipRect: [Math.round(tr.x), Math.round(tr.y), Math.round(tr.width), Math.round(tr.height)],
+                    railRect: [Math.round(rr.x), Math.round(rr.y), Math.round(rr.width), Math.round(rr.height)],
+                    text: tip.textContent,
+                  };
+                })()`,
+              )
+              .then((tip) => console.log(`[E2E] RAIL_TIP ${JSON.stringify(tip)}`))
+              .catch((err) => console.log(`[E2E] RAIL_TIP failed: ${String(err)}`));
+          }, 400);
+        })
         .catch((err) => console.log(`[E2E] RAIL_HOVER failed: ${String(err)}`));
     }, 1200);
   });
