@@ -416,6 +416,33 @@ node scripts/dev-gui.mjs
 
 > 若没有启动 mock 服务，聊天区为空、卷轴仍会绘制；截图里没有话题卡片属预期。
 
+## 22. 2026-11-05 卷轴外观回退原版 + 突起坐标即时定位验证
+
+> 承接第 21 节：用户要求保留原版配色/高光，只借鉴参考作品的悬停突起；同时修复「下一次悬停时突起从上次位置滑到当前位置」。本节验证 ADR-0029。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 原版外观 | 打开聊天页截图（`e2e-round11-rail-restored.png`） | 暖金双细线 + 视口段提亮 + 话题圆点，和 ADR-0027 完全一致 |
+| 悬停突起 + 高光 | `LOOPSOAR_E2E_HOVER_RAIL=1`（`e2e-round11-rail-restored-hover.png`） | 指针高度处平滑向外鼓包（峰值约 14px），同时该段线条高亮；卡片正常显示 |
+| 突起坐标即时定位 | `LOOPSOAR_E2E_HOVER_RAIL=2`（`e2e-round11-rail-reenter.png`） | 45% 悬停 → 移出轨道 → 75% 重新进入；重新进入后突起中心立即位于 75% 处，不从 45% 滑过来 |
+| 像素测量 | 对截图右缘按行取线位置，算突起中心 | 突起中心 y≈675（物理像素），与 75% 重新进入点（逻辑 y≈540 × DPR 1.25）一致 |
+| 参数默认值 / 存储键 | 设置 → 外观 → 卷轴参数 | 默认 w16 / amp48 / lam86 / lam112 / spd0.8 / tap130；localStorage 键 `loopsoar_rail_params_chat_v3`，v1/v2 旧键被清理 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=300'
+$env:LOOPSOAR_E2E_HOVER_RAIL='2'
+$env:LOOPSOAR_E2E_HOLD_MS='3200'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-reenter.png'
+node scripts/dev-gui.mjs
+```
+
+> 判读方法：把截图右缘裁出来，逐行取最左侧线条像素 x，扣掉基线后取偏差加权中心；中心应落在重新进入的高度附近。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

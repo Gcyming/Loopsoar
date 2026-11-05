@@ -646,6 +646,36 @@ function scheduleE2ERailHover(win: BrowserWindow): void {
             y: Math.round(pos.y),
           });
           console.log(`[E2E] RAIL_HOVER moved ${JSON.stringify(pos)}`);
+          // E2E 两步悬停（LOOPSOAR_E2E_HOVER_RAIL=2）：先离开轨道，再在另一个高度重新进入，
+          // 用来验证「下一次悬停的突起直接出现在当前指针位置」而不是从旧位置滑过来。
+          if (process.env.LOOPSOAR_E2E_HOVER_RAIL === "2") {
+            const moveTo = (x: number, y: number): void => {
+              win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x), y: Math.round(y) });
+            };
+            setTimeout(() => {
+              // 1) 移到轨道左侧正文区（离开轨道触发 pointerleave，突起开始收回）
+              moveTo(pos.x - 80, pos.y);
+              console.log("[E2E] RAIL_HOVER leave");
+              setTimeout(() => {
+                void win.webContents
+                  .executeJavaScript(
+                    `(() => {
+                      const rail = document.querySelector('.topic-rail');
+                      if (!rail) return null;
+                      const r = rail.getBoundingClientRect();
+                      return { x: r.left + r.width / 2, y: r.top + r.height * 0.75 };
+                    })()`,
+                  )
+                  .then((pos2: { x: number; y: number } | null) => {
+                    if (!pos2) return;
+                    // 2) 在 75% 高度重新进入：新突起必须直接出现在 75% 处
+                    moveTo(pos2.x, pos2.y);
+                    console.log(`[E2E] RAIL_HOVER reenter ${JSON.stringify(pos2)}`);
+                  })
+                  .catch((err) => console.log(`[E2E] RAIL_HOVER reenter failed: ${String(err)}`));
+              }, 400);
+            }, 500);
+          }
           // 400ms 后回读 hover 卡片状态，确认「悬停卡片」在真实鼠标路径下也可见。
           setTimeout(() => {
             void win.webContents

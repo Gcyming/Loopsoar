@@ -472,6 +472,20 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-wave.png`（静止：亚麻白 + 赭石双股编织）、`e2e-round11-rail-wave-hover.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：指针处收拢并鼓出单峰包络 + 悬停卡片「● 1 / 1 你：…」，日志 `[E2E] RAIL_HOVER moved` / `RAIL_TIP`）。
 - **备注**：`contain:paint` 只能在 canvas、拖拽热区左侧多 10px（slime 的用户反馈坑）等细节一并保留；旧版细线/编织截图仅作为历史，不再作为当前外观证据。
 
+## 二·四十六、2026-11-05 第四十三次增量（卷轴外观回退原版配色 + 突起坐标即时定位）
+
+用户反馈（第 11 轮追加，附原版/当前对比图）：「我还是更喜欢原版配色……主要是我叫你调整鼠标放置位置的反馈显示，也没叫你全盘搬过来啊，原设计也有不少优秀的地方，不用全盘搬 slime 的。」「鼠标离开后似乎有多余的坐标记录，每次在我下一次鼠标放上去后，突起反馈总是从上一次移到当前鼠标放置位置。你优化一下，应该是直接出现在鼠标放置位置才对。」
+
+- **结论**：ADR-0028 的「整块移植 slime 编织」属于过度移植。原版（细双股暖金波浪 + 视口提亮段 + 话题圆点 + 悬停局部高光）保留，只借鉴 slime 的**悬停突起**交互。
+- **改动**：
+  1. `packages/ui/src/TopicRail.tsx` 回退到 ADR-0027 外观（`git checkout 51a414a`）：暗线 rgba(200,128,74,0.30)、亮线 rgba(245,190,140,0.55)、视口段渐变提亮、圆点、悬停段高光，全部恢复；只保留「突起」的平滑包络（`waveDamp` 压平突起区荡漾、`bumpSigma`、`reach`）。
+  2. **突起坐标即时定位（本次 bug 修复）**：`onPointerEnter` 现在会立刻把 `pointerYRef` 设为当前指针高度；回退后 `pointerPush` 直接使用 `pointerYRef`（没有二次平滑），因此下一次悬停的第一帧突起就出现在鼠标位置，不再从上次留下的坐标滑过来。
+  3. `packages/ui/src/railParams.ts` 默认值恢复原版（w16 / amp48 / lam0 86 / lam1 112 / spd0.8 / tap130），存储键升级 `loopsoar_rail_params_chat_v3` 并清理 v1/v2 旧键（v2 里是 slime 编织参数，会覆盖原版外观）。
+  4. `packages/ui/src/i18nSettings.ts` 标签/预览说明恢复「亮线波长 / 暗线波长」。
+  5. E2E 钩子扩充：`LOOPSOAR_E2E_HOVER_RAIL=2` 时先悬停 45% → 移出轨道 → 在 75% 重新进入，用于捕捉「重新进入后突起位置」。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-restored.png`（静止：原版暖金双线 + 视口提亮）、`e2e-round11-rail-restored-hover.png`（悬停：原版外观 + 平滑突起 + 卡片）、`e2e-round11-rail-reenter.png`（`HOVER_RAIL=2`：离开后在 75% 重新进入；像素测量突起中心 y≈675，与重新进入的指针位置一致，日志 `RAIL_HOVER reenter`）。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

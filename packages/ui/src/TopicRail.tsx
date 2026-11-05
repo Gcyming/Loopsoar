@@ -1,25 +1,14 @@
 /**
- * TopicRail —— slime 卷轴（TopicRail wave 模式）的 Loopsoar 移植版。
+ * TopicRail —— slime 卷轴（TopicRail）的 Loopsoar 移植版。
  *
- * 视觉目标（对齐 slime 实拍，颜色改用 Loopsoar 主题）：**双股编织麻花**贯穿整条高度 ——
- *   - 主股：`244,239,230`（亚麻白，Loopsoar 品牌亮色），宽 `W*0.13`，视口位置之上最亮、之下转暗；
- *   - 辅股：`216,141,86`（赭石暖色，取自品牌 ochre），宽 `W*0.095`，相位差 π、反向摆动，与主股交织；
- *   - 两股各自再描一遍更宽、更低透明度的「光晕」，形成细而发光的效果；
- *   - 两股波长接近（默认 46 / 53），形成缓慢的编织节奏，而不是散开的乱线。
+ * 视觉目标（对齐 slime 实拍）：**极细、连绵的双股波浪线**贯穿整条高度，
+ * 没有粗胶囊/滚动块；视口所在的一段只做「提亮 + 微光晕」，消息锚点是轨道右侧的小圆点。
  *
- * 配色约束：只使用 Loopsoar 品牌色（亚麻白 / 赭石 / 暖金），不复刻 slime 的蓝白配色。
+ * 悬停反馈（slime 的「突起」）：指针所在高度把线向左（聊天区一侧）鼓出一个平滑的包，
+ * 强度逐帧缓动、离开时自然收回；画布向左侧多留 BUMP_PAD 空间，避免突起被裁切。
  *
- * 悬停反馈（slime 的「突起」）：指针高度处两股**收拢**并整体向聊天区一侧鼓出，
- * 中心用高斯「bulge」、两翼用「dip」做回弹，形成平滑的单峰鼓包；离开后缓动收回。
- * 画布向左多留 `LEFT_ROOM` 空间，鼓包不会被裁切。
- *
- * 与 slime 的对应关系：
- *   - 几何 / 配色 / alpha / 光晕宽度 / 线宽比例逐项照搬
- *     slime 渲染层 `pages/TopicRail.tsx` 的 wave 模式（几何/比例逐项对齐，不复制其配色）；
- *   - 参数（波长/振幅/速度/渐隐）可在外观设置页调整，存 localStorage 并事件广播；
- *   - 去掉 slime 的「刻度模式」；话题锚点只用于悬停卡片文案，不再画圆点。
- *
- * 交互：按住任意位置拖动 = 滚动；悬停显示「● n / total 话题」卡片并暂停荡漾。
+ * 交互：按住任意位置拖动 = 滚动；悬停显示位置气泡并暂停荡漾；方向键可微调。
+ * 参数：railParams.ts（外观页可调、localStorage 持久化、事件即时生效）。
  * 约束：纯 UI 组件（无 IPC / 无 electron），不改变 Loopsoar 分层。
  */
 import * as React from "react";
@@ -27,7 +16,7 @@ import { DEFAULT_CHAT_RAIL, loadRailParams, onRailParams, type RailParams } from
 
 export interface TopicRailProps {
   scroller: () => HTMLElement | null;
-  /** 当前上下文占用（0~1），无话题标签时显示在悬停卡片里 */
+  /** 当前上下文占用（0~1），显示在悬停提示里 */
   contextRatio?: () => number;
 }
 
@@ -35,24 +24,6 @@ interface RailPoint {
   y: number;
   label: string;
 }
-
-/** ——— slime 卷轴几何常量（与宿主右侧留白成对出现，改一处必须同步另一处）——— */
-const LEFT_ROOM = 12;
-const RIGHT_ROOM = 6;
-/** 视口位置的内边距（slime 的 R.PAD） */
-const PAD = 3;
-/** 两端渐隐下限（slime 的 R.EFLOOR） */
-const E_FLOOR = 0.12;
-/** 悬停收拢窗口（slime 的 a / b） */
-const HOVER_A = 4;
-const HOVER_B = 6.8;
-/** 鼓包宽度（slime 的 sig=13） */
-const BUMP_SIGMA = 13;
-/** 鼓包 / 回弹强度（slime 的 bulge=280%、dip=110%） */
-const BULGE = 2.8;
-const DIP = 1.1;
-/** 回弹项宽度（slime 的 T=2.7） */
-const DIP_T = 2.7;
 
 export default function TopicRail({ scroller, contextRatio }: TopicRailProps): React.ReactElement {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
@@ -62,19 +33,19 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
   const tipTextRef = React.useRef<HTMLSpanElement | null>(null);
   const paramsRef = React.useRef<RailParams>(DEFAULT_CHAT_RAIL);
   const pointsRef = React.useRef<RailPoint[]>([]);
+  const phaseRef = React.useRef(0);
   const hoverRef = React.useRef(false);
   const dragRef = React.useRef(false);
-  /** 指针目标高度（px，相对卷轴顶部）；-1 表示未进入 */
   const pointerYRef = React.useRef(-1);
-  /** 平滑后的指针高度（slime 的 ptr.uc，鼓包跟随它缓动） */
-  const pointerSmoothRef = React.useRef(0);
-  /** 悬停强度 0~1（slime 的 ptr.strength） */
-  const strengthRef = React.useRef(0);
+  /** 悬停突起强度 0~1：每帧向目标值缓动，指针离开时平滑收回。 */
+  const bumpRef = React.useRef(0);
   const reducedRef = React.useRef(false);
+  const [railWidth, setRailWidth] = React.useState<number>(DEFAULT_CHAT_RAIL.w);
 
   React.useEffect(() => {
     const apply = (params: RailParams): void => {
       paramsRef.current = params;
+      setRailWidth(params.w);
       window.dispatchEvent(new CustomEvent("loopsoar:rail-repaint"));
     };
     apply(loadRailParams());
@@ -101,16 +72,11 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     let disposed = false;
     let dpr = 1;
     let height = 100;
-    let lastT = 0;
-    /** 荡漾累计时间（秒），驱动 driftPhase */
-    let driftT = 0;
-    let driftPhase = 0;
-    let scrollPhase = 0;
 
     const collect = (): RailPoint[] => {
       const sc = scroller();
       if (!sc) return [];
-      // 只取「话题锚点」（用户消息）；助手回复不再逐条打点（slime 的卷轴是连续的）。
+      // 只取「话题锚点」（用户消息）；助手回复不再逐条打点（slime 的卷轴刻度是稀疏的）
       const nodes = Array.from(sc.querySelectorAll<HTMLElement>("[data-rail-label][data-rail-role='user']"));
       const base = sc.getBoundingClientRect().top - sc.scrollTop + sc.clientTop;
       return nodes.map((node) => ({
@@ -119,22 +85,20 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       }));
     };
 
+    /** 画布向轨道左侧多让出的空间：悬停时波形要向左鼓出，需要额外画布，否则会被裁掉。 */
+    const BUMP_PAD = 30;
+
     const layout = (): void => {
-      dpr = Math.min(3, window.devicePixelRatio || 1);
+      dpr = Math.min(2.5, window.devicePixelRatio || 1);
       const width = paramsRef.current.w;
-      const totalW = LEFT_ROOM + width + RIGHT_ROOM;
+      const totalW = width + BUMP_PAD;
       height = Math.max(20, host.clientHeight);
       canvas.width = Math.round(totalW * dpr);
       canvas.height = Math.round(height * dpr);
       canvas.style.width = `${totalW}px`;
       canvas.style.height = `${height}px`;
-      canvas.style.left = `-${LEFT_ROOM}px`;
-      canvas.style.top = "0";
-      canvas.style.position = "absolute";
-      canvas.style.display = "block";
-      canvas.style.pointerEvents = "none";
-      // slime 的教训：contain:paint 只能放 canvas，不能放 host（否则把左伸的悬浮卡片裁掉）。
-      canvas.style.setProperty("contain", "paint");
+      canvas.style.marginLeft = `-${BUMP_PAD}px`;
+      canvas.style.position = "relative";
       host.style.width = `${width}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       pointsRef.current = collect();
@@ -144,138 +108,161 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const sc = scroller();
       if (!sc) return;
       const p = paramsRef.current;
-      const W = p.w;
-      const cw = LEFT_ROOM + W + RIGHT_ROOM;
-      ctx.clearRect(0, 0, cw, height);
-      if (height <= 8) return;
-
+      const width = p.w;
+      const cx = BUMP_PAD + width / 2;
+      const padTop = 6;
+      const padBottom = 6;
       const maxScroll = Math.max(1, sc.scrollHeight - sc.clientHeight);
       const ratio = Math.min(1, Math.max(0, sc.scrollTop / maxScroll));
-      const innerH = height - PAD * 2;
-      const puC = Math.min(height, Math.max(0, PAD + ratio * Math.max(1, innerH)));
-      scrollPhase = sc.scrollTop * 0.0105;
-
-      // 波形带宽：slime 的 band() 逐项照搬（右侧 88% 宽、左侧留 1.2px）
-      const right = LEFT_ROOM + W * 0.88;
-      const left = LEFT_ROOM + 1.2;
-      const cx = (left + right) / 2;
-      const maxAmp = Math.max(0.6, (right - left) / 2);
-      const baseAmp = maxAmp * (p.amp / 100);
-      const tap = Math.max(0, Math.min(p.tap, height * 0.4));
+      const innerH = height - padTop - padBottom;
+      const vpCenter = padTop + ratio * innerH;
+      const vpLen = Math.max(26, (sc.clientHeight / Math.max(1, sc.scrollHeight)) * innerH);
+      const amp = Math.max(0.8, (width / 2 - 4) * (p.amp / 100));
+      const phase = phaseRef.current;
       const dir = p.flip ? -1 : 1;
 
-      const taper = (u: number): number => {
-        if (tap <= 0) return 1;
-        const e = Math.min(u, height - u);
-        const s = Math.min(1, Math.max(0, e / tap));
-        return E_FLOOR + (1 - E_FLOOR) * (s * s * (3 - 2 * s));
+      ctx.clearRect(0, 0, width + BUMP_PAD, height);
+      if (height <= 8) return;
+
+      // 两端渐隐
+      const taper = (y: number): number => {
+        if (p.tap <= 0) return 1;
+        const e = Math.min(y - padTop, height - padBottom - y);
+        const t = Math.min(1, Math.max(0, e / p.tap));
+        return 0.15 + 0.85 * (t * t * (3 - 2 * t));
       };
-
-      const strength = strengthRef.current;
-      const ptrU = pointerSmoothRef.current;
-
-      /** slime 的 shapeAt：指针附近两股收拢 + 高斯鼓包/回弹（向外突起） */
-      const shapeAt = (u: number): { sep: number; push: number; cx: number } => {
-        const t = (u - ptrU) / BUMP_SIGMA;
-        const at = Math.abs(t);
-        const win =
-          at <= HOVER_A ? 1 : at >= HOVER_B ? 0 : 0.5 * (1 + Math.cos((Math.PI * (at - HOVER_A)) / (HOVER_B - HOVER_A)));
-        const wOsc = Math.min(1, strength * win);
-        const bump = Math.exp(-(t * t) / 2);
-        const dipTerm = ((t * t) / DIP_T) * Math.exp(1 - (t * t) / DIP_T);
-        const h = BULGE * bump - (DIP + BULGE * Math.exp(-DIP_T / 2)) * dipTerm;
-        let push = -dir * maxAmp * strength * h;
-        const lo = 1.4 - cx;
-        const hi = cw - 2.0 - cx;
-        if (push < lo) push = lo;
-        if (push > hi) push = hi;
-        return { sep: baseAmp * (1 - wOsc) * taper(u), push, cx };
+      // 视口附近的轻微侧移（slime 的「衬托」）：不要大动作，只要看得出"当前段"
+      const pushAt = (y: number): number => {
+        const d = (y - vpCenter) / (vpLen * 1.1 + 1);
+        return dir * amp * 0.7 * Math.exp(-(d * d) / 2);
       };
-
-      /** slime 的 lineStyle：视口位置之上更亮、之下更暗，两端再乘渐隐 */
-      const lineStyle = (color: string, aLit: number, aDim: number, at: number): CanvasGradient => {
-        const blend = Math.max(14, height * 0.07);
-        const stops = [0, tap, at - blend, at + blend, height - tap, height].sort((x, y) => x - y);
-        const g = ctx.createLinearGradient(0, 0, 0, height);
-        const seen: Record<string, 1> = {};
-        for (const sRaw of stops) {
-          const y = Math.max(0, Math.min(height, sRaw));
-          const key = y.toFixed(2);
-          if (seen[key]) continue;
-          seen[key] = 1;
-          let a: number;
-          if (y <= at - blend) a = aLit;
-          else if (y >= at + blend) a = aDim;
-          else a = aLit + (aDim - aLit) * ((y - (at - blend)) / (2 * blend));
-          g.addColorStop(y / height, `rgba(${color},${Math.max(0, a * taper(y)).toFixed(3)})`);
-        }
-        return g;
+      // slime 的「突起」：指针所在高度把整条线向左（聊天区一侧）鼓出一个平滑的包，
+      // 强度由 bumpRef 每帧缓动，离开时自然收回；高斯窗让上下过渡连续。
+      const ptrY = pointerYRef.current;
+      const hovering = hoverRef.current && ptrY >= 0;
+      const bumpAmt = bumpRef.current;
+      // 高斯窗要足够宽（窄窗口也不小于 34px），否则突起边缘过陡，看起来像折角而不是鼓包。
+      const bumpSigma = Math.max(34, height * 0.06);
+      const bumpReach = Math.max(10, width * 0.9);
+      const pointerPush = (y: number): number => {
+        if (bumpAmt <= 0.001 || ptrY < 0) return 0;
+        const d = (y - ptrY) / bumpSigma;
+        return -bumpAmt * bumpReach * Math.exp(-(d * d) / 2);
       };
+      // 突起区内压平基础荡漾：两股线（λ0/λ1 相位不同）在平移中心附近会交叉成 S 形/打结，
+      // 把正弦项乘以 1-0.85*bumpAmt*高斯，指针处两股重合为一条平滑外鼓曲线，离开后逐渐恢复波纹。
+      const waveDamp = (y: number): number => {
+        if (bumpAmt <= 0.001 || ptrY < 0) return 1;
+        const d = (y - ptrY) / (bumpSigma * 1.15);
+        return 1 - 0.85 * bumpAmt * Math.exp(-(d * d) / 2);
+      };
+      const xAt = (y: number, lambda: number, phi: number): number =>
+        cx +
+        pushAt(y) +
+        pointerPush(y) +
+        amp * taper(y) * waveDamp(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
 
-      const strokeWave = (lam: number, phi: number, width: number, style: CanvasGradient, key: number): void => {
-        const N = Math.max(2, Math.ceil(height / 2));
+      const stroke = (
+        lambda: number,
+        phi: number,
+        from: number,
+        to: number,
+        lineWidth: number,
+        color: string,
+        blur: number,
+      ): void => {
         ctx.beginPath();
-        for (let k = 0; k <= N; k++) {
-          const u = (height * k) / N;
-          const sh = shapeAt(u);
-          const x = sh.cx + sh.push + sh.sep * key * Math.sin((Math.PI * 2 * u) / lam + phi + driftPhase + scrollPhase);
-          if (k === 0) ctx.moveTo(x, u);
-          else ctx.lineTo(x, u);
+        for (let y = from; y <= to; y += 1) {
+          const x = xAt(y, lambda, phi);
+          if (y === from) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
-        ctx.lineWidth = width;
-        ctx.strokeStyle = style;
+        ctx.lineWidth = lineWidth;
         ctx.lineCap = "round";
+        ctx.strokeStyle = color;
+        if (blur > 0) {
+          ctx.shadowBlur = blur;
+          ctx.shadowColor = "rgba(255, 205, 160, 0.85)";
+        }
         ctx.stroke();
+        ctx.shadowBlur = 0;
       };
 
-      // 两股参数几何照搬 slime，颜色换成 Loopsoar 品牌色（亚麻白主股 + 赭石辅股），
-      // 各自带一档宽光晕；alpha 比例沿用 slime，保证编织层次一致。
-      const strands: Array<{
-        lam: number;
-        phi: number;
-        key: number;
-        w: number;
-        cr: string;
-        aLit: number;
-        aDim: number;
-        aGlow: number;
-        gw: number;
-      }> = [
-        { lam: p.lam0, phi: 0, key: 1, w: W * 0.13, cr: "244,239,230", aLit: 0.95, aDim: 0.58, aGlow: 0.1, gw: 1.5 },
-        { lam: p.lam1, phi: Math.PI, key: -1, w: W * 0.095, cr: "216,141,86", aLit: 0.55, aDim: 0.36, aGlow: 0.13, gw: 2.0 },
-      ];
-      for (const s of strands) {
-        strokeWave(s.lam, s.phi, s.w, lineStyle(s.cr, s.aLit, s.aDim, puC), s.key);
-        strokeWave(s.lam, s.phi, s.w * s.gw, lineStyle(s.cr, s.aGlow, s.aGlow, height), s.key);
+      const top = padTop;
+      const bottom = height - padBottom;
+
+      // ① 暗线（完整、细、低透明度）
+      stroke(p.lam1, Math.PI / 2, top, bottom, 1, "rgba(200, 128, 74, 0.30)", 0);
+      // ② 亮线（完整、稍亮）
+      stroke(p.lam0, 0, top, bottom, 1.25, "rgba(245, 190, 140, 0.55)", 0);
+
+      // ③ 视口段：两股线一起提亮 + 光晕（没有滚动块，只有"这一段在发光"）
+      const litFrom = Math.max(top, vpCenter - vpLen / 2);
+      const litTo = Math.min(bottom, vpCenter + vpLen / 2);
+      const litGrad = ctx.createLinearGradient(0, litFrom, 0, litTo);
+      litGrad.addColorStop(0, "rgba(255, 214, 170, 0.10)");
+      litGrad.addColorStop(0.5, "rgba(255, 232, 205, 0.98)");
+      litGrad.addColorStop(1, "rgba(255, 214, 170, 0.10)");
+      ctx.shadowBlur = 0;
+      // 用渐变作为 strokeStyle（渐变是竖直的，正好形成"中间亮两头暗"）
+      ctx.beginPath();
+      for (let y = litFrom; y <= litTo; y += 1) {
+        const x = xAt(y, p.lam0, 0);
+        if (y === litFrom) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.lineWidth = 1.9;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = litGrad;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = "rgba(255, 205, 160, 0.55)";
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // ④ 话题锚点：轨道右侧的小圆点（稀疏，仅用户消息）
+      const dotX = BUMP_PAD + width - 4.5;
+      for (const point of pointsRef.current) {
+        const y = padTop + (point.y / Math.max(1, sc.scrollHeight)) * innerH;
+        if (y < top - 2 || y > bottom + 2) continue;
+        ctx.beginPath();
+        ctx.fillStyle = hoverRef.current ? "rgba(255, 214, 170, 0.95)" : "rgba(245, 190, 140, 0.7)";
+        ctx.arc(dotX, y, 1.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ⑤ 悬停：指针附近的一小段线被提亮（衬托 + 局部高光），不画光点
+      if (hovering) {
+        const from = Math.max(top, ptrY - 46);
+        const to = Math.min(bottom, ptrY + 46);
+        const hoverGrad = ctx.createLinearGradient(0, from, 0, to);
+        hoverGrad.addColorStop(0, "rgba(255, 224, 190, 0.10)");
+        hoverGrad.addColorStop(0.5, "rgba(255, 236, 214, 1)");
+        hoverGrad.addColorStop(1, "rgba(255, 224, 190, 0.10)");
+        ctx.beginPath();
+        for (let y = from; y <= to; y += 1) {
+          const x = xAt(y, p.lam0, 0);
+          if (y === from) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = hoverGrad;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "rgba(255, 214, 170, 0.75)";
+        ctx.stroke();
+        ctx.shadowBlur = 0;
       }
     };
 
     const frame = (t: number): void => {
       if (disposed) return;
       const p = paramsRef.current;
-      const dt = lastT ? Math.min(48, t - lastT) : 16;
-      lastT = t;
       const frozen = reducedRef.current || (p.pause && hoverRef.current) || dragRef.current || p.spd === 0;
-      const speed = frozen ? 0 : p.spd;
-      driftT += (dt / 1000) * speed;
-      driftPhase = reducedRef.current ? 0 : (driftT * Math.PI * 2) / 5.2;
-
-      // 悬停强度：进入约 150ms、离开自然收回（slime 的 0.18/帧）
-      const want = hoverRef.current && pointerYRef.current >= 0 ? 1 : 0;
-      const kStrong = 1 - Math.pow(1 - 0.18, dt / 16.7);
-      strengthRef.current += (want - strengthRef.current) * kStrong;
-      if (want === 1 && strengthRef.current > 0.998) strengthRef.current = 1;
-      if (want === 0 && strengthRef.current < 0.002) strengthRef.current = 0;
-
-      // 鼓包中心跟随指针（slime 的 damp=0.22/帧）
-      if (pointerYRef.current >= 0) {
-        const kDamp = 1 - Math.pow(1 - 0.22, dt / 16.7);
-        pointerSmoothRef.current += (pointerYRef.current - pointerSmoothRef.current) * kDamp;
-        if (Math.abs(pointerYRef.current - pointerSmoothRef.current) < 0.25) {
-          pointerSmoothRef.current = pointerYRef.current;
-        }
-      }
-
+      if (!frozen) phaseRef.current = t * 0.0009 * p.spd;
+      // 悬停突起：向目标缓动（进入约 150ms、离开自然收回），不受荡漾暂停影响。
+      const bumpTarget = hoverRef.current && pointerYRef.current >= 0 ? 1 : 0;
+      bumpRef.current += (bumpTarget - bumpRef.current) * 0.16;
+      if (Math.abs(bumpTarget - bumpRef.current) < 0.003) bumpRef.current = bumpTarget;
       paint();
       raf = requestAnimationFrame(frame);
     };
@@ -284,8 +271,9 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const sc = scroller();
       if (!sc) return;
       const rect = host.getBoundingClientRect();
-      const y = Math.min(height - 6, Math.max(6, clientY - rect.top));
-      const f = (y - 6) / Math.max(1, height - 12);
+      const padTop = 6;
+      const y = Math.min(height - 6, Math.max(padTop, clientY - rect.top));
+      const f = (y - padTop) / Math.max(1, height - padTop - 6);
       const maxScroll = Math.max(1, sc.scrollHeight - sc.clientHeight);
       sc.scrollTo({ top: f * maxScroll, behavior: "auto" });
     };
@@ -294,8 +282,9 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const sc = scroller();
       if (!sc) return;
       const rect = host.getBoundingClientRect();
-      const y = Math.min(height - 6, Math.max(6, clientY - rect.top));
-      const f = (y - 6) / Math.max(1, height - 12);
+      const padTop = 6;
+      const y = Math.min(height - 6, Math.max(padTop, clientY - rect.top));
+      const f = (y - padTop) / Math.max(1, height - padTop - 6);
       const maxScroll = Math.max(1, sc.scrollHeight - sc.clientHeight);
       const scrollTop = f * maxScroll;
       let nearest: RailPoint | null = null;
@@ -311,7 +300,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
         }
       }
       const pct = Math.round(f * 100);
-      // slime 的悬停卡片：左侧圆点 + 「n / total」序号 + 话题标签。
+      // slime 的悬停卡片：左侧圆点 + 「n / total」序号 + 话题标签（不再挤一行百分比）。
       tipOrd.textContent = nearestIndex >= 0 ? `${nearestIndex + 1} / ${points.length}` : `${pct}%`;
       tipText.textContent = nearest?.label
         ? nearest.label.slice(0, 80)
@@ -333,23 +322,34 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     };
     const onPointerMove = (event: PointerEvent): void => {
       hoverRef.current = true;
-      const y = Math.max(0, Math.min(height, event.clientY - host.getBoundingClientRect().top));
-      pointerYRef.current = y;
+      pointerYRef.current = Math.max(0, Math.min(height, event.clientY - host.getBoundingClientRect().top));
       if (dragRef.current) jump(event.clientY);
       showTip(event.clientY);
-      // 即使 rAF 被系统降频/暂停，指针移动时也立即重绘一次，避免「悬停没反应」。
+      // 指针移动后立即重绘：即使 rAF 被系统降频/暂停，突起也不会看起来「没反应」。
+      if (reducedRef.current) bumpRef.current = 1;
       paint();
     };
     const onPointerUp = (event: PointerEvent): void => {
       dragRef.current = false;
       host.releasePointerCapture?.(event.pointerId);
     };
-    const onPointerEnter = (): void => {
+    const onPointerEnter = (event: PointerEvent): void => {
       hoverRef.current = true;
+      // 进入的第一帧就把突起定位到当前指针：不能沿用上一次离开时保存的位置，
+      // 否则下一次悬停会看到「突起从旧位置滑到新位置」的假动画。
+      pointerYRef.current = Math.max(0, Math.min(height, event.clientY - host.getBoundingClientRect().top));
+      if (reducedRef.current) {
+        bumpRef.current = pointerYRef.current >= 0 ? 1 : 0;
+        paint();
+      }
     };
     const onPointerLeave = (): void => {
       hoverRef.current = false;
-      // 保留 pointerYRef：强度从最后位置平滑收回，避免鼓包瞬间跳没。
+      // 保留 pointerYRef 让突起从最后一次位置平滑收回；tip 立即隐藏即可。
+      if (reducedRef.current) {
+        bumpRef.current = 0;
+        paint();
+      }
       if (!dragRef.current) tip.classList.remove("on");
     };
     const onScroll = (): void => {
@@ -370,57 +370,37 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       paint();
     });
     resizeObserver.observe(host);
-    const scrollerObserver = new ResizeObserver(() => {
-      layout();
-      paint();
-    });
-    scrollerObserver.observe(el);
-    const onWinResize = (): void => {
-      layout();
-      paint();
-    };
-    window.addEventListener("resize", onWinResize);
-    window.addEventListener("loopsoar:rail-repaint", onRepaint);
+    resizeObserver.observe(el);
     el.addEventListener("scroll", onScroll, { passive: true });
     host.addEventListener("pointerdown", onPointerDown);
     host.addEventListener("pointermove", onPointerMove);
     host.addEventListener("pointerup", onPointerUp);
     host.addEventListener("pointerenter", onPointerEnter);
     host.addEventListener("pointerleave", onPointerLeave);
+    window.addEventListener("loopsoar:rail-repaint", onRepaint);
 
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
-      scrollerObserver.disconnect();
-      window.removeEventListener("resize", onWinResize);
-      window.removeEventListener("loopsoar:rail-repaint", onRepaint);
       el.removeEventListener("scroll", onScroll);
       host.removeEventListener("pointerdown", onPointerDown);
       host.removeEventListener("pointermove", onPointerMove);
       host.removeEventListener("pointerup", onPointerUp);
       host.removeEventListener("pointerenter", onPointerEnter);
       host.removeEventListener("pointerleave", onPointerLeave);
+      window.removeEventListener("loopsoar:rail-repaint", onRepaint);
     };
-  }, [scroller, contextRatio]);
+  }, [scroller, contextRatio, railWidth]);
 
   return (
     <div
       ref={hostRef}
       className="topic-rail"
       title="拖动卷轴滚动 · 悬停查看位置"
-      style={{
-        position: "absolute",
-        top: 6,
-        bottom: 6,
-        right: 3,
-        width: DEFAULT_CHAT_RAIL.w,
-        cursor: "pointer",
-        touchAction: "none",
-        zIndex: 3,
-      }}
+      style={{ position: "absolute", top: 6, bottom: 6, right: 3, width: railWidth, cursor: "pointer", touchAction: "none", zIndex: 3 }}
     >
-      <canvas ref={canvasRef} />
+      <canvas ref={canvasRef} style={{ display: "block", pointerEvents: "none" }} />
       <div ref={tipRef} className="topic-rail-tip">
         <i className="dot" />
         <span className="ord" ref={tipOrdRef} />
