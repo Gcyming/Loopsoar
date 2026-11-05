@@ -18,6 +18,11 @@ export const LAYOUT = {
    * （DOM 侧 StartPage 用同一数值做 margin，原生 WebContentsView 的 bounds 用同一数值内缩）。
    */
   BROWSER_VIEW_INSET: 8,
+  /**
+   * 网页面板右侧留白（比其它三边窄）：右侧紧邻会话栏，用户在视觉上希望「只隔一线」，
+   * 所以右边单独收窄、其它三边保持 8px 的圆角门户留白。
+   */
+  BROWSER_VIEW_INSET_RIGHT: 4,
   /** 网页面板圆角（原生视图 setBorderRadius 与 DOM 页框共用，避免直角硬缝）。 */
   BROWSER_VIEW_RADIUS: 14,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
@@ -26,7 +31,7 @@ export const LAYOUT = {
   SIDEBAR_COLLAPSED_WIDTH: 48,
   /** 小窗化（浮动卡片）模式下侧栏四周留白。 */
   SIDEBAR_FLOAT_MARGIN: 8,
-  /** 侧栏拖拽分隔条宽度：原生网页视图必须让出这 6px，否则分隔条被视图盖住无法拖拽。 */
+  /** 侧栏拖拽分隔条宽度：原生网页视图必须让出这 2px 透明热区，否则分隔条被视图盖住无法拖拽。 */
   SPLITTER_WIDTH: 2,
   /** 底部状态条高度。 */
   STATUS_BAR_HEIGHT: 32,
@@ -76,7 +81,8 @@ export function computeBrowserViewBounds(
   const splitterWidth =
     sidebarWidth > 0 && sidebarWidth !== layout.SIDEBAR_COLLAPSED_WIDTH ? layout.SPLITTER_WIDTH : 0;
   const inset = Math.max(0, layout.BROWSER_VIEW_INSET);
-  const width = Math.max(0, size.width - sidebarWidth - splitterWidth - inset * 2);
+  const insetRight = Math.max(0, layout.BROWSER_VIEW_INSET_RIGHT);
+  const width = Math.max(0, size.width - sidebarWidth - splitterWidth - inset - insetRight);
   const height = Math.max(
     0,
     size.height -

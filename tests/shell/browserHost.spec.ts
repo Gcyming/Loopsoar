@@ -121,8 +121,8 @@ describe("BrowserHost（多标签）", () => {
     expect(host.listTabs().length).toBe(1);
     expect(host.listTabs()[0].active).toBe(true);
     expect(created[0].navigated[0]).toBe("https://example.com/");
-    // 1360x860：x=8，y=40+48+8=96，width=1360-360-2-16=982，height=860-40-48-32-16=724
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    // 1360x860：x=8，y=40+48+8=96，width=1360-360-2-8-4=986，height=860-40-48-32-8-4=724
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
   });
 
   it("关闭标签会真正销毁 WebContents（音视频不再继续播放）", async () => {
@@ -226,7 +226,7 @@ describe("BrowserHost（多标签）", () => {
     state.width = 1000;
     state.height = 700;
     host.syncBounds();
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 622, height: 564 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 626, height: 564 });
   });
 });
 
@@ -282,10 +282,10 @@ describe("BrowserHost（底部让位：全宽终端面板）", () => {
   it("setBottomInset 只缩短高度，不动 x/y/宽度", async () => {
     const { host, created } = makeHost();
     await host.navigate("https://example.com");
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
     host.setBottomInset(260);
     // 860 - 40(Title) - 48(Top) - 32(Status) - 16(页框留白) - 260(终端) = 464
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 464 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 464 });
   });
 
   it("与侧栏宽度组合：宽度和高度同时让位（互不干扰）", async () => {
@@ -293,8 +293,8 @@ describe("BrowserHost（底部让位：全宽终端面板）", () => {
     await host.navigate("https://example.com");
     host.setSidebarWidth(542);
     host.setBottomInset(260);
-    // 宽 1360-542-2-16=800；高 860-136-260=464
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 800, height: 464 });
+    // 宽 1360-542-2-8-4=804；高 860-136-260=464
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 804, height: 464 });
   });
 
   it("debugBounds 反映 sidebarWidth/bottomInset（E2E 可据此核对让位是否生效）", async () => {
@@ -304,7 +304,7 @@ describe("BrowserHost（底部让位：全宽终端面板）", () => {
     host.setBottomInset(260);
     expect(host.debugBounds()).toMatchObject({
       window: { width: 1360, height: 860 },
-      bounds: { x: 8, y: 96, width: 800, height: 464 },
+      bounds: { x: 8, y: 96, width: 804, height: 464 },
       sidebarWidth: 542,
       bottomInset: 260,
     });
@@ -315,20 +315,20 @@ describe("BrowserHost（底部让位：全宽终端面板）", () => {
     await host.navigate("https://example.com");
     host.setBottomInset(-100);
     expect(host.getBottomInset()).toBe(0);
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
     host.setBottomInset(5000);
     expect(host.getBottomInset()).toBe(2000);
     // 高度不允许为负：max(0, 860-136-2000) = 0
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 0 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 0 });
   });
 
   it("无标签时设置也记住，后续导航直接生效；inset=0 恢复整块高度（终端关闭）", async () => {
     const { host, created } = makeHost();
     host.setBottomInset(300);
     await host.navigate("https://example.com");
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 424 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 424 });
     host.setBottomInset(0);
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
   });
 });
 
@@ -336,10 +336,10 @@ describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
   it("animate=false（拖拽）→ 立即生效、不创建定时器", async () => {
     const { host, created, scheduler } = makeAnimatedHost();
     await host.navigate("https://example.com");
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
     host.setSidebarWidth(542);
     expect(host.getSidebarWidth()).toBe(542);
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 800, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 804, height: 724 });
     expect(scheduler.pending()).toBe(0);
   });
 
@@ -348,18 +348,18 @@ describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
     await host.navigate("https://example.com");
     host.setSidebarWidth(48, true);
     // 首帧前不改（下一 tick 才动），避免动画启动瞬间闪跳
-    expect(created[0].bounds?.width).toBe(982);
+    expect(created[0].bounds?.width).toBe(986);
     expect(scheduler.pending()).toBe(1);
 
     scheduler.tick(1);
     const firstFrameWidth = created[0].bounds?.width as number;
-    // 侧栏变窄 → 网页视图变宽（从 982 向 1296 过渡，第一帧只走了一小段）
-    expect(firstFrameWidth > 982).toBe(true);
-    expect(firstFrameWidth < 1296).toBe(true);
+    // 侧栏变窄 → 网页视图变宽（从 986 向 1300 过渡，第一帧只走了一小段）
+    expect(firstFrameWidth > 986).toBe(true);
+    expect(firstFrameWidth < 1300).toBe(true);
 
     scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
-    // 收起态：无分隔条让位（1360-48-16=1296），定时器清理
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1296, height: 724 });
+    // 收起态：无分隔条让位（1360-48-16=1300），定时器清理
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1300, height: 724 });
     expect(host.getSidebarWidth()).toBe(48);
     expect(scheduler.pending()).toBe(0);
   });
@@ -380,7 +380,7 @@ describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
 
     scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
     expect(host.getSidebarWidth()).toBe(360);
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
     expect(scheduler.pending()).toBe(0);
   });
 
@@ -391,7 +391,7 @@ describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
     scheduler.tick(3);
     host.setSidebarWidth(500);
     expect(host.getSidebarWidth()).toBe(500);
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 842, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 846, height: 724 });
     expect(scheduler.pending()).toBe(0);
   });
 
@@ -400,7 +400,7 @@ describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
     host.setSidebarWidth(48, true);
     scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
     await host.navigate("https://example.com");
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1296, height: 724 });
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1300, height: 724 });
   });
 
   it("目标与当前相同 → 不启动动画（避免无意义的逐帧重排）", async () => {

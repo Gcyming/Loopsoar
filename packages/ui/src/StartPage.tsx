@@ -57,8 +57,8 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     // 网页面板：四边留白 + 圆角 + 裁切，与原生 WebContentsView 的 inset/圆角共用同一契约值，
-    // 页面不再顶到窗口边缘（用户反馈的「硬朗直角」）。
-    margin: LAYOUT.BROWSER_VIEW_INSET,
+    // 页面不再顶到窗口边缘（用户反馈的「硬朗直角」）；右侧紧邻会话栏，单独收窄到 4px。
+    margin: `${LAYOUT.BROWSER_VIEW_INSET}px ${LAYOUT.BROWSER_VIEW_INSET_RIGHT}px ${LAYOUT.BROWSER_VIEW_INSET}px ${LAYOUT.BROWSER_VIEW_INSET}px`,
     borderRadius: LAYOUT.BROWSER_VIEW_RADIUS,
     overflow: "hidden",
     boxSizing: "border-box",

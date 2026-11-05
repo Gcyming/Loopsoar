@@ -228,6 +228,8 @@ export default function MessageList({
 
 const styles: Record<string, React.CSSProperties> = {
   messageArea: { position: "relative", flex: 1, minHeight: 0, display: "flex" },
-  messageList: { flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 },
+  // 会话内容整体收窄几像素（用户 m04745）：右侧多留 6px，让气泡/代码块与卷轴脱开；
+  // 卷轴本身是绝对定位、不受 padding 影响，头部与输入框也不在列表内。
+  messageList: { flex: 1, overflowY: "auto", padding: "12px 20px 12px 14px", display: "flex", flexDirection: "column", gap: 12 },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8, paddingTop: 24 },
 };

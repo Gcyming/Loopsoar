@@ -565,6 +565,32 @@ node scripts/dev-gui.mjs
 
 > 实测结果：`E2E_EVAL {"tb":{"x":0,"w":852.6},"sb":{"x":854.6,"w":507},"gap":2,"topMask":false,...}`。
 
+## 28. 2026-11-05 网页面板右侧留白再收紧 + 会话内容右收验证
+
+> 承接第 27 节；用户要求「空隙再压缩一点点」，并把对话内容整体收窄几个像素（卷轴与对话以外内容不动）。本节验证 ADR-0035。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 分区间隙 | DOM 探针取页框右缘（`.browser-toolbar` 父节点第二个子元素）与会话栏左缘 `.agent-sidebar` | paneGap = **6px**（4px 右侧留白 + 2px splitter） |
+| 原生视图对齐 | `debugBounds` | 右侧留白 4px，宽度 = 窗口 - 侧栏 - 2 - 8 - 4（与 DOM 页框一致） |
+| 对话内容收窄 | `.chat-scroll` computed padding-right | **20px**（原 14px）；气泡/代码块右缘与卷轴脱开 |
+| 卷轴位置 | `.topic-rail` rect | 与之前一致（绝对定位，不受 messageList padding 影响） |
+| 头部/输入框 | `.agent-sidebar-header` / composer rect | 宽度不变（不在对话列表内） |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1212 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='chat'
+$env:LOOPSOAR_E2E_HOLD_MS='900'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round12-gap2.png'
+$env:LOOPSOAR_E2E_EVAL='(() => { const tb=document.querySelector(".browser-toolbar").getBoundingClientRect(); const col=document.querySelector(".browser-toolbar").parentElement; const pane=col.children[1]?.getBoundingClientRect(); const sb=document.querySelector(".agent-sidebar").getBoundingClientRect(); const sc=document.querySelector(".chat-scroll"); return { paneGap: pane? +(sb.left-pane.right).toFixed(1):null, msgPadRight: sc?getComputedStyle(sc).paddingRight:null }; })()'
+node scripts/dev-gui.mjs
+```
+
+> 实测结果：`E2E_EVAL {"toolbarRight":852.6,"paneRight":848.6,"sidebarLeft":854.6,"paneGap":6,"msgPadRight":"20px"}`。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

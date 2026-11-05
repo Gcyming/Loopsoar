@@ -295,7 +295,7 @@ describe("窗口自适应：防抖 + BrowserHost 重排（模拟 resize/maximize
     });
     await host.navigate("https://example.com/");
     // 导航后的首次布局：1360x860 → 978x724
-    expect(lastBounds).toEqual({ x: 8, y: 96, width: 982, height: 724 });
+    expect(lastBounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
 
     let layouts = 0;
     const runner = createDebouncedRunner(() => {
@@ -312,13 +312,13 @@ describe("窗口自适应：防抖 + BrowserHost 重排（模拟 resize/maximize
     await new Promise((resolve) => setTimeout(resolve, 80));
 
     expect(layouts).toBe(1);
-    // 1440x900：宽 1440-360-2-16=1062；高 900-40-48-32-16=764
-    expect(lastBounds).toEqual({ x: 8, y: 96, width: 1062, height: 764 });
+    // 1440x900：宽 1440-360-2-8-4=1066；高 900-40-48-32-8-4=764
+    expect(lastBounds).toEqual({ x: 8, y: 96, width: 1066, height: 764 });
     // debugBounds 必须同时给出「计算的 bounds」与「视图真实 getBounds」（E2E 靠它定位没生效的 setBounds）
     expect(host.debugBounds()).toMatchObject({
       window: { width: 1440, height: 900 },
-      bounds: { x: 8, y: 96, width: 1062, height: 764 },
-      actual: { x: 8, y: 96, width: 1062, height: 764 },
+      bounds: { x: 8, y: 96, width: 1066, height: 764 },
+      actual: { x: 8, y: 96, width: 1066, height: 764 },
     });
   });
 });

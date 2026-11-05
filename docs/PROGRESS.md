@@ -560,6 +560,17 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round12-gap.png`（1361×862 内容区的 1702×1078 截图）；DOM 探针 `E2E_EVAL`：`.browser-toolbar` 右缘 852.6、`.agent-sidebar` 左缘 854.6 → **gap=2px**；`.scroll-fade-mask.is-top` 查询为 `false`（元素已删）、底部 mask 正常隐藏。
 - 文档：ADR-0034、E2E-SMOKE 第 27 节。
 
+## 二·五十二、2026-11-05 第四十九次增量（网页面板右侧留白再收紧 + 会话内容右侧收窄）
+
+用户反馈（m04745）：「当前会话与网页之间的空隙还可以再压缩一点点，然后把会话内容整体收窄一点（不要窄太多，几个像素都够了）不包括卷轴那里（你看用户与Agent的对话都与卷轴挤在一起了）以及对话以外的内容。」
+
+- **改动**：
+  1. `packages/contracts/src/layout.ts` 新增 `BROWSER_VIEW_INSET_RIGHT: 4`：网页面板右侧留白单独收窄到 4px（其它三边仍 8px），`computeBrowserViewBounds` 的宽度改为扣 `inset + insetRight`；`StartPage` 的 margin 同步为 `8px 4px 8px 8px`。视觉缝从 ADR-0034 的「8+2=10px」降到 **4+2=6px**。
+  2. `packages/ui/src/MessageList.tsx` 的 `messageList` 右侧 padding 14→**20px**：对话气泡/代码块整体右收 6px，与卷轴脱开；卷轴是绝对定位不受影响，头部与输入框不在列表内，保持原宽。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1212 tests 全绿**（5 个布局测试文件的宽度期望再 +4px，修正高度 800 被误替换的 3 处）。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round12-gap2.png`；DOM 探针 `E2E_EVAL`：页框右缘 848.6、会话栏左缘 854.6 → **paneGap=6px**，splitter 热区 2px，`.chat-scroll` `padding-right: 20px`，`.scroll-fade-mask.is-top` 不存在。
+- 文档：ADR-0035、E2E-SMOKE 第 28 节。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）
