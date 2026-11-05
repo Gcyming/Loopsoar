@@ -517,6 +517,20 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-bump-small.png`；像素测量峰值位移约 -14 物理像素（逻辑 11.2px），突起中心 y≈487 与指针位置一致；4× 放大见 `.tmp` 目视确认「轻微鼓包」。
 - 文档：ADR-0031、E2E-SMOKE 第 24 节。
 
+## 二·四十九、2026-11-05 第四十六次增量（卷轴凹陷防裁切 + 突起更紧凑可调 + 去掉拖拽提示）
+
+用户反馈（附聊天区右缘截图）：「现在还有一点问题，你看哟便还有一点点凹陷在屏幕外，你看看能不能调整一下？然后把这个突起以及上下凹陷的部分调紧凑一点，看着更显眼（但不要调太多，调几个像素就够了，或者你干脆把这一整个调整参数开放在设置里，方便用户自己定制。）。最后把右侧的什么“拖拽调整位置”什么的提示给我去了，没必要。」
+
+- **根因**：dip 向窗口右侧回弹的位移（约 4px）叠加悬停高光 12px 光晕，而基线距窗口右缘仅约 11px，canvas 右缘只留 8px 余量，导致凹陷末端/光晕在窗口右缘被裁切，看起来像「凹陷钻出屏幕」。
+- **改动**：
+  1. **防裁切**（`packages/ui/src/TopicRail.tsx`）：线基线左移 4px（`cx = BUMP_PAD + width/2 - 4`）；轨道右侧 `right` 3→4；悬停高光光晕 `shadowBlur` 12→8、线宽 2.4→2.2。dip 位移 + 光晕现在都留在窗口内，静态外观不变。
+  2. **更紧凑/更显眼**：`bumpSigma` 16→**13**、`bumpReach` 11.2→**13**（默认值）；dip 收近（`DIP` 1.1→**0.75**、`DIP_T` 2.7→**2.2**），上下凹陷更贴突起、整体更「一眼可见」。
+  3. **参数开放到设置**：`RailParams` 新增 `bumpReach`（悬停突起幅度，4–24px）与 `bumpSigma`（悬停突起宽度，8–32px）；`packages/ui/src/Settings.tsx` 外观页「卷轴参数」新增两个滑杆；`i18nSettings.ts` 新增对应中英文案；旧 v3 数据由 `normalizeRailParams` 自动补默认值，不重置用户已调参数。
+  4. **删除拖拽提示**：移除 `.topic-rail` 的 `title="拖动卷轴滚动 · 悬停查看位置"` 原生 tooltip（用户认为没必要）。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-compact.png`（悬停：紧凑突起 + 凹陷完整不裁切 + 卡片）、`docs/screenshots/e2e-round11-rail-compact-crop.png`（右缘 4× 放大）、`docs/screenshots/e2e-round11-rail-settings.png`（设置 → 外观：新增两个突起滑杆）。像素测量：基线 x≈1683（窗口宽 1702，右侧留 19px），突起/凹陷整体保持在窗口内。
+- 文档：ADR-0032、E2E-SMOKE 第 25 节。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

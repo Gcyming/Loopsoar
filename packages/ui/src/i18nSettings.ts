@@ -100,6 +100,8 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.appearance.slider.lam1": { zh: "暗线波长", en: "Dim wavelength" },
   "settings.appearance.slider.spd": { zh: "荡漾速度", en: "Wave speed" },
   "settings.appearance.slider.tap": { zh: "两端渐隐", en: "Edge fade" },
+  "settings.appearance.slider.bumpReach": { zh: "悬停突起幅度", en: "Hover bump size" },
+  "settings.appearance.slider.bumpSigma": { zh: "悬停突起宽度", en: "Hover bump width" },
   "settings.appearance.pause": { zh: "悬停时暂停荡漾", en: "Pause the wave on hover" },
   "settings.appearance.flip": { zh: "衬托方向翻转", en: "Flip the backlight direction" },
   "settings.appearance.restoreDefault": { zh: "恢复默认", en: "Restore defaults" },

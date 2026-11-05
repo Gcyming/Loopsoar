@@ -492,6 +492,31 @@ $env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-bump-small.png'
 node scripts/dev-gui.mjs
 ```
 
+## 25. 2026-11-05 卷轴凹陷防裁切 + 突起紧凑可调验证
+
+> 承接第 24 节：凹陷末端/光晕不再被窗口右缘裁切；突起更紧凑显眼；突起参数开放到设置；删除拖拽提示。本节验证 ADR-0032。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 凹陷不裁切 | `LOOPSOAR_E2E_HOVER_RAIL=2` 截图（`e2e-round11-rail-compact.png`） | 突起两翼的 dip 与光晕完整显示，右缘不出现硬切；基线距窗口右缘约 19px（1702 宽时 x≈1683） |
+| 突起紧凑显眼 | 同上，4× 放大（`...-compact-crop.png`） | 高斯宽度 13px、峰值 13px；上下凹陷更贴近突起，整体一眼可见但不压正文 |
+| 突起参数可调 | 设置 → 外观 → 卷轴参数（`e2e-round11-rail-settings.png`） | 出现「悬停突起幅度（4–24px）」「悬停突起宽度（8–32px）」两个滑杆，拖动即时生效并持久化 |
+| 拖拽提示已删 | 鼠标悬停卷轴 | 不再出现浏览器原生 tooltip「拖动卷轴滚动 · 悬停查看位置」，只有自定义卡片 |
+| 旧参数兼容 | 已有 v3 localStorage 数据启动 | 缺 `bumpReach/bumpSigma` 时自动补 13/13，不重置用户已调的其它参数 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=300'
+$env:LOOPSOAR_E2E_HOVER_RAIL='2'
+$env:LOOPSOAR_E2E_HOLD_MS='3200'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-compact.png'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

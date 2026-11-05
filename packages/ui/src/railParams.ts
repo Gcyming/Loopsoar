@@ -22,6 +22,10 @@ export interface RailParams {
   pause: boolean;
   /** 两端渐隐长度（px） */
   tap: number;
+  /** 悬停突起幅度（px，指针处线向外鼓出的最大位移） */
+  bumpReach: number;
+  /** 悬停突起紧凑度（px，高斯宽度；越小越紧凑） */
+  bumpSigma: number;
 }
 
 export const DEFAULT_CHAT_RAIL: RailParams = {
@@ -33,6 +37,9 @@ export const DEFAULT_CHAT_RAIL: RailParams = {
   flip: false,
   pause: true,
   tap: 130,
+  // 突起参数（ADR-0032）：默认值 = 原版外观 + 更紧凑的 slime 式悬停突起。
+  bumpReach: 13,
+  bumpSigma: 13,
 };
 
 export const RAIL_PARAMS_EVENT = "loopsoar:rail-params";
@@ -41,6 +48,8 @@ export const RAIL_PARAMS_EVENT = "loopsoar:rail-params";
  * 而当前外观已回退到原版细线（w16/lam86/112），必须换键清掉 v2 的遗留值，
  * 否则用户 localStorage 里的旧参数会把外观继续固定在错误形态。
  * 已知代价：升级后用户自定义的卷轴参数会回到默认值。
+ * 注意：v3 之后新增的 `bumpReach` / `bumpSigma` 由 normalizeRailParams 自动补默认值，
+ * 老 v3 数据不需要再换键（否则会把用户已调好的 6 个参数一起重置）。
  */
 const STORAGE_KEY = "loopsoar_rail_params_chat_v3";
 const LEGACY_STORAGE_KEYS = ["loopsoar_rail_params_chat_v2", "loopsoar_rail_params_chat"];
@@ -52,6 +61,8 @@ const NUM_RANGES: Record<string, [number, number]> = {
   lam1: [8, 400],
   spd: [0, 4],
   tap: [0, 400],
+  bumpReach: [4, 24],
+  bumpSigma: [8, 32],
 };
 
 export function normalizeRailParams(input: unknown, base: RailParams = DEFAULT_CHAT_RAIL): RailParams {

@@ -380,13 +380,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             })
             .catch(bad);
         };
-        const sliderDefs: { key: keyof Pick<RailParams, "w" | "amp" | "lam0" | "lam1" | "spd" | "tap">; label: string; min: number; max: number; step: number; fmt: (v: number) => string }[] = [
+        const sliderDefs: { key: keyof Pick<RailParams, "w" | "amp" | "lam0" | "lam1" | "spd" | "tap" | "bumpReach" | "bumpSigma">; label: string; min: number; max: number; step: number; fmt: (v: number) => string }[] = [
           { key: "w", label: tr("settings.appearance.slider.w"), min: 6, max: 32, step: 1, fmt: (v) => `${v}px` },
           { key: "amp", label: tr("settings.appearance.slider.amp"), min: 0, max: 100, step: 1, fmt: (v) => `${v}%` },
           { key: "lam0", label: tr("settings.appearance.slider.lam0"), min: 8, max: 400, step: 1, fmt: (v) => `${v}px` },
           { key: "lam1", label: tr("settings.appearance.slider.lam1"), min: 8, max: 400, step: 1, fmt: (v) => `${v}px` },
           { key: "spd", label: tr("settings.appearance.slider.spd"), min: 0, max: 4, step: 0.05, fmt: (v) => v.toFixed(2) },
           { key: "tap", label: tr("settings.appearance.slider.tap"), min: 0, max: 400, step: 5, fmt: (v) => `${v}px` },
+          { key: "bumpReach", label: tr("settings.appearance.slider.bumpReach"), min: 4, max: 24, step: 1, fmt: (v) => `${v}px` },
+          { key: "bumpSigma", label: tr("settings.appearance.slider.bumpSigma"), min: 8, max: 32, step: 1, fmt: (v) => `${v}px` },
         ];
         const previewLines = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => tr(`settings.appearance.demo.${n}`));
         return (

@@ -109,7 +109,10 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       if (!sc) return;
       const p = paramsRef.current;
       const width = p.w;
-      const cx = BUMP_PAD + width / 2;
+      // 基线向左让 4px：突起两翼的 dip 会向聊天区反方向（右侧）回弹约 3~4px，
+      // 原基线离窗口右缘只剩 ~11px，叠加 12px 光晕后会贴边裁切（用户反馈「右边凹陷在屏幕外」）。
+      // 这里同时配合 index.html 的右侧光晕收紧，保证 dip + 光晕都留在窗口内。
+      const cx = BUMP_PAD + width / 2 - 4;
       const padTop = 6;
       const padBottom = 6;
       const maxScroll = Math.max(1, sc.scrollHeight - sc.clientHeight);
@@ -140,17 +143,19 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       // 强度由 bumpRef 每帧缓动，离开时自然收回。
       // 关键：高斯宽度必须是固定值，不能按轨道高度百分比缩放 ——
       // 否则窗口越高包越长，整条线会被拉成缓慢的 S 形大弯（用户反馈「又崩了」）。
-      // 宽度/幅度按用户反馈收小：16px 窗口下峰值约 10px，只做「轻微提示」，不挡正文。
+      // 突起宽度/幅度可由用户在外观设置里调整（ADR-0032，railParams.bumpSigma / bumpReach）。
+      // 默认 13px 高斯 + 13px 峰值：比上一版（16px/11.2px）更紧凑、更显眼，
+      // 同时 dip 收得更近（DIP_T 2.7→2.2、DIP 1.1→0.75），不会向右侧甩太远。
+      const bumpSigma = Math.max(8, p.bumpSigma);
+      const bumpReach = Math.max(0, p.bumpReach);
       const ptrY = pointerYRef.current;
       const hovering = hoverRef.current && ptrY >= 0;
       const bumpAmt = bumpRef.current;
-      const bumpSigma = 16;
-      const bumpReach = Math.max(8, Math.min(12, width * 0.7));
       // 突起形状沿用 slime 的 bulge + dip：中心高斯向外鼓，两翼轻微回缩，
       // 这样线与线的过渡是圆的、没有折角（纯高斯在窄线上会显得像「肘部」）。
       const BULGE = 2.8;
-      const DIP = 1.1;
-      const DIP_T = 2.7;
+      const DIP = 0.75;
+      const DIP_T = 2.2;
       const pointerPush = (y: number): number => {
         if (bumpAmt <= 0.001 || ptrY < 0) return 0;
         const t = (y - ptrY) / bumpSigma;
@@ -254,10 +259,11 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
           if (y === from) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.lineWidth = 2.4;
+        ctx.lineWidth = 2.2;
         ctx.lineCap = "round";
         ctx.strokeStyle = hoverGrad;
-        ctx.shadowBlur = 12;
+        // 光晕从 12 收到 8：原光晕在窗口右缘会被裁切，视觉上像「凹陷钻出屏幕」。
+        ctx.shadowBlur = 8;
         ctx.shadowColor = "rgba(255, 214, 170, 0.75)";
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -407,8 +413,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     <div
       ref={hostRef}
       className="topic-rail"
-      title="拖动卷轴滚动 · 悬停查看位置"
-      style={{ position: "absolute", top: 6, bottom: 6, right: 3, width: railWidth, cursor: "pointer", touchAction: "none", zIndex: 3 }}
+      style={{ position: "absolute", top: 6, bottom: 6, right: 4, width: railWidth, cursor: "pointer", touchAction: "none", zIndex: 3 }}
     >
       <canvas ref={canvasRef} style={{ display: "block", pointerEvents: "none" }} />
       <div ref={tipRef} className="topic-rail-tip">
