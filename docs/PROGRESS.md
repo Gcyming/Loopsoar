@@ -486,6 +486,24 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-restored.png`（静止：原版暖金双线 + 视口提亮）、`e2e-round11-rail-restored-hover.png`（悬停：原版外观 + 平滑突起 + 卡片）、`e2e-round11-rail-reenter.png`（`HOVER_RAIL=2`：离开后在 75% 重新进入；像素测量突起中心 y≈675，与重新进入的指针位置一致，日志 `RAIL_HOVER reenter`）。
 
+## 二·四十七、2026-11-05 第四十四次增量（卷轴突起宽度固定：修复大窗口下「整条线被拉成大弯」）
+
+用户反馈（附聊天区右缘截图）：「如图，怎么鼠标放上去后的反馈又崩了？」
+
+- **根因**：ADR-0027/0029 的突起高斯宽度写成 `bumpSigma = Math.max(34, height * 0.06)`，会随轨道高度百分比缩放。窗口越大、轨道越高，突起越「长」：在接近最大化/高 DPI 的窗口里，高斯覆盖了轨道的很大一部分，视觉上整条线被缓慢拉成 S 形大弯，而不是指针处的一个局部鼓包。
+- **修复**（`packages/ui/src/TopicRail.tsx`）：
+  1. `bumpSigma` 固定为 **20px**，不再随 `height` 缩放 —— 任何窗口尺寸下，突起都只覆盖指针上下约 ±50px，不会变成整条线的大弯。
+  2. `bumpReach = Math.max(12, Math.min(18, width))`，突起幅度限制在 12~18px。
+  3. 形状改用 slime 的 bulge + dip（中心高斯外鼓、两翼轻微回缩，`BULGE=2.8 / DIP=1.1 / DIP_T=2.7`），把纯高斯的「折角/肘部」过渡成圆润的包。
+  4. `waveDamp` 的窗口同步用固定 `bumpSigma`，突起区内两股线收拢成一条平滑曲线。
+  5. 悬停高光段从「指针 ±46px」改为「指针 ±2.4×bumpSigma」，与突起范围对齐。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：
+  - `docs/screenshots/e2e-round11-rail-bump-fixed.png`（`LOOPSOAR_E2E_HOVER_RAIL=2`：45% 悬停 → 离开 → 75% 重新进入；截图显示突起位于 75% 指针处）。
+  - `docs/screenshots/e2e-round11-rail-bump-fixed-crop.png`（右缘 4× 放大：局部圆润鼓包，不再是大弯）。
+  - 像素测量：突起位移中心 y≈675（物理像素），与重新进入指针的物理位置 674.75 相差 <1px；位移峰值约 -18px（逻辑约 14.4px），突兀范围约 46 物理像素（阈值法），确认是**局部**突起且**即时定位**。
+- **文档**：ADR-0030、E2E-SMOKE 第 23 节。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

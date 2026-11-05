@@ -443,6 +443,32 @@ node scripts/dev-gui.mjs
 
 > 判读方法：把截图右缘裁出来，逐行取最左侧线条像素 x，扣掉基线后取偏差加权中心；中心应落在重新进入的高度附近。
 
+## 23. 2026-11-05 卷轴突起宽度固定（大窗口下整条线被拉弯的修复）
+
+> 承接第 22 节：用户反馈「鼠标放上去后的反馈又崩了」。根因是突起高斯宽度按轨道高度百分比缩放。本节验证 ADR-0030。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 局部突起（非整条线大弯） | `LOOPSOAR_E2E_HOVER_RAIL=1` 截图后目视右缘 | 突起只出现在指针上下约 ±50px，其余线段保持原版细波浪 |
+| 突起坐标即时定位 | `LOOPSOAR_E2E_HOVER_RAIL=2`（`e2e-round11-rail-bump-fixed.png`） | 45% 悬停 → 移出 → 75% 重新进入；突起直接出现在 75% 处 |
+| 像素测量 | 右缘逐行取最亮线像素，计算位移中心 | 突起中心 y≈675（物理像素），与重新进入指针物理位置 674.75 相差 <1px；峰值位移约 -18px（逻辑约 14.4px） |
+| 外观不变 | 同一截图目视 | 暖金双细线 + 视口提亮 + 圆点、悬停高光与原版一致 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=300'
+$env:LOOPSOAR_E2E_HOVER_RAIL='2'
+$env:LOOPSOAR_E2E_HOLD_MS='3200'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-bump-fixed.png'
+node scripts/dev-gui.mjs
+```
+
+> 若窗口为高 DPI / 最大化，仍应看到同样「局部」的突起（`bumpSigma=20` 与轨道高度无关）。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

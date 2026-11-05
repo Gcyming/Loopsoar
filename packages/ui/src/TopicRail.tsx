@@ -136,18 +136,27 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
         const d = (y - vpCenter) / (vpLen * 1.1 + 1);
         return dir * amp * 0.7 * Math.exp(-(d * d) / 2);
       };
-      // slime 的「突起」：指针所在高度把整条线向左（聊天区一侧）鼓出一个平滑的包，
-      // 强度由 bumpRef 每帧缓动，离开时自然收回；高斯窗让上下过渡连续。
+      // slime 的「突起」：指针所在高度把线向左（聊天区一侧）鼓出一个**局部**的包，
+      // 强度由 bumpRef 每帧缓动，离开时自然收回。
+      // 关键：高斯宽度必须是固定值（约 20px），不能按轨道高度百分比缩放 ——
+      // 否则窗口越高包越长，整条线会被拉成缓慢的 S 形大弯（用户反馈「又崩了」）。
       const ptrY = pointerYRef.current;
       const hovering = hoverRef.current && ptrY >= 0;
       const bumpAmt = bumpRef.current;
-      // 高斯窗要足够宽（窄窗口也不小于 34px），否则突起边缘过陡，看起来像折角而不是鼓包。
-      const bumpSigma = Math.max(34, height * 0.06);
-      const bumpReach = Math.max(10, width * 0.9);
+      const bumpSigma = 20;
+      const bumpReach = Math.max(12, Math.min(18, width * 1.0));
+      // 突起形状沿用 slime 的 bulge + dip：中心高斯向外鼓，两翼轻微回缩，
+      // 这样线与线的过渡是圆的、没有折角（纯高斯在窄线上会显得像「肘部」）。
+      const BULGE = 2.8;
+      const DIP = 1.1;
+      const DIP_T = 2.7;
       const pointerPush = (y: number): number => {
         if (bumpAmt <= 0.001 || ptrY < 0) return 0;
-        const d = (y - ptrY) / bumpSigma;
-        return -bumpAmt * bumpReach * Math.exp(-(d * d) / 2);
+        const t = (y - ptrY) / bumpSigma;
+        const bump = Math.exp(-(t * t) / 2);
+        const dipTerm = ((t * t) / DIP_T) * Math.exp(1 - (t * t) / DIP_T);
+        const h = BULGE * bump - (DIP + BULGE * Math.exp(-DIP_T / 2)) * dipTerm;
+        return (-bumpAmt * bumpReach * h) / BULGE;
       };
       // 突起区内压平基础荡漾：两股线（λ0/λ1 相位不同）在平移中心附近会交叉成 S 形/打结，
       // 把正弦项乘以 1-0.85*bumpAmt*高斯，指针处两股重合为一条平滑外鼓曲线，离开后逐渐恢复波纹。
@@ -232,8 +241,8 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
 
       // ⑤ 悬停：指针附近的一小段线被提亮（衬托 + 局部高光），不画光点
       if (hovering) {
-        const from = Math.max(top, ptrY - 46);
-        const to = Math.min(bottom, ptrY + 46);
+        const from = Math.max(top, ptrY - bumpSigma * 2.4);
+        const to = Math.min(bottom, ptrY + bumpSigma * 2.4);
         const hoverGrad = ctx.createLinearGradient(0, from, 0, to);
         hoverGrad.addColorStop(0, "rgba(255, 224, 190, 0.10)");
         hoverGrad.addColorStop(0.5, "rgba(255, 236, 214, 1)");
