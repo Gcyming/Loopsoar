@@ -403,6 +403,16 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round10-closed-frame.png`（顶行标签活动高亮无白框、工具条/会话栏同色连成闭环、网页面板圆角内缩；页面为本地 E2E 测试页）、`docs/screenshots/e2e-round10-panel-browser-view.png`（原生网页内容渲染截图）。像素采样：外壳 `rgb(23,27,34)`、omnibox 胶囊 `rgb(8,11,16)`、标题栏/状态栏 `rgb(10,12,16)`；几何探针 `bounds {x:8,y:96,width:978,height:724}`（1360×860、sidebar 360）。
 - **已知限制（记录，不阻塞）**：`win.capturePage()` 不含原生 `WebContentsView`，窗口级截图里网页面板显示为占位；功能与几何以 `debugBounds` + `browser:view` 截图交叉验证。聊天区右缘的金色波浪线是「卷轴」自定义滚动条设计元素，不是渲染伪影。
 
+## 二·四十、2026-11-05 第三十七次增量（星标折叠开关 + 地址栏随列伸缩 + 滚动条单一化）
+
+用户诉求（第 11 轮）：① 收起/展开入口分散（一个在右上角左边、一个在右上角下面），要求改成同一个星标方块开关——收起时只显示方块，点击展开后方块变长方形、星标平滑左移、右侧渐入收起图标；② 收起后地址栏要随网页列变宽向右延伸，而不是一直很短；③ 会话右侧滚动条处又出现了原生上下箭头按钮，要求只保留波纹卷轴。
+
+- **统一星标折叠开关（根因：两个反向按钮分散在两处）**：删除 `AgentSidebar` 收起态 rail 的全部按钮（星标方块下方的 `‹` 展开、会话切换、新建）与展开态 header 里的 `>` 收起按钮，改为两态共用的绝对定位 `.sidebar-toggle`：收起 = 32×32 圆角方块（仅 `agent` 星标）；展开 = 62×32 长方形，星标绝对 `left:8` 随容器左扩平滑左移，右侧让出的空间渐入 `forward` 收起箭头（opacity 延迟 90ms）；宽度 320ms `cubic-bezier(0.2,0,0.2,1)`。右缘 `right:8` 固定，所以视觉动作始终是「向右展开 / 向左收起」一个方向。点击收起→回到 `lastExpandedModeRef`（docked/float），展开→collapsed；`fill`（mini/独立 Agent 窗口）时隐藏（关闭由该窗口标题栏负责），header `paddingRight:78` 避免和绝对开关重叠。hover 放进 `index.html` 的 `.sidebar-toggle:hover`（内联 background 会压过 hover，与第 9 轮根因同类）。
+- **地址栏随列伸缩（根因：第 10 轮遗留的静态上限）**：`BrowserChrome` 的 `omniboxWrap.maxWidth:720` 是第 10 轮「地址栏不要伸进会话栏」时加的 cap；但第 10 轮已把工具条裁进 `pageColumn`，cap 变成多余限制——侧栏收起后网页列变宽，地址栏却不跟着变长。删除该 cap，omnibox `flex:1` 填满网页列；新增 `.browser-toolbar` / `.browser-omnibox` 类便于探针与样式定位。
+- **滚动条单一化（根因：soft 主题覆盖了基础隐藏规则）**：`index.html` 的 soft 主题块给 `.chat-scroll` 设了 `scrollbar-width:thin` + `scrollbar-color`，覆盖基础规则 `.chat-scroll { scrollbar-width:none }` 与 `::-webkit-scrollbar{width:0}`，于是原生 WebKit 滚动条（含上下箭头按钮）重新出现，与右侧 TopicRail 波纹卷轴叠在一起。删除该覆盖并留注释，聊天区只保留波浪卷轴。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **132 文件 / 1205 tests 全绿**。
+- **真机 E2E 证据（DOM 探针 + 截图）**：展开态 `omni.w=667`、toggle `62×32`；点击后（900ms 落定）`mode=collapsed`、`omni.w=1132`、toggle `32×32`、`.chat-scroll` 滚动条厚度 = 0；展开动画采样 `32→47→62`（100ms/600ms 两点，连续无跳变）。截图 `e2e-round11-expanded.png`、`e2e-round11-collapsed.png`、`e2e-round11-toggle-mid.png`（动画中帧：长方形、星标在左、箭头渐入）。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

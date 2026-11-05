@@ -248,6 +248,48 @@ $env:LOOPSOAR_E2E_RESIZE='1360x860'
 node scripts/dev-gui.mjs
 ```
 
+## 16. 2026-11-05 星标折叠开关 / 地址栏伸缩 / 滚动条单一化验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 收起/展开只剩一个入口（星标方块） | ✅ 原 rail 按钮与 header `>` 收起按钮已删除，只剩 `.sidebar-toggle` | `AgentSidebar.tsx` + 截图 |
+| 收起态只显示 32×32 星标方块 | ✅ `mode=collapsed`、toggle `getBoundingClientRect().width=32`，无其他按钮 | `e2e-round11-collapsed.png` + `E2E_EVAL` |
+| 展开态为长方形，星标左移 + 收起箭头渐入 | ✅ 落定 62×32；动画中帧宽 44，星标在左、右侧箭头半透明 | `e2e-round11-expanded.png`、`e2e-round11-toggle-mid.png` |
+| 开关方向符合直觉（右缘固定、只左伸右收） | ✅ 动画采样 32→47→62（100ms/600ms），无跳变；右缘 `right:8` 固定 | `E2E_EVAL` 两次点击探针 |
+| 收起后地址栏随网页列向右延伸 | ✅ `omni.w` 667→1132（同一窗口，仅点击开关） | `E2E_EVAL` + `e2e-round11-collapsed.png` |
+| 展开后地址栏恢复原长度 | ✅ 1132→667 | `E2E_EVAL` + `e2e-round11-expanded.png` |
+| 会话右侧不再出现原生滚动条按钮，仅保留波浪卷轴 | ✅ `.chat-scroll` `offsetWidth-clientWidth=0`（`scrollbar-width:none` 生效） | `E2E_EVAL` + 截图 |
+| 开关 hover 有反馈 | ✅ `.sidebar-toggle:hover` 背景/文字变化（内联背景已移除） | `index.html` 规则 + 截图 |
+| 回归基线 | ✅ typecheck 5/5、gen/check 逐字节一致、build 5/5、vitest 132 文件 / 1205 tests 全绿 | 终端记录 |
+
+说明：窗口级截图仍不含原生 `WebContentsView`（`capturePage` 限制），网页面板显示为 StartPage 占位；本轮验证点均在 DOM chrome 上，地址栏/开关尺寸用 `getBoundingClientRect` 探针给出精确值。
+
+复跑命令（PowerShell，先启动本地测试页 `node .tmp/adpage-server.mjs 19444`）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\tool\AI\real-project\Loopsoar\Parent file\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_NAV_URL='http://127.0.0.1:19444/'
+$env:LOOPSOAR_E2E_NAV_WAIT_MS='2200'
+$env:LOOPSOAR_E2E_HOLD_MS='900'
+
+# 1) 展开态截图 + DOM 探针（omni 宽度 / toggle 尺寸 / 滚动条厚度）
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-expanded.png'
+$env:LOOPSOAR_E2E_EVAL='(() => { const r=(s)=>{const el=document.querySelector(s); if(!el) return null; const b=el.getBoundingClientRect(); return {x:Math.round(b.x),w:Math.round(b.width)};}; const sc=document.querySelector(".chat-scroll"); return JSON.stringify({omni:r(".browser-omnibox"),toggle:r(".sidebar-toggle"),sbW:sc?sc.offsetWidth-sc.clientWidth:null,mode:document.querySelector(".agent-sidebar")?.dataset.mode}); })()'
+node scripts/dev-gui.mjs
+
+# 2) 点击开关 → 收起态截图（地址栏应延伸；mode=collapsed；toggle 32）
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-collapsed.png'
+$env:LOOPSOAR_E2E_HOLD_MS='1200'
+$env:LOOPSOAR_E2E_EVAL='(async () => { const r=(s)=>{const ell=document.querySelector(s); if(!ell) return null; const b=ell.getBoundingClientRect(); return {x:Math.round(b.x),w:Math.round(b.width)};}; const before=r(".browser-omnibox"); document.querySelector(".sidebar-toggle")?.click(); await new Promise((res)=>setTimeout(res,900)); const sc=document.querySelector(".chat-scroll"); return JSON.stringify({before,after:r(".browser-omnibox"),toggleAfter:r(".sidebar-toggle"),sbW:sc?sc.offsetWidth-sc.clientWidth:null,mode:document.querySelector(".agent-sidebar")?.dataset.mode}); })()'
+node scripts/dev-gui.mjs
+
+# 3) 动画中帧（收起→展开 80ms 后截图，验证长方形过渡态）
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-toggle-mid.png'
+$env:LOOPSOAR_E2E_HOLD_MS='60'
+$env:LOOPSOAR_E2E_EVAL='(async () => { document.querySelector(".sidebar-toggle")?.click(); await new Promise((res)=>setTimeout(res,80)); return JSON.stringify({w:Math.round(document.querySelector(".sidebar-toggle")?.getBoundingClientRect().width ?? -1),mode:document.querySelector(".agent-sidebar")?.dataset.mode}); })()'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

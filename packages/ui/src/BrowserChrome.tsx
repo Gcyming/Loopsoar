@@ -167,7 +167,7 @@ export default function BrowserChrome({
 
   return (
     <>
-      <header style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
+      <header className="browser-toolbar" style={{ ...styles.topBar, height: LAYOUT.TOP_BAR_HEIGHT }}>
         <div style={styles.navGroup}>
           <button type="button" className="icon-btn" title={tr("browser.back")} disabled={!active?.canBack} onClick={onBack}>
             <Icon name="back" size={16} />
@@ -180,7 +180,7 @@ export default function BrowserChrome({
           </button>
         </div>
 
-        <div style={styles.omniboxWrap}>
+        <div className="browser-omnibox" style={styles.omniboxWrap}>
           <Icon name="search" size={14} style={styles.omniboxIcon} />
           <input
             value={address}
@@ -267,9 +267,8 @@ const styles: Record<string, React.CSSProperties> = {
   navGroup: { display: "flex", gap: 2, flexShrink: 0 },
   omniboxWrap: {
     flex: 1,
-    // 地址栏不再一路顶到会话栏：留出右侧余量，让「网址输入栏」与右侧会话栏之间有呼吸；
-    // 剩余空间由 topActions 的 marginLeft:auto 吃掉，星标/快照/更多仍贴网页列右缘。
-    maxWidth: 720,
+    // 地址栏占满网页列（工具条本身只被 pageColumn 裁切，不会再伸进会话栏）。
+    // 不再设 maxWidth：侧栏收起时网页列变宽，地址栏会自然跟着向右延伸。
     display: "flex",
     alignItems: "center",
     gap: 8,

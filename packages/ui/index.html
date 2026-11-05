@@ -137,10 +137,9 @@
         padding-top: 2px;
         padding-bottom: 2px;
       }
-      html:not([data-theme="classic"]) .chat-scroll {
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
-      }
+      /* 注意：不要在这里给 .chat-scroll 设 scrollbar-width:thin —— 会覆盖基础规则的 none，
+         原生滚动条和上下箭头按钮会重新出现，与右侧 TopicRail 的波纹卷轴叠在一起。
+         聊天区只保留波浪卷轴，原生滚动条保持隐藏。 */
       /* 终端面板（全宽底部）：浮起的大圆角面板 + 顶部柔和阴影 */
       html:not([data-theme="classic"]) .terminal-panel.is-fullwidth {
         border-top: none !important;
@@ -330,6 +329,24 @@
       .tab-item:hover .tab-close {
         opacity: 1;
         pointer-events: auto;
+      }
+      /* 会话栏收起/展开开关：两态共用的星标方块。宽度由内联控制（32↔62），
+         底色/文字在这里定义，hover 才有反馈（内联 background 会压过 hover 规则）。 */
+      .sidebar-toggle {
+        background: var(--ls-accent-soft);
+        color: var(--ls-accent-hover);
+        transition: background-color 120ms ease, color 120ms ease, width 320ms cubic-bezier(0.2, 0, 0.2, 1);
+      }
+      .sidebar-toggle:hover {
+        background: rgba(var(--ls-accent-rgb), 0.28);
+        color: var(--ls-text);
+      }
+      .sidebar-toggle:active {
+        transform: scale(0.96);
+      }
+      .sidebar-toggle:focus-visible {
+        outline: 2px solid rgba(var(--ls-accent-rgb), 0.6);
+        outline-offset: 2px;
       }
       /* chip 的内联 background:transparent 会压过普通 :hover 规则，这里用 !important 拿回反馈 */
       .agent-sidebar .chip:hover {

@@ -363,6 +363,27 @@
 
 ---
 
+---
+## ADR-0023 会话栏星标折叠开关 / 地址栏随列伸缩 / 聊天滚动条单一化
+
+- **背景**：用户第 11 轮三点反馈：① 「收起与展开的图标位置很反直觉，一个在右上角的左边，一个在右上角的下面」，要求用收起态那个 Loopsoar 星标方块作为唯一开关——未展开时只显示方块，点击展开后方块由正方形变长方形、星标平滑左移、右侧空出的部分渐入收起图标；② 「收起后，上方网址填入栏也要随右侧边栏的收起向右延伸为正常长度，现在一直维持的比较短的长度」；③ 「会话的右边上下滚动的拖拽处又出现了我原本叫你替代了的按钮？仅保留现有波纹状按钮条就行」。
+- **根因**：
+  1. 收起/展开入口分散：展开态 header 的 `>` 收起按钮位于右上角左侧，收起态 rail 的 `‹` 展开按钮位于星标方块下方；两个不同位置、不同方向的按钮执行相反动作，且 rail 还混着会话切换/新建，视觉与操作都反直觉。
+  2. 地址栏 `maxWidth:720` 是第 10 轮为「地址栏不要伸进会话栏」加的静态上限；第 10 轮已把工具条裁进 `pageColumn`，该 cap 变成多余限制——侧栏收起、网页列变宽后地址栏不跟着延伸。
+  3. soft 主题块给 `.chat-scroll` 设了 `scrollbar-width:thin` + `scrollbar-color`，覆盖基础规则 `scrollbar-width:none` 与 `::-webkit-scrollbar{width:0}`，原生 WebKit 滚动条（含上下箭头）重新出现，与 TopicRail 波纹卷轴重叠。
+- **决策**：
+  1. **单一星标开关**：`AgentSidebar` 用绝对定位 `.sidebar-toggle` 取代两个入口——`top/right:8`、宽 `isCollapsed ? 32 : 62`、高 32；收起=仅星标方块，展开=长方形（星标绝对 `left:8` 随容器左扩左移，右侧渐入 `forward` 箭头，opacity 延迟 90ms）；宽度 320ms `cubic-bezier(0.2,0,0.2,1)`，右缘固定所以只有「左伸右收」一个方向。点击收起→`lastExpandedModeRef`（docked/float），展开→collapsed；`fill`（mini/独立 Agent 窗口）隐藏，靠该窗口标题栏关闭；header `paddingRight:78` 防重叠；hover 放 `index.html` `.sidebar-toggle:hover`（避免内联背景压过 hover）。删除 rail 全部按钮与 header 收起按钮。
+  2. **地址栏弹性**：删除 `omniboxWrap.maxWidth:720`，omnibox `flex:1` 填满 `pageColumn`；侧栏收起时网页列变宽、地址栏自动延伸。新增 `.browser-toolbar` / `.browser-omnibox` 类作为探针与样式锚点。
+  3. **滚动条单一化**：删除 soft 主题对 `.chat-scroll` 的 `scrollbar-width:thin` 覆盖，保留基础 `scrollbar-width:none` + `::-webkit-scrollbar{width:0;height:0}`，聊天区只保留波浪卷轴。
+- **理由**：同一元素做两态切换时，右缘固定 + 宽度变化会把「方向」自然编码进动作（展开=向左长出来），不再需要记忆两个反向按钮；地址栏长度应由列宽决定，静态上限在列宽可变后必然过时；滚动条只能有一个视觉来源，否则两个滚动指示器叠加既乱又会抢拖拽。
+- **替代方案**：保留两个按钮只调整位置（否，用户明确只留一个星标方块）；展开按钮放回 header 右侧（否，仍是两个入口）；地址栏用 JS 监听宽度写像素（否，flex 即可，避免状态同步与抖动）；仅隐藏 WebKit 箭头而保留滚动条（否，仍与卷轴重叠）。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **132 文件 / 1205 tests 全绿**；真机 E2E（`docs/E2E-SMOKE.md` 第 16 节）DOM 探针：展开 `omni.w=667`/toggle 62，收起 `omni.w=1132`/toggle 32/`mode=collapsed`/`chat-scroll` 滚动条厚度 0，展开动画采样 32→47→62；截图 `e2e-round11-expanded.png`、`e2e-round11-collapsed.png`、`e2e-round11-toggle-mid.png`。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：32px 方块在触屏/高 DPI 下点击过小 → 增大命中区域（padding/伪元素）而不是改回两个按钮；地址栏过长导致图标被挤 → 给 omnibox 加 `minWidth:0` 与动作区 `flexShrink:0`（已具备），必要时按列宽百分比限制。
+- **复核时间**：打包阶段（触屏 / 高 DPI / 极窄窗口 / 经典主题）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -389,3 +410,4 @@
 | ADR-0020 | 会话栏「小窗化」= 独立 Agent 窗口（真·窗口化） | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0021 | 定制窗口 chrome / 本地图标库 / 发送↔中断 / hover / 动效规范收敛 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0022 | 顶部标签行 + chrome 闭环外壳（网页面板内缩/圆角） | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0023 | 会话栏星标折叠开关 / 地址栏随列伸缩 / 聊天滚动条单一化 | ✅ 已验证（自动化 + 真机 E2E） |

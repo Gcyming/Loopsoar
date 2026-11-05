@@ -4,7 +4,7 @@
  *
  * 三态（由 App 通过 preferences.sidebarMode 持久化，组件只受控渲染）：
  *   · docked    常驻右侧（默认）；根节点 data-mode="docked"
- *   · collapsed 收起为 48px 竖条（Agent 图标 + 展开 + 会话切换/新建）；内容**不卸载**，
+ *   · collapsed 收起为 48px 竖条，只显示右上角的星标开关方块（点开即展开）；内容**不卸载**，
  *               用 opacity 淡出 + 指针禁用，宽度与透明度同步过渡 → 展开时布局不跳变
  *   · float     浮动小窗：外面包一层 `floatCard`（圆角/阴影/外边距由 .is-float/.floatCard 的 CSS 负责）
  *
@@ -13,18 +13,20 @@
  *     这样收起/展开时是父级裁切窗口在动，而不是组件内部宽度和父级各动一套（会被父级瞬间裁掉）。
  *   · 内容 `.agent-sidebar-inner` 固定为展开态基准宽度（`width` prop）并用 margin-left:auto 钉右缘：
  *     宽度变窄时裁掉左侧、内容不重排（slime 的不变式：右边栏始终钉住窗口右缘）。
- *   · rail 绝对定位在右缘，只有 48px 宽，因此收起到 48px 时正好露出的就是 rail。
+ *   · 收起/展开开关 `.sidebar-toggle` 绝对定位在右上角，两态共用同一元素：
+ *     收起 = 32×32 方块（仅星标）；展开 = 长方形（星标左移 + 右侧渐入收起箭头），
+ *     宽度过渡时右缘固定，所以动作只有「向右展开 / 向左收起」一个方向。
  *
  * 约定类名（V1 主题任务按此写 CSS，组件只提供结构与内联骨架）：
  *   `.agent-sidebar[data-mode="docked|collapsed|float"]`、`.agent-sidebar.is-float`、`.agent-sidebar.is-collapsed`、
- *   `.agent-sidebar-inner`、`.agent-sidebar-content`、`.floatCard`、`.agent-sidebar-rail`、`.sidebar-mode-btn`
+ *   `.agent-sidebar-inner`、`.agent-sidebar-content`、`.floatCard`、`.sidebar-toggle`、`.sidebar-mode-btn`
  *
  * 纯展示 + 受控 props：所有业务动作（切换会话、新建、删除、复制、打开工作区面板、模式切换）由 App 实现；
  * 宽度拖拽仍由 App 的 splitter 控制。
  */
 import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
-import { BRAND, MOTION, RADIUS, SHADOW } from "./theme.js";
+import { BRAND, MOTION, NO_DRAG_REGION, RADIUS, SHADOW } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
 import Popover from "./AnchoredPopover.js";
@@ -120,9 +122,8 @@ export default function AgentSidebar({
     [tr],
   );
 
-  /** 会话下拉的锚点：展开态在会话 chip 上，收起态在 48px 竖条的会话图标上（Portal 按实际位置定位）。 */
+  /** 会话下拉的锚点：展开态在会话 chip 上（Portal 按实际位置定位）。 */
   const sessionAnchorRef = React.useRef<HTMLSpanElement | null>(null);
-  const railSessionAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   /** 记住收起前的非收起态（expand 时回到 docked 或 float，而不是永远 docked）。 */
   const lastExpandedModeRef = React.useRef<Exclude<SidebarMode, "collapsed">>("docked");
   React.useEffect(() => {
@@ -150,9 +151,6 @@ export default function AgentSidebar({
   const floatLabel = isFloat
     ? localized("chat.sidebarDock", "恢复常驻", "Dock sidebar")
     : localized("chat.sidebarFloat", "小窗化", "Float sidebar");
-  const railLabel = localized("chat.sidebarRail", "会话栏操作", "Sidebar actions");
-  const switchLabel = localized("chat.sidebarRailSwitch", "切换会话", "Switch session");
-  const newLabel = localized("chat.sidebarRailNew", "新建会话", "New session");
 
   const fill = width <= 0;
   const contentWidth = fill ? "100%" : width;
@@ -161,46 +159,38 @@ export default function AgentSidebar({
 
   return (
     <aside className={rootClassName} data-mode={mode} style={{ ...styles.sidebar, ...(isFloat ? styles.sidebarFloat : {}) }}>
-      {/* 收起态：48px 竖条（Agent 图标 / 展开 / 会话切换 / 新建）。内容仍在下面 DOM 中以 opacity 淡出 */}
-      {isCollapsed ? (
-        <div className="agent-sidebar-rail" style={styles.rail} role="toolbar" aria-label={railLabel}>          <span style={styles.railLogo} title={agentLabel} aria-hidden="true">
+      {/* 收起/展开开关：同一个绝对定位元素在两态间连续变形（右缘钉住窗口右边）。
+          收起 = 32×32 圆角方块（仅 Loopsoar 星标）；展开 = 长方形，星标随容器左扩平滑左移，
+          右侧让出的空间渐入「收起」箭头。点击方块展开、点击箭头收起，不再有两个分散的按钮。 */}
+      {fill ? null : (
+        <button
+          type="button"
+          className="sidebar-toggle"
+          data-expanded={isCollapsed ? "false" : "true"}
+          style={{
+            ...styles.toggle,
+            width: isCollapsed ? 32 : 62,
+          }}
+          title={isCollapsed ? expandLabel : collapseLabel}
+          aria-label={isCollapsed ? expandLabel : collapseLabel}
+          aria-expanded={!isCollapsed}
+          onClick={() => onModeChange(isCollapsed ? lastExpandedModeRef.current : "collapsed")}
+        >
+          <span style={styles.toggleStar} aria-hidden="true">
             <Icon name="agent" size={16} />
           </span>
-          <button
-            type="button"
-            className="icon-btn sidebar-mode-btn"
-            style={styles.railBtn}
-            title={expandLabel}
-            aria-label={expandLabel}
-            onClick={() => onModeChange(lastExpandedModeRef.current)}
+          <span
+            style={{
+              ...styles.toggleChevron,
+              opacity: isCollapsed ? 0 : 1,
+              transitionDelay: isCollapsed ? "0ms" : "90ms",
+            }}
+            aria-hidden="true"
           >
-            <Icon name="back" size={14} />
-          </button>
-          <span ref={railSessionAnchorRef} style={styles.anchor} data-popover-trigger>
-            <button
-              type="button"
-              className="icon-btn sidebar-mode-btn"
-              style={styles.railBtn}
-              title={`${switchLabel}${activeSession?.title ? `：${activeSession.title}` : ""}`}
-              aria-label={switchLabel}
-              onClick={onToggleSession}
-            >
-              <Icon name="notes" size={14} />
-            </button>
+            <Icon name="forward" size={12} />
           </span>
-          <button
-            type="button"
-            className="icon-btn sidebar-mode-btn"
-            style={styles.railBtn}
-            title={newLabel}
-            aria-label={newLabel}
-            onClick={onNewSession}
-          >
-            <Icon name="plus" size={14} />
-          </button>
-          <span style={styles.spacer} />
-        </div>
-      ) : null}
+        </button>
+      )}
 
       {/* float 态外包 floatCard；collapsed 态整体 opacity:0 + pointer-events:none（常驻 DOM 不卸载） */}
       <div
@@ -224,15 +214,6 @@ export default function AgentSidebar({
                 <Icon name="file" size={13} />
               </button>
               <span style={styles.sidebarAgent}>{agentLabel}</span>
-              <button
-                type="button"
-                className="icon-btn sidebar-mode-btn"
-                title={collapseLabel}
-                aria-label={collapseLabel}
-                onClick={() => onModeChange("collapsed")}
-              >
-                <Icon name="forward" size={13} />
-              </button>
               <button
                 type="button"
                 className="icon-btn sidebar-mode-btn"
@@ -281,7 +262,7 @@ export default function AgentSidebar({
             </button>
             {/* 会话历史下拉：Portal + placePopover 定位（原 absolute 在窗口边缘会被裁切） */}
             <Popover
-              anchorRef={isCollapsed ? railSessionAnchorRef : sessionAnchorRef}
+              anchorRef={sessionAnchorRef}
               open={sessionOpen}
               onClose={() => undefined}
               width={300}
@@ -364,35 +345,45 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minHeight: 0,
   },
-  /** 收起态竖条：绝对定位钉在父级右缘（48px 宽），父级收窄时正好露出这一条。 */
-  rail: {
+  /**
+   * 收起/展开开关：两态共用的绝对定位元素。右缘固定（right:8），宽度 32↔62 变化时
+   * 容器只会向左生长，所以视觉动作始终是「向右展开 / 向左收起」一个方向。
+   * 星标绝对 left:8 会随容器左缘一起左移；收起箭头绝对 right:8，在腾出的右半边渐入。
+   */
+  toggle: {
     position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    width: 48,
-    zIndex: 2,
+    top: 8,
+    right: 8,
+    zIndex: 3,
     display: "flex",
-    flexDirection: "column",
     alignItems: "center",
-    gap: 6,
-    padding: "10px 0 12px",
-    // 收起竖条与工具条同底色，收/展时不会闪出另一块面
-    background: BRAND.inkRaised,
+    height: 32,
+    padding: 0,
+    border: "none",
+    borderRadius: RADIUS.sm,
+    cursor: "pointer",
+    overflow: "hidden",
+    ...NO_DRAG_REGION,
+    // 底/字色由 index.html 的 .sidebar-toggle 规则提供（内联 background 会压过 hover 反馈）
+    transition: `width ${MOTION.sidebarDuration} ${MOTION.ease}`,
   },
-  railLogo: {
+  toggleStar: {
+    position: "absolute",
+    left: 8,
+    top: 0,
+    bottom: 0,
     display: "inline-flex",
     alignItems: "center",
-    justifyContent: "center",
-    width: 32,
-    height: 32,
-    marginBottom: 2,
-    borderRadius: RADIUS.sm,
-    background: BRAND.ochreSoft,
-    color: BRAND.ochreHover,
   },
-  railBtn: { width: 32, height: 32 },
-  spacer: { flex: 1 },
+  toggleChevron: {
+    position: "absolute",
+    right: 8,
+    top: 0,
+    bottom: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    transition: "opacity 160ms ease",
+  },
   sidebarHeader: {
     display: "flex",
     alignItems: "center",
@@ -400,7 +391,8 @@ const styles: Record<string, React.CSSProperties> = {
     // 纵向拉长到与第二行网址工具条同高：会话栏头部按钮与网页工具条处在同一横带，
     // 不再缩在列顶，顶部的「两块面」因此连成一条。
     height: LAYOUT.TOP_BAR_HEIGHT,
-    padding: "0 12px",
+    // 右侧留出绝对定位的收起/展开开关宽度（62px + 右缘 8px + 间距 8px），按钮不会互相压住。
+    padding: "0 78px 0 12px",
     fontWeight: 600,
     fontSize: 13,
     color: BRAND.linen,
