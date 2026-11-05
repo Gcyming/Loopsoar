@@ -5,6 +5,7 @@
  * 真正的网页由主进程的 WebContentsView 覆盖在同一区域，本组件不参与原生视图布局。
  */
 import * as React from "react";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
@@ -55,6 +56,12 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    // 网页面板：四边留白 + 圆角 + 裁切，与原生 WebContentsView 的 inset/圆角共用同一契约值，
+    // 页面不再顶到窗口边缘（用户反馈的「硬朗直角」）。
+    margin: LAYOUT.BROWSER_VIEW_INSET,
+    borderRadius: LAYOUT.BROWSER_VIEW_RADIUS,
+    overflow: "hidden",
+    boxSizing: "border-box",
     background: `radial-gradient(circle at 28% 18%, rgba(var(--ls-accent-rgb, 200, 118, 60),0.10) 0%, ${BRAND.ink} 58%)`,
   },
   startPage: { maxWidth: 520, padding: 28, textAlign: "left" },

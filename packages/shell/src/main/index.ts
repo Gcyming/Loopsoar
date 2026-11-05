@@ -5,7 +5,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -469,6 +469,43 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
               }
             } catch (err) {
               console.warn("DESKTOP_SHOT_SKIPPED", err instanceof Error ? err.message : String(err));
+            }
+          }
+
+          // E2E：窗口级合成截图（LOOPSOAR_E2E_WINDOW_SHOT=1）——capturePage 不含原生 WebContentsView，
+          // 用 desktopCapturer 抓屏后按窗口矩形裁切，验证网页圆角面板/标签高亮等合成效果（不含桌面其他内容）。
+          if (process.env.LOOPSOAR_E2E_WINDOW_SHOT === "1") {
+            try {
+              const { desktopCapturer } = await import("electron");
+              const winBounds = win.getBounds();
+              const display = screen.getDisplayMatching(winBounds);
+              const scale = display.scaleFactor;
+              const sources = await desktopCapturer.getSources({
+                types: ["screen"],
+                thumbnailSize: {
+                  width: Math.round(display.bounds.width * scale),
+                  height: Math.round(display.bounds.height * scale),
+                },
+              });
+              const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
+              const img = source?.thumbnail;
+              if (img && !img.isEmpty()) {
+                const size = img.getSize();
+                const crop = {
+                  x: Math.max(0, Math.round((winBounds.x - display.bounds.x) * scale)),
+                  y: Math.max(0, Math.round((winBounds.y - display.bounds.y) * scale)),
+                  width: Math.round(winBounds.width * scale),
+                  height: Math.round(winBounds.height * scale),
+                };
+                crop.width = Math.min(crop.width, size.width - crop.x);
+                crop.height = Math.min(crop.height, size.height - crop.y);
+                const cropped = img.crop(crop);
+                const winPath = shotPath.replace(/\.png$/, "-window.png");
+                fs.writeFileSync(winPath, cropped.toPNG());
+                console.log("WINDOW_SHOT_SAVED", winPath);
+              }
+            } catch (err) {
+              console.warn("WINDOW_SHOT_SKIPPED", err instanceof Error ? err.message : String(err));
             }
           }
 

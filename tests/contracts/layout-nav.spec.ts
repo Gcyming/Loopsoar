@@ -7,25 +7,28 @@ import { normalizeNavigateUrl } from "../../packages/contracts/src/navigation.ts
 
 describe("布局契约", () => {
   it("常量与 S2 规格一致", () => {
-    expect(LAYOUT.TITLE_BAR_HEIGHT).toBe(36);
+    expect(LAYOUT.TITLE_BAR_HEIGHT).toBe(40);
     expect(LAYOUT.TOP_BAR_HEIGHT).toBe(48);
     expect(LAYOUT.SIDEBAR_WIDTH).toBe(360);
     expect(LAYOUT.STATUS_BAR_HEIGHT).toBe(32);
+    // 网页面板：四边留白 + 圆角（DOM 页框与原生 WebContentsView 共用同一契约值）
+    expect(LAYOUT.BROWSER_VIEW_INSET).toBe(8);
+    expect(LAYOUT.BROWSER_VIEW_RADIUS).toBe(14);
   });
 
-  it("原生浏览器视图避开标题栏/顶栏/侧栏/状态条", () => {
+  it("原生浏览器视图避开标题栏/顶栏/侧栏/状态条，并内缩为圆角面板", () => {
     expect(computeBrowserViewBounds({ width: 1280, height: 800 })).toEqual({
-      x: 0,
-      y: 118,
-      width: 914,
-      height: 650,
+      x: 8,
+      y: 96,
+      width: 898,
+      height: 664,
     });
   });
 
   it("窗口过小时钳制为 0（不产生负尺寸）", () => {
     expect(computeBrowserViewBounds({ width: 100, height: 40 })).toEqual({
-      x: 0,
-      y: 118,
+      x: 8,
+      y: 96,
       width: 0,
       height: 0,
     });

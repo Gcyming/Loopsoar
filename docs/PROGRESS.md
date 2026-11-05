@@ -390,6 +390,19 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5（ui 603.56 kB / gzip 176.59 kB）、`vitest` **132 文件 / 1205 tests 全绿**。
 - **真机 E2E 证据**：无边框 Agent 窗口 422×722（`e2e-round9-agent-window-agent-window.png`）、主窗口网页铺满（`-main-fullwidth.png`）；滑入轨迹 `x 686→662`（200ms）、主窗口原生视图 `sidebarWidth 507→0` 逐帧插值；窗口按钮 hover（`e2e-round9-titlebar-hover-hover.png`）；Composer 生成中=停止图标（`e2e-round9-composer-stop.png`）、运行中输入后即变回发送（`e2e-round9-composer-typing.png`）。
 
+## 二·三十九、2026-11-05 第三十六次增量（顶部标签行 + chrome 闭环外壳）
+
+用户诉求（第 10 轮）：标签页移到最顶行、与窗口按钮同列；活动标签填充高亮、去掉白描边胶囊；网页/会话/顶部之间不要硬直角缝隙；网址栏只覆盖网页列、不延伸进会话栏；会话栏顶部按钮区与网址栏同底色并纵向拉长；输入框与周围底色区分；最后用同一块抬高外壳把工具条与会话栏连起来，让网页面板以圆角内缩成闭环。
+
+- **标签页升到标题行**：`TitleBar` 新增 `tabs?: React.ReactNode` 插槽（main 变体 = 左侧标签 + `+`，中间拖动区，右侧最小化/最大化/关闭；agent 变体不变）。新增 `packages/ui/src/BrowserTabs.tsx`，`BrowserChrome` 删除独立 34px 标签栏与三个 tab 回调，只保留第二行导航工具条；`TITLE_BAR_HEIGHT` 36→**40**、删除 `TAB_BAR_HEIGHT`，原生视图顶部偏移同步为 `40 + 48 + inset`。
+- **标签渲染改为 Chrome 式**：非活动标签透明底、无边框、次级文字色，仅 hover 变色；活动标签填充 `--ls-surface-raised`（与下一行工具条同色连成一片）+ 文字提亮，关闭键仅 hover 出现；`.tab-item` 基础规则统一放进 `index.html`（soft/classic 共用 token）。
+- **chrome 闭环外壳（根因）**：`App` 结构改为 `workRow`（整块 `BRAND.inkRaised` 抬高面）= 左侧 `pageColumn`（工具条 + 网页面板）+ splitter + 右侧满高会话栏；`StatusBar` 也改 raised 并删除 borderTop，外框一直延伸到底。网页面板四边内缩 `BROWSER_VIEW_INSET=8`、圆角 `BROWSER_VIEW_RADIUS=14`，DOM 占位与原生 `WebContentsView` 同参数（`view.setBorderRadius(14)` + `computeBrowserViewBounds` 内缩），形成「深色门户嵌在抬高外壳里」的闭环。顶部工具条/会话栏/间隙共享同一底色，原先 splitter 6px + 侧栏左侧 8px 露出的应用底色暗缝被填满。
+- **网址栏收窄与会话栏配色**：`BrowserChrome` 工具条背景 `BRAND.inkRaised`、地址栏只铺到网页列宽度（omnibox `maxWidth:720`、右侧动作区 `marginLeft:auto`），删除 borderBottom 硬线；会话栏 `background: BRAND.inkRaised`、`borderLeft:none`、header 高度 48 与第二行工具条同横带；soft 主题 `.agent-sidebar` 覆盖改为 `var(--ls-surface-raised)`、无边框无阴影。输入区：`Composer` 外层去 borderTop/透明，输入卡片 `BRAND.inkRaised` + 圆角 14，与周围形成对比。
+- **窗口圆角**：`agentWindow` 的 `frame:false + roundedCorners:true` 保持，与外壳圆角视觉一致。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **132 文件 / 1205 tests 全绿**（layout-nav / core-layout / browserHost / agentWindow / historyBackfill 期望值全部按新几何更新：`x=8`、`y=96`、宽高各多扣 16、不再扣标签栏 34）。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round10-closed-frame.png`（顶行标签活动高亮无白框、工具条/会话栏同色连成闭环、网页面板圆角内缩；页面为本地 E2E 测试页）、`docs/screenshots/e2e-round10-panel-browser-view.png`（原生网页内容渲染截图）。像素采样：外壳 `rgb(23,27,34)`、omnibox 胶囊 `rgb(8,11,16)`、标题栏/状态栏 `rgb(10,12,16)`；几何探针 `bounds {x:8,y:96,width:978,height:724}`（1360×860、sidebar 360）。
+- **已知限制（记录，不阻塞）**：`win.capturePage()` 不含原生 `WebContentsView`，窗口级截图里网页面板显示为占位；功能与几何以 `debugBounds` + `browser:view` 截图交叉验证。聊天区右缘的金色波浪线是「卷轴」自定义滚动条设计元素，不是渲染伪影。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

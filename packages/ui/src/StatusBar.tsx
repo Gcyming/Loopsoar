@@ -60,8 +60,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 18,
     padding: "0 12px",
-    background: BRAND.ink,
-    borderTop: `1px solid ${BRAND.border}`,
+    // 底栏与工具条/会话栏使用同一块抬高面：页框下方的外框一直延伸到底，
+    // 不再用分隔线切断（用户反馈「条框的影子」）。
+    background: BRAND.inkRaised,
     fontSize: 11,
     color: BRAND.linenFaint,
     flexShrink: 0,

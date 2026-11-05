@@ -342,6 +342,27 @@
 - **复核时间**：打包阶段（多显示器 / 多 DPI / 窗口贴边吸附 / 输入法与快捷键）
 
 ---
+## ADR-0022 顶部标签行 + chrome 闭环外壳（网页面板内缩/圆角）
+
+- **背景**：用户第 10 轮 UI 精修：① 标签页移到最顶行、与最小化/最大化/关闭同列，活动标签填充高亮、去掉白描边胶囊；② 网页/会话/顶部之间仍是硬直角，要求把会话与整体底部配色调一致、把网页区专门划分出来；③ 网址栏只覆盖网页列、不要延伸进会话栏，会话栏顶部按钮区与工具条同底色并纵向拉长；④ 输入框要与周围底色区分；⑤ 最后要求把工具条与会话栏之间的小缝隙连接起来，用弧度形成彻底的闭环框住网页栏。
+- **根因**：
+  1. 标签栏是独立的第三行（`TAB_BAR_HEIGHT=34`），与标题栏/窗口按钮分离，活动标签用 `borderColor: BRAND.borderStrong` 描边，视觉上像一排白框胶囊。
+  2. 标题栏以下用 `body` 平铺：`BrowserChrome` 顶栏横跨整个窗口（包括会话栏上方），会话栏从工具条下方才开始；外壳底色透明，splitter 6px 与侧栏左侧 8px 内边距露出应用底色，形成暗缝与硬直角。
+  3. 网页面板（StartPage DOM 占位 + 原生 `WebContentsView`）与窗口/工具条之间没有统一的内缩与圆角，原生视图默认直角、贴到内容区边缘。
+- **决策**：
+  1. **标签并入标题行**：`TitleBar` 增加 `tabs` 插槽（main 变体：左标签 + `+`、中拖动区、右窗口按钮；agent 变体保持品牌 + 最小化/关闭）；新增 `BrowserTabs.tsx`，`BrowserChrome` 只保留第二行导航工具条；`TITLE_BAR_HEIGHT` 36→**40**，删除 `TAB_BAR_HEIGHT`，原生视图顶部偏移同步为 `TITLE_BAR_HEIGHT + TOP_BAR_HEIGHT + BROWSER_VIEW_INSET`。
+  2. **标签视觉（Chrome 式）**：非活动标签透明、无边框、次级文字，仅 hover 变色；活动标签填充 `--ls-surface-raised`（与工具条同色连成一片）并提亮文字；关闭键仅 hover 显示；规则统一放 `index.html`，soft/classic 共用 token。
+  3. **闭环外壳**：`App` 改 `workRow`（背景 `BRAND.inkRaised`）= 左 `pageColumn`（工具条 + 页面）+ splitter + 右满高会话栏；`StatusBar` 同色并删除上分隔线，外框延伸到底；工具条背景 raised、只覆盖网页列（omnibox `maxWidth:720` + 动作区 `marginLeft:auto`），去 borderBottom；会话栏 raised、无左边框、header 高度 48 对齐第二行工具条；`Composer` 外层透明、输入卡片 raised + radius 14。
+  4. **网页面板闭环**：契约新增 `BROWSER_VIEW_INSET=8`、`BROWSER_VIEW_RADIUS=14`，`computeBrowserViewBounds` 四边内缩为 `x=inset, y=title+top+inset, w=size-sidebar-splitter-2*inset, h=size-title-top-status-bottomInset-2*inset`；DOM `StartPage.browserPane` 与原生视图共用同一组值，主进程 `view.setBorderRadius(14)` 切角露外壳底色，形成「深色门户嵌在抬高外壳里」。
+- **理由**：标签与窗口控制同列是主流浏览器的稳定心智模型；外壳单块抬高 + 网页面板内缩圆角，用同一底色自然消掉 splitter/侧栏内边距的暗缝与硬直角，不需要再加分隔线；契约单一产地保证 DOM 与原生视图几何不漂移。
+- **替代方案**：保留第三行标签只改配色（否，用户明确要「挪到最上面」）；用 CSS `border-radius` 只修 DOM 不修原生视图（否，网页仍是直角、闭环破口）；给外壳加描边/阴影伪造连接（否，缝隙仍是缝，且抬高底色已能自然连成一体）。
+- **验证方式**：`tests/contracts/layout-nav.spec.ts`（新常量与 1280×800/小窗口边界）、`tests/core/layout.spec.ts`（inset/圆角几何全量重写）、`tests/shell/browserHost.spec.ts`、`tests/shell/agentWindow.spec.ts`、`tests/shell/browserHistoryBackfill.spec.ts`；全量 **132 文件 / 1205 tests 全绿**，typecheck 5/5、gen/check 逐字节一致、build 5/5；真机 E2E 见 `docs/E2E-SMOKE.md` 第 15 节（顶行标签高亮、闭环外壳像素采样、几何探针 `{x:8,y:96,width:978,height:724}`、截图 `e2e-round10-closed-frame.png`）。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：标签行与窗口按钮在极窄窗口（<640px）挤压拖动区 → 隐藏部分标签文字/允许横向滚动，不改回第三行；`setBorderRadius` 在个别显卡/合成器异常 → 降级为 DOM 圆角 + 原生视图不切角（契约常量可回退 0）。
+- **复核时间**：打包阶段（多显示器 / 多 DPI / 极窄窗口 / 高对比度主题）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -367,3 +388,4 @@
 | ADR-0019 | 柔和无框双主题 / 会话栏三态 / 全宽底部终端 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0020 | 会话栏「小窗化」= 独立 Agent 窗口（真·窗口化） | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0021 | 定制窗口 chrome / 本地图标库 / 发送↔中断 / hover / 动效规范收敛 | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0022 | 顶部标签行 + chrome 闭环外壳（网页面板内缩/圆角） | ✅ 已验证（自动化 + 真机 E2E） |

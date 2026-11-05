@@ -7,6 +7,7 @@
 import path from "node:path";
 import { lookup } from "node:dns/promises";
 import { app, BrowserWindow, session, shell, WebContentsView } from "electron";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { SESSION_PARTITION } from "../shared/brand.js";
 import { BrowserHost, type BrowserVisit, type HostView, type PersistedBrowserState } from "./browserHost.js";
 import {
@@ -144,6 +145,9 @@ export function createElectronBrowserHost(
           partition: SESSION_PARTITION,
         },
       });
+      // 网页面板圆角：与 DOM 页框（StartPage.browserPane）共用同一契约值，
+      // 原生视图切掉的四角露出应用底色，不再出现「网页直角顶到边缘」的硬缝。
+      view.setBorderRadius(LAYOUT.BROWSER_VIEW_RADIUS);
       view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
       return view as unknown as HostView;
     },

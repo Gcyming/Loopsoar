@@ -88,19 +88,18 @@
           radial-gradient(900px 520px at 100% -6%, rgba(var(--ls-teal-rgb), 0.045), transparent 58%);
         background-repeat: no-repeat;
       }
-      /* 右侧会话栏：抬高一档的实面（不靠分隔线），顶部一层极轻高光 */
+      /* 右侧会话栏：与第二行网址工具条同一块「抬高的面」（--ls-surface-raised），
+         地址栏胶囊与网页面板则各自内凹/浮起；「独立面板」语义只留给网页区。 */
       html:not([data-theme="classic"]) .agent-sidebar {
         border: none !important;
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 32%),
-          var(--ls-surface-raised) !important;
-        border-radius: var(--ls-radius-lg);
-        box-shadow: var(--ls-shadow-card);
+        background: var(--ls-surface-raised) !important;
+        border-radius: 0;
+        box-shadow: none;
       }
       html:not([data-theme="classic"]) .agent-sidebar.is-collapsed,
       html:not([data-theme="classic"]) .agent-sidebar.is-float {
-        border-radius: var(--ls-radius-lg) !important;
-        box-shadow: var(--ls-shadow-float) !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
       }
       /* 头部 / 工作区 / 会话条：内部不再画任何分隔线 */
       html:not([data-theme="classic"]) .agent-sidebar-header,
@@ -305,10 +304,32 @@
         color: #ffffff;
       }
 
-      /* 标签页 / 会话条等可点条目：统一补 hover 反馈（此前只有 active 态，鼠标悬停无变化） */
+      /* 顶行标签页（Chrome 式）：非活动透明、无描边；活动填充工具条同色并高亮文字。
+         旧实现的活动标签带 1px 描边，被用户反馈「顶着白框、很杂乱」。 */
+      .tab-item {
+        border: none;
+        background: transparent;
+        color: var(--ls-text-muted);
+        transition: background-color 120ms ease, color 120ms ease;
+      }
       .tab-item:hover:not(.is-active) {
         background: var(--ls-surface-hover);
         color: var(--ls-text);
+      }
+      .tab-item.is-active {
+        background: var(--ls-surface-raised);
+        color: var(--ls-text);
+        font-weight: 600;
+      }
+      /* 关闭键：只在悬停当前标签时出现（预留宽度，不引起布局跳动） */
+      .tab-item .tab-close {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease, background-color 120ms ease;
+      }
+      .tab-item:hover .tab-close {
+        opacity: 1;
+        pointer-events: auto;
       }
       /* chip 的内联 background:transparent 会压过普通 :hover 规则，这里用 !important 拿回反馈 */
       .agent-sidebar .chip:hover {

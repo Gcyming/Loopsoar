@@ -22,6 +22,7 @@ import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
+import BrowserTabs from "./BrowserTabs.js";
 import TitleBar from "./TitleBar.js";
 import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
@@ -1050,30 +1051,48 @@ export default function App(): React.JSX.Element {
 
   return (
     <div style={styles.app}>
-      {/* Agent 独立窗口（?mini=1）也走自绘标题栏：无系统边框，只有最小化/关闭 */}
-      <TitleBar maximized={maximized} variant={miniWindow ? "agent" : "main"} />
-
-      {miniWindow ? null : (
-      <BrowserChrome
-        tabs={tabs}
-        address={address}
-        currentUrl={currentUrl}
-        omniboxRef={omniboxRef}
-        onAddressChange={setAddress}
-        onNavigate={() => navigate()}
-        onBack={goBack}
-        onForward={goForward}
-        onReload={reloadPage}
-        onSnapshot={() => void snapshot()}
-        onNotice={setNotice}
-        onSelectTab={selectTab}
-        onCloseTab={closeTab}
-        onNewTab={newTab}
+      {/* Agent 独立窗口（?mini=1）也走自绘标题栏：无系统边框，只有最小化/关闭；
+          主窗口标题栏同时承载标签页（与窗口按钮同一行，Chrome 式）。 */}
+      <TitleBar
+        maximized={maximized}
+        variant={miniWindow ? "agent" : "main"}
+        {...(miniWindow
+          ? {}
+          : {
+              tabs: (
+                <BrowserTabs
+                  tabs={tabs}
+                  onSelectTab={selectTab}
+                  onCloseTab={closeTab}
+                  onNewTab={newTab}
+                />
+              ),
+            })}
       />
-      )}
 
-      <div style={styles.body}>
-        {miniWindow ? null : <StartPage currentUrl={currentUrl} />}
+      {/* 工作区：左侧「网页列」（导航工具条 + 圆角页框），右侧会话栏。
+          浏览器工具条只在网页列上方，不横跨到会话区；会话栏从标题栏下方起满高，
+          顶部就是自己的功能按钮区。原生 WebContentsView 几何不变
+          （x=inset、y=titlebar+topbar+inset、宽度让出侧栏与 splitter）。 */}
+      <div style={styles.workRow}>
+        {miniWindow ? null : (
+          <div style={styles.pageColumn}>
+            <BrowserChrome
+              tabs={tabs}
+              address={address}
+              currentUrl={currentUrl}
+              omniboxRef={omniboxRef}
+              onAddressChange={setAddress}
+              onNavigate={() => navigate()}
+              onBack={goBack}
+              onForward={goForward}
+              onReload={reloadPage}
+              onSnapshot={() => void snapshot()}
+              onNotice={setNotice}
+            />
+            <StartPage currentUrl={currentUrl} />
+          </div>
+        )}
 
         {!miniWindow && !agentWindowOpen && sidebarMode === "docked" ? (
           <div style={styles.splitter} onMouseDown={startResize} title="拖动调整面板宽度" />
@@ -1090,8 +1109,13 @@ export default function App(): React.JSX.Element {
             justifyContent: "flex-end",
             overflow: "hidden",
             minWidth: 0,
-            // collapsed / 窗口化时贴边收起；docked 四周留 8px 形成浮动卡片
-            padding: miniWindow ? 8 : agentWindowOpen || sidebarMode === "collapsed" ? 0 : 8,
+            // 会话栏顶部不再留白：与第二行工具条同高起步，头部按钮纵向拉长并进同一横带；
+            // 右侧/底部贴边与状态栏同色收口，只在网页面板一侧留 8px 形成分区间隙。
+            padding: miniWindow
+              ? 8
+              : agentWindowOpen || sidebarMode === "collapsed"
+                ? 0
+                : "0 0 0 8px",
             transition:
               miniWindow || sidebarDragging
                 ? "none"
@@ -1328,13 +1352,24 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     overflow: "hidden",
   },
-  body: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden" },
+  // chrome 外壳：工具条、splitter、会话栏共用同一块抬高的面（BRAND.inkRaised），
+  // 页框四边内缩成「深色门户」；中间那一点缝（splitter + 会话栏左侧留白）因此被填满，
+  // 顶部网址栏与会话栏连成一体，再用页框圆角形成闭合外框。
+  workRow: {
+    display: "flex",
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
+    background: BRAND.inkRaised,
+  },
+  // 网页列：导航工具条（第二行）只覆盖这一列；页框在 StartPage 里内缩成圆角面板。
+  pageColumn: { display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" },
   splitter: {
     width: 6,
     flexShrink: 0,
     cursor: "col-resize",
+    // 不再画 1px 分隔线：网页区与会话区之间只靠页框留白形成间隙（用户反馈「条框影子」）。
     background: "transparent",
-    borderLeft: `1px solid ${BRAND.border}`,
     transition: "background 120ms",
   },
 };

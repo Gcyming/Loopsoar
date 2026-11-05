@@ -23,6 +23,7 @@
  * 宽度拖拽仍由 App 的 splitter 控制。
  */
 import * as React from "react";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, MOTION, RADIUS, SHADOW } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
@@ -325,8 +326,10 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     overflow: "hidden",
     boxSizing: "border-box",
-    borderLeft: `1px solid ${BRAND.border}`,
-    background: BRAND.inkPanel,
+    // 会话栏这一竖行与第二行网址工具条同底色（BRAND.inkRaised = --ls-surface-raised），
+    // 两行拼成同一块抬高的面；地址栏胶囊则用更暗的 ink 内凹其中。
+    borderLeft: "none",
+    background: BRAND.inkRaised,
     // 只过渡颜色类属性：width 由父级驱动，不能在本节点再过渡（否则每一帧都落后于父级）
     transition: `opacity ${MOTION.sidebarDuration} ${MOTION.ease}, border-radius ${MOTION.sidebarDuration} ${MOTION.ease}, box-shadow ${MOTION.sidebarDuration} ${MOTION.ease}`,
   },
@@ -374,7 +377,8 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 6,
     padding: "10px 0 12px",
-    background: BRAND.inkPanel,
+    // 收起竖条与工具条同底色，收/展时不会闪出另一块面
+    background: BRAND.inkRaised,
   },
   railLogo: {
     display: "inline-flex",
@@ -393,8 +397,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    // 减噪：去掉底部分隔线，仅留低对比间距（soft 主题「无边框卡片」）
-    padding: "10px 12px 6px",
+    // 纵向拉长到与第二行网址工具条同高：会话栏头部按钮与网页工具条处在同一横带，
+    // 不再缩在列顶，顶部的「两块面」因此连成一条。
+    height: LAYOUT.TOP_BAR_HEIGHT,
+    padding: "0 12px",
     fontWeight: 600,
     fontSize: 13,
     color: BRAND.linen,

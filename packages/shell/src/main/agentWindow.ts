@@ -96,8 +96,8 @@ export function computeAgentWindowBounds(
   const width = Math.max(1, Math.min(preferredWidth, Math.max(1, workArea.width - gap * 2)));
   const height = Math.max(1, Math.min(preferredHeight, Math.max(1, workArea.height - gap * 2)));
 
-  // 浏览器视图顶部 = 自绘标题栏 + 顶部栏 + 标签栏（顺序与 contracts/layout 一致）
-  const topInset = LAYOUT.TITLE_BAR_HEIGHT + LAYOUT.TOP_BAR_HEIGHT + LAYOUT.TAB_BAR_HEIGHT;
+  // 浏览器视图顶部 = 自绘标题栏（含标签页）+ 顶部栏 + 网页面板留白（顺序与 contracts/layout 一致）
+  const topInset = LAYOUT.TITLE_BAR_HEIGHT + LAYOUT.TOP_BAR_HEIGHT + LAYOUT.BROWSER_VIEW_INSET;
 
   const preferredX =
     contentBounds && Number.isFinite(contentBounds.x) && Number.isFinite(contentBounds.width)

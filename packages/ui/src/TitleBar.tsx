@@ -1,10 +1,11 @@
 /**
- * 自定义标题栏：品牌标识 + 窗口控制（最小化/最大化/关闭）。
+ * 自定义标题栏：最顶行。
  * 纯展示组件，只通过 preload 暴露的 window API 操作窗口。
  *
  * 两种形态：
- * - main（默认）：主窗口，保留最大化/还原按钮，双击拖拽区最大化。
- * - agent：Agent 独立窗口（无系统边框），仅保留最小化/关闭，不提供最大化。
+ * - main（默认）：Chrome/Edge 式——左侧标签页插槽（`tabs`，由 App 传入 BrowserTabs），
+ *   中间空白拖动区（双击最大化），右侧最小化/最大化/关闭。标签与窗口按钮同列。
+ * - agent：Agent 独立窗口（无系统边框），左侧品牌 +「Agent 对话」+ 右侧最小化/关闭。
  */
 import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
@@ -17,9 +18,11 @@ export interface TitleBarProps {
   maximized: boolean;
   /** 窗口形态：main = 主窗口；agent = Agent 独立窗口（无系统边框，仅最小化/关闭）。 */
   variant?: "main" | "agent";
+  /** main 形态的标签页插槽（与窗口按钮同一行）；agent 形态忽略。 */
+  tabs?: React.ReactNode;
 }
 
-export default function TitleBar({ maximized, variant = "main" }: TitleBarProps): React.ReactElement {
+export default function TitleBar({ maximized, variant = "main", tabs }: TitleBarProps): React.ReactElement {
   const api = useLoopsoarApi();
   const tr = useT();
   const isAgent = variant === "agent";
@@ -28,14 +31,26 @@ export default function TitleBar({ maximized, variant = "main" }: TitleBarProps)
   const agentTitle = rawAgentTitle === "agentWindow.title" ? "Agent 对话" : rawAgentTitle;
 
   return (
-    <div style={styles.titleBar}>
-      <div
-        style={{ ...styles.titleDrag, ...DRAG_REGION }}
-        onDoubleClick={isAgent ? undefined : () => void api?.window.maximize()}
-      >
-        <img src="./logo.png" alt="" width={18} height={18} style={styles.titleLogo} />
-        <span style={styles.titleText}>{isAgent ? agentTitle : "Loopsoar"}</span>
-      </div>
+    <div style={{ ...styles.titleBar, ...(isAgent ? styles.titleBarAgent : styles.titleBarMain) }}>
+      {isAgent ? (
+        <div
+          style={{ ...styles.titleDrag, ...DRAG_REGION }}
+          onDoubleClick={undefined}
+        >
+          <img src="./logo.png" alt="" width={18} height={18} style={styles.titleLogo} />
+          <span style={styles.titleText}>{agentTitle}</span>
+        </div>
+      ) : (
+        <>
+          {/* 标签页与窗口按钮同列：整条标签区 no-drag，空白区才是拖动区 */}
+          <div style={styles.tabsSlot}>{tabs}</div>
+          <div
+            style={{ ...styles.dragFiller, ...DRAG_REGION }}
+            onDoubleClick={() => void api?.window.maximize()}
+            aria-hidden
+          />
+        </>
+      )}
       <div style={{ ...styles.windowControls, ...NO_DRAG_REGION }}>
         <button
           type="button"
@@ -77,13 +92,17 @@ export default function TitleBar({ maximized, variant = "main" }: TitleBarProps)
 const styles: Record<string, React.CSSProperties> = {
   titleBar: {
     display: "flex",
-    alignItems: "center",
+    alignItems: "stretch",
     height: LAYOUT.TITLE_BAR_HEIGHT,
     background: BRAND.ink,
-    borderBottom: `1px solid ${BRAND.border}`,
     flexShrink: 0,
     userSelect: "none",
   },
+  /** 主窗口：标签条与工具条连成一片，不留横向硬线。 */
+  titleBarMain: { borderBottom: "none" },
+  /** Agent 小窗：标题栏与下方会话区需要一层极轻分隔（软主题下 border 已透明）。 */
+  titleBarAgent: { borderBottom: `1px solid ${BRAND.border}` },
+  tabsSlot: { display: "flex", alignItems: "stretch", minWidth: 0, maxWidth: "72%", overflow: "hidden" },
   titleDrag: {
     display: "flex",
     alignItems: "center",
@@ -93,6 +112,8 @@ const styles: Record<string, React.CSSProperties> = {
     paddingLeft: 12,
     minWidth: 0,
   },
+  /** 主窗口的空白拖动区：只承担拖动/双击最大化，不画任何东西（标签右侧起）。 */
+  dragFiller: { flex: 1, height: "100%", minWidth: 24 },
   titleLogo: { borderRadius: 4, display: "block" },
   titleText: { fontSize: 12, fontWeight: 600, letterSpacing: 0.6, color: BRAND.linenMuted },
   windowControls: { display: "flex", alignItems: "stretch", height: "100%", flexShrink: 0 },

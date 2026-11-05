@@ -6,12 +6,20 @@
 import { z } from "zod";
 
 export const LAYOUT = {
-  /** 自定义标题栏高度（品牌 + 窗口控制；原生 frame 已隐藏）。 */
-  TITLE_BAR_HEIGHT: 36,
-  /** 标签栏高度（多标签页；原生视图需让出该高度）。 */
-  TAB_BAR_HEIGHT: 34,
+  /**
+   * 自定义标题栏高度：标签页 + 新建按钮 + 窗口控制（最小化/最大化/关闭）同一行，
+   * 与 Chrome/Edge 一致；原生 frame 已隐藏。
+   */
+  TITLE_BAR_HEIGHT: 40,
   /** 顶部栏高度（omnibox + 操作按钮）。 */
   TOP_BAR_HEIGHT: 48,
+  /**
+   * 网页面板四周留白：网页不再顶到窗口边缘，而是作为独立圆角面板浮在应用底色上
+   * （DOM 侧 StartPage 用同一数值做 margin，原生 WebContentsView 的 bounds 用同一数值内缩）。
+   */
+  BROWSER_VIEW_INSET: 8,
+  /** 网页面板圆角（原生视图 setBorderRadius 与 DOM 页框共用，避免直角硬缝）。 */
+  BROWSER_VIEW_RADIUS: 14,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
   SIDEBAR_WIDTH: 360,
   /** 侧栏收起态宽度（只剩图标/展开按钮）。 */
@@ -44,7 +52,8 @@ export interface BrowserViewBounds {
 
 /**
  * 计算浏览器原生视图的包围盒（逻辑像素）：
- * 顶部让出 TOP_BAR，右侧让出 SIDEBAR，底部让出 STATUS_BAR；宽高不足时钳制为 0（不产生负尺寸）。
+ * 顶部让出 TITLE_BAR + TOP_BAR，右侧让出 SIDEBAR，底部让出 STATUS_BAR，
+ * 四边再让出 BROWSER_VIEW_INSET 形成独立圆角网页面板；宽高不足时钳制为 0（不产生负尺寸）。
  */
 export interface BrowserBoundsOptions {
   /** 右侧侧栏实际宽度（收起态 48 / 浮动卡片宽度）；缺省用 layout.SIDEBAR_WIDTH。 */
@@ -64,15 +73,21 @@ export function computeBrowserViewBounds(
   // 此时再扣 SPLITTER_WIDTH 会让原生网页右侧留一条 6px 的 DOM 缝（网页不铺满，用户可见）。
   const splitterWidth =
     sidebarWidth > 0 && sidebarWidth !== layout.SIDEBAR_COLLAPSED_WIDTH ? layout.SPLITTER_WIDTH : 0;
-  const width = Math.max(0, size.width - sidebarWidth - splitterWidth);
+  const inset = Math.max(0, layout.BROWSER_VIEW_INSET);
+  const width = Math.max(0, size.width - sidebarWidth - splitterWidth - inset * 2);
   const height = Math.max(
     0,
     size.height -
       layout.TITLE_BAR_HEIGHT -
-      layout.TAB_BAR_HEIGHT -
       layout.TOP_BAR_HEIGHT -
       layout.STATUS_BAR_HEIGHT -
-      bottomInset,
+      bottomInset -
+      inset * 2,
   );
-  return { x: 0, y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + layout.TAB_BAR_HEIGHT, width, height };
+  return {
+    x: inset,
+    y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + inset,
+    width,
+    height,
+  };
 }

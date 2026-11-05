@@ -59,6 +59,7 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "browser.browserSettings": { zh: "设置", en: "Settings" },
   "browser.morePending": { zh: "更多（待接）", en: "More (coming soon)" },
   "browser.newTab": { zh: "新建标签页", en: "New tab" },
+  "browser.tabsAria": { zh: "标签页", en: "Tabs" },
   "browser.closeTab": { zh: "关闭标签", en: "Close tab" },
   "browser.historyTitle": { zh: "历史记录（全局）", en: "History (global)" },
   "browser.historyVisits": { zh: "访问 {count} 次", en: "visited {count}×" },

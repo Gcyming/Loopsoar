@@ -615,15 +615,17 @@ export default function Composer({
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  composer: { flex: "none", borderTop: `1px solid ${BRAND.border}`, padding: "8px 10px 6px", background: BRAND.inkRaised },
+  // 输入区不加硬分隔线：靠输入卡片自身的底色与周围区分（用户反馈「输入框颜色要和周围不同」）。
+  // 外层透明 = 会话栏底色；卡片用 raised 亮一档，形成清晰的独立输入面板。
+  composer: { flex: "none", padding: "8px 10px 6px", background: "transparent" },
   composerBox: {
     display: "flex",
     flexDirection: "column",
     gap: 6,
     padding: "8px 10px",
-    borderRadius: 10,
+    borderRadius: 14,
     border: `1px solid ${BRAND.border}`,
-    background: BRAND.ink,
+    background: BRAND.inkRaised,
   },
   measureRow: { display: "flex", gap: 6, height: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" },
   measureChip: { display: "inline-flex", alignItems: "center", fontSize: 12, whiteSpace: "nowrap" },

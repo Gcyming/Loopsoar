@@ -1,5 +1,8 @@
 /**
- * 浏览器顶栏（极简版）：后退/前进/刷新 + 地址搜索框（内嵌收藏星标）+ 快照/更多 + 标签栏。
+ * 浏览器顶栏（极简版）：后退/前进/刷新 + 地址搜索框（内嵌收藏星标）+ 快照/更多。
+ *
+ * 标签页已移到最顶行的 TitleBar（与最小化/最大化/关闭同列，见 BrowserTabs.tsx），
+ * 本组件只负责第二行的导航工具条。
  *
  * 浮层策略（M3 之后）：工具栏不再自己渲染任何菜单/浮层——
  * 收藏星标与「更多」按钮**悬停 250ms**（或点击）时调用 `api.ui.openPopover({kind,anchor,lang})`，
@@ -31,10 +34,6 @@ export interface BrowserChromeProps {
   onSnapshot: () => void;
   /** 工具条内操作提示（收藏/取消收藏结果）。 */
   onNotice: (text: string) => void;
-  onSelectTab: (tabId: string) => void;
-  onCloseTab: (tabId: string) => void;
-  onNewTab: () => void;
-
 }
 
 
@@ -59,9 +58,6 @@ export default function BrowserChrome({
   onReload,
   onSnapshot,
   onNotice,
-  onSelectTab,
-  onCloseTab,
-  onNewTab,
 }: BrowserChromeProps): React.ReactElement {
   const api = useLoopsoarApi();
   const tr = useT();
@@ -254,35 +250,6 @@ export default function BrowserChrome({
           </button>
         </div>
       </header>
-
-      <div style={{ ...styles.tabBar, height: LAYOUT.TAB_BAR_HEIGHT }}>
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={`tab-item${tab.active ? " is-active" : ""}`}
-            style={{ ...styles.tab, ...(tab.active ? styles.tabActive : {}) }}
-            onClick={() => onSelectTab(tab.id)}
-            title={tab.url || tab.title}
-          >
-            <span style={styles.tabTitle}>{tab.title || tr("browser.startNewTabTitle")}</span>
-            <button
-              type="button"
-              className="icon-btn tab-close"
-              title={tr("browser.closeTab")}
-              style={styles.tabClose}
-              onClick={(event) => {
-                event.stopPropagation();
-                onCloseTab(tab.id);
-              }}
-            >
-              <Icon name="close" size={10} />
-            </button>
-          </div>
-        ))}
-        <button type="button" className="icon-btn" title={tr("browser.newTab")} style={styles.tabAdd} onClick={onNewTab}>
-          <Icon name="plus" size={13} />
-        </button>
-      </div>
     </>
   );
 }
@@ -293,13 +260,16 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 8,
     padding: "0 10px",
+    // 抬高一档的「工具条底」：与右侧会话栏同色，地址栏作为更暗的胶囊嵌在上面（参考 Tabbit）。
     background: BRAND.inkRaised,
-    borderBottom: `1px solid ${BRAND.border}`,
     flexShrink: 0,
   },
   navGroup: { display: "flex", gap: 2, flexShrink: 0 },
   omniboxWrap: {
     flex: 1,
+    // 地址栏不再一路顶到会话栏：留出右侧余量，让「网址输入栏」与右侧会话栏之间有呼吸；
+    // 剩余空间由 topActions 的 marginLeft:auto 吃掉，星标/快照/更多仍贴网页列右缘。
+    maxWidth: 720,
     display: "flex",
     alignItems: "center",
     gap: 8,
@@ -307,6 +277,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 6px 0 12px",
     borderRadius: 15,
     border: `1px solid ${BRAND.border}`,
+    // 地址栏胶囊比工具条再暗一档，形成「条带抬高一档 + 输入框内凹」的层次
     background: BRAND.ink,
     minWidth: 0,
   },
@@ -323,36 +294,5 @@ const styles: Record<string, React.CSSProperties> = {
   },
   starWrap: { position: "relative", display: "inline-flex", alignItems: "center", flex: "none" },
   omniboxStar: { width: 24, height: 24, flex: "none" },
-  topActions: { display: "flex", gap: 2, flexShrink: 0 },
-  tabBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    padding: "0 8px",
-    background: BRAND.inkRaised,
-    borderBottom: `1px solid ${BRAND.border}`,
-    flexShrink: 0,
-    overflowX: "auto",
-    overflowY: "hidden",
-  },
-  tab: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    maxWidth: 220,
-    height: 26,
-    padding: "0 6px 0 10px",
-    borderRadius: 7,
-    border: "1px solid transparent",
-    color: BRAND.linenMuted,
-    fontSize: 11.5,
-    cursor: "pointer",
-    flex: "0 1 auto",
-    minWidth: 0,
-    transition: "background 120ms, color 120ms, border-color 120ms",
-  },
-  tabActive: { background: BRAND.inkPanel, borderColor: BRAND.borderStrong, color: BRAND.linen },
-  tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  tabClose: { width: 18, height: 18 },
-  tabAdd: { width: 24, height: 24, flex: "none" },
+  topActions: { display: "flex", gap: 2, flexShrink: 0, marginLeft: "auto" },
 };

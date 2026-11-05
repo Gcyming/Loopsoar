@@ -214,6 +214,40 @@ $env:LOOPSOAR_E2E_EVAL="(() => { const b = document.querySelector('.send-btn'); 
 node scripts/dev-gui.mjs
 ```
 
+## 15. 2026-11-05 顶部标签行 + chrome 闭环外壳验证
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 标签页在最顶行左侧，窗口按钮同列右侧 | ✅ 截图顶行可见「Loopsoar 广告拦截 E2E 测试页」+ `+`，最右为最小化/最大化/关闭 | `docs/screenshots/e2e-round10-closed-frame.png` |
+| 活动标签填充高亮，非活动透明无白框 | ✅ 活动标签与第二行工具条同色连成一片；无 `border` 胶囊；关闭键 hover 才出现 | 同上截图 + `packages/ui/index.html` `.tab-item` 规则 |
+| 工具条只覆盖网页列，不延伸进会话栏 | ✅ 地址栏/图标止于网页列右缘（omnibox `maxWidth:720`、动作区 `marginLeft:auto`），会话栏从标题栏下满高 | 同上截图 |
+| 工具条与会话栏连成抬高外壳，缝隙消失 | ✅ 像素采样：工具条空白区/会话栏/状态栏均为 `rgb(23,27,34)`；原 splitter+侧栏内边距暗缝被 `workRow` raised 底色填满 | 同上截图 + `App.tsx` `workRow` |
+| 网页面板四边内缩 + 圆角，形成闭环 | ✅ DOM `browserPane` margin 8/radius 14；原生视图 `view.setBorderRadius(14)`；闭环外框可见 | 同上截图 + `browser:view` 截图 `e2e-round10-panel-browser-view.png` |
+| 几何探针（1360×860、sidebar 360） | ✅ bounds/actual `{x:8,y:96,width:978,height:724}`；maximize 2048×1104 → `{x:8,y:96,width:1666,height:968}`；unmaximize 回 `978×724` | `LOOPSOAR_E2E_RESIZE` 日志 |
+| 输入区与周围底色区分 | ✅ 输入卡片 `BRAND.inkRaised` + radius 14、外层透明无 borderTop | 同上截图 |
+
+说明：`win.capturePage()` 不包含原生 `WebContentsView`，窗口级截图里网页面板显示为 StartPage 占位；页面渲染单独用 `BROWSER_VIEW_SHOT_SAVED docs/screenshots/e2e-round10-panel-browser-view.png` 验证。聊天区右缘的金色波浪线是「卷轴」自定义滚动条设计元素，不是渲染伪影。
+
+复跑命令（PowerShell）：
+
+```powershell
+# 1) 首次用新数据目录时先点掉 onboarding，保留同一目录供第二次截图
+$env:LOOPSOAR_DATA_DIR='D:\tool\AI\real-project\Loopsoar\Parent file\.loopsoar-data-e2e10'
+$env:LOOPSOAR_E2E_CLICK_TEXT='跳过'
+node scripts/dev-gui.mjs
+
+# 2) 顶行标签 + 闭环外壳截图（本地测试页服务：node .tmp/adpage-server.mjs 19444）
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round10-frame-final.png'
+$env:LOOPSOAR_E2E_NAV_URL='http://127.0.0.1:19444/'
+$env:LOOPSOAR_E2E_NAV_WAIT_MS='2500'
+$env:LOOPSOAR_E2E_HOLD_MS='900'
+node scripts/dev-gui.mjs
+
+# 3) 几何探针
+$env:LOOPSOAR_E2E_RESIZE='1360x860'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
