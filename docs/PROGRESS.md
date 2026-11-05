@@ -434,6 +434,15 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-braid.png`（静止态：规整双股麻花 + 输入框本体深色圆角块）、`docs/screenshots/e2e-round11-rail-braid-hover.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：悬停收拢 + 卡片「● 1 / 1 你：…」，日志 `[E2E] RAIL_HOVER hovered`）。
 
+## 二·四十三、2026-11-05 第四十次增量（卷轴外观回退 + 悬停突起反馈）
+
+用户反馈（第 11 轮追加）：「也不对啊，还不如如图原来那一版，主要是我说的鼠标放置时的反馈一点没变啊，我要的一直是第三张图 slime 那种鼠标放上去后的突起反馈啊，你给我把外观改回去，反馈做出来。」——即：① 双股麻花版外观不如原来的细金线，回退；② 悬停时要像 slime 一样在指针处鼓出「突起」，此前只是收拢，方向不对。
+
+- **外观回退**：`packages/ui/src/TopicRail.tsx` 从 `1a4f641` 版本恢复「极细双股波浪线 + 视口提亮 + 话题圆点」的原始绘制，撤销 二·四十二 的粗编织（该版被评估为「越来越乱」，仅保留在 git 历史与旧截图中）。
+- **悬停突起（根因：之前只做了「收拢」，是反向反馈）**：画布向轨道左侧扩出 `BUMP_PAD=30px`（canvas 宽度 `w+30`、`margin-left:-30px`、轨道热区宽度不变），`paint()` 里新增 `pointerPush(y) = -bumpAmt * max(8, width*0.75) * exp(-((y-ptrY)/(height*0.045))²/2)`：指针高度处整条线向聊天区一侧平滑鼓出，高斯窗保证上下连续；`frame()` 每帧把 `bumpRef` 向 0/1 目标做 0.16 线性缓动（进入约 150ms、离开自然收回），指针离开时保留最后 y 供回缩动画使用。视口提亮段/话题圆点同步使用带突起的 `xAt`。
+- **验证基线**：typecheck 5/5、`pnpm check` 逐字节一致、build 5/5、vitest **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-final.png`（静止态＝原始细线外观）、`e2e-round11-rail-bump.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：指针高度处明显鼓包 + 提亮段，日志 `[E2E] RAIL_HOVER hovered`）。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

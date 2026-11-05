@@ -342,6 +342,29 @@ $env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-braid.png'
 node scripts/dev-gui.mjs
 ```
 
+## 19. 2026-11-05 卷轴外观回退 + 悬停突起验证
+
+> 本节结论取代第 18 节的外观部分：双股编织被用户判定「越来越乱」，外观已回退到原细线，仅保留 slime 式悬停突起；输入框本体色块保留。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 静止外观回退 | 打开聊天页截图（`e2e-round11-rail-final.png`） | 右侧为**极细亚麻/赭石双股波浪线** + 视口提亮段 + 话题圆点，无粗编织/大光晕 |
+| 悬停突起 | `LOOPSOAR_E2E_HOVER_RAIL=1` + 有消息的会话（`e2e-round11-rail-bump.png`） | 指针高度处整条线向聊天区一侧平滑鼓出明显包络（**向外突起**，不是收拢），上下渐变自然；日志 `[E2E] RAIL_HOVER hovered` |
+| 悬停卡片回归 | 同上 | 卡片仍显示「● n / total 标签」 |
+| 输入框本体色块回归 | 同截图 | 输入框本体为深色圆角块，周围保持会话面底色 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='chat'
+$env:LOOPSOAR_E2E_HOVER_RAIL='1'
+$env:LOOPSOAR_E2E_HOLD_MS='1400'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-bump.png'
+node scripts/dev-gui.mjs
+```
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

@@ -4,6 +4,9 @@
  * 视觉目标（对齐 slime 实拍）：**极细、连绵的双股波浪线**贯穿整条高度，
  * 没有粗胶囊/滚动块；视口所在的一段只做「提亮 + 微光晕」，消息锚点是轨道右侧的小圆点。
  *
+ * 悬停反馈（slime 的「突起」）：指针所在高度把线向左（聊天区一侧）鼓出一个平滑的包，
+ * 强度逐帧缓动、离开时自然收回；画布向左侧多留 BUMP_PAD 空间，避免突起被裁切。
+ *
  * 交互：按住任意位置拖动 = 滚动；悬停显示位置气泡并暂停荡漾；方向键可微调。
  * 参数：railParams.ts（外观页可调、localStorage 持久化、事件即时生效）。
  * 约束：纯 UI 组件（无 IPC / 无 electron），不改变 Loopsoar 分层。
@@ -34,6 +37,8 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
   const hoverRef = React.useRef(false);
   const dragRef = React.useRef(false);
   const pointerYRef = React.useRef(-1);
+  /** 悬停突起强度 0~1：每帧向目标值缓动，指针离开时平滑收回。 */
+  const bumpRef = React.useRef(0);
   const reducedRef = React.useRef(false);
   const [railWidth, setRailWidth] = React.useState<number>(DEFAULT_CHAT_RAIL.w);
 
@@ -80,14 +85,20 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       }));
     };
 
+    /** 画布向轨道左侧多让出的空间：悬停时波形要向左鼓出，需要额外画布，否则会被裁掉。 */
+    const BUMP_PAD = 30;
+
     const layout = (): void => {
       dpr = Math.min(2.5, window.devicePixelRatio || 1);
       const width = paramsRef.current.w;
+      const totalW = width + BUMP_PAD;
       height = Math.max(20, host.clientHeight);
-      canvas.width = Math.round(width * dpr);
+      canvas.width = Math.round(totalW * dpr);
       canvas.height = Math.round(height * dpr);
-      canvas.style.width = `${width}px`;
+      canvas.style.width = `${totalW}px`;
       canvas.style.height = `${height}px`;
+      canvas.style.marginLeft = `-${BUMP_PAD}px`;
+      canvas.style.position = "relative";
       host.style.width = `${width}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       pointsRef.current = collect();
@@ -98,7 +109,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       if (!sc) return;
       const p = paramsRef.current;
       const width = p.w;
-      const cx = width / 2;
+      const cx = BUMP_PAD + width / 2;
       const padTop = 6;
       const padBottom = 6;
       const maxScroll = Math.max(1, sc.scrollHeight - sc.clientHeight);
@@ -106,16 +117,11 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const innerH = height - padTop - padBottom;
       const vpCenter = padTop + ratio * innerH;
       const vpLen = Math.max(26, (sc.clientHeight / Math.max(1, sc.scrollHeight)) * innerH);
-      // 两股用同一波长、反向摆动才会形成规整的麻花（不同波长会漂移成几条乱线）；
-      // 摆幅按轨道宽度收敛，避免线条被画布裁边。
-      const lambda = Math.max(20, Math.min(p.lam0, p.lam1));
-      const amp = Math.max(1.6, Math.min(width / 2 - 3, (width / 2 - 3) * (p.amp / 100) * 1.2));
+      const amp = Math.max(0.8, (width / 2 - 4) * (p.amp / 100));
       const phase = phaseRef.current;
-      // 滚动时波形随内容流动（slime 的 scrollPhase）：拖动/滚轮时线条不是死的。
-      const scrollPhase = sc.scrollTop * 0.0105;
       const dir = p.flip ? -1 : 1;
 
-      ctx.clearRect(0, 0, width, height);
+      ctx.clearRect(0, 0, width + BUMP_PAD, height);
       if (height <= 8) return;
 
       // 两端渐隐
@@ -128,66 +134,113 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       // 视口附近的轻微侧移（slime 的「衬托」）：不要大动作，只要看得出"当前段"
       const pushAt = (y: number): number => {
         const d = (y - vpCenter) / (vpLen * 1.1 + 1);
-        return dir * amp * 0.4 * Math.exp(-(d * d) / 2);
+        return dir * amp * 0.7 * Math.exp(-(d * d) / 2);
       };
-      // 指针附近把麻花辫「捏拢」并推开一点（slime 的 wOsc + push，不画光点）
+      // slime 的「突起」：指针所在高度把整条线向左（聊天区一侧）鼓出一个平滑的包，
+      // 强度由 bumpRef 每帧缓动，离开时自然收回；高斯窗让上下过渡连续。
       const ptrY = pointerYRef.current;
       const hovering = hoverRef.current && ptrY >= 0;
-      const focusAt = (y: number): number => (hovering ? Math.exp(-(((y - ptrY) / 46) ** 2) / 2) : 0);
-      const pointerPush = (y: number): number => dir * amp * 0.8 * focusAt(y);
-      // 两股同一波长、key=±1 反向摆动：在 y = n·λ/2 处交叉，形成规整麻花。
-      const xAt = (y: number, key: number): number => {
-        const sep = amp * taper(y) * (1 - 0.55 * focusAt(y));
-        const raw =
-          cx +
-          pushAt(y) +
-          pointerPush(y) +
-          sep * key * Math.sin((Math.PI * 2 * y) / lambda + phase + scrollPhase);
-        return Math.max(2, Math.min(width - 2, raw));
+      const bumpAmt = bumpRef.current;
+      const bumpSigma = Math.max(26, height * 0.045);
+      const pointerPush = (y: number): number => {
+        if (bumpAmt <= 0.001 || ptrY < 0) return 0;
+        const d = (y - ptrY) / bumpSigma;
+        const reach = Math.max(8, width * 0.75);
+        return -bumpAmt * reach * Math.exp(-(d * d) / 2);
       };
+      const xAt = (y: number, lambda: number, phi: number): number =>
+        cx + pushAt(y) + pointerPush(y) + amp * taper(y) * Math.sin((Math.PI * 2 * y) / Math.max(8, lambda) + phase + phi);
 
-      // 沿纵向渐变：视口中心最亮、上下渐暗、两端再乘 taper 渐隐（slime 的 lineStyle）
-      const lineStyle = (rgb: string, aLit: number, aDim: number): CanvasGradient => {
-        const blend = Math.max(14, height * 0.07);
-        const stopYs = [0, p.tap, vpCenter - blend, vpCenter + blend, height - p.tap, height]
-          .map((v) => Math.min(height, Math.max(0, v)))
-          .sort((a, b) => a - b);
-        const gradient = ctx.createLinearGradient(0, 0, 0, height);
-        let last = -1;
-        for (const y of stopYs) {
-          if (Math.abs(y - last) < 0.5) continue;
-          last = y;
-          const a =
-            y <= vpCenter - blend
-              ? aLit
-              : y >= vpCenter + blend
-                ? aDim
-                : aLit + (aDim - aLit) * ((y - (vpCenter - blend)) / (2 * blend));
-          gradient.addColorStop(y / height, `rgba(${rgb},${Math.max(0, a * taper(y)).toFixed(3)})`);
-        }
-        return gradient;
-      };
-
-      // 单股：按 xAt 采样成一条竖向曲线（step=2，画布高度有限，足够顺滑且省 CPU）
-      const wave = (key: number, lineWidth: number, style: CanvasGradient): void => {
+      const stroke = (
+        lambda: number,
+        phi: number,
+        from: number,
+        to: number,
+        lineWidth: number,
+        color: string,
+        blur: number,
+      ): void => {
         ctx.beginPath();
-        for (let y = 0; y <= height; y += 2) {
-          const x = xAt(y, key);
-          if (y === 0) ctx.moveTo(x, y);
+        for (let y = from; y <= to; y += 1) {
+          const x = xAt(y, lambda, phi);
+          if (y === from) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
         ctx.lineWidth = lineWidth;
         ctx.lineCap = "round";
-        ctx.strokeStyle = style;
+        ctx.strokeStyle = color;
+        if (blur > 0) {
+          ctx.shadowBlur = blur;
+          ctx.shadowColor = "rgba(255, 205, 160, 0.85)";
+        }
         ctx.stroke();
+        ctx.shadowBlur = 0;
       };
 
-      // 先铺两股光晕，再叠主线（slime 的 glow pass + main pass）。
-      wave(1, Math.max(3, width * 0.24), lineStyle("244,239,230", 0.10, 0.05));
-      wave(-1, Math.max(3, width * 0.22), lineStyle("216,142,88", 0.15, 0.08));
-      // 主线：linen 亮股 + ochre 暗股，同一波长反向 → 规整麻花辫。
-      wave(1, Math.max(1.5, width * 0.11), lineStyle("244,239,230", 0.95, 0.55));
-      wave(-1, Math.max(1.4, width * 0.1), lineStyle("216,142,88", 0.9, 0.5));
+      const top = padTop;
+      const bottom = height - padBottom;
+
+      // ① 暗线（完整、细、低透明度）
+      stroke(p.lam1, Math.PI / 2, top, bottom, 1, "rgba(200, 128, 74, 0.30)", 0);
+      // ② 亮线（完整、稍亮）
+      stroke(p.lam0, 0, top, bottom, 1.25, "rgba(245, 190, 140, 0.55)", 0);
+
+      // ③ 视口段：两股线一起提亮 + 光晕（没有滚动块，只有"这一段在发光"）
+      const litFrom = Math.max(top, vpCenter - vpLen / 2);
+      const litTo = Math.min(bottom, vpCenter + vpLen / 2);
+      const litGrad = ctx.createLinearGradient(0, litFrom, 0, litTo);
+      litGrad.addColorStop(0, "rgba(255, 214, 170, 0.10)");
+      litGrad.addColorStop(0.5, "rgba(255, 232, 205, 0.98)");
+      litGrad.addColorStop(1, "rgba(255, 214, 170, 0.10)");
+      ctx.shadowBlur = 0;
+      // 用渐变作为 strokeStyle（渐变是竖直的，正好形成"中间亮两头暗"）
+      ctx.beginPath();
+      for (let y = litFrom; y <= litTo; y += 1) {
+        const x = xAt(y, p.lam0, 0);
+        if (y === litFrom) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.lineWidth = 1.9;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = litGrad;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = "rgba(255, 205, 160, 0.55)";
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // ④ 话题锚点：轨道右侧的小圆点（稀疏，仅用户消息）
+      const dotX = BUMP_PAD + width - 4.5;
+      for (const point of pointsRef.current) {
+        const y = padTop + (point.y / Math.max(1, sc.scrollHeight)) * innerH;
+        if (y < top - 2 || y > bottom + 2) continue;
+        ctx.beginPath();
+        ctx.fillStyle = hoverRef.current ? "rgba(255, 214, 170, 0.95)" : "rgba(245, 190, 140, 0.7)";
+        ctx.arc(dotX, y, 1.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ⑤ 悬停：指针附近的一小段线被提亮（衬托 + 局部高光），不画光点
+      if (hovering) {
+        const from = Math.max(top, ptrY - 46);
+        const to = Math.min(bottom, ptrY + 46);
+        const hoverGrad = ctx.createLinearGradient(0, from, 0, to);
+        hoverGrad.addColorStop(0, "rgba(255, 224, 190, 0.10)");
+        hoverGrad.addColorStop(0.5, "rgba(255, 236, 214, 1)");
+        hoverGrad.addColorStop(1, "rgba(255, 224, 190, 0.10)");
+        ctx.beginPath();
+        for (let y = from; y <= to; y += 1) {
+          const x = xAt(y, p.lam0, 0);
+          if (y === from) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = hoverGrad;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "rgba(255, 214, 170, 0.75)";
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
     };
 
     const frame = (t: number): void => {
@@ -195,6 +248,10 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
       const p = paramsRef.current;
       const frozen = reducedRef.current || (p.pause && hoverRef.current) || dragRef.current || p.spd === 0;
       if (!frozen) phaseRef.current = t * 0.0009 * p.spd;
+      // 悬停突起：向目标缓动（进入约 150ms、离开自然收回），不受荡漾暂停影响。
+      const bumpTarget = hoverRef.current && pointerYRef.current >= 0 ? 1 : 0;
+      bumpRef.current += (bumpTarget - bumpRef.current) * 0.16;
+      if (Math.abs(bumpTarget - bumpRef.current) < 0.003) bumpRef.current = bumpTarget;
       paint();
       raf = requestAnimationFrame(frame);
     };
@@ -267,7 +324,7 @@ export default function TopicRail({ scroller, contextRatio }: TopicRailProps): R
     };
     const onPointerLeave = (): void => {
       hoverRef.current = false;
-      pointerYRef.current = -1;
+      // 保留 pointerYRef 让突起从最后一次位置平滑收回；tip 立即隐藏即可。
       if (!dragRef.current) tip.classList.remove("on");
     };
     const onScroll = (): void => {
