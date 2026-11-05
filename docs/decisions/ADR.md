@@ -464,6 +464,24 @@
 
 ---
 
+## ADR-0028 卷轴外观重做为 slime wave 编织（沿用 Loopsoar 品牌配色）
+
+- **背景**：ADR-0025~0027 一直在旧「极细双线」上叠动画（突起、压平荡漾、卡片对比度），用户多次指出与参考作品 `D:\pilot project`（slime）的卷轴外观不一致。复查确认参考作品的关键是**编织几何本身**：两股波长接近（46/53）、相位差 π、反向摆动，主股亮、辅股暗，视口位置之上更亮、之下转暗，两股各带一档宽光晕。
+- **决策**：
+  1. `packages/ui/src/TopicRail.tsx` 按 slime 的 wave 模式逐项移植 `band / shapeAt / lineStyle / strokeWave / frame`（含悬停收拢 `wOsc`、bulge 2.8、dip 1.1、strength 0.18/帧、uc 0.22/帧）。
+  2. 颜色改为 Loopsoar 品牌色：主股亚麻白 `244,239,230`、辅股赭石 `216,141,86`；不复刻 slime 的蓝白配色（用户明确「颜色要贴合 loopsoar 主题」）。
+  3. 参数默认值采用 slime 出厂值（`w12 / amp55 / lam46 / lam53 / spd1 / tap90`）；存储键升级为 `loopsoar_rail_params_chat_v2` 并清理旧键，避免旧 localStorage 参数把新外观覆盖回细线。
+  4. 细节保留：`contain:paint` 只放 canvas（host 上会裁掉左伸的悬浮卡片）；拖拽热区左侧多留 10px；`prefers-reduced-motion` / 动效关闭时冻结荡漾并把悬停强度直接置 0/1。
+- **理由**：用户要的是参考作品那张图的视觉结果，而不是在旧图形上加动画；编织几何 + 品牌色是唯一能同时满足「像 slime」和「贴合 Loopsoar 主题」的组合。
+- **替代方案**：继续微调旧双线（否，几何不同，永远不像）；直接复制 slime 蓝白配色（否，违背品牌约束，用户明确要求主题色）；只做悬停突起不改静态外观（否，静态外观才是用户比较的主体）。
+- **后果**：外观与参考作品一致；用户此前自定义的卷轴参数会因存储键升级回到默认值（已在代码注释标明）；slime 的「刻度模式」不移植（Loopsoar 聊天区只需要 wave 模式）。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**；真机 E2E `docs/screenshots/e2e-round11-rail-wave.png`（静止编织）与 `e2e-round11-rail-wave-hover.png`（悬停鼓包 + 卡片），日志 `[E2E] RAIL_HOVER moved` / `RAIL_TIP`。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：品牌色在浅色主题对比不足 → 按主题 token 切换两股颜色；窄窗口光晕过亮 → 按 `height` 缩放 alpha；用户仍不认可 → 恢复 ADR-0026 外观（`git checkout fc3c97c -- packages/ui/src/TopicRail.tsx`）。
+- **复核时间**：打包阶段（浅色主题、多显示器 DPI、系统减少动画）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -495,3 +513,4 @@
 | ADR-0025 | 输入框本体色块 / slime 式双股编织卷轴 | 🟡 输入框色块保留；编织外观已被 ADR-0026 回退 |
 | ADR-0026 | 卷轴外观回退 + slime 式悬停突起 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0027 | 卷轴突起平滑化 / 悬停卡片对比度 | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0028 | 卷轴外观重做为 slime wave 编织（Loopsoar 品牌配色） | ✅ 已验证（自动化 + 真机 E2E） |

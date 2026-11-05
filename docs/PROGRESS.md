@@ -458,6 +458,20 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-smooth.png`（静止态外观不变）、`e2e-round11-rail-smooth-bump.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：突起为单一平滑包络、无 S 形打结；深色卡片显示「● 1 / 1 你：你好，请简单介绍一下你自己」，日志 `[E2E] RAIL_HOVER moved` 与 `RAIL_TIP`）。
 - **备注**：E2E 合成鼠标偶发被下一帧的 pointerleave 清掉悬停状态（首次复跑 `RAIL_TIP display:none`，重跑正常），属合成输入时序抖动，不是功能回归；真机悬停稳定。
 
+## 二·四十五、2026-11-05 第四十二次增量（卷轴按 slime wave 模式重做，沿用 Loopsoar 品牌配色）
+
+用户反馈（第 11 轮追加）：「还是不对啊，我要的是第二张图这样的啊，你是听不懂吗？你给我去『pilot project』这个文件夹内好好翻翻 slime 的设计啊，那是我钦点的合格作品」「颜色不要错了啊，要贴合 loopsoar 的主题。」
+
+- **根因**：前几版（ADR-0025~0027）都在「原极细双线」上叠动画，而参考作品的核心是**编织几何本身** —— 两股波长 46/53、相位差 π、反向摆动、视口上下明暗渐变、宽光晕；只调突起/压平荡漾永远不会变成那张图。
+- **重做**（`packages/ui/src/TopicRail.tsx` 整文件重写）：
+  1. **几何逐项移植 slime wave 模式**：`LEFT_ROOM=12 / RIGHT_ROOM=6`；`band()`（右侧 88% 带宽）；`shapeAt()`（悬停收拢 `wOsc` + 高斯 bulge 2.8 + dip 1.1 回弹）；`strokeWave()`（双股不同波长、反向 `key`）；`lineStyle()`（视口位置之上 lit、之下 dim 的竖直渐变，两端 `taper`）；画布 `contain:paint` 只放 canvas（host 上会裁掉左伸卡片）。
+  2. **配色换成 Loopsoar 主题**：主股亚麻白 `244,239,230`（品牌亮色，宽 `W*0.13`）、辅股赭石 `216,141,86`（宽 `W*0.095`）；alpha / 光晕比例沿用 slime（0.95/0.58/0.10、0.55/0.36/0.13，光晕宽 ×1.5 / ×2.0）。不复刻 slime 的蓝白配色。
+  3. **悬停突起**：`strength` 0.18/帧缓入、`uc` 0.22/帧跟随（进入约 150ms），离开自然收回；`onPointerMove` 立即重绘兜底 rAF 降频。
+  4. **参数默认值改为 slime 出厂值**：`w12 / amp55 / lam0 46 / lam1 53 / spd1 / tap90`；localStorage 键升级 `loopsoar_rail_params_chat_v2` 并清理旧键，避免旧参数把新外观覆盖回细线；外观设置标签改为「主股波长（亚麻白）/ 辅股波长（赭石）」。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1209 tests 全绿**。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-wave.png`（静止：亚麻白 + 赭石双股编织）、`e2e-round11-rail-wave-hover.png`（`LOOPSOAR_E2E_HOVER_RAIL=1`：指针处收拢并鼓出单峰包络 + 悬停卡片「● 1 / 1 你：…」，日志 `[E2E] RAIL_HOVER moved` / `RAIL_TIP`）。
+- **备注**：`contain:paint` 只能在 canvas、拖拽热区左侧多 10px（slime 的用户反馈坑）等细节一并保留；旧版细线/编织截图仅作为历史，不再作为当前外观证据。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

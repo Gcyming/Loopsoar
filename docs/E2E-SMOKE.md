@@ -390,6 +390,32 @@ node scripts/dev-gui.mjs
 
 > 合成鼠标偶发被下一帧 pointerleave 清掉悬停态（`RAIL_TIP display:none`），重跑即可；真机悬停稳定。
 
+## 21. 2026-11-05 卷轴按 slime wave 重做（Loopsoar 品牌配色）验证
+
+> 承接第 20 节：突起已平滑，但用户要求静态外观必须是参考作品那种「双股编织」；本节验证 ADR-0028 的几何移植与品牌配色。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 静止编织外观 | 打开聊天页截图（`e2e-round11-rail-wave.png`） | 亚麻白主股 + 赭石辅股的双股编织麻花；视口段提亮、两端渐隐；无粗块、无话题圆点 |
+| 悬停鼓包 | `LOOPSOAR_E2E_HOVER_RAIL=1`（`e2e-round11-rail-wave-hover.png`） | 指针高度两股收拢并向聊天区鼓出**单峰平滑包络**（峰值约 13px），上下过渡连续 |
+| 悬停卡片 | 同上，查看 `[E2E] RAIL_TIP` | `display:flex`、`text` 形如 `1 / 1你：…`、tipRect 非零；深色卡片 + 可见描边 |
+| 参数默认值 / 存储键 | 设置 → 外观 → 卷轴参数 | 默认 w12 / amp55 / lam46 / lam53 / spd1 / tap90；localStorage 键为 `loopsoar_rail_params_chat_v2`，旧键已被清理 |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1209 tests 全绿 |
+
+复跑命令（PowerShell；聊天内容需要 mock LLM，端口 19500）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_API_KEY='sk-mock-local'
+$env:LOOPSOAR_E2E_OPEN='chat&chatDelay=300'
+$env:LOOPSOAR_E2E_HOVER_RAIL='1'
+$env:LOOPSOAR_E2E_HOLD_MS='2500'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-wave-hover.png'
+node scripts/dev-gui.mjs
+```
+
+> 若没有启动 mock 服务，聊天区为空、卷轴仍会绘制；截图里没有话题卡片属预期。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash
