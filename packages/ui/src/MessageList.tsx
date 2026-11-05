@@ -49,7 +49,6 @@ export default function MessageList({
   const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   const atBottomRef = React.useRef(true);
   const [atBottom, setAtBottom] = React.useState(true);
-  const [atTop, setAtTop] = React.useState(true);
   const scrollRafRef = React.useRef<number | null>(null);
 
   /** 滚轮是最可靠的意图信号：向上立即解除跟随，向下且已到底则恢复。 */
@@ -94,7 +93,6 @@ export default function MessageList({
       });
       atBottomRef.current = next;
       setAtBottom((current) => (current === next ? current : next));
-      setAtTop(scroller.scrollTop < 8);
     });
   };
 
@@ -103,7 +101,6 @@ export default function MessageList({
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
     atBottomRef.current = true;
     setAtBottom(true);
-    setAtTop(false);
   };
 
   /** 内容高度变化就保持贴底（含折叠展开/图片迟加载），静默片刻停表。 */
@@ -183,7 +180,6 @@ export default function MessageList({
       const scroller = scrollerRef.current;
       if (!scroller) return;
       scroller.scrollTop = scroller.scrollHeight;
-      setAtTop(false);
     });
     return () => cancelAnimationFrame(id);
   }, [messages.length]);
@@ -219,7 +215,6 @@ export default function MessageList({
           ))
         )}
       </div>
-      <div className={`scroll-fade-mask is-top${atTop ? " is-hidden" : ""}`} aria-hidden />
       <div className={`scroll-fade-mask is-bottom${atBottom ? " is-hidden" : ""}`} aria-hidden />
       {!atBottom ? (
         <button type="button" className="jump-latest" title={tr("chat.jumpLatest")} onClick={jumpToLatest}>

@@ -545,6 +545,21 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E 证据**：`docs/screenshots/e2e-round11-rail-pause-switch.png`（设置→外观：默认未勾选的「悬停时暂停流动」+ 说明文案）。
 - 文档：ADR-0033、E2E-SMOKE 第 26 节。
 
+## 二·五十一、2026-11-05 第四十八次增量（收紧网页/会话分区间隙 + 删除会话顶部阴影）
+
+用户反馈（m04618）：「会话与网页两侧栏目看似只有一线之隔，实际上仔细一看，中间有相当大一段间距……改成符合直观逻辑直觉的，将会话栏宽度变大点。然后除去上方会话未滚动在最顶层时的阴影，我感觉不好看。」
+
+- **间隙根因（三层叠加）**：
+  1. 页框 `BROWSER_VIEW_INSET=8`（设计上的圆角面板留白）；
+  2. `App.tsx` splitter 固定 `6px`；
+  3. 侧栏 wrapper `padding-left: 8px`，同时 `AgentSidebar width={sidebarWidth - 16}` 又按「左右各 8px」预留、且 inner 用 `marginLeft:auto` 右对齐 —— 实际在 splitter 与内容之间留下 16–24px 空白带，内容反而被压窄。
+- **改动**：
+  1. `packages/contracts/src/layout.ts`：`SPLITTER_WIDTH` 6→**2**（契约是原生视图宽度的单一产地，DOM 同步改）；`App.tsx` 的 splitter 宽度改用 `LAYOUT.SPLITTER_WIDTH`，docked 侧栏 wrapper padding 归零（仅独立 Agent 窗口保留 8），`AgentSidebar width` 改为 `Math.max(240, sidebarWidth)` —— 内容铺满整列。视觉上网页卡片右缘到会话内容只剩「页框 8px 内缩 + 2px 热区」≈10px。
+  2. 顶部阴影删除：`MessageList.tsx` 移除 `scroll-fade-mask is-top` 元素与 `atTop` state/`setAtTop` 调用，`index.html` 删除 `.scroll-fade-mask.is-top` 渐变规则；底部渐隐保留（「还有更多」提示仍需要）。
+- **验证基线**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1212 tests 全绿**（同步更新 5 个布局测试文件的 splitter 期望：非收起态宽度 +4px）。
+- **真机 E2E 证据**：`docs/screenshots/e2e-round12-gap.png`（1361×862 内容区的 1702×1078 截图）；DOM 探针 `E2E_EVAL`：`.browser-toolbar` 右缘 852.6、`.agent-sidebar` 左缘 854.6 → **gap=2px**；`.scroll-fade-mask.is-top` 查询为 `false`（元素已删）、底部 mask 正常隐藏。
+- 文档：ADR-0034、E2E-SMOKE 第 27 节。
+
 ## 三、未完成 / 已知问题（下次继续）
 
 ### 0.1.0 后启动（已记录，不提前做）

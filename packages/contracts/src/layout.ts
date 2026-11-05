@@ -27,7 +27,7 @@ export const LAYOUT = {
   /** 小窗化（浮动卡片）模式下侧栏四周留白。 */
   SIDEBAR_FLOAT_MARGIN: 8,
   /** 侧栏拖拽分隔条宽度：原生网页视图必须让出这 6px，否则分隔条被视图盖住无法拖拽。 */
-  SPLITTER_WIDTH: 6,
+  SPLITTER_WIDTH: 2,
   /** 底部状态条高度。 */
   STATUS_BAR_HEIGHT: 32,
   /** 右侧 Agent 面板底部终端抽屉：默认/最小/最大高度。 */
@@ -70,7 +70,9 @@ export function computeBrowserViewBounds(
   const sidebarWidth = Math.max(0, options.sidebarWidth ?? layout.SIDEBAR_WIDTH);
   const bottomInset = Math.max(0, Math.min(options.bottomInset ?? 0, size.height));
   // 分隔条只在「停靠且展开」时渲染：收起态（48px rail）与窗口化（侧栏让位为 0）都没有分隔条，
-  // 此时再扣 SPLITTER_WIDTH 会让原生网页右侧留一条 6px 的 DOM 缝（网页不铺满，用户可见）。
+  // 此时再扣 SPLITTER_WIDTH 会让原生网页右侧留一条 DOM 缝（网页不铺满，用户可见）。
+  // 宽度 2px：拖拽热区由 DOM 上的透明条提供，视觉上网页与会话之间只隔页框留白 + 一条细缝，
+  // 不再出现用户反馈的「看似一线、实际一大段」的空白带。
   const splitterWidth =
     sidebarWidth > 0 && sidebarWidth !== layout.SIDEBAR_COLLAPSED_WIDTH ? layout.SPLITTER_WIDTH : 0;
   const inset = Math.max(0, layout.BROWSER_VIEW_INSET);

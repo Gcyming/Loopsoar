@@ -573,6 +573,26 @@
 
 ---
 
+## ADR-0034 收紧网页/会话分区间隙 + 删除会话顶部滚动阴影
+
+- **背景**：用户反馈「会话与网页两侧栏目看似只有一线之隔，实际上中间有相当大一段间距……改成符合直观逻辑直觉的，将会话栏宽度变大点。然后除去上方会话未滚动在最顶层时的阴影。」
+- **根因**：
+  1. 间隙由三层叠加：页框 `BROWSER_VIEW_INSET=8`（设计需要的圆角面板留白）+ splitter `6px` + 侧栏 wrapper `padding-left:8px`；同时 `AgentSidebar width={sidebarWidth-16}` 又按旧「左右各 8px」预留并右对齐，导致内容被压窄、空白被放大。
+  2. 顶部阴影是 `MessageList` 的 `.scroll-fade-mask.is-top`（44px、`rgba(17,19,24,0.92)` 渐变），在会话未滚到最顶时一直压着一条暗色带。
+- **决策**：
+  1. `packages/contracts/src/layout.ts` 的 `SPLITTER_WIDTH` 6→**2**（契约是原生 `WebContentsView` 宽度的单一产地，DOM 同步）；`App.tsx` splitter 宽度改用 `LAYOUT.SPLITTER_WIDTH`；docked 侧栏 wrapper padding 归零（独立 Agent 窗口的 8px 保留），`AgentSidebar width` 改为 `Math.max(240, sidebarWidth)`，内容铺满整列。
+  2. 删除顶部滚动阴影：移除 `MessageList.tsx` 的 `scroll-fade-mask is-top` 元素及 `atTop` state / `setAtTop` 调用；删除 `index.html` 的 `.scroll-fade-mask.is-top` 规则；底部渐隐保留。
+  3. 同步 5 个布局测试文件的 splitter 期望（非收起态宽度 +4px）。
+- **理由**：页框 8px 内缩本身已经提供了「网页卡片」的视觉边界，再叠 6px splitter 和 8px padding 就变成空白带；splitter 只需要一个可拖拽的 2px 热区。顶部渐变属于旧版「滚动提示」，与当前柔和外壳风格冲突，用户明确不喜欢。
+- **替代方案**：把 BROWSER_VIEW_INSET 也调小（否，会破坏圆角门户的闭合外框设计）；保留 6px splitter 只删 padding（否，仍有 14px 空白，用户仍会觉得「不是一线之隔」）；保留顶部阴影只调低透明度（否，用户要删除）。
+- **后果**：网页卡片右缘到会话内容 ≈10px（8 inset + 2 splitter），会话内容宽度增加 16–24px；顶部不再出现暗色渐变；拖拽热区变窄但仍有 2px + cursor 反馈。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm check` 逐字节一致、`pnpm build` 5/5、`vitest` **133 文件 / 1212 tests 全绿**；真机 E2E `docs/screenshots/e2e-round12-gap.png`，DOM 探针 `.browser-toolbar` 右缘 852.6 / `.agent-sidebar` 左缘 854.6 → gap=2px，`.scroll-fade-mask.is-top` 不存在。
+- **状态**：✅ 已验证（自动化 + 真机 E2E）
+- **回退条件**：2px 热区在触控板上过难拖拽 → 加宽透明命中区（不动视觉宽度）；用户希望更宽的侧栏 → 调大 `sidebarWidth` 默认/记忆值，而不是加 padding。
+- **复核时间**：打包阶段（高 DPI、窄窗口、触控板拖拽手感）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -610,3 +630,4 @@
 | ADR-0031 | 卷轴突起幅度调小（视觉轻重） | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0032 | 卷轴凹陷防裁切 + 突起参数可调 + 删除拖拽提示 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0033 | 卷轴悬停流动开关：默认不暂停、由用户选择 | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0034 | 收紧网页/会话分区间隙（splitter 2px/内容铺满）+ 删除会话顶部阴影 | ✅ 已验证（自动化 + 真机 E2E） |

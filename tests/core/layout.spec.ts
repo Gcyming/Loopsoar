@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { LAYOUT, computeBrowserViewBounds } from "../../packages/contracts/src/layout.ts";
 
-/** 常规窗口：默认布局下 宽=1280-360-6-16=898，高=800-40-48-32-16=664。 */
+/** 常规窗口：默认布局下 宽=1280-360-2-16=902，高=800-40-48-32-16=664。 */
 const BASE = { width: 1280, height: 800 };
 /** 顶部让位：40(Title，含标签页)+48(Top)+8(网页面板留白)，与窗口大小无关。 */
 const TOP_OFFSET = 96;
@@ -23,7 +23,7 @@ describe("computeBrowserViewBounds：基础回归", () => {
     expect(computeBrowserViewBounds(BASE)).toEqual({
       x: 8,
       y: TOP_OFFSET,
-      width: 898,
+      width: 902,
       height: 664,
     });
   });
@@ -34,7 +34,7 @@ describe("computeBrowserViewBounds：bottomInset（全宽终端让位）", () =>
     expect(computeBrowserViewBounds(BASE, LAYOUT, { bottomInset: 260 })).toEqual({
       x: 8,
       y: TOP_OFFSET,
-      width: 898,
+      width: 902,
       height: 404,
     });
   });
@@ -53,7 +53,7 @@ describe("computeBrowserViewBounds：bottomInset（全宽终端让位）", () =>
   it("超限：inset > 窗口高 → 先按窗口高夹取，高度仍为 0（不产生负数）", () => {
     const bounds = computeBrowserViewBounds(BASE, LAYOUT, { bottomInset: 5000 });
     expect(bounds.height).toBe(0);
-    expect(bounds.width).toBe(898);
+    expect(bounds.width).toBe(902);
   });
 
   it("负数 inset 按 0 处理（防止 UI 传负值把视图撑大）", () => {
@@ -62,10 +62,10 @@ describe("computeBrowserViewBounds：bottomInset（全宽终端让位）", () =>
 });
 
 describe("computeBrowserViewBounds：sidebarWidth（侧栏实际宽度）", () => {
-  it("收起态 48 不扣分隔条（rail 无 splitter）／拖拽值 542 扣 6px", () => {
+  it("收起态 48 不扣分隔条（rail 无 splitter）／拖拽值 542 扣 2px", () => {
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 48 }).width).toBe(1280 - 48 - 16);
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 542 }).width).toBe(
-      1280 - 542 - 6 - 16,
+      1280 - 542 - 2 - 16,
     );
     // 高度不受侧栏影响
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 542 }).height).toBe(664);
@@ -78,9 +78,9 @@ describe("computeBrowserViewBounds：sidebarWidth（侧栏实际宽度）", () =
 
   it("自定义 layout 的 SIDEBAR_WIDTH 可被 options.sidebarWidth 覆盖", () => {
     const layout = { ...LAYOUT, SIDEBAR_WIDTH: 500 };
-    expect(computeBrowserViewBounds(BASE, layout).width).toBe(1280 - 500 - 6 - 16);
+    expect(computeBrowserViewBounds(BASE, layout).width).toBe(1280 - 500 - 2 - 16);
     expect(computeBrowserViewBounds(BASE, layout, { sidebarWidth: 600 }).width).toBe(
-      1280 - 600 - 6 - 16,
+      1280 - 600 - 2 - 16,
     );
   });
 
@@ -99,7 +99,7 @@ describe("computeBrowserViewBounds：组合与夹取", () => {
     expect(computeBrowserViewBounds(BASE, LAYOUT, { sidebarWidth: 542, bottomInset: 260 })).toEqual({
       x: 8,
       y: TOP_OFFSET,
-      width: 1280 - 542 - 6 - 16,
+      width: 1280 - 542 - 2 - 16,
       height: 664 - 260,
     });
   });

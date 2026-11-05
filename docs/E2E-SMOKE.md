@@ -539,6 +539,32 @@ $env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round11-rail-pause-switch.png'
 node scripts/dev-gui.mjs
 ```
 
+## 27. 2026-11-05 网页/会话分区间隙收紧 + 顶部阴影删除验证
+
+> 承接第 26 节；用户要求「网页与会话只隔一线」并删除会话顶部滚动阴影。本节验证 ADR-0034。
+
+| 验证点 | 操作 | 期望 |
+| --- | --- | --- |
+| 分区间隙 | DOM 探针取 `.browser-toolbar` 右缘与 `.agent-sidebar` 左缘 | 差值 = 2px（splitter）；页框自身 8px 内缩另计，视觉缝约 10px |
+| 会话内容宽度 | 同上取 `.agent-sidebar` 宽度 | 等于 `sidebarWidth`（不再被 wrapper padding / `-16` 双重扣减） |
+| 顶部阴影 | 查询 `.scroll-fade-mask.is-top` | 元素不存在（已删除），截图顶部无暗色渐变带 |
+| 底部渐隐 | 查询 `.scroll-fade-mask.is-bottom` | 仍存在，未滚到底时可见 |
+| 原生视图对齐 | `debugBounds` / `browserHost.syncBounds` | x=8、y=96、width=窗口-侧栏-2-16、height 不变（splitter 2px 已进契约） |
+| 回归基线 | `pnpm typecheck && pnpm check && pnpm build && npx vitest run` | 5/5、逐字节一致、5/5、133 文件 / 1212 tests 全绿 |
+
+复跑命令（PowerShell）：
+
+```powershell
+$env:LOOPSOAR_DATA_DIR='D:\\tool\\AI\\real-project\\Loopsoar\\Parent file\\.loopsoar-data-mock'
+$env:LOOPSOAR_E2E_OPEN='chat'
+$env:LOOPSOAR_E2E_HOLD_MS='900'
+$env:LOOPSOAR_E2E_SHOT='docs/screenshots/e2e-round12-gap.png'
+$env:LOOPSOAR_E2E_EVAL='(() => { const tb=document.querySelector(".browser-toolbar")?.getBoundingClientRect(); const sb=document.querySelector(".agent-sidebar")?.getBoundingClientRect(); return { gap: tb&&sb?sb.x-(tb.x+tb.width):null, topMask: !!document.querySelector(".scroll-fade-mask.is-top") }; })()'
+node scripts/dev-gui.mjs
+```
+
+> 实测结果：`E2E_EVAL {"tb":{"x":0,"w":852.6},"sb":{"x":854.6,"w":507},"gap":2,"topMask":false,...}`。
+
 ## 7. 回归基线（必须全绿后才提交）
 
 ```bash

@@ -1110,12 +1110,9 @@ export default function App(): React.JSX.Element {
             overflow: "hidden",
             minWidth: 0,
             // 会话栏顶部不再留白：与第二行工具条同高起步，头部按钮纵向拉长并进同一横带；
-            // 右侧/底部贴边与状态栏同色收口，只在网页面板一侧留 8px 形成分区间隙。
-            padding: miniWindow
-              ? 8
-              : agentWindowOpen || sidebarMode === "collapsed"
-                ? 0
-                : "0 0 0 8px",
+            // 右侧/底部贴边与状态栏同色收口；左侧不再额外留白 —— 页框自己的 8px 内缩 + 2px splitter
+            // 已构成自然分区间隙，再叠加 padding 会让「一线之隔」变成 20px+ 的空白带（用户 m04618）。
+            padding: miniWindow ? 8 : 0,
             transition:
               miniWindow || sidebarDragging
                 ? "none"
@@ -1123,7 +1120,9 @@ export default function App(): React.JSX.Element {
           }}
         >
         <AgentSidebar
-          width={miniWindow ? 0 : Math.max(240, sidebarWidth - 16)}
+          // 侧栏列宽就是内容宽：之前传 sidebarWidth-16（为左右各 8px 的旧 padding 预留）叠加
+          // wrapper 左 padding，实际把内容压窄 16–24px；现在 padding 归零，内容铺满整列。
+          width={miniWindow ? 0 : Math.max(240, sidebarWidth)}
           mode={miniWindow ? "docked" : sidebarMode}
           onModeChange={
             miniWindow
@@ -1365,10 +1364,10 @@ const styles: Record<string, React.CSSProperties> = {
   // 网页列：导航工具条（第二行）只覆盖这一列；页框在 StartPage 里内缩成圆角面板。
   pageColumn: { display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" },
   splitter: {
-    width: 6,
+    width: LAYOUT.SPLITTER_WIDTH,
     flexShrink: 0,
     cursor: "col-resize",
-    // 不再画 1px 分隔线：网页区与会话区之间只靠页框留白形成间隙（用户反馈「条框影子」）。
+    // 不再画分隔线：网页区与会话区之间只靠「页框 8px 内缩 + 2px 热区」形成一道细缝。
     background: "transparent",
     transition: "background 120ms",
   },
