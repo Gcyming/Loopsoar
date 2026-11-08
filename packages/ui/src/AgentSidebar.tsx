@@ -211,7 +211,7 @@ export default function AgentSidebar({
             </span>
             <span style={styles.sidebarActions}>
               <button type="button" className="icon-btn" title={tr("chat.copyConversationTitle")} onClick={copyConversation}>
-                <Icon name="file" size={13} />
+                <Icon name="copy" size={13} />
               </button>
               <span style={styles.sidebarAgent}>{agentLabel}</span>
               <button

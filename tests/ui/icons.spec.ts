@@ -85,6 +85,11 @@ const REQUIRED_ICONS = [
   "sparkle",
   "circle",
   "checkbox",
+  // 时间线图标化（toolVisual 动态返回图标名）+ 复制动作统一图标
+  "copy",
+  "layers-linked",
+  "list-details",
+  "guide-arrow",
 ];
 
 /** pictographic emoji（用户明确不要表情符号当图标；箭头 → ← ↳ 属于排版符号，保留）。 */

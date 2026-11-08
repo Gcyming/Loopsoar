@@ -25,6 +25,7 @@ import {
   isToolFailure,
   toolCategoryOf,
   toolDisplayLabel,
+  toolVisual,
   type PlanItem,
   type TimelineGroup,
   type TimelineStep,
@@ -223,10 +224,12 @@ function TimelineNode({
         (normalizedHeadline.length >= 8 && normalizedPreview.startsWith(normalizedHeadline)));
     const displayPreview = duplicateOfHeadline ? "" : preview;
     return (
-      <div className="think-step">
+      <div className="think-step" data-kind="think">
         <span className="think-step-mark" />
         <button type="button" className="think-step-toggle" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起这段思考" : "展开这段思考（Markdown）"}>
           <Chevron open={expanded} size={10} />
+          <span className="think-step-icon" aria-hidden><Icon name="bulb" size={11} /></span>
+          <span className="think-step-kind">思考</span>
           <span className="think-step-preview">
             {displayPreview || (duplicateOfHeadline ? (expanded ? "收起思考" : "展开思考") : "思考…")}
             {!duplicateOfHeadline && clean.length > 120 ? "…" : ""}
@@ -249,7 +252,7 @@ function TimelineNode({
     const text = step.text.trim();
     if (!text) return null;
     return (
-      <div className="think-step">
+      <div className="think-step" data-kind="body">
         <span className="think-step-mark body-step-mark" />
         <div className="think-step-text body-step-text">
           {streamingTail ? <StreamFadeText text={text} Markdown={Markdown} /> : Markdown({ text })}
@@ -263,10 +266,11 @@ function TimelineNode({
   if (step.kind === "todo") {
     const done = step.state === "done";
     return (
-      <div className="think-step">
+      <div className="think-step" data-kind="todo">
         <span className={`think-step-mark todo-step-mark${done ? " is-done" : ""}`} />
-        <div className={`todo-announce${done ? " is-done" : ""}`}>
+        <div className={`todo-announce${done ? " is-done" : ""}`} data-state={done ? "done" : "start"}>
           <span className="todo-announce-mark" aria-hidden>{done ? <Icon name="check" size={9} /> : <Icon name="play" size={9} />}</span>
+          <span className="todo-announce-kind">推进播报</span>
           <span className="todo-announce-text" title={step.text}>{step.text}</span>
           <span className="todo-announce-tag">{done ? "已完成" : "开始"}</span>
         </div>
@@ -278,11 +282,12 @@ function TimelineNode({
     const text = step.text.trim();
     if (!text) return null;
     return (
-      <div className="think-step">
+      <div className="think-step" data-kind="steer">
         <span className="think-step-mark steer-step-mark" />
         <div className="steer-card">
           <button type="button" className="steer-card-head" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起这条引导" : "展开这条引导"}>
             <Chevron open={expanded} size={10} />
+            <span className="steer-card-icon" aria-hidden><Icon name="guide-arrow" size={11} /></span>
             <span className="steer-card-title">引导</span>
             {!expanded ? <span className="steer-card-preview">{text.replace(/\s+/g, " ").slice(0, 80)}</span> : null}
           </button>
@@ -302,11 +307,12 @@ function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
   const done = items.filter((item) => item.status === "completed").length;
   const active = items.find((item) => item.status === "in_progress");
   return (
-    <div className="think-step">
+    <div className="think-step" data-kind="plan">
       <span className="think-step-mark plan-step-mark" />
       <div className="plan-card">
         <button type="button" className="plan-card-head" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起任务规划" : "展开任务规划"}>
           <Chevron open={expanded} size={10} />
+          <span className="plan-card-icon" aria-hidden><Icon name="list-details" size={12} /></span>
           <span className="plan-card-title">任务规划</span>
           <span className="plan-card-progress" data-all-done={done === items.length && items.length > 0 ? "1" : "0"}>{done}/{items.length}</span>
           {!expanded && active ? <span className="plan-card-active">· {active.content}</span> : null}
@@ -339,7 +345,8 @@ function ToolNode({
 }): React.ReactElement {
   const failed = isToolFailure(step.name, step.result, step.ok);
   const running = step.state === "running";
-  const { category, color } = toolCategoryOf(step.name);
+  const { color } = toolCategoryOf(step.name);
+  const visual = toolVisual(step.name);
   const status = running ? "执行中" : failed ? "失败" : "成功";
   const hasBody = Boolean(step.detail || step.result);
   const isUrl = Boolean(step.detail && /^https?:\/\//i.test(step.detail));
@@ -349,13 +356,13 @@ function ToolNode({
     if (!parsedDiff.diff) return null;
     return diffStat(diffLines(parsedDiff.diff.oldText, parsedDiff.diff.newText));
   }, [parsedDiff.diff]);
-  const isCommand = category === "执行命令";
+  const isCommand = visual.label === "执行命令";
   const urls = React.useMemo(() => {
     const found = (step.result ?? "").match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
     return [...new Set(found)].slice(0, 4);
   }, [step.result]);
   return (
-    <div className="think-tool-node">
+    <div className="think-tool-node" data-kind="tool" data-tool={step.name}>
       <span className="think-tool-mark" style={{ background: failed ? "var(--ls-danger, #f87171)" : color }} />
       <div
         className="think-tool-btn"
@@ -372,9 +379,9 @@ function ToolNode({
         title={hasBody ? (expanded ? "点击收起详情" : "点击展开详情") : undefined}
         style={{ cursor: hasBody ? "pointer" : "default" }}
       >
-        <span className="think-tool-glyph" aria-hidden><Icon name={glyphFor(category)} size={12} /></span>
+        <span className="think-tool-glyph" aria-hidden><Icon name={visual.icon} size={12} /></span>
+        <span className="think-tool-type">{visual.label}</span>
         <span className="think-tool-name" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
-        {category ? <span className="think-tool-cat">{category}</span> : null}
         {diffStats ? (
           <span className="think-diff-inline">
             <span className="think-diff-add">+{diffStats.add}</span>
@@ -464,26 +471,4 @@ function ToolNode({
       ) : null}
     </div>
   );
-}
-
-/** 工具分类 → 本地图标名（mask 图标随 currentColor 着色，尺寸由调用处给）。 */
-function glyphFor(category: string): string {
-  switch (category) {
-    case "执行命令":
-      return "terminal";
-    case "写入":
-      return "edit";
-    case "删除":
-      return "close";
-    case "网页访问":
-      return "globe";
-    case "读取":
-      return "file";
-    case "规划":
-      return "checkbox";
-    case "委派子代理":
-      return "arrow-go";
-    default:
-      return "settings";
-  }
 }

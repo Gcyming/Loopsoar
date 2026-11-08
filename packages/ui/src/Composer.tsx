@@ -44,7 +44,6 @@ export interface ComposerProps {
   effortLabel: (value: string) => string;
   permissionLabel: (state: PermissionsState) => string;
   onPickAttachment: () => void;
-  notice: string;
   /** 斜杠命令执行入口（App 负责 /new /clear /stop /settings /compact /help 的实际动作）。 */
   onCommand?: (command: string) => void;
   /** 组件内异步操作（粘贴图片/选文件/命令）的提示出口；缺省则静默。 */
@@ -120,7 +119,6 @@ export default function Composer({
   effortLabel,
   permissionLabel,
   onPickAttachment,
-  notice,
   onCommand,
   onNotice,
 }: ComposerProps): React.ReactElement {
@@ -605,11 +603,6 @@ export default function Composer({
           </div>
         </Popover>
       </div>
-      <div style={styles.composerFoot}>
-        <span style={styles.notice}>
-          {notice || (busy ? "" : mode === "plan" ? tr("composer.planFoot") : tr("composer.buildFoot"))}
-        </span>
-      </div>
     </div>
   );
 }
@@ -674,8 +667,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /** 中断态：运行中且输入为空时，主按钮切换为「停止」动作（红色强调，不禁用）。 */
   sendBtnInterrupt: { background: BRAND.danger },
-  composerFoot: { display: "flex", gap: 8, marginTop: 4, fontSize: 10.5, color: BRAND.linenFaint, minHeight: 14 },
-  notice: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   modelMenuHead: { fontSize: 10.5, color: BRAND.linenFaint, padding: "2px 4px 6px" },
   permRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "3px 4px" },
   permCat: { fontSize: 11, color: BRAND.linenMuted },

@@ -197,6 +197,36 @@ export function toolCategoryOf(name: string): { category: ToolCategory; color: s
   return { category: "", color: "#8b93a3" };
 }
 
+/** 时间线每行的「图标 + 类型标签」——思考过程图标化的唯一映射产地（纯函数，可单测）。 */
+export interface ToolVisual {
+  /** public/icons 下的本地图标名（Icon 组件用 CSS mask 渲染）。 */
+  icon: string;
+  /** 人类可读的类型标签（如「执行命令」「浏览网页」）。 */
+  label: string;
+}
+
+const TOOL_VISUAL_FALLBACK: ToolVisual = { icon: "bolt", label: "工具调用" };
+
+/**
+ * 工具名 → 时间线行首的图标与类型标签。
+ *
+ * 顺序即优先级：外部工具/MCP 先判（避免 ext__ 内部名字命中 read/search 等规则）；
+ * 搜索先于浏览（web_search 两者都像）；命令先于文件（terminal_run 也含 read 之类的字样）。
+ */
+export function toolVisual(name: string): ToolVisual {
+  if (/^(mcp__|ext__)/.test(name)) return { icon: "puzzle", label: "外部工具" };
+  const raw = name.replace(/^mcp__[^_]+__/, "");
+  if (/memory|memor/i.test(raw)) return { icon: "layers-linked", label: "记忆" };
+  if (/^(todo_write|todo|plan)/i.test(raw)) return { icon: "list-details", label: "任务规划" };
+  if (/search|web_search|websearch|google|bing|query/i.test(raw)) return { icon: "search", label: "搜索" };
+  if (/bash|terminal|exec|command|shell|npm|pip|git\b|\.py\b/i.test(raw)) return { icon: "terminal", label: "执行命令" };
+  if (/browser|navigate|snapshot|click|scroll|fetch|browse|网页/i.test(raw)) return { icon: "globe", label: "浏览网页" };
+  if (/write|edit|create|save|generate|delete|remove|file|read|list|get|path|folder/i.test(raw)) {
+    return { icon: "file", label: "读写文件" };
+  }
+  return TOOL_VISUAL_FALLBACK;
+}
+
 /** 从工具参数里抽出最值得展示的一行（网址 / 路径 / 命令 / 查询）。 */
 export function extractToolDetail(name: string, args: unknown, result?: string): string {
   const record = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;

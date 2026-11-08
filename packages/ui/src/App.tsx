@@ -1418,7 +1418,6 @@ export default function App(): React.JSX.Element {
                 })
                 .catch(() => {});
             }}
-            notice={notice}
           />
         </AgentSidebar>
         </div>
@@ -1457,6 +1456,7 @@ export default function App(): React.JSX.Element {
         agentLabel={agentLabel}
         providerLabel={providerLabel}
         currentUrl={currentUrl}
+        mode={mode}
         terminalOpen={terminalOpen}
         onToggleTerminal={() => setTerminalOpen((value) => !value)}
       />

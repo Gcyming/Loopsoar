@@ -11,6 +11,7 @@ import {
   isToolFailure,
   parsePlanItems,
   toolCategoryOf,
+  toolVisual,
   type TimelineStep,
 } from "../../packages/ui/src/timeline.ts";
 
@@ -99,5 +100,29 @@ describe("回复耗时格式化（思考过程卡标题行「用时 1.2s」）",
     expect(formatDurationMs(undefined)).toBe("—");
     expect(formatDurationMs(0)).toBe("—");
     expect(formatDurationMs(-5)).toBe("—");
+  });
+});
+
+describe("时间线图标化映射（toolVisual：图标 + 类型标签）", () => {
+  it("按工具语义分类到固定图标与中文标签", () => {
+    expect(toolVisual("terminal_run")).toEqual({ icon: "terminal", label: "执行命令" });
+    expect(toolVisual("bash")).toEqual({ icon: "terminal", label: "执行命令" });
+    expect(toolVisual("file_read")).toEqual({ icon: "file", label: "读写文件" });
+    expect(toolVisual("file_write")).toEqual({ icon: "file", label: "读写文件" });
+    expect(toolVisual("browser_navigate")).toEqual({ icon: "globe", label: "浏览网页" });
+    expect(toolVisual("web_search")).toEqual({ icon: "search", label: "搜索" });
+    expect(toolVisual("search_files")).toEqual({ icon: "search", label: "搜索" });
+    expect(toolVisual("memory_search")).toEqual({ icon: "layers-linked", label: "记忆" });
+    expect(toolVisual("mcp__fs__read_file")).toEqual({ icon: "puzzle", label: "外部工具" });
+    expect(toolVisual("ext__demo__echo")).toEqual({ icon: "puzzle", label: "外部工具" });
+    expect(toolVisual("todo_write")).toEqual({ icon: "list-details", label: "任务规划" });
+    expect(toolVisual("delegate_subagent")).toEqual({ icon: "bolt", label: "工具调用" });
+  });
+
+  it("未知工具回落到「工具调用」，不会返回空图标", () => {
+    const visual = toolVisual("totally_unknown_tool");
+    expect(visual).toEqual({ icon: "bolt", label: "工具调用" });
+    expect(visual.icon.length).toBeGreaterThan(0);
+    expect(visual.label.length).toBeGreaterThan(0);
   });
 });

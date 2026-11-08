@@ -51,11 +51,6 @@ import {
 } from "./domains/settings.js";
 import { registerMemoryTools } from "./memoryTools.js";
 import { registerSearchTools } from "./searchTools.js";
-import {
-  createFallbackLlmClient,
-  createModelRouterForTargets,
-  type FallbackLlmTarget,
-} from "./routerLlm.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
 import { AskBus } from "./askBus.js";
@@ -1081,40 +1076,21 @@ app.whenReady().then(async () => {
     return createOpenAiClient({ baseUrl: item.baseUrl, apiKey: key, model: item.model, resolveHeaders });
   };
 
-  // 多供应商降级链（模型路由）：active 最高优先级，其余按配置顺序；冷却状态挂在 router 上跨请求复用。
-  let llmRouter = createModelRouterForTargets([]);
-  const buildLlmTargets = (sessionId?: string): FallbackLlmTarget[] => {
-    const activeId = providers.active()?.id;
-    return providers
-      .list()
-      .map((item, index) => {
-        if (!resolveProviderKey(item.id)) return null;
-        return {
-          id: item.id,
-          provider: item.provider,
-          model: item.model,
-          priority: item.id === activeId ? 100 : Math.max(1, 50 - index),
-          roles: ["chat"],
-          build: () => {
-            const client = buildLlmForProvider(item, sessionId);
-            if (!client) throw new Error(`供应商 ${item.provider} 未配置密钥`);
-            return client;
-          },
-        } satisfies FallbackLlmTarget;
-      })
-      .filter((target): target is FallbackLlmTarget => target !== null);
-  };
-  const rebuildLlmRouter = (): void => {
-    llmRouter = createModelRouterForTargets(buildLlmTargets());
-  };
+  /**
+   * 当前活动供应商 → LLM 客户端（**不做跨供应商静默降级**）。
+   *
+   * 2026-11-08 用户明确要求：「配的是 opencode-zen，回复却自称 Agnes-3.0-flash」——这是旧实现里
+   * 的「多供应商降级链」：活动供应商 429/超时后自动切到下一个供应商继续回答（且有 30s 冷却），
+   * 但 UI/模型 chip 仍显示活动供应商，于是「模型对应不上」。
+   * 现在的语义：选哪个供应商就用哪个；用不了就把上游错误原样报出来（额度/鉴权等错误已在
+   * core/llm/upstreamError.ts 里快速失败并给中文可行动提示）。要换供应商由用户显式切换。
+   */
   const buildLlmFromActive = (sessionId?: string): LlmClient | undefined => {
-    const targets = buildLlmTargets(sessionId);
-    if (targets.length === 0) return undefined;
-    if (targets.length === 1) return targets[0].build();
-    return createFallbackLlmClient({ targets, router: llmRouter });
+    const active = providers.active();
+    if (!active) return undefined;
+    return buildLlmForProvider(active, sessionId);
   };
   // 惰性引用：供应商增删改/切换活跃后立即生效（无需重启）
-  rebuildLlmRouter();
   let llmRef: LlmClient | undefined = buildLlmFromActive();
 
   // 记忆库（路径可在设置里改）+ 会话持久化
@@ -1222,15 +1198,12 @@ app.whenReady().then(async () => {
     providers,
     secrets,
     onProvidersChanged: () => {
-      rebuildLlmRouter();
       llmRef = buildLlmFromActive();
     },
     onProviderCleared: () => {
-      rebuildLlmRouter();
       llmRef = buildLlmFromActive();
     },
     onProviderSaved: () => {
-      rebuildLlmRouter();
       llmRef = buildLlmFromActive();
     },
     // 偏好保存 → 应用工作区根 / 记忆库位置

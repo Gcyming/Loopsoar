@@ -866,6 +866,12 @@
       font-size: 12px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; flex: 1; min-width: 0; color: #a8a296;
     }
+    /* 时间线图标化（用户 m02010）：每一行 = 图标 + 类型标签 + 预览/详情 */
+    .think-step-icon { flex-shrink: 0; display: inline-flex; color: var(--ls-accent-hover); opacity: 0.9; }
+    .think-step-kind {
+      flex-shrink: 0; font-size: 10px; line-height: 1.4; padding: 1px 5px; border-radius: 7px;
+      background: #1a1d24; border: 1px solid #2c2c31; color: #7c766a; font-weight: 400;
+    }
     .think-step-text {
       margin-top: 4px; padding: 2px 4px 2px 10px;
       border-left: 2px solid #2c2c31;
@@ -891,6 +897,7 @@
       padding: 0; border: none; background: transparent; cursor: pointer; text-align: left;
     }
     .plan-card-title { font-size: 12px; font-weight: 600; color: #c9c3b6; flex-shrink: 0; }
+    .plan-card-icon, .steer-card-icon { flex-shrink: 0; display: inline-flex; color: var(--ls-accent-hover); opacity: 0.9; }
     .plan-card-progress {
       font-size: 11px; color: var(--ls-accent-hover); flex-shrink: 0; font-variant-numeric: tabular-nums;
     }
@@ -939,6 +946,10 @@
       color: var(--ls-accent-hover); background: rgba(var(--ls-accent-rgb), 0.12);
     }
     .todo-announce.is-done .todo-announce-tag { color: #4ade80; background: rgba(74, 222, 128, 0.14); }
+    .todo-announce-kind {
+      flex-shrink: 0; font-size: 10px; padding: 0 5px; border-radius: 999px;
+      color: #7c766a; background: rgba(255, 255, 255, 0.06);
+    }
 
     /* 引导卡 */
     .steer-card {
@@ -990,6 +1001,11 @@
     .think-tool-cat {
       flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: 7px;
       line-height: 1.4; background: #1a1d24; border: 1px solid #2c2c31; color: #7c766a;
+    }
+    /* 图标化后的工具类型标签（执行命令 / 浏览网页 / 搜索 / 读写文件 / 外部工具…） */
+    .think-tool-type {
+      flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: 7px;
+      line-height: 1.4; background: #1a1d24; border: 1px solid #2c2c31; color: #a8a296;
     }
     .think-tool-detail {
       flex: 1 1 auto; min-width: 0; font-size: 11px; color: #7c766a;

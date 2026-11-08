@@ -93,7 +93,7 @@ export default function ChatMessageView({
             <Icon name="reload" size={12} />
           </button>
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
-            <Icon name="file" size={12} />
+            <Icon name="copy" size={12} />
           </button>
         </div>
       </div>
@@ -121,42 +121,6 @@ export default function ChatMessageView({
             </span>
           ) : null}
         </div>
-        {/* 悬停元信息：复制 / 模式 / 模型 / 思考开关（回复耗时已移到思考过程卡标题行） */}
-        <div className="msg-hover" style={styles.msgHover}>
-          <button
-            type="button"
-            className="msg-action"
-            style={styles.msgAction}
-            title={tr("chat.copyReplyTitle")}
-            onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
-          >
-            <Icon name="file" size={12} />
-          </button>
-          <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
-          {m.model ? (
-            <span style={styles.msgModel} title={m.provider ? `${m.provider} · ${m.model}` : m.model}>
-              · {m.model}
-            </span>
-          ) : null}
-          {m.timing ? null : <span style={styles.msgTime}>· {timeText}</span>}
-          {hasStructuredTimeline ? (
-            <button
-              type="button"
-              className={`msg-think-toggle${thinkingOpen ? " is-open" : ""}`}
-              title={thinkingOpen ? tr("chat.thinkingCollapse") : tr("chat.thinkingExpand")}
-              onClick={onToggleThinking}
-            >
-              <Icon name="notes" size={11} />
-              <span>{tr("chat.thinkingLabel")}</span>
-            </button>
-          ) : null}
-          {!streaming && m.text ? (
-            <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.regenerateTitle")} onClick={() => onRegenerate(m.id)}>
-              <Icon name="reload" size={12} />
-            </button>
-          ) : null}
-        </div>
-
         {hasStructuredTimeline ? (
           <Timeline
             steps={timelineSteps}
@@ -220,6 +184,34 @@ export default function ChatMessageView({
           </div>
         ) : null}
         {streaming ? <LiveStatus startedAt={m.createdAt ?? Date.now()} contextPct={contextPct} runningTool={runningTool} hasText={m.text.length > 0} /> : null}
+
+        {/* 元信息行：移到回复最底部（用户 m02010「悬停行下移」）；「思考」按钮已删，
+            点「思考过程」卡标题即可展开。顺序：Build · 模型（省略号） · 时间，右侧复制/重新生成。 */}
+        <div className="msg-hover msg-hover-bottom" style={styles.msgHover}>
+          <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
+          {m.model ? (
+            <span style={styles.msgModel} title={m.provider ? `${m.provider} · ${m.model}` : m.model}>
+              · {m.model}
+            </span>
+          ) : null}
+          <span style={styles.msgTime}>· {timeText}</span>
+          <span style={styles.msgHoverActions}>
+            <button
+              type="button"
+              className="msg-action"
+              style={styles.msgAction}
+              title={tr("chat.copyReplyTitle")}
+              onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
+            >
+              <Icon name="copy" size={12} />
+            </button>
+            {!streaming && m.text ? (
+              <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.regenerateTitle")} onClick={() => onRegenerate(m.id)}>
+                <Icon name="reload" size={12} />
+              </button>
+            ) : null}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -347,6 +339,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /** 时间戳（无 timing 时）不参与收缩。 */
   msgTime: { flexShrink: 0, whiteSpace: "nowrap" },
+  /** 底部元信息行右侧动作组（复制/重新生成）：固定贴右，不参与左侧文本收缩。 */
+  msgHoverActions: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 7, flexShrink: 0 },
   assistantHead: { display: "flex", alignItems: "center", gap: 6, minHeight: 20 },
   /** 上下文环靠右（与助手名/生成中圆点同一行，LiveStatus 风格的小组件）。 */
   contextRingWrap: { marginLeft: "auto", display: "inline-flex", alignItems: "center", flexShrink: 0 },

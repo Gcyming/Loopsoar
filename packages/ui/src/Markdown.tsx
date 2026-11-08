@@ -6,6 +6,7 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
 
 /** 代码块：带语言标签与「复制」按钮。 */
@@ -26,6 +27,7 @@ function CodeBlock({ code, lang, compact = false }: { code: string; lang: string
       <div style={styles.codeHead}>
         <span style={styles.codeLang}>{lang || "code"}</span>
         <button type="button" className="msg-action" title={tr("chat.markdownCopyCode")} onClick={copy} style={styles.codeCopy}>
+          <Icon name="copy" size={11} style={{ marginRight: 4 }} />
           {copied ? tr("chat.markdownCopied") : tr("chat.markdownCopy")}
         </button>
       </div>
@@ -264,12 +266,17 @@ const styles: Record<string, React.CSSProperties> = {
   },
   codeLang: { fontSize: 10.5, color: BRAND.linenFaint, letterSpacing: 0.4 },
   codeCopy: {
+    display: "inline-flex",
+    alignItems: "center",
+    width: "auto",
+    height: 18,
+    padding: "0 4px",
+    whiteSpace: "nowrap",
     background: "transparent",
     border: "none",
     color: BRAND.linenFaint,
     cursor: "pointer",
     fontSize: 10.5,
-    padding: 0,
   },
   codeBlock: {
     margin: 0,

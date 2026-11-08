@@ -16,6 +16,8 @@ export interface StatusBarProps {
   agentLabel: string;
   providerLabel: string;
   currentUrl: string;
+  /** 当前模式：状态栏左侧显示 Build/Plan 模式提示（用户 m02010：从输入框下方挪到底部状态栏）。 */
+  mode: "build" | "plan";
   terminalOpen: boolean;
   onToggleTerminal: () => void;
 }
@@ -25,12 +27,18 @@ export default function StatusBar({
   agentLabel,
   providerLabel,
   currentUrl,
+  mode,
   terminalOpen,
   onToggleTerminal,
 }: StatusBarProps): React.JSX.Element {
   const tr = useT();
+  const modeHintKey = mode === "plan" ? "composer.planFoot" : "composer.buildFoot";
   return (
     <footer style={{ ...styles.statusBar, height: LAYOUT.STATUS_BAR_HEIGHT }}>
+      <span className="status-mode" data-mode={mode} style={{ ...styles.statusItem, ...styles.modeItem }} title={tr(modeHintKey)}>
+        <Icon name={mode === "plan" ? "notes" : "bolt"} size={11} />
+        <span style={styles.modeText}>{tr(modeHintKey)}</span>
+      </span>
       <span style={styles.statusItem}>
         <span className="live-dot" style={styles.liveDot} />
         shell: {shellStatus ?? "—"}
@@ -68,6 +76,16 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   statusItem: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  /** 模式提示：最左侧、可省略；图标与文案同一行不换行。 */
+  modeItem: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 0,
+    maxWidth: 320,
+    color: BRAND.linenMuted,
+  },
+  modeText: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   liveDot: { marginRight: 6, verticalAlign: "1px" },
   statusUrl: { marginLeft: "auto", fontFamily: "ui-monospace, Consolas, monospace", color: BRAND.linenFaint },
   /** 与 Agent 侧栏 chip 共用底样式（高度/字号单独收窄）。 */
