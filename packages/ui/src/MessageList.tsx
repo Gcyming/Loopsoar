@@ -13,7 +13,7 @@ import { BRAND } from "./theme.js";
 import TopicRail from "./TopicRail.js";
 import ChatMessageView from "./ChatMessageView.js";
 import type { ChatMessage } from "./chatStreamState.js";
-import { decideFollow, hasInnerScroller, type ScrollBox } from "./scrollFollow.js";
+import { decideFollow, hasInnerScroller, shouldRestickAfterResize, type ScrollBox } from "./scrollFollow.js";
 import { useT } from "./i18n.js";
 
 export interface MessageListProps {
@@ -120,7 +120,15 @@ export default function MessageList({
         return;
       }
       const height = element.scrollHeight;
-      if (height !== lastHeight) {
+      // 内容变高（流式/折叠）或容器被顶矮（终端抽屉展开）都要补到底；
+      // 只在"仍在跟随"时补 —— 用户已上翻时 tick 开头已提前退出，不会抢滚动位置。
+      const needsRestick = shouldRestickAfterResize({
+        top: element.scrollTop,
+        scrollHeight: height,
+        clientHeight: element.clientHeight,
+        following: atBottomRef.current,
+      });
+      if (height !== lastHeight || needsRestick) {
         lastHeight = height;
         stableFrames = 0;
         element.scrollTop = height;
@@ -138,6 +146,9 @@ export default function MessageList({
       raf = requestAnimationFrame(tick);
     };
     const resizeObserver = new ResizeObserver(kick);
+    // 容器自身高度变化也要补底：只观察消息子节点时，终端抽屉展开把聊天区压矮，
+    // 子节点高度不变 → 不会 kick，最新消息就被顶出视口（用户反馈的"终端一展开就看不到最新回复"）。
+    resizeObserver.observe(scroller);
     const observed = new Set<Element>();
     const sync = (): void => {
       const element = scrollerRef.current;

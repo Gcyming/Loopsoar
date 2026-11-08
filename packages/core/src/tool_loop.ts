@@ -141,9 +141,27 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
   // 外部中止信号监听：一旦触发，立即停止当前轮次并返回 aborted。
   const abortController = new AbortController();
+  /**
+   * 可等待的中止信号：LLM 读取（上游迟迟没有 chunk 时）与工具执行（工具还在跑时）都与它竞速。
+   * 为什么需要：只轮询 `abortController.signal.aborted` 的话，检查点只有「下一个 chunk 到达」和
+   * 「下一轮开始 / 工具返回」，上游卡住或长任务工具在跑时点「停止」根本不生效 ——
+   * 用户看到的是「点了没反应 + 界面一直显示思考中」。
+   */
+  let abortWaiter: { reject: (reason: unknown) => void } | null = null;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortWaiter = { reject };
+  });
+  // 没参与竞速时它也会在停止时 reject：挂一个空 catch，避免 unhandled rejection
+  void abortPromise.catch(() => {});
+  const waitAbort = (): Promise<never> => abortPromise;
+  const onExternalAbort = (): void => {
+    abortController.abort();
+    abortWaiter?.reject(new Error("loop-aborted"));
+  };
   if (signal) {
-    const onAbort = (): void => abortController.abort();
-    signal.addEventListener("abort", onAbort, { once: true });
+    // 已经中止（stop 早于循环启动的竞态）：直接生效，不能指望后续 abort 事件
+    if (signal.aborted) onExternalAbort();
+    else signal.addEventListener("abort", onExternalAbort, { once: true });
   }
 
   try {
@@ -228,9 +246,15 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
         signal: abortController.signal,
       };
 
-      // 流式调用 LLM
+      // 流式调用 LLM：手动迭代 + 与中止信号竞速。
+      // 为什么不用 for-await：for-await 只在「下一个 chunk 到达」后才轮到循环体里的中止检查；
+      // 上游卡住（长时间无 chunk）时用户点「停止」不会立即生效，UI 会一直显示「思考中」。
+      const stream = llm.invoke(request)[Symbol.asyncIterator]();
       try {
-        for await (const chunk of llm.invoke(request)) {
+        for (;;) {
+          const step = await Promise.race([stream.next(), waitAbort()]);
+          if (step.done) break;
+          const chunk = step.value;
           if (abortController.signal.aborted) {
             return {
               status: "aborted",
@@ -290,7 +314,9 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               let toolResult: ToolResult;
 
               try {
-                // 并发执行：工具调用与超时检测竞争
+                // 并发执行：工具调用与超时检测竞争，并与中止信号竞争。
+                // 为什么带中止：MCP/终端工具自身无法可靠取消，但「用户点了停止」不能让循环
+                // 一直卡在工具上（终端命令/子代理可能几分钟）——工具还在跑也要立刻收束本轮。
                 const timeoutRace = Promise.race([
                   executeTool.invoke(toolCall).catch((err) => ({
                     ok: false,
@@ -304,10 +330,27 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                     // 不阻止进程退出（否则普通工具的 90s 定时器会拖住测试/退出路径）
                     silentTimer.unref?.();
                   }),
+                  waitAbort(),
                 ]);
 
                 toolResult = await timeoutRace;
               } catch (err) {
+                // 用户中止：即使工具还在跑也立刻结束本轮（不再发起下一轮 LLM）。
+                // 工具结果被放弃（无法可靠取消），其 promise 已挂 catch，不会产生 unhandled rejection。
+                if (abortController.signal.aborted) {
+                  emit("tool", {
+                    toolCallId: toolCall.id,
+                    toolName: toolCall.name,
+                    args: toolCall.args,
+                    result: { ok: false, content: "", error: "已停止" } as ToolResult,
+                  });
+                  return {
+                    status: "aborted",
+                    reason: "工具执行期间收到外部中止信号",
+                    finalText,
+                    usage,
+                  };
+                }
                 // 超时：心跳已发，返回 silent（安全模式触发条件）
                 emit("heartbeat", { silentMs: silentTimeoutMs });
                 return {
@@ -319,6 +362,22 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               } finally {
                 if (silentTimer) clearTimeout(silentTimer);
                 clearInterval(heartbeatInterval);
+              }
+
+              // 工具返回后的兜底检查：工具恰好在中止前落定（竞速落败）时，也不能继续本轮/下一轮
+              if (abortController.signal.aborted) {
+                emit("tool", {
+                  toolCallId: toolCall.id,
+                  toolName: toolCall.name,
+                  args: toolCall.args,
+                  result: { ok: false, content: "", error: "已停止" } as ToolResult,
+                });
+                return {
+                  status: "aborted",
+                  reason: "工具返回后收到外部中止信号",
+                  finalText,
+                  usage,
+                };
               }
 
               // 工具调用完成后发送 tool 事件
@@ -407,6 +466,15 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           }
         }
       } catch (llmErr) {
+        // 用户主动中止：归一为 aborted（不 emit error —— 否则 UI 会当成真实失败弹红字）
+        if (abortController.signal.aborted) {
+          return {
+            status: "aborted",
+            reason: "LLM 调用期间收到外部中止信号",
+            finalText,
+            usage,
+          };
+        }
         // LLM 流调用异常：记录为 error 事件并返回 error 状态
         const msg = llmErr instanceof Error ? llmErr.message : String(llmErr);
         emit("error", { message: msg, fatal: true });
@@ -416,6 +484,11 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           finalText,
           usage,
         };
+      } finally {
+        // 关闭上游流（等价于 for-await 提前 break 时的 IteratorClose：释放 SSE 连接/定时器）。
+        // 注意：不 await —— 未实现中止的客户端可能让生成器卡在内部 await 上，
+        // await return() 会把「立即返回」又拖成无限等待（正是本次要修的问题）。
+        void Promise.resolve(stream.return?.(undefined)).catch(() => {});
       }
 
       // 本轮产生过工具调用：把 assistant(tool_calls) 与工具结果回灌，进入下一轮
@@ -466,6 +539,15 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           ];
           continue;
         }
+        // 中止优先于核验：用户已点停止就不再为收束做额外的核验 IO
+        if (abortController.signal.aborted) {
+          return {
+            status: "aborted",
+            reason: "LLM 调用期间收到外部中止信号",
+            finalText,
+            usage,
+          };
+        }
         // 每轮声称核验（可选）：模型准备收束但本轮没调工具 → 先核验它的「已完成」声称。
         // 为什么在这里拦：等最终收束后再核验，用户已经看到「已保存/已完成」的假完成了；
         // 核验未通过就注入一条 user 提示，逼模型用工具实际核实（最多 maxVerifyForcedRounds 次）。
@@ -486,6 +568,15 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               note: `声称核验异常（本轮已跳过）：${err instanceof Error ? err.message : String(err)}`,
             });
           }
+        }
+        // 核验期间收到中止：不再收束/续轮，直接以 aborted 结束
+        if (abortController.signal.aborted) {
+          return {
+            status: "aborted",
+            reason: "LLM 调用期间收到外部中止信号",
+            finalText,
+            usage,
+          };
         }
         if (verifyFailed) {
           if (forcedVerifyRounds < maxVerifyForcedRounds) {
@@ -559,6 +650,15 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       usage,
     };
   } catch (err) {
+    // 中止导致的中断（例如上游 abort 后抛出的异常）也归为 aborted，而不是 error
+    if (abortController.signal.aborted) {
+      return {
+        status: "aborted",
+        reason: "外部中止信号触发，工具循环被终止",
+        finalText,
+        usage,
+      };
+    }
     // 最外层异常捕获：任何未被内部捕获的异常都转为 error 状态，保证不崩溃（fail-closed）
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -567,5 +667,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       finalText,
       usage,
     };
+  } finally {
+    // 解绑外部信号监听（长生命周期 signal 上不能留悬挂监听器）
+    if (signal) signal.removeEventListener("abort", onExternalAbort);
   }
 }

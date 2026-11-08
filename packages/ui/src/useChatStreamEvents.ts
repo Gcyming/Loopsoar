@@ -38,6 +38,7 @@ import {
   applyToolStart,
   parseDone,
   restoreMessages,
+  settleAbortedTools,
   type ChatMessage,
   type SessionStreamMeta,
 } from "./chatStreamState.js";
@@ -436,8 +437,15 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         const sid = p.sessionId ?? sessionIdRef.current;
         if (!sid) return;
         const meta = metaFor(sid);
-        const wasStopping = meta.stopping;
         const info = parseDone(p.content);
+        // abort 也可能是其它入口触发的（本窗口没点停止）：同样按「已停止」收尾，
+        // 不显示「已中断（aborted）：外部中止信号触发…」这种机器文案。
+        const wasStopping = meta.stopping || info.interrupted?.status === "aborted";
+        // 用户主动停止：中断横幅统一显示 stopped/用户已停止（与 error 停止分支一致）
+        const settledInfo =
+          wasStopping && info.interrupted
+            ? { ...info, interrupted: { status: "stopped", reason: "用户已停止" } }
+            : info;
         let finishedId: string | null = null;
         updateSessionMessages(sid, (prev) => {
           const streaming = prev.find((m) => m.status === "streaming");
@@ -445,7 +453,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           if (streaming?.timeline?.length && api) {
             void api.chat.saveTimeline({ sessionId: sid, timeline: streaming.timeline }).catch(() => {});
           }
-          return applyDone(prev, info, { startedAt: meta.startedAt, firstTokenAt: meta.firstTokenAt });
+          return applyDone(prev, settledInfo, { startedAt: meta.startedAt, firstTokenAt: meta.firstTokenAt });
         });
         meta.busy = false;
         meta.stopping = false;
@@ -491,7 +499,13 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           updateSessionMessages(sid, (prev) =>
             prev.map((m) =>
               m.status === "streaming"
-                ? { ...m, status: "done", tail: undefined, interrupted: { status: "stopped", reason: "用户已停止" } }
+                ? {
+                    ...m,
+                    status: "done",
+                    tail: undefined,
+                    interrupted: { status: "stopped", reason: "用户已停止" },
+                    timeline: settleAbortedTools(m.timeline),
+                  }
                 : m,
             ),
           );

@@ -689,6 +689,65 @@
 
 ---
 
+## ADR-0040 模型可见墙钟时间：每条消息带时间戳 + 当前时间放 volatile 段
+
+- **背景**：用户（m01685）反馈 Agent 缺乏时间感知、会把旧消息当新消息处理，要求「为每条消息追加模型可见的墙钟时间（消息时间戳）」并建议参考业界做法。调研（[Claude Code 注入 Current date 的做法](https://github.com/router-for-me/CLIProxyAPI/commit/6d57ac9087623268e35086728d893487657127e8)、[multica add-time-awareness](https://github.com/multica-ai/multica/commit/5c26f92caa7acac968349faa1978a4d8b7f79826)、[时间感知缺失问题](https://github.com/NousResearch/hermes-agent/issues/60765)）结论一致：只给「当前日期」不够，模型需要每条消息的时间才能判断新旧与间隔；时间戳必须确定性生成，否则破坏 KV 前缀缓存。
+- **决策**：
+  1. 新增 core 纯函数模块 `packages/core/src/messageTime.ts`：`formatWallClock(ts)` → 本地 `YYYY-MM-DD HH:mm`；`withWallClockPrefix(content, ts)`（幂等、空值/非法时间原样返回）；`MESSAGE_TIME_INSTRUCTION`（**静态**格式说明）；`currentWallClockLine(now)`。
+  2. 历史消息：shell `getHistory` 透传持久化的 `ts`，services 组请求时用 `withWallClockPrefix` 统一加前缀（同一历史每轮生成一致 → 前缀缓存稳定）。
+  3. 当前用户消息同样带当前时间前缀；**当前时间**行放 volatile 段（每轮刷新、不进 stable），因此不污染 KV 缓存。
+  4. system 稳定段追加 `MESSAGE_TIME_INSTRUCTION`：解释 `[YYYY-MM-DD HH:mm]` 语义，要求按时间判断新旧、旧消息的请求不得当新请求重复执行；该段字节级稳定（`assertStableUnchanged` 仍通过）。
+  5. 时间格式统一为本地时区 24 小时制、分钟精度（不需要秒：秒级差异对 Agent 判断无意义且增加噪声）。
+- **理由**：per-message 时间戳让模型能区分「几分钟前」与「昨天」；确定性前缀保证 KV 缓存命中；当前时间放 volatile 避免 stable 段每轮变化；格式说明与时间数据分离，稳定段保持字节不变。
+- **替代方案**：只在 system prompt 写当前日期（否，无法判断单条消息新旧）；时间戳放 system 段（否，每轮变化破坏缓存）；把时间戳持久化进会话正文（否，污染用户可见文本与回滚/导出）；秒级/时区缩写（否，噪声大且易误读）。
+- **后果**：模型每次请求多出每条历史消息 ~18 字符前缀（长历史下有少量 token 成本，但远小于时间判断错误的成本）；会话导出/界面显示不受影响（时间戳只在发往模型的副本上加）；旧会话没有 `ts` 的历史保持原样（不补造时间）。
+- **验证方式**：`tests/core/messageTime.spec.ts` 7 tests（格式化补零/非法值/null、前缀幂等、静态说明不含具体时间、当前时间行）；`tests/services/chat-timeaware.spec.ts`（历史消息与当前消息都带前缀、system 含说明且不含具体时间、volatile 含当前时间）；`tests/core/session.spec.ts` 稳定段断言通过；`pnpm typecheck` 5/5。
+- **状态**：✅ 自动化已验证（2026-11-08）
+- **回退条件**：模型被时间戳干扰（例如把它当用户输入的一部分复述）→ 改为只在 system 段给「会话起始时间 + 最近消息时间」两条；token 成本敏感 → 缩短为 `MM-DD HH:mm`。
+- **复核时间**：打包阶段（长会话、跨天会话、压缩后时间连续性）
+
+
+---
+
+## ADR-0041 中断立即生效 + 上游额度/鉴权错误快速失败
+
+- **背景**：用户（m01685）反馈「中断按钮点击后不是立即中断，中断后 Agent 会话仍显示思考中」，并质疑 opencode-zen「思考非常慢，是上游连接问题还是没适配」。排查结论（同一根因的两个面）：
+  1. `core/llm/openai.ts` / `anthropic.ts` 内部的 AbortController 只用于超时，**忽略调用方 `req.signal`** → `ChatService.stop()` 的 abort 到不了在途 fetch；工具执行（终端/MCP/ask_user 最长 600s）也没与 abort 竞速 → 点停止后循环根本不退，UI 一直「思考中」，最坏等首字节 120s / 总 300s。
+  2. 直连诊断 opencode-zen：free 模型额度用尽时上游返回 HTTP 429 `FreeUsageLimitError`，响应头 `retry-after: 62231`（≈17 小时后重置）；旧客户端把 429 一律当可重试、把等待上限截到 60s 再重试 3 次 → **静默等待约 3 分钟**才报错。这就是用户感知的「zen 思考非常慢」：不是上游慢，是额度错误被当成临时限流反复重试。同账号另见 402 `Insufficient account funds`、403 `An OpenCode Go subscription is required`。
+- **决策**：
+  1. **信号透传**：openai/anthropic 客户端把 `req.signal` 接到在途 fetch（含退避等待可中止）；用户 abort → 抛 AbortError，不重试、不 yield error chunk。
+  2. **abort 竞速**：core `tool_loop` 新增可等待 abortPromise，LLM 迭代用「手动 next() 与 abort 竞速」，工具 `invoke()` 也参与竞速；abort 立即返回 `status:"aborted"`（不再发 fatal error）；工具执行中被放弃（后台可能跑完但结果不再回灌/展示）。
+  3. **语义归一**：services 在 aborted 时原因归一「用户已停止本轮生成」、空正文兜底「（已停止）」、跳过 claims 审计；UI `applyDone` 落 `done + interrupted` 并把 running 工具节点落定「已停止」，done(aborted) 即使来自其它入口也按「已停止」收尾。
+  4. **上游错误分类**（新增 `core/llm/upstreamError.ts`）：解析错误体，`FreeUsageLimitError` / insufficient funds / subscription required / permission_error / invalid_api_key 等 → **不可重试**、立即给中文可行动提示；普通 429 仅当 `retry-after ≤ 15s` 才重试（≤2 次），`retry-after` 很大/缺失 → 立即报错并给「上游限流，约 X 后重试」（62231s → 约 17 小时）；5xx/529 保留退避重试。
+- **理由**：abort 必须能打断在途 I/O 才有「立即」；把额度耗尽当限流重试是最贵的错误处理——用户白等 3 分钟还看不到真正原因；工具无法可靠取消（MCP/终端），但放弃等待并立刻收敛 UI 符合「立即中断」预期；错误分类让用户可以马上换供应商/订阅，而不是反复重试。
+- **替代方案**：只改 UI 文案（否，治标不治本）；等工具返回再退出（否，600s 级延迟）；把 429 全部禁用重试（否，真正的短时限流应允许快速重试）；继续用 `win?.abort()` 之类隐式取消（否，无法穿透工具执行）。
+- **后果**：中断后 UI 在 ~50ms 级收敛（实测 52-53ms）；工具被放弃时后台可能仍跑完（无副作用回灌）；额度错误改为立即失败，不再出现 3 分钟静默；旧构建仍会慢，需重新部署。
+- **验证方式**：新增 `tests/core/toolLoopAbort.spec.ts`（3）、`tests/core/llmAbortSignal.spec.ts`（3）、`tests/core/upstreamErrors.spec.ts`（8，含 429 FreeUsageLimitError+retry-after 62231 → <500ms 报「额度」、402/403 立即失败、普通 429 retry-after 0.2 重试成功）、`tests/services/chat-stop.spec.ts`（2）、`tests/ui/abort-settle.spec.ts`（3）；全仓 `pnpm test` **146 文件 / 1278 tests 全绿**、`pnpm typecheck` 5/5。真机 E2E：点停止后 **52-53ms** 收尾、`.stream-gate` 0 个、无「正在思考」残留、横幅「本轮已中断：用户已停止」、主按钮恢复「发送（Enter）」。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-08）
+- **回退条件**：放弃工具导致资源泄漏 → 改为「等待工具返回但 UI 立即收敛」；误杀正常长任务 → 把竞速范围收窄到 LLM 流；上游分类误判 → 只对明确 type 生效，其余回落原重试策略。
+- **复核时间**：打包阶段（自定义 loop 是否响应 signal、MCP 工具取消语义）
+
+---
+
+## ADR-0042 启动速度优化：非关键启动任务后移 + 启动计时锚点 + UI 面板懒加载
+
+- **背景**：用户（m01685）要求「优化整体架构，整理并精简整体代码，优化启动速度」。定位到首屏路径上的三类浪费：记忆库 `await memory.load()`（重建向量索引时会探测本地 embedding，最坏 3000ms）阻塞出窗；MCP 自动连接（spawn 子进程 + stdio 握手）、浏览器历史补记（同步 JSON 落盘）、扩展子进程启动都排在窗口创建之前；UI 单 JS 包 614KB（Settings/i18nSettings 等面板全部静态 import）。
+- **决策**：
+  1. **不阻塞出窗**：`memory.load()` 改为后台加载（读取路径未加载时按空库返回，装配不依赖 loaded），完成打点 `memory-load-done`。
+  2. **首帧后 deferred 任务**：MCP 自动连接、browser-history 补记、扩展子进程启动移到 `ready-to-show` 之后，另有 3s 兜底（窗口加载失败时仍会执行）；`mcp.connect` 补 `.catch`。
+  3. **启动计时锚点**：`boot.ts` 新增 `createBootTrace()`，默认关闭、`LOOPSOAR_BOOT_TRACE=1` 时打印 13 个阶段「Δ距上一阶段 / @距进程启动」（module-eval → window-created → ready-to-show/did-finish-load/deferred-boot），不引入新依赖、关闭时零开销。
+  4. **UI 懒加载**：Settings / ChromePage / TerminalPanel / SnapshotPanel 改 `React.lazy` + `<Suspense fallback={null}>`，首帧只加载聊天主链路；`Onboarding` 因 `isOnboardingDone` 被入口引用暂不拆。
+- **理由**：首屏只需要「窗口 + 聊天壳」；embedding 探测、子进程 spawn、同步落盘都是"几百毫秒~几秒"的可用性负债，后移不影响功能（MCP/扩展/历史面板稍后可用）；计时锚点让"哪一段慢"可观测，避免下次凭感觉优化；面板懒加载把首包拆成按需块，减少首帧解析/执行。
+- **替代方案**：把窗口创建提到全部装配之前（否，IPC/域未装配完会造成首帧请求失败）；整包拆成多入口（否，自定义协议与打包链改动大）；不做懒加载只优化主进程（否，UI 614KB 解析同样占首帧）。
+- **后果**：离线等价 harness（真 esbuild bundle + fake electron + 真实数据，warm n=6）：`protocol.handle → 窗口创建` **47.6ms → 28.3ms（-41%）**；进程入口 → 窗口创建 **89.4ms → 71.7ms（-20%，-17.7ms）**；记忆加载从「窗口前阻塞」变为「窗口后 +18~20ms 后台完成」。真机 dev trace（本机）：window-created @669.9ms、did-finish-load @899.1ms、ready-to-show @915.9ms、deferred-boot 随后启动。UI 主包 614KB → **527.13KB**（-14%），按需块：Settings 59.44KB / TerminalPanel 15.50KB / ChromePage 11.28KB / SnapshotPanel 3.19KB（gzip 后分别为 14.44/5.19/3.04/1.16KB）。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm test` 146 文件/1278 tests 全绿、`pnpm vitest run tests/shell tests/guards` 630 tests 全绿；真机 E2E：懒加载后设置页可正常打开（隔离断言仍通过）、终端面板展开/贴底正常、`LOOPSOAR_BOOT_TRACE=1` 输出全链路。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-08）
+- **回退条件**：懒加载导致首开面板白屏/慢 → 把对应面板改回静态 import；deferred 任务影响 MCP/扩展可用性 → 缩短 3s 兜底或改回首帧前；memory 未加载导致首轮记忆召回缺失不可接受 → 恢复 await（接受最坏 3s 延迟）并改为限制 embedding 探测超时。
+- **复核时间**：打包阶段（冷启动、低配机、MCP 多 server 场景）
+
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -732,3 +791,6 @@
 | ADR-0037 | 会话栏最小宽度 = 窗口宽度比例（当前比例即下限，单一夹紧产地） | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0038 | 引导/插入队列（slime 移植）：入队不打断 + 同轮续轮注入 + 回执折进思考历程（重启仍可见） | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0039 | 界面隔离与换界面收起：浮层随界面收起、草稿按会话隔离、去掉「生成中…」脚注 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0040 | 模型可见墙钟时间：每条消息带 `[YYYY-MM-DD HH:mm]` 前缀、当前时间放 volatile 段 | ✅ 自动化已验证 |
+| ADR-0041 | 中断立即生效 + 上游额度/鉴权错误快速失败（signal 透传/abort 竞速/错误分类） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0042 | 启动优化：记忆加载后台化 + 非关键任务首帧后移 + 启动计时锚点 + UI 面板懒加载 | ✅ 自动化 + 真机 E2E 已验证 |

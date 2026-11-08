@@ -6,6 +6,8 @@
  * assertStableUnchanged 保证 stable 字节级不变，任何篡改立即失败（fail-closed）。
  */
 
+import { MESSAGE_TIME_INSTRUCTION } from "./messageTime.js";
+
 // 身份约束：只以「我是 {name}」自称，不暴露底层模型提供商、架构或训练细节。
 // 为什么：防止模型混淆自身身份，破坏 Loopsoar 平台边界，避免供应商信息泄露到用户可见输出中。
 export function IDENTITY_CONSTRAINT(name: string, role: string): string {
@@ -50,6 +52,8 @@ export function buildSystemSegments(opts: {
     IDENTITY_CONSTRAINT(opts.name, opts.role),
     ...HONESTY_PROTOCOL,
     ANTI_SYCOPHANCY_RULE,
+    // 静态格式说明（不含具体时间）：解释消息时间戳前缀的语义；含具体时间的行在 volatile 段
+    MESSAGE_TIME_INSTRUCTION,
     `角色：${opts.role}`,
     skillsText,
   ].join("\n");

@@ -23,6 +23,37 @@ export function ensureLoopsoarDirs(userDataRoot: string): {
   return { dataDir, knowledgeDir, configDir };
 }
 
+/**
+ * 启动链路计时（性能回归/瓶颈定位用）。
+ *
+ * 默认关闭：只有 `LOOPSOAR_BOOT_TRACE=1` 时才打印，关闭时每个 mark 只做一次布尔判断（零可观测开销）。
+ * 为什么放在 boot.ts：这里不 import electron，主进程入口与单测都能复用；输出到主进程日志（pnpm dev 的终端可见）。
+ * 时间基准：Node/Electron 主进程的 performance.now() 从进程启动起算，因此 @Xms 即「进程启动→该阶段」的绝对耗时。
+ */
+export interface BootTrace {
+  readonly enabled: boolean;
+  /** 距进程启动的毫秒数（关闭时也返回真实值，供其它诊断复用）。 */
+  elapsed(): number;
+  /** 打一个阶段点：打印「距上一个阶段 Δ」与「距进程启动 @」。 */
+  mark(label: string): void;
+}
+
+export function createBootTrace(options: { enabled?: boolean; now?: () => number } = {}): BootTrace {
+  const enabled = options.enabled ?? process.env.LOOPSOAR_BOOT_TRACE === "1";
+  const now = options.now ?? (() => performance.now());
+  let lastAt = now();
+  return {
+    enabled,
+    elapsed: () => now(),
+    mark(label: string): void {
+      if (!enabled) return;
+      const at = now();
+      console.log(`[boot] ${label}  Δ${(at - lastAt).toFixed(1)}ms  @${at.toFixed(1)}ms`);
+      lastAt = at;
+    },
+  };
+}
+
 export interface ProtocolRequestLike {
   url: string;
 }

@@ -6,6 +6,7 @@
 import type { LlmClient } from "loopsoar-core/llm";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import { buildSystemSegments } from "loopsoar-core/session";
+import { currentWallClockLine, withWallClockPrefix } from "loopsoar-core/messageTime";
 import {
   runToolLoop,
   type ToolCall,
@@ -91,7 +92,7 @@ export interface ChatServiceOptions {
     repeatToolStopAt?: number;
   };
   /** 会话历史（持久化消息，按时间正序）；缺省则单轮对话。 */
-  getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string }[];
+  getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string; ts?: number }[];
   /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
   onPermissionRequest?: (request: PermissionRequestEvent) => void;
   agent?: ChatAgent;
@@ -124,7 +125,7 @@ export interface ChatInput {
   /** 推理等级（模型声明支持时透传给厂商）。 */
   reasoningEffort?: string;
   /** 会话历史（持久化消息）；缺省则退化为单轮。 */
-  getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string }[];
+  getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string; ts?: number }[];
 }
 
 /** 权限确认请求（浮层 UI 据此弹窗；requestId 用于 resolvePermission 结算）。 */
@@ -418,10 +419,15 @@ export class ChatService {
     // 记忆召回 + 技能注入：都放 volatile 段（不进稳定前缀，避免破坏 KV 缓存）
     const memoryText = this.opts.getMemoryFor?.(input.message) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
-    const volatileContent = [segments.volatile, memoryText, skillText].filter((t) => t.trim()).join("\n\n");
+    // 当前墙钟时间放 volatile 段（每轮刷新、不进 stable 前缀，不破坏 KV 缓存）
+    const requestNow = Date.now();
+    const volatileContent = [currentWallClockLine(requestNow), segments.volatile, memoryText, skillText]
+      .filter((t) => t.trim())
+      .join("\n\n");
+    // 历史消息加模型可见时间戳（确定性前缀，同一历史每轮生成一致 → KV 前缀缓存不受影响）
     const rawHistory = (this.opts.getHistory?.(sessionId) ?? []).map((m) => ({
       role: m.role,
-      content: m.content,
+      content: withWallClockPrefix(m.content, m.ts),
     }));
     // 上下文自动压缩：超预算时把早期消息压成确定性摘要（不额外请求模型，避免"失忆截断"）
     const compression = compressConversation(rawHistory, {
@@ -439,7 +445,7 @@ export class ChatService {
     const messages = [
       { role: "system" as const, content: stableContent },
       ...compression.messages,
-      { role: "user" as const, content: `${input.message}\n\n${volatileContent}` },
+      { role: "user" as const, content: `${withWallClockPrefix(input.message, requestNow)}\n\n${volatileContent}` },
     ];
 
     const controller = new AbortController();
@@ -536,18 +542,26 @@ export class ChatService {
         : await runToolLoop(loopInput);
 
       outcome = loopOutcome.status;
-      reason = loopOutcome.reason;
+      // aborted 的底层原因文案（"外部中止信号触发…"）对用户无意义：主动停止是用户动作，
+      // 统一改成「已停止」，让 done 事件 / 中断横幅给出人读原因。
+      reason = loopOutcome.status === "aborted" ? "用户已停止本轮生成" : loopOutcome.reason;
       finalText = loopOutcome.finalText;
       // 输出过滤（身份边界）：finalText 整体再过滤一次（流式过滤可能因分批而漏边，这里是最终防线）
       if (filterEnabled && finalText) finalText = applyOutputFilter(finalText);
       // 空正文兜底：任何非正常收束都必须给出可读原因（配合 UI 的中断横幅，避免"莫名空白"）
       if (!finalText.trim()) {
-        finalText = outcome === "done" ? "（模型没有返回文本内容）" : `（任务未完成：${reason}）`;
+        finalText =
+          outcome === "done"
+            ? "（模型没有返回文本内容）"
+            : outcome === "aborted"
+              ? "（已停止）"
+              : `（任务未完成：${reason}）`;
       }
       usage = loopOutcome.usage;
 
-      // 声称核验：只报告「声称存在但实际不存在」的可疑项
-      if (platform && finalText) {
+      // 声称核验：只报告「声称存在但实际不存在」的可疑项。
+      // 用户已停止时跳过：核验要为每个声称做文件存在性 IO，会拖慢进入 done 收尾（UI 要等 done 才收敛）。
+      if (platform && finalText && outcome !== "aborted") {
         try {
           const findings = await auditClaims(finalText, (p) => platform.fs.exists(p));
           claims = findings.filter((f) => f.verified && !f.exists && f.reason !== "跳过 URL/域名残片");
@@ -556,10 +570,19 @@ export class ChatService {
         }
       }
     } catch (err) {
-      reason = `编排异常：${err instanceof Error ? err.message : String(err)}`;
-      emit("error", reason);
+      // 中止引发的中断（例如收尾阶段被 abort 打断的 IO）也按 aborted 收束，不当成编排异常
+      if (controller.signal.aborted) {
+        outcome = "aborted";
+        reason = "用户已停止本轮生成";
+        if (!finalText.trim()) finalText = "（已停止）";
+      } else {
+        reason = `编排异常：${err instanceof Error ? err.message : String(err)}`;
+        emit("error", reason);
+      }
     } finally {
-      this.aborts.delete(sessionId);
+      // 只清理「本次流」的控制器：同一会话可能已经开始了新流（停止后的排队续发），
+      // 老流收尾不能把新流的控制器删掉 —— 否则新流再点停止会返回 false、永远停不下来。
+      if (this.aborts.get(sessionId) === controller) this.aborts.delete(sessionId);
       // 收尾：把流式过滤器里跨 chunk 缓冲的尾部（<20 字符）补发，否则最后一段正文会丢
       if (filterEnabled) {
         const textTail = textFilter.flush();

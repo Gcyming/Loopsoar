@@ -255,6 +255,20 @@ export function parseDone(raw: string | undefined): DoneInfo {
   }
 }
 
+/** 中止收尾：把仍处于 running 的工具节点落定为「已停止」，避免历史里永远显示「执行中」。 */
+export function settleAbortedTools(steps: TimelineStep[] | undefined): TimelineStep[] | undefined {
+  if (!steps || steps.length === 0) return steps;
+  let changed = false;
+  const next = steps.map((step) => {
+    if (step.kind === "tool" && step.state === "running") {
+      changed = true;
+      return { ...step, state: "done" as const, ok: false, result: step.result ?? "已停止" };
+    }
+    return step;
+  });
+  return changed ? next : steps;
+}
+
 /** 收尾：所有 streaming 消息落定，记录耗时与中断原因。 */
 export function applyDone(
   messages: ChatMessage[],
@@ -270,7 +284,9 @@ export function applyDone(
       status: "done",
       tail: undefined,
       timing: { firstTokenMs: firstMs, totalMs, ...info.usage },
-      ...(info.interrupted ? { interrupted: info.interrupted } : {}),
+      ...(info.interrupted
+        ? { interrupted: info.interrupted, timeline: settleAbortedTools(message.timeline) }
+        : {}),
     };
   });
 }

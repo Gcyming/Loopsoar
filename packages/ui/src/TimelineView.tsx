@@ -37,11 +37,22 @@ export interface TimelineProps {
   liveStream?: boolean;
   /** 演示/验收：强制展开所有工作阶段（平时历史阶段默认折叠）。 */
   expandAll?: boolean;
+  /** 「回复耗时」文案（如「用时 1.2s」，由调用方本地化）；无思考过程的消息不传，直接省略。 */
+  durationText?: string;
   open: boolean;
   onToggleOpen: () => void;
   Markdown: MarkdownFn;
   onOpenUrl?: (url: string) => void;
 }
+
+/** 思考过程卡标题行的「用时」：小号数字、单行不换行（窄侧栏也不把标题挤到第二行）。 */
+const DURATION_STYLE: React.CSSProperties = {
+  color: BRAND.linenFaint,
+  fontSize: 10.5,
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+};
 
 function Chevron({ open, size = 11 }: { open: boolean; size?: number }): React.ReactElement {
   return (
@@ -75,7 +86,7 @@ function toolLabel(name: string): string {
   return toolDisplayLabel(name);
 }
 
-export default function Timeline({ steps, liveStream = false, expandAll = false, open, onToggleOpen, Markdown, onOpenUrl }: TimelineProps): React.ReactElement | null {
+export default function Timeline({ steps, liveStream = false, expandAll = false, durationText, open, onToggleOpen, Markdown, onOpenUrl }: TimelineProps): React.ReactElement | null {
   const groups = React.useMemo(() => groupTimeline(steps), [steps]);
   const references = React.useMemo(() => collectReferences(steps), [steps]);
   if (steps.length === 0) return null;
@@ -86,6 +97,11 @@ export default function Timeline({ steps, liveStream = false, expandAll = false,
         <span className="think-card-brain" aria-hidden><Icon name="sparkle" size={12} /></span>
         <span className="think-card-label">思考过程</span>
         {toolCount > 0 ? <span className="think-card-count">{toolCount} 个动作</span> : null}
+        {durationText ? (
+          <span className="think-card-duration" style={DURATION_STYLE}>
+            {durationText}
+          </span>
+        ) : null}
         <span style={{ marginLeft: "auto", display: "inline-flex" }}>
           <Chevron open={open} />
         </span>

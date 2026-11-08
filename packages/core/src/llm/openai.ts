@@ -7,6 +7,14 @@
  * （避免重复内容）；Retry-After 截断到 60s。
  */
 import type { LlmChunk, LlmClient, LlmRequest } from "./index.js";
+import {
+  classifyFatalUpstreamError,
+  humanizeWait,
+  MAX_429_RETRIES,
+  MAX_RETRY_AFTER_MS,
+  parseRetryAfterMs,
+  parseUpstreamError,
+} from "./upstreamError.js";
 
 export interface OpenAiClientOptions {
   baseUrl: string;
@@ -34,15 +42,7 @@ export interface NormalizedUsage {
 /** usage 归一：OpenAI 的 prompt_tokens_details.cached_tokens 与 deepseek 的 prompt_cache_hit_tokens 都映射到 cacheRead。 */
 /** 把服务端的原始错误体变成可读一句话（优先 error.message；截断 300 字）。 */
 function friendlyHttpError(body: string): string {
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: unknown } | unknown; message?: unknown };
-    const nested = typeof parsed?.error === "object" && parsed.error ? (parsed.error as { message?: unknown }).message : undefined;
-    const raw = typeof nested === "string" ? nested : typeof parsed?.message === "string" ? parsed.message : undefined;
-    if (raw) return raw.slice(0, 300);
-  } catch {
-    // 非 JSON
-  }
-  return body.slice(0, 300);
+  return parseUpstreamError(0, body).message;
 }
 
 export function normalizeUsage(raw: {
@@ -61,11 +61,13 @@ export function normalizeUsage(raw: {
   };
 }
 
-/** 可重试错误（429/5xx/网络）；携带建议等待时间。 */
+/** 可重试错误（限流/5xx/网络）；携带建议等待时间与最多重试次数（429 只允许 1~2 次）。 */
 class RetryableError extends Error {
   constructor(
     message: string,
     readonly retryAfterMs: number,
+    /** 本次请求内最多重试次数（缺省用客户端 maxRetries）。 */
+    readonly maxAttempts?: number,
   ) {
     super(message);
     this.name = "RetryableError";
@@ -94,6 +96,14 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
     const controller = new AbortController();
     const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs);
     const firstByteTimer = setTimeout(() => controller.abort(), firstByteTimeoutMs);
+    // 外部中止（用户点「停止」/会话取消）必须穿透到在途 fetch。
+    // 只靠调用方轮询中止标志不够：上游卡住（迟迟没有 chunk）时，停止要等到首字节超时（120s）
+    // 才会生效 —— 用户看到的是「点了没反应，还一直显示思考中」。超时与外部中止共用一个 controller。
+    const onExternalAbort = (): void => controller.abort();
+    if (req.signal) {
+      if (req.signal.aborted) controller.abort();
+      else req.signal.addEventListener("abort", onExternalAbort, { once: true });
+    }
 
     try {
       const res = await fetch(endpoint, {
@@ -142,10 +152,32 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
       clearTimeout(firstByteTimer);
 
       if (!res.ok) {
-        const bodyText = (await res.text()).slice(0, 300);
+        const bodyText = (await res.text()).slice(0, 800);
+        const info = parseUpstreamError(res.status, bodyText);
+        // 额度/余额/订阅/鉴权/模型类错误：重试必然继续失败 → 立即失败并给可行动提示。
+        // 典型真实故障：opencode-zen 免费模型 HTTP 429 FreeUsageLimitError + retry-after≈17h，
+        // 旧实现按 429 重试（每次等 60s × 3 次）→ 用户看到「思考中」持续数分钟。
+        const fatal = classifyFatalUpstreamError(info);
+        if (fatal) {
+          yield { kind: "error", message: `${fatal}（HTTP ${res.status}：${info.message}）` };
+          return;
+        }
         if (RETRYABLE_STATUS.has(res.status)) {
-          const retryAfter = Number(res.headers.get("retry-after")) * 1000;
-          throw new RetryableError(`HTTP ${res.status}: ${friendlyHttpError(bodyText)}`, Math.min(isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 1000, 60_000));
+          const retryAfterMs = parseRetryAfterMs(res.headers);
+          if (res.status === 429) {
+            // 普通限流：只有「很快就会恢复」才值得在本次请求内等；retry-after 很大/缺失 → 立即报错
+            if (retryAfterMs === undefined || retryAfterMs > MAX_RETRY_AFTER_MS) {
+              const waitHint =
+                retryAfterMs !== undefined
+                  ? `上游限流，约 ${humanizeWait(retryAfterMs)} 后可重试`
+                  : "上游限流且未提供 retry-after，请稍后手动重试";
+              yield { kind: "error", message: `${waitHint}（HTTP 429：${info.message}）` };
+              return;
+            }
+            throw new RetryableError(`HTTP ${res.status}: ${info.message}`, retryAfterMs, MAX_429_RETRIES);
+          }
+          const capped = retryAfterMs !== undefined ? Math.min(retryAfterMs, 60_000) : undefined;
+          throw new RetryableError(`HTTP ${res.status}: ${info.message}`, capped ?? 1000);
         }
         yield { kind: "error", message: `HTTP ${res.status}: ${friendlyHttpError(bodyText)}` };
         return;
@@ -241,6 +273,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
     } finally {
       clearTimeout(firstByteTimer);
       clearTimeout(totalTimer);
+      req.signal?.removeEventListener("abort", onExternalAbort);
     }
   }
 
@@ -256,9 +289,14 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             }
             return;
           } catch (err) {
+            // 用户主动停止：把 AbortError 原样上抛（tool_loop 归一为 aborted），
+            // 绝不能重试、也不能转成 error chunk（UI 会当成红色失败并继续显示思考中）。
+            if (req.signal?.aborted) throw err;
             if (emitted) throw err; // 已开始输出：不重试，避免重复内容
             const retryable = err instanceof RetryableError;
-            if (!retryable || attempt >= maxRetries) {
+            // 429 自带更严的重试上限（Lead 要求最多 1~2 次），避免长等待刷屏
+            const retryLimit = retryable && err.maxAttempts !== undefined ? Math.min(maxRetries, err.maxAttempts) : maxRetries;
+            if (!retryable || attempt >= retryLimit) {
               yield {
                 kind: "error",
                 message: `LLM 调用失败（重试 ${attempt} 次后放弃）：${err instanceof Error ? err.message : String(err)}`,
@@ -266,7 +304,17 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
               return;
             }
             const waitMs = err.retryAfterMs || DEFAULT_RETRY_BACKOFF[Math.min(attempt, DEFAULT_RETRY_BACKOFF.length - 1)];
-            await new Promise((r) => setTimeout(r, waitMs));
+            // 退避等待也要可中止：否则停止后还要空等 1~7s 才轮到下一次（或下一次 invokeOnce）观察信号
+            await new Promise<void>((resolve) => {
+              const done = (): void => {
+                clearTimeout(timer);
+                req.signal?.removeEventListener("abort", done);
+                resolve();
+              };
+              const timer = setTimeout(done, waitMs);
+              req.signal?.addEventListener("abort", done, { once: true });
+            });
+            if (req.signal?.aborted) throw new DOMException("Aborted", "AbortError");
           }
         }
       })();

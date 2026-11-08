@@ -10,6 +10,14 @@
  * 纯文本对话、系统提示、工具调用声明、推理（thinking）均完整支持。
  */
 import type { LlmChunk, LlmClient, LlmMessage, LlmRequest } from "./index.js";
+import {
+  classifyFatalUpstreamError,
+  humanizeWait,
+  MAX_429_RETRIES,
+  MAX_RETRY_AFTER_MS,
+  parseRetryAfterMs,
+  parseUpstreamError,
+} from "./upstreamError.js";
 
 export interface AnthropicClientOptions {
   baseUrl: string;
@@ -26,6 +34,18 @@ export interface AnthropicClientOptions {
 function effortToBudget(effort: string): number {
   const map: Record<string, number> = { minimal: 1024, low: 2048, medium: 4096, high: 8192, xhigh: 16384 };
   return map[effort.toLowerCase()] ?? 4096;
+}
+
+/** 可重试的上游 HTTP 错误（429/529/5xx）；retryAfterMs 缺省时按退避序列等待。 */
+class RetryableHttpError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number,
+    readonly maxAttempts = 2,
+  ) {
+    super(message);
+    this.name = "RetryableHttpError";
+  }
 }
 
 function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages: { role: "user" | "assistant"; content: unknown[] }[] } {
@@ -66,6 +86,13 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
   async function* invokeOnce(req: LlmRequest): AsyncGenerator<LlmChunk> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 外部中止（用户点「停止」/会话取消）必须穿透到在途 fetch，否则上游卡住时
+    // 停止要等到总超时（300s）才生效，UI 一直停在「思考中」。
+    const onExternalAbort = (): void => controller.abort();
+    if (req.signal) {
+      if (req.signal.aborted) controller.abort();
+      else req.signal.addEventListener("abort", onExternalAbort, { once: true });
+    }
     try {
       const { system, messages } = toAnthropicMessages(req.messages);
       const body: Record<string, unknown> = {
@@ -101,15 +128,37 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
         signal: controller.signal,
       });
       if (!res.ok) {
-        const text = (await res.text()).slice(0, 400);
-        let friendly = text;
-        try {
-          const parsed = JSON.parse(text) as { error?: { message?: string }; message?: string };
-          friendly = parsed.error?.message ?? parsed.message ?? text;
-        } catch {
-          // 保留原文
+        const bodyText = (await res.text()).slice(0, 800);
+        const info = parseUpstreamError(res.status, bodyText);
+        // 额度/余额/订阅/鉴权/模型类错误：重试必然继续失败 → 立即失败并给可行动提示
+        const fatal = classifyFatalUpstreamError(info);
+        if (fatal) {
+          yield { kind: "error", message: `${fatal}（HTTP ${res.status}：${info.message}）` };
+          yield { kind: "done" };
+          return;
         }
-        yield { kind: "error", message: `HTTP ${res.status}: ${friendly.slice(0, 300)}` };
+        if (res.status === 429 || res.status === 529) {
+          const retryAfterMs = parseRetryAfterMs(res.headers);
+          if (res.status === 429) {
+            // 普通限流：只有「很快就会恢复」才在本次请求内重试；retry-after 很大/缺失 → 立即报错
+            if (retryAfterMs === undefined || retryAfterMs > MAX_RETRY_AFTER_MS) {
+              const waitHint =
+                retryAfterMs !== undefined
+                  ? `上游限流，约 ${humanizeWait(retryAfterMs)} 后可重试`
+                  : "上游限流且未提供 retry-after，请稍后手动重试";
+              yield { kind: "error", message: `${waitHint}（HTTP 429：${info.message}）` };
+              yield { kind: "done" };
+              return;
+            }
+            throw new RetryableHttpError(`HTTP 429: ${info.message}`, retryAfterMs, MAX_429_RETRIES);
+          }
+          // 529 overloaded / 5xx：按退避重试（有 retry-after 则遵守，截断到 60s）
+          throw new RetryableHttpError(
+            `HTTP ${res.status}: ${info.message}`,
+            retryAfterMs !== undefined ? Math.min(retryAfterMs, 60_000) : undefined,
+          );
+        }
+        yield { kind: "error", message: `HTTP ${res.status}: ${info.message}` };
         yield { kind: "done" };
         return;
       }
@@ -218,12 +267,28 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
       if (outputTokens > 0) yield { kind: "usage", tokens: outputTokens };
       yield { kind: "done" };
     } catch (err) {
+      // 用户主动停止：把 AbortError 上抛（tool_loop 归一为 aborted），不伪装成「请求超时」错误块
+      if (req.signal?.aborted) throw err;
       const message = err instanceof Error ? err.message : String(err);
       yield { kind: "error", message: message.includes("abort") ? "请求超时" : message };
       yield { kind: "done" };
     } finally {
       clearTimeout(timer);
+      req.signal?.removeEventListener("abort", onExternalAbort);
     }
+  }
+
+  /** 可中止的退避等待（用户停止后不必空等 1s/2s/3s）。 */
+  function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal?.addEventListener("abort", done, { once: true });
+    });
   }
 
   return {
@@ -231,16 +296,24 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
       const self = {
         async *[Symbol.asyncIterator](): AsyncGenerator<LlmChunk> {
           for (let attempt = 0; ; attempt += 1) {
-            let retryable = false;
-            for await (const chunk of invokeOnce(req)) {
-              if (chunk.kind === "error" && /HTTP (429|5\d\d)/.test(chunk.message) && attempt < maxRetries) {
-                retryable = true;
-                break;
+            // 已中止：直接以 AbortError 结束（不发起新请求、不重试）
+            if (req.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            try {
+              for await (const chunk of invokeOnce(req)) yield chunk;
+              return;
+            } catch (err) {
+              // 用户主动停止：AbortError 原样上抛（tool_loop 归一 aborted）
+              if (req.signal?.aborted) throw err;
+              // 不可重试错误（非 RetryableHttpError）直接上抛，交给 tool_loop 归一为 error
+              if (!(err instanceof RetryableHttpError)) throw err;
+              const limit = Math.max(0, Math.min(maxRetries, err.maxAttempts));
+              if (attempt >= limit) {
+                yield { kind: "error", message: `上游错误（重试 ${attempt} 次后放弃）：${err.message}` };
+                return;
               }
-              yield chunk;
+              await sleepWithAbort(err.retryAfterMs ?? 1000 * (attempt + 1), req.signal);
+              if (req.signal?.aborted) throw new DOMException("Aborted", "AbortError");
             }
-            if (!retryable) return;
-            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           }
         },
       };

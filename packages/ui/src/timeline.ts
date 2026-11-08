@@ -226,6 +226,16 @@ export function isToolFailure(name: string, result: string | undefined, ok?: boo
   return false;
 }
 
+/**
+ * 「回复耗时」的展示格式（思考过程卡标题行用）：
+ * <1s 用毫秒整数（如 420ms），≥1s 保留一位小数（如 1.2s）；缺失/异常返回 "—"。
+ * 纯函数，便于单测与 E2E 断言文案。
+ */
+export function formatDurationMs(ms: number | undefined): string {
+  if (!ms || ms < 0) return "—";
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
 /** 从 todo_write 结果（Markdown checklist）解析规划条目；解析失败返回空数组。 */
 export function parsePlanItems(raw: string | undefined): PlanItem[] {
   const text = (raw ?? "").replace(/\r\n/g, "\n");

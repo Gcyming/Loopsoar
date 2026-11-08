@@ -25,6 +25,7 @@ import { resolveDataDir } from "./dataDir.js";
 import { APP_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import {
+  createBootTrace,
   ensureLoopsoarDirs,
   makePlaceholderProtocolHandler,
   makeUiProtocolHandler,
@@ -94,6 +95,9 @@ import { createShutdownHandler } from "./shutdown.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** 启动链路计时：LOOPSOAR_BOOT_TRACE=1 时打印各阶段耗时（默认关闭，无开销）。 */
+const bootTrace = createBootTrace();
+
 // 自定义协议必须声明为 standard + secure，相对路径资源与 fetch 才能按网页语义工作。
 // 必须在 app ready 之前调用（Electron 要求），因此放在模块顶层。
 protocol.registerSchemesAsPrivileged([
@@ -109,6 +113,8 @@ protocol.registerSchemesAsPrivileged([
 // 脚本里传相对目录（如 LOOPSOAR_DATA_DIR=.loopsoar-data）会在启动时报 “Path must be absolute”。
 app.setName(APP_NAME);
 app.setPath("userData", resolveDataDir(process.env.LOOPSOAR_DATA_DIR, app.getPath("appData")));
+// 模块顶层工作到此结束（import 图求值 + 协议声明 + userData 落位）；@Xms 即「进程启动→JS 入口就绪」。
+bootTrace.mark("module-eval");
 
 /** 审计：内存环形缓冲（诊断快照，最多 200 条）+ JSONL 落盘（发布门：审计可追溯）。 */
 const AUDIT_RING_MAX = 200;
@@ -141,6 +147,8 @@ function pushToRenderer(event: string, payload: unknown): void {
 
 let mainWindow: BrowserWindow | null = null;
 let browserHost: BrowserHost | null = null;
+// 首帧后启动的非关键任务（main() 内装配；createMainWindow 的 ready-to-show 回调里触发）
+let deferredBootTasks: (() => void) | null = null;
 // Agent 会话栏独立窗口管理器（main() 内创建；createMainWindow 的 closed 回调需在模块作用域访问）
 let agentWindow: AgentWindowManager | null = null;
 
@@ -845,7 +853,14 @@ function createMainWindow(): void {
       ],
     },
   });
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+    bootTrace.mark("window-ready-to-show");
+    // 首帧已出：此时才启动会 spawn 子进程/同步落盘的非关键任务，避免与渲染抢资源。
+    deferredBootTasks?.();
+  });
+  // 首帧渲染完成（UI 已可交互）：启动计时的最后一条锚点
+  mainWindow.webContents.once("did-finish-load", () => bootTrace.mark("window-did-finish-load"));
   // 诊断钩子：preload 失败/渲染报错/加载失败必须在主进程日志可见，否则只能盲猜
   mainWindow.webContents.on("preload-error", (_e, preloadPath, error) => {
     console.error("PRELOAD_ERROR", preloadPath, error);
@@ -952,10 +967,12 @@ function ensureWritableDataDirs(): ReturnType<typeof ensureLoopsoarDirs> {
 }
 
 app.whenReady().then(async () => {
+  bootTrace.mark("whenReady");
   try {
     const dirs = ensureWritableDataDirs();
   // 审计落盘：<dataDir>/logs/audit-YYYYMMDD.jsonl（重启可查；失败不影响主流程）
   auditFile = new AuditFileLogger({ dir: path.join(dirs.dataDir, "logs") });
+  bootTrace.mark("data-dirs");
 
   // 协议：服务真实 UI 产物；产物缺失时降级为可读提示页（不白屏）
   const uiDist = resolveUiDistDir(uiDistCandidates(__dirname, process.cwd()));
@@ -965,6 +982,7 @@ app.whenReady().then(async () => {
     console.warn("[Loopsoar] 未找到 ui/dist（先运行 pnpm --filter loopsoar-ui build），使用占位页");
     protocol.handle(PROTOCOL, makePlaceholderProtocolHandler());
   }
+  bootTrace.mark("protocol+ui-dist");
 
   // 装配：platform / 工具注册表 / 沙箱 / Provider 配置 → ChatService（真 LLM 闭环）
   const platform = createNodePlatform();
@@ -1002,6 +1020,7 @@ app.whenReady().then(async () => {
   console.log(
     `[Loopsoar] dataDir=${dirs.dataDir} secrets=${secrets.storageMode()} fileMode=${secretFileMode ?? "none"} osAvailable=${safeStorage.isEncryptionAvailable()}`,
   );
+  bootTrace.mark("core-assembly");
   // 开发/E2E 密钥持久化验证钩子（仅显式环境变量启用；不打印明文）
   if (process.env.LOOPSOAR_E2E_SECRET_SET) {
     const [pidRaw, key] = process.env.LOOPSOAR_E2E_SECRET_SET.split("|");
@@ -1101,7 +1120,17 @@ app.whenReady().then(async () => {
   // 记忆库（路径可在设置里改）+ 会话持久化
   const memoryFile = initialPrefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
   const memory = new MemoryService({ platform, filePath: memoryFile });
-  await memory.load();
+  // 记忆加载不阻塞首次出窗：load() 在重建向量索引时会探测本地 embedding（最坏 embedTimeout=3000ms，
+  // 见 memoryService.ts:84 + buildExternalIndex），等待它会把窗口创建一起拖住。
+  // 读取路径在「尚未 loaded」时按空库返回空结果（MemoryService 的读方法直接读 store），
+  // 因此窗口/IPC 装配无需已加载状态；加载完成只影响「第一条消息」的记忆召回，代价可接受。
+  const memoryReady = memory
+    .load()
+    .then(() => bootTrace.mark("memory-load-done"))
+    .catch(() => undefined);
+  // 加载在后台继续；只有「记忆写入」等极少数路径需要等它，首屏不等（见上方注释）。
+  void memoryReady;
+  bootTrace.mark("memory-load-started");
 
   // 询问用户总线（ask_user 工具）：ask:user 推渲染层弹窗，回答经 ask:respond 结算（超时按取消）
   const askBus = new AskBus({ push: (event, payload) => pushToRenderer(event, payload) });
@@ -1165,6 +1194,7 @@ app.whenReady().then(async () => {
   const agents = new AgentRegistry();
   agents.registerBuiltin(BUILTIN_AGENT);
   const defaultAgent = agents.defaultAgent();
+  bootTrace.mark("stores");
   const settingsDeps = {
     ...deps,
     platform,
@@ -1245,6 +1275,8 @@ app.whenReady().then(async () => {
       return messages.slice(-400).map((m) => ({
         role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
         content: m.text,
+        // 模型可见墙钟时间：持久化的 ts 透传给 services（由 messageTime 统一加前缀）
+        ts: m.ts,
       }));
     },
     // 当前模型上下文窗口（tokens）：用于历史压缩预算；未探测到则回退 core 默认
@@ -1276,6 +1308,7 @@ app.whenReady().then(async () => {
     // 权限确认 → 推送到渲染层弹窗（perm:request 事件）
     onPermissionRequest: (request) => pushToRenderer("perm:request", request),
   });
+  bootTrace.mark("chat-service");
 
   // 浏览器宿主：会话级标签组；WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
   // 初始会话 = 最近一次使用的会话（重启后左右两侧一起恢复）；没有会话时建一个，保证"文件夹"存在。
@@ -1361,15 +1394,8 @@ app.whenReady().then(async () => {
       .then((tabs) => pushToRenderer("browser:tabs", { tabs }))
       .catch(() => undefined);
   }
-  // 全局历史补记：会话恢复被有意设计为「不计访问」（否则每次重启都把旧页面算成新访问），
-  // 但全局历史面板只读 browser-history.json —— 不补记的话老用户升级后看到的是空面板（用户反馈）。
-  // backfill 只补缺失 URL（visitedAt=启动时刻、visitCount=1）；已存在条目不改计数/排序，只按需补标题。
-  if (bootBrowserState && bootBrowserState.tabs.length > 0) {
-    const backfill = browserHistory.backfill(bootBrowserState.tabs);
-    if (backfill.added > 0 || backfill.merged > 0 || backfill.skipped > 0) {
-      console.log(`[Loopsoar] 浏览器历史补记 ${JSON.stringify(backfill)}`);
-    }
-  }
+  bootTrace.mark("browser-host");
+  // 注：全局历史补记（browser-history.json 的同步落盘）已移到首帧后的 deferred 启动任务里，见 runDeferredBootTasks。
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost, resolveSessionRoot);
   registerTerminalTools(registry, resolveSessionRoot);
@@ -1387,6 +1413,7 @@ app.whenReady().then(async () => {
   registerAskTools(registry, askBus);
   // 新工具注册后必须再同步沙箱白名单（否则会被判「未知工具名」）
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
+  bootTrace.mark("tools-registered");
 
   /** 退出前全量落盘：标签防抖队列可能还没触发，必须同步刷一次。 */
   const saveAllBrowserStates = (): void => {
@@ -1519,10 +1546,7 @@ app.whenReady().then(async () => {
     onUpdate: (id, status) => pushToRenderer("extensions:updated", { id, runtime: status }),
     onToolsChanged: () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
   });
-  // 异步启动已启用扩展（失败互相隔离，不阻塞主窗口）
-  setTimeout(() => {
-    void extensionRuntime.startEnabled().catch(() => undefined);
-  }, 500);
+  // 注：扩展子进程启动、MCP 自动连接、浏览器历史补记都在首帧后的 runDeferredBootTasks 里执行（见下）。
 
   registerExtensionsDomain({
     ...deps,
@@ -1555,10 +1579,7 @@ app.whenReady().then(async () => {
     push: pushToRenderer,
     mcpConfigPath: path.join(dirs.dataDir, "mcp.json"),
   });
-  // 自动连接启用的 MCP（失败不阻断启动；UI 里可重试）
-  for (const srv of mcp.list()) {
-    if (srv.enabled && srv.state === "idle") void mcp.connect(srv.id);
-  }
+  // 自动连接启用的 MCP 移到首帧后（connect 会 spawn 子进程并做 stdio 握手，见 runDeferredBootTasks）
   registerWindowDomain({
     ...deps,
     windowControls: {
@@ -1588,14 +1609,50 @@ app.whenReady().then(async () => {
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });
 
+  bootTrace.mark("ipc-domains");
+
+  /**
+   * 首帧后启动的非关键任务（不参与首屏）：
+   *   · MCP 自动连接：每个 server 一次 spawn + stdio JSON-RPC 握手，放在首帧前与渲染进程抢 CPU/IO（实测用户数据里 mcp.json 有 1 个 enabled server）；
+   *   · 浏览器历史补记：标签恢复后的一次同步 JSON 落盘（browser-history.json 上限 500 条）；
+   *   · 扩展子进程：保留原来的 500ms 延迟，但从首帧起算，避免启动瞬间连续 spawn 多个 Node 进程。
+   */
+  let deferredBootStarted = false;
+  const runDeferredBootTasks = (): void => {
+    if (deferredBootStarted) return;
+    deferredBootStarted = true;
+    bootTrace.mark("deferred-boot:start");
+    // 全局历史补记：会话恢复被有意设计为「不计访问」（否则每次重启都把旧页面算成新访问），
+    // 但全局历史面板只读 browser-history.json —— 不补记的话老用户升级后看到的是空面板（用户反馈）。
+    // backfill 只补缺失 URL（visitedAt=启动时刻、visitCount=1）；已存在条目不改计数/排序，只按需补标题。
+    if (bootBrowserState && bootBrowserState.tabs.length > 0) {
+      const backfill = browserHistory.backfill(bootBrowserState.tabs);
+      if (backfill.added > 0 || backfill.merged > 0 || backfill.skipped > 0) {
+        console.log(`[Loopsoar] 浏览器历史补记 ${JSON.stringify(backfill)}`);
+      }
+    }
+    // 自动连接启用的 MCP（失败不阻断启动；UI 里可重试）
+    for (const srv of mcp.list()) {
+      if (srv.enabled && srv.state === "idle") void mcp.connect(srv.id).catch(() => undefined);
+    }
+    setTimeout(() => {
+      void extensionRuntime.startEnabled().catch(() => undefined);
+    }, 500);
+  };
+  deferredBootTasks = runDeferredBootTasks;
+  // 兜底：窗口加载失败等情况下 ready-to-show 可能不触发，3s 后仍要跑（否则 MCP/扩展永远不启动）
+  setTimeout(() => deferredBootTasks?.(), 3000);
+
   // 移除原生菜单栏（File/Edit/View/Window）——品牌统一由自定义标题栏承载
   Menu.setApplicationMenu(null);
 
   createMainWindow();
+  bootTrace.mark("window-created");
   // 启动恢复发生在 createMainWindow 之前：当时 attachView 拿不到主窗口（返回 false 跳过挂载），
   // 窗口创建后立刻重排一次，让恢复出来的原生网页视图补挂并设置 bounds/可见性。
   // 幂等：已挂上的视图不会重复挂载；没有标签页时只是一次空布局。
   browserHost?.syncBounds();
+  bootTrace.mark("window-sync-bounds");
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });

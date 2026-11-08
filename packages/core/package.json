@@ -6,6 +6,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./session": "./src/session.js",
+    "./messageTime": "./src/messageTime.js",
     "./filter": "./src/filter.js",
     "./claims": "./src/claims.js",
     "./router": "./src/router.js",

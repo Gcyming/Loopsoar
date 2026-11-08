@@ -3,7 +3,7 @@
  *
  * 只接收消息与回调，不订阅事件、不做 IPC；数据来自 chatStreamState 维护的消息。
  * 助手块包含：时间线（TimelineView）、流式正文（StreamFadeText）、中断横幅、LiveStatus、
- * 产物面板与悬停元信息（复制/重新生成/耗时）。
+ * 产物面板与悬停元信息（复制/重新生成；回复耗时在思考过程卡标题行，不在悬停行）。
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
@@ -14,6 +14,7 @@ import Timeline from "./TimelineView.js";
 import { ProductPanel } from "./ArtifactPanels.js";
 import { collectProducts, stripDiffMarkers } from "./artifacts.js";
 import { baseName, splitAttachments } from "./attachments.js";
+import { formatDurationMs } from "./timeline.js";
 import { renderRich } from "./Markdown.js";
 import { useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
@@ -34,11 +35,6 @@ export interface ChatMessageViewProps {
   onOpenUrl: (url: string) => void;
 }
 
-function fmtMs(ms: number | undefined): string {
-  if (!ms || ms < 0) return "—";
-  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
 export default function ChatMessageView({
   message: m,
   mode,
@@ -56,6 +52,11 @@ export default function ChatMessageView({
   const tr = useT();
   const timelineSteps = m.timeline ?? [];
   const hasStructuredTimeline = timelineSteps.some((step) => step.kind !== "body");
+  // 回复耗时只在思考过程卡标题行展示；没有思考过程（纯文本回复）时省略，避免塞回悬停行换行。
+  const replyDurationText =
+    hasStructuredTimeline && m.timing?.totalMs
+      ? tr("chat.replyDuration", { time: formatDurationMs(m.timing.totalMs) })
+      : undefined;
   const products = hasStructuredTimeline ? collectProducts(timelineSteps) : [];
   const displayText = stripDiffMarkers(m.text);
   const showThinking = m.status === "streaming" && !m.text && !hasStructuredTimeline;
@@ -87,11 +88,11 @@ export default function ChatMessageView({
         </div>
         <div className="msg-hover" style={styles.msgHover}>
           <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
-          <span>· {timeText}</span>
-          <button type="button" className="msg-action" title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
+          <span style={styles.msgTime}>· {timeText}</span>
+          <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
             <Icon name="reload" size={12} />
           </button>
-          <button type="button" className="msg-action" title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
+          <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
             <Icon name="file" size={12} />
           </button>
         </div>
@@ -120,27 +121,24 @@ export default function ChatMessageView({
             </span>
           ) : null}
         </div>
-        {/* 悬停元信息：复制 / 模式 / 模型 / 耗时 / 思考开关（与 slime 一样位于正文之前） */}
+        {/* 悬停元信息：复制 / 模式 / 模型 / 思考开关（回复耗时已移到思考过程卡标题行） */}
         <div className="msg-hover" style={styles.msgHover}>
           <button
             type="button"
             className="msg-action"
+            style={styles.msgAction}
             title={tr("chat.copyReplyTitle")}
             onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}
           >
             <Icon name="file" size={12} />
           </button>
           <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
-          {m.model ? <span title={m.provider ? `${m.provider} · ${m.model}` : m.model}>· {m.model}</span> : null}
-          {m.timing ? (
-            <span style={styles.msgTiming}>
-              {tr("chat.replyTime", { time: fmtMs(m.timing.totalMs) })}
-              {m.timing.tokens ? ` · ${m.timing.tokens} tokens` : ""}
-              {m.timing.toolCalls ? tr("chat.toolCalls", { count: m.timing.toolCalls }) : ""}
+          {m.model ? (
+            <span style={styles.msgModel} title={m.provider ? `${m.provider} · ${m.model}` : m.model}>
+              · {m.model}
             </span>
-          ) : (
-            <span>· {timeText}</span>
-          )}
+          ) : null}
+          {m.timing ? null : <span style={styles.msgTime}>· {timeText}</span>}
           {hasStructuredTimeline ? (
             <button
               type="button"
@@ -153,7 +151,7 @@ export default function ChatMessageView({
             </button>
           ) : null}
           {!streaming && m.text ? (
-            <button type="button" className="msg-action" title={tr("chat.regenerateTitle")} onClick={() => onRegenerate(m.id)}>
+            <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.regenerateTitle")} onClick={() => onRegenerate(m.id)}>
               <Icon name="reload" size={12} />
             </button>
           ) : null}
@@ -165,6 +163,7 @@ export default function ChatMessageView({
             liveStream={streaming}
             expandAll={expandAllGroups}
             open={thinkingOpen}
+            durationText={replyDurationText}
             onToggleOpen={onToggleThinking}
             Markdown={({ text, compact }) => renderRich(text, { compact })}
             onOpenUrl={onOpenUrl}
@@ -322,9 +321,32 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  msgHover: { display: "flex", alignItems: "center", gap: 7, minHeight: 18, margin: "1px 0 6px", fontSize: 10.5, color: BRAND.linenFaint },
-  msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted },
-  msgTiming: { color: BRAND.linenFaint, fontSize: 10 },
+  /** 悬停元信息行：单行不换行；窄侧栏下把模型名省略号收尾（用户反馈 Build · model 换行很难看）。 */
+  msgHover: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "nowrap",
+    gap: 7,
+    minWidth: 0,
+    overflow: "hidden",
+    minHeight: 18,
+    margin: "1px 0 6px",
+    fontSize: 10.5,
+    color: BRAND.linenFaint,
+  },
+  msgHoverTag: { fontWeight: 600, color: BRAND.linenMuted, flexShrink: 0 },
+  /** 操作按钮固定宽度，不参与悬停行的收缩（否则窄侧栏会被挤扁）。 */
+  msgAction: { flexShrink: 0 },
+  /** 模型名过长时省略号截断（完整值留在 title 里），不再把整行挤成两行。 */
+  msgModel: {
+    minWidth: 0,
+    flexShrink: 1,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  /** 时间戳（无 timing 时）不参与收缩。 */
+  msgTime: { flexShrink: 0, whiteSpace: "nowrap" },
   assistantHead: { display: "flex", alignItems: "center", gap: 6, minHeight: 20 },
   /** 上下文环靠右（与助手名/生成中圆点同一行，LiveStatus 风格的小组件）。 */
   contextRingWrap: { marginLeft: "auto", display: "inline-flex", alignItems: "center", flexShrink: 0 },

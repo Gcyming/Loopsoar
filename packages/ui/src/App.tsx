@@ -16,8 +16,8 @@ import type {
   WorkspaceRecord,
 } from "./types.js";
 import { BRAND, MOTION, applyTheme } from "./theme.js";
-import Settings from "./Settings.js";
-import ChromePage from "./ChromePage.js";
+const Settings = React.lazy(() => import("./Settings.js"));
+const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
@@ -27,12 +27,12 @@ import TitleBar from "./TitleBar.js";
 import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
-import TerminalPanel from "./TerminalPanel.js";
+const TerminalPanel = React.lazy(() => import("./TerminalPanel.js"));
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
 import { setLanguage } from "./i18n.js";
 import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
 import AskUserDialog from "./AskUserDialog.js";
-import SnapshotPanel from "./SnapshotPanel.js";
+const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
 import AgentSidebar from "./AgentSidebar.js";
 import StatusBar from "./StatusBar.js";
 import PermissionDialog from "./PermissionDialog.js";
@@ -1433,6 +1433,7 @@ export default function App(): React.JSX.Element {
           transition: "height 240ms cubic-bezier(0.2, 0, 0.2, 1)",
         }}
       >
+        <React.Suspense fallback={null}>
         <TerminalPanel
           sessionId={currentSession ?? undefined}
           open={terminalOpen}
@@ -1447,6 +1448,7 @@ export default function App(): React.JSX.Element {
             void api?.browser.setOverlay({ open: false }).catch(() => {});
           }}
         />
+        </React.Suspense>
       </div>
 
       {miniWindow ? null : (
@@ -1480,8 +1482,11 @@ export default function App(): React.JSX.Element {
         onNotice={setNotice}
       />
       {/* 页面快照浮层：正文/元素可滚动复制；打开设置/工作区时自动收起 */}
-      <SnapshotPanel snapshot={snapshotData} onClose={() => setSnapshotData(null)} />
+      <React.Suspense fallback={null}>
+        <SnapshotPanel snapshot={snapshotData} onClose={() => setSnapshotData(null)} />
+      </React.Suspense>
       {settingsOpen ? (
+        <React.Suspense fallback={null}>
         <Settings
           key={settingsSection || "settings"}
           api={api}
@@ -1495,10 +1500,12 @@ export default function App(): React.JSX.Element {
           onPreferencesSaved={(next) => setPreferences(next)}
           onOpenOnboarding={() => setOnboardingOpen(true)}
         />
+        </React.Suspense>
       ) : null}
 
       {/* 浏览器管理整页（浮层「查看更多」跳转）：历史/下载/收藏夹/设置 */}
       {chromePage ? (
+        <React.Suspense fallback={null}>
         <ChromePage
           kind={chromePage}
           api={api}
@@ -1511,6 +1518,7 @@ export default function App(): React.JSX.Element {
           onOpenSettings={() => setChromePage("settings")}
           onNotice={setNotice}
         />
+        </React.Suspense>
       ) : null}
 
       {/* 首次启动向导（P6）：跳过/完成写本地标记；设置·关于可重开 */}

@@ -6,6 +6,7 @@ import {
   appendTimelineStep,
   extractToolDetail,
   foldPlanUpdate,
+  formatDurationMs,
   groupTimeline,
   isToolFailure,
   parsePlanItems,
@@ -82,5 +83,21 @@ describe("时间线 · 工具分类与详情", () => {
   it("todo_write 的 Markdown checklist 可解析", () => {
     const items = parsePlanItems("- [x] 读取页面\n- [ ] 总结 ← 进行中\n- [ ] 输出");
     expect(items.map((i) => i.status)).toEqual(["completed", "in_progress", "pending"]);
+  });
+});
+
+describe("回复耗时格式化（思考过程卡标题行「用时 1.2s」）", () => {
+  it("<1s 用毫秒整数，≥1s 保留一位小数", () => {
+    expect(formatDurationMs(420)).toBe("420ms");
+    expect(formatDurationMs(999)).toBe("999ms");
+    expect(formatDurationMs(1000)).toBe("1.0s");
+    expect(formatDurationMs(1234)).toBe("1.2s");
+    expect(formatDurationMs(59990)).toBe("60.0s");
+  });
+
+  it("缺失/异常值显示占位符，不出现 undefined", () => {
+    expect(formatDurationMs(undefined)).toBe("—");
+    expect(formatDurationMs(0)).toBe("—");
+    expect(formatDurationMs(-5)).toBe("—");
   });
 });

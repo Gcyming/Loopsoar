@@ -24,6 +24,22 @@ export function decideFollow(metrics: ScrollMetrics): boolean {
   return metrics.following;
 }
 
+/** 布局尺寸变化后的补底容差：gaps 在该像素内视为已经贴底。 */
+export const RESTICK_TOLERANCE_PX = 1;
+
+/**
+ * 滚动容器**自身尺寸**变化（终端抽屉展开/收起、外层布局调整）后是否要重新贴底。
+ *
+ * 为什么不能复用 decideFollow：容器变矮会把当前位置直接"顶离"底部，gap 突然变大，
+ * 滞回判据会误判成"用户上翻了"。尺寸变化不是用户意图，唯一可用的意图来源是
+ * 当前的跟随状态（`following`）：仍在跟随 → 立刻补到底；用户已上翻 → 不动，尊重其位置。
+ */
+export function shouldRestickAfterResize(metrics: ScrollMetrics): boolean {
+  if (!metrics.following) return false;
+  const gap = metrics.scrollHeight - metrics.top - metrics.clientHeight;
+  return gap > RESTICK_TOLERANCE_PX;
+}
+
 export interface ScrollBox {
   scrollHeight: number;
   clientHeight: number;

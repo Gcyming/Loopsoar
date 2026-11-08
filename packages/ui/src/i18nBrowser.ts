@@ -156,8 +156,8 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "chat.railUser": { zh: "你：{text}", en: "You: {text}" },
   "chat.railAssistant": { zh: "Loopsoar：{text}", en: "Loopsoar: {text}" },
   "chat.replyFallback": { zh: "回复", en: "Reply" },
-  "chat.replyTime": { zh: "· 回复耗时 {time}", en: "· Replied in {time}" },
-  "chat.toolCalls": { zh: " · {count} 次工具", en: " · {count} tool calls" },
+  /** 思考过程卡标题行的回复耗时（简洁版，避免窄侧栏换行）。 */
+  "chat.replyDuration": { zh: "用时 {time}", en: "{time}" },
   "chat.thinkingExpand": { zh: "展开思考过程", en: "Expand thinking" },
   "chat.thinkingCollapse": { zh: "收起思考过程", en: "Collapse thinking" },
   "chat.thinkingLabel": { zh: "思考", en: "Thinking" },
