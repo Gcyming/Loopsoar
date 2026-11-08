@@ -540,6 +540,17 @@ export class ChatService {
       const loopOutcome = this.opts.runLoop
         ? await this.opts.runLoop({ ...loopInput, sessionId })
         : await runToolLoop(loopInput);
+      if (process.env.LOOPSOAR_LOOP_DEBUG) {
+        console.log("[LOOP] outcome", {
+          status: loopOutcome.status,
+          reason: loopOutcome.reason,
+          finalTextLen: loopOutcome.finalText.length,
+          rounds: loopOutcome.usage?.rounds,
+          toolCalls: loopOutcome.usage?.toolCalls,
+          totalTokens: loopOutcome.usage?.totalTokens,
+          wallClockMs: loopOutcome.usage?.wallClockMs,
+        });
+      }
 
       outcome = loopOutcome.status;
       // aborted 的底层原因文案（"外部中止信号触发…"）对用户无意义：主动停止是用户动作，

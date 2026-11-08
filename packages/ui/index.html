@@ -1657,7 +1657,8 @@
        ══════════════════════════════════════════════════════════════════════ */
     .ask-overlay {
       position: fixed;
-      inset: 0;
+      /* 从标题栏下方开始（= LAYOUT.TITLE_BAR_HEIGHT 40px）：窗口按钮永远可见可点（用户 m02115）。 */
+      inset: 40px 0 0 0;
       z-index: 70;
       display: flex;
       align-items: center;
@@ -1990,7 +1991,8 @@
     /* ── 页面快照浮层（正文可读 + 可交互元素） ── */
     .snapshot-overlay {
       position: fixed;
-      inset: 0;
+      /* 标题栏下方开始（= LAYOUT.TITLE_BAR_HEIGHT 40px）：关闭/最小化/最大化按钮始终可点。 */
+      inset: 40px 0 0 0;
       z-index: 48; /* 低于设置(50)/权限(60)/ask(70)：这些模态打开时快照已让位 */
       display: flex;
       align-items: center;
@@ -2255,7 +2257,8 @@
     /* ── 首次启动向导 ── */
     .onboarding-overlay {
       position: fixed;
-      inset: 0;
+      /* 标题栏下方开始（= LAYOUT.TITLE_BAR_HEIGHT 40px）：窗口按钮永远可点（用户 m02115）。 */
+      inset: 40px 0 0 0;
       z-index: 46; /* 低于设置(50)/权限(60)/ask(70)：从向导跳设置时设置盖在上面 */
       display: flex;
       align-items: center;
@@ -2520,7 +2523,10 @@
       border-radius: 12px;
       border: 1px solid var(--ls-border-strong);
       background: var(--ls-surface-raised);
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+      /* 独立透明浮层窗口（PopoverApp）自带窗口边界：内层卡片的投影会溢出窗口，
+         在网页/桌面上形成「莫名其妙的大方框阴影」（用户 m02115 截图）→ 去掉，
+         层叠感交给边框 + 窗口自身的背景即可。 */
+      box-shadow: none;
       color: var(--ls-text);
       overflow: hidden;
       animation: popIn 120ms ease both;

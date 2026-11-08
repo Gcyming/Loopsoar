@@ -5,6 +5,7 @@
  * 数据全部经 window.loopsoarAPI（workspace/worktree 域）；组件不直接碰 Node。
  */
 import * as React from "react";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
@@ -227,7 +228,7 @@ export default function WorkspacePanel({
   };
 
   return (
-    <div className="modal-overlay" style={styles.overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-overlay" data-fullpage-overlay="workspace" style={styles.overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-card" style={styles.card} role="dialog" aria-label={tr("workspace.dialogAria")}>
         <div style={styles.header}>
           <Icon name="folder" size={16} style={{ color: BRAND.ochre }} />
@@ -387,9 +388,14 @@ export default function WorkspacePanel({
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  /** 覆盖层从标题栏下方开始（LAYOUT.TITLE_BAR_HEIGHT）：窗口最小化/最大化/关闭键在任何
+   *  整页界面都可见可点（用户 m02115：全屏页盖住 TitleBar 导致关闭键点不到）。 */
   overlay: {
     position: "fixed",
-    inset: 0,
+    top: LAYOUT.TITLE_BAR_HEIGHT,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 1200,
     background: "rgba(2, 4, 8, 0.72)",
     display: "flex",

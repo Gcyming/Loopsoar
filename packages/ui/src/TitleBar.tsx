@@ -12,6 +12,7 @@ import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, DRAG_REGION, NO_DRAG_REGION } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
+import { dismissAllPopovers } from "./popover.js";
 import { useT } from "./i18n.js";
 
 export interface TitleBarProps {
@@ -80,7 +81,19 @@ export default function TitleBar({ maximized, variant = "main", tabs }: TitleBar
           title={tr("titlebar.close")}
           className="win-btn win-close"
           style={styles.windowButton}
-          onClick={() => void (isAgent ? api?.ui.closeAgentWindow() : api?.window.close())}
+          onClick={() => {
+            // 关窗前先收起所有展开列表/浮层：避免关闭流程里残留浮层窗口/监听；
+            // 也保证「点多次关闭没反应」时每次都先把 UI 状态清干净（用户 m02115）。
+            dismissAllPopovers();
+            if (isAgent) {
+              void api?.ui.closeAgentWindow();
+            } else if (api) {
+              void api.window.close();
+            } else {
+              // preload 未注入（极端降级环境）时退回浏览器标准关闭，避免按钮完全失效。
+              window.close();
+            }
+          }}
         >
           <Icon name="close" size={12} />
         </button>

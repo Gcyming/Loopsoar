@@ -72,6 +72,7 @@ export default function SnapshotPanel({ snapshot, onClose }: SnapshotPanelProps)
   return (
     <div
       className="snapshot-overlay"
+      data-fullpage-overlay="snapshot"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();

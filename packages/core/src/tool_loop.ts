@@ -64,6 +64,12 @@ export interface ToolLoopOpts {
   /** 声称核验失败后最多注入几次强制工具轮（默认 2；0=不强制，只记录 progress）。 */
   maxVerifyForcedRounds?: number;
   /**
+   * 上游因输出长度上限截断（finishReason="length"）时最多自动续写几次（默认 4；0=不续写）。
+   * 为什么需要：很多 OpenAI 兼容上游默认 max_tokens 很小，长回复会被截断在半句；
+   * 自动续写把同一助手消息续完整，用户不必手动「继续」。
+   */
+  maxLengthContinuations?: number;
+  /**
    * 长等待工具名单（默认 ["ask_user"]）。
    * 为什么单独豁免：ask_user 等真人回答可能几分钟，按普通工具静默超时（90s）会被误杀。
    */
@@ -121,6 +127,9 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   /** 已注入的强制工具轮次数（verifyRound 未通过时累计，受 maxVerifyForcedRounds 封顶）。 */
   let forcedVerifyRounds = 0;
   const maxVerifyForcedRounds = Math.max(0, Math.floor(opts.maxVerifyForcedRounds ?? 2));
+  /** 已自动续写次数（上游 finish_reason=length 截断时累计，受 maxLengthContinuations 封顶）。 */
+  let lengthContinuations = 0;
+  const maxLengthContinuations = Math.max(0, Math.floor(opts.maxLengthContinuations ?? 4));
   /** 长等待工具集合：默认 ask_user（真人回答耗时不可控）。 */
   const longRunningTools = new Set(opts.longRunningTools ?? ["ask_user"]);
   const longRunningTimeoutMs = opts.longRunningTimeoutMs ?? 600_000;
@@ -216,6 +225,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       let roundHadToolProgress = false;
       let roundText = "";
       let sawDone = false;
+      let roundFinishReason: string | undefined;
       const roundToolCalls: {
         id: string;
         name: string;
@@ -446,6 +456,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
             case "done": {
               sawDone = true;
+              roundFinishReason = chunk.finishReason;
               break;
             }
 
@@ -492,7 +503,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       }
 
       // 本轮产生过工具调用：把 assistant(tool_calls) 与工具结果回灌，进入下一轮
-      if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] round done", { round, sawDone, tools: roundToolCalls.length, text: roundText.length });
+      if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] round done", { round, sawDone, tools: roundToolCalls.length, text: roundText.length, finishReason: roundFinishReason });
       if (roundToolCalls.length > 0) {
         conversation = [
           ...conversation,
@@ -535,6 +546,33 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               content: `\n【运行中插入的指令】\n用户在你运行期间插入了下面的请求（把它们当作本轮新增的指令一并考虑）：\n${lateSteers
                 .map((it) => `- ${it.text}`)
                 .join("\n")}\n`,
+            },
+          ];
+          continue;
+        }
+        // 上游长度截断自动续写（修复「长回复断在半句」的真实根因）：
+        // 许多 OpenAI 兼容上游默认 max_tokens 远小于模型上限，正常长回答会在半句话被 finish_reason="length" 截断；
+        // 旧实现丢弃 finish_reason，UI 看起来就是「消息被截断」。这里把已产出的正文回灌，让模型接着写，
+        // 同一助手消息由 UI 继续拼接，用户无感。
+        if ((roundFinishReason === "length" || roundFinishReason === "max_tokens") && lengthContinuations < maxLengthContinuations) {
+          lengthContinuations += 1;
+          if (process.env.LOOPSOAR_LOOP_DEBUG) {
+            console.log("[LOOP] length continuation", {
+              round,
+              count: lengthContinuations,
+              roundTextLen: roundText.length,
+              finishReason: roundFinishReason,
+            });
+          }
+          emit("progress", {
+            note: `输出达到上游长度上限，自动续写（第 ${lengthContinuations}/${maxLengthContinuations} 次）…`,
+          });
+          conversation = [
+            ...conversation,
+            { role: "assistant", content: roundText },
+            {
+              role: "user",
+              content: "请紧接上文继续输出未完成的内容：不要重复已写内容，不要重新开头，不要总结。",
             },
           ];
           continue;

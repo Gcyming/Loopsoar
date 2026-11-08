@@ -4,6 +4,7 @@
  * 纯展示：请求对象与回填回调全部由 App 持有（perm:request 事件 → App；respondPermission → perm:respond）。
  */
 import * as React from "react";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
@@ -18,7 +19,7 @@ export interface PermissionDialogProps {
 export default function PermissionDialog({ request, onRespond }: PermissionDialogProps): React.JSX.Element {
   const tr = useT();
   return (
-    <div style={styles.permOverlay}>
+    <div className="permission-overlay" data-fullpage-overlay="permission" style={styles.permOverlay}>
       <div style={styles.permCard}>
         <div style={styles.permTitle}>{tr("permission.title")}</div>
         <div style={styles.permTool}>
@@ -47,9 +48,13 @@ export default function PermissionDialog({ request, onRespond }: PermissionDialo
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  /** 模态框覆盖层从标题栏下方开始：窗口最小化/最大化/关闭键在确认弹窗打开时仍可点。 */
   permOverlay: {
     position: "fixed",
-    inset: 0,
+    top: LAYOUT.TITLE_BAR_HEIGHT,
+    left: 0,
+    right: 0,
+    bottom: 0,
     background: "rgba(8,9,12,0.5)",
     display: "flex",
     alignItems: "center",

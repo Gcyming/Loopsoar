@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, BADGE } from "./theme.js";
 import {
   HEADER_TEMPLATE_VARIABLES,
@@ -1435,6 +1436,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   return (
     <div
       className={fullPage ? "settings-fullpage" : "settings-overlay"}
+      data-fullpage-overlay={fullPage ? undefined : "settings"}
       style={fullPage ? S.fullPageRoot : S.overlay}
       onClick={fullPage ? undefined : (e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -1558,7 +1560,9 @@ function Kv({ k, v }: { k: string; v: string }) {
 }
 
 const S: Record<string, React.CSSProperties> = {
-  overlay: { position: "fixed", inset: 0, background: "rgba(8,9,12,0.62)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, animation: "fadeOnly 140ms ease both" },
+  /** 覆盖层从标题栏下方开始：保证窗口最小化/最大化/关闭按钮在任何整页界面都可见可点
+   *  （用户 m02115：全屏页盖住 TitleBar，右上角关闭点多次都退不出）。 */
+  overlay: { position: "fixed", top: LAYOUT.TITLE_BAR_HEIGHT, left: 0, right: 0, bottom: 0, background: "rgba(8,9,12,0.62)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, animation: "fadeOnly 140ms ease both" },
   panel: { width: "min(960px, 94vw)", height: "min(690px, 90vh)", display: "flex", flexDirection: "column", background: BRAND.inkRaised, border: `1px solid ${BRAND.border}`, borderRadius: 12, overflow: "hidden", boxShadow: "0 24px 60px rgba(0,0,0,0.55)" },
   /** 整页模式（ChromePage）：无模态背景/圆角/阴影，铺满父容器。 */
   fullPageRoot: { position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: BRAND.inkRaised, overflow: "hidden" },

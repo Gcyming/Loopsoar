@@ -132,7 +132,9 @@ export default function Popover({
         background: BRAND.inkRaised,
         border: `1px solid ${BRAND.borderStrong}`,
         borderRadius: 10,
-        boxShadow: "0 14px 40px rgba(0,0,0,0.55)",
+        // 窗口内 Portal 浮层：保留轻微层叠即可；原来的 40px/0.55 大投影在浅色主题下
+        // 会形成一圈发光的「大方框阴影」（用户 m02115 反馈），这里收小/减淡。
+        boxShadow: "0 10px 26px rgba(0,0,0,0.42)",
         padding: 8,
       }}
       onMouseDown={(event) => event.stopPropagation()}

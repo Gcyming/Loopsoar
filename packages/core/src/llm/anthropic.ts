@@ -31,6 +31,14 @@ export interface AnthropicClientOptions {
   resolveHeaders?: () => Record<string, string>;
 }
 
+/**
+ * 把 Anthropic 的 stop_reason 映射成与 OpenAI 一致的 finishReason 语义：
+ * "max_tokens" 表示被输出上限截断（等价 finish_reason="length"），tool_loop 据此自动续写。
+ */
+function anthropicFinishReason(stopReason: string): string {
+  return stopReason === "max_tokens" ? "length" : stopReason;
+}
+
 function effortToBudget(effort: string): number {
   const map: Record<string, number> = { minimal: 1024, low: 2048, medium: 4096, high: 8192, xhigh: 16384 };
   return map[effort.toLowerCase()] ?? 4096;
@@ -178,7 +186,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
         }
         const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
         if (tokens) yield { kind: "usage", tokens };
-        yield { kind: "done" };
+        yield { kind: "done", ...(data.stop_reason ? { finishReason: anthropicFinishReason(data.stop_reason) } : {}) };
         return;
       }
 
@@ -187,6 +195,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
       let buffer = "";
       let done = false;
       let outputTokens = 0;
+      let stopReason: string | undefined;
       const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
 
       const handleEvent = function* (data: string): Generator<LlmChunk> {
@@ -232,6 +241,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
             break;
           case "message_delta":
             outputTokens += evt.usage?.output_tokens ?? 0;
+            if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
             break;
           case "message_stop":
             done = true;
@@ -265,7 +275,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
         }
       }
       if (outputTokens > 0) yield { kind: "usage", tokens: outputTokens };
-      yield { kind: "done" };
+      yield stopReason ? { kind: "done", finishReason: anthropicFinishReason(stopReason) } : { kind: "done" };
     } catch (err) {
       // 用户主动停止：把 AbortError 上抛（tool_loop 归一为 aborted），不伪装成「请求超时」错误块
       if (req.signal?.aborted) throw err;

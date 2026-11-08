@@ -20,7 +20,7 @@ const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
-import { usePopover } from "./popover.js";
+import { dismissAllPopovers } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import BrowserTabs from "./BrowserTabs.js";
 import TitleBar from "./TitleBar.js";
@@ -187,8 +187,8 @@ export default function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
-  // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc 收起（含 Composer 内菜单）。
-  usePopover("app-session", sessionOpen, setSessionOpen);
+  // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc/切界面统一收起。
+  // 会话历史下拉在 AgentSidebar 内用 usePopover("app-session") 登记；这里只负责全局收起。
 
   // 启动时先为空：真实会话 ID 必须来自 shell（恢复历史或 chat:sessions 的 currentId），
   // 否则未恢复历史的冷启动会拿一个假 ID 发送，消息落到索引外的"幽灵会话"。
@@ -323,6 +323,9 @@ export default function App(): React.JSX.Element {
   useE2eRestoredScroll(messages.length, busy);
 
   const openSettings = useCallback((section?: string): void => {
+    // 进入设置属于「切换界面」：任何展开中的列表/浮层（含 Composer 权限菜单）先收起，
+    // 否则会压在新界面上（用户 m02115 截图：设置页上还浮着「本会话工具权限」）。
+    dismissAllPopovers();
     setSettingsSection(section ?? "general");
     setSettingsOpen(true);
   }, []);
@@ -866,6 +869,7 @@ export default function App(): React.JSX.Element {
     return api.on("chrome:popoverAction", (payload) => {
       const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string } };
       if (p?.action === "openPage" && p.payload?.kind) {
+        dismissAllPopovers();
         setChromePage(p.payload.kind);
         return;
       }
@@ -898,10 +902,9 @@ export default function App(): React.JSX.Element {
   const selectTab = useCallback(
     (tabId: string): void => {
       if (!api) return;
+      // 切标签属于切换界面：所有已展开列表/浮层先收起（用户 m02115 全局规则）。
+      dismissAllPopovers();
       void api.browser.selectTab({ tabId }).then(() => {
-        // 换界面收起：切标签属于切换界面，会话/模型下拉不应残留
-        setSessionOpen(false);
-        setModelMenuOpen(false);
         void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         const tab = tabs.find((t) => t.id === tabId);
         if (tab?.url) {
@@ -961,6 +964,8 @@ export default function App(): React.JSX.Element {
 
   const newSession = useCallback((): void => {
     if (!api) return;
+    // 新建会话属于切换界面：先收起所有展开列表/浮层（用户 m02115 全局规则）。
+    dismissAllPopovers();
     // 会话隔离：旧会话的输入草稿先存住，回来还能接着写
     draftRef.current.set(sessionIdRef.current, inputRef.current);
     void api.chat.newSession().then((r) => {
@@ -975,8 +980,6 @@ export default function App(): React.JSX.Element {
       }
       setPendingSteers([]); // 新会话没有待发指令
       setBusy(false);
-      setSessionOpen(false);
-      setModelMenuOpen(false);
       setInput("");
       setNotice("已新建会话");
       void api.browser
@@ -1060,6 +1063,8 @@ export default function App(): React.JSX.Element {
 
   const switchSession = useCallback((sessionId: string): void => {
     if (!api) return;
+    // 切会话属于切换界面：先收起所有展开列表/浮层（用户 m02115 全局规则）。
+    dismissAllPopovers();
     const previousSessionId = sessionIdRef.current;
     void api.chat.switchSession({ sessionId }).then((r) => {
       if (!r.ok) return;
@@ -1073,11 +1078,9 @@ export default function App(): React.JSX.Element {
       setBusy(meta.busy);
       // 切会话：把该会话自己的待发队列镜像回 UI（每个会话独立排队）
       setPendingSteers(readPending(sessionId));
-      // 会话隔离：输入草稿跟着会话走（先存旧会话，再恢复新会话），浮层一律收起
+      // 会话隔离：输入草稿跟着会话走（先存旧会话，再恢复新会话）
       draftRef.current.set(previousSessionId, inputRef.current);
       setInput(draftRef.current.get(sessionId) ?? "");
-      setSessionOpen(false);
-      setModelMenuOpen(false);
       setNotice("");
       void api.browser
         .listTabs()
@@ -1158,6 +1161,8 @@ export default function App(): React.JSX.Element {
 
   const snapshot = useCallback((): void => {
     if (!api) return;
+    // 打开快照面板 = 进入整页浮层：先收起所有展开列表（用户 m02115 全局规则）。
+    dismissAllPopovers();
     void api.browser
       .snapshot()
       .then((result) => {
@@ -1205,14 +1210,22 @@ export default function App(): React.JSX.Element {
     if (settingsOpen || workspacePanelOpen) setSnapshotData(null);
   }, [settingsOpen, workspacePanelOpen]);
 
-  // 界面隔离/换界面收起：进入设置、整页、工作区等其它界面时，聊天的浮层列表
-  // （模型选择 / 会话列表）必须一起收起，否则会压在新界面上（用户实测截图）。
+  // 界面隔离/换界面收起：进入设置、整页、工作区、快照等其它界面时，任何已展开列表
+  // （会话下拉 / Composer 权限·模型·命令菜单）都必须一起收起，否则会压在新界面上
+  // （用户实测截图）。统一走 dismissAllPopovers()，未来新增列表只要用 usePopover 就自动覆盖。
   const otherInterfaceOpen = settingsOpen || chromePage !== null || workspacePanelOpen || snapshotData !== null;
   useEffect(() => {
     if (!otherInterfaceOpen) return;
-    setModelMenuOpen(false);
-    setSessionOpen(false);
+    dismissAllPopovers();
   }, [otherInterfaceOpen]);
+
+  // 窗口失焦：切到别的应用/系统弹窗时也收起展开列表，回来界面干净（用户 m02115）。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onBlur = (): void => dismissAllPopovers();
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
 
   // 页面变化后快照内容会过期：自动收起，避免展示与当前页不匹配的旧正文
   useEffect(() => {
@@ -1337,10 +1350,14 @@ export default function App(): React.JSX.Element {
           compactUi={compactUi}
           sessionOpen={sessionOpen}
           onToggleSession={toggleSessionMenu}
+          onCloseSession={() => setSessionOpen(false)}
           onNewSession={newSession}
           onSwitchSession={switchSession}
           onDeleteSession={deleteSession}
-          onOpenWorkspacePanel={() => setWorkspacePanelOpen(true)}
+          onOpenWorkspacePanel={() => {
+            dismissAllPopovers();
+            setWorkspacePanelOpen(true);
+          }}
           onNotice={setNotice}
         >
           <MessageList
@@ -1498,7 +1515,10 @@ export default function App(): React.JSX.Element {
             void api?.settings.getProvider().then(setProvider).catch(() => {});
           }}
           onPreferencesSaved={(next) => setPreferences(next)}
-          onOpenOnboarding={() => setOnboardingOpen(true)}
+          onOpenOnboarding={() => {
+            dismissAllPopovers();
+            setOnboardingOpen(true);
+          }}
         />
         </React.Suspense>
       ) : null}

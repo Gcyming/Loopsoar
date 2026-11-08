@@ -98,6 +98,7 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
   return (
     <div
       className="ask-overlay"
+      data-fullpage-overlay="ask"
       role="presentation"
       onMouseDown={(event) => {
         // 点遮罩空白只把焦点收回弹窗（不误关弹窗：取消必须显式按钮/Esc）

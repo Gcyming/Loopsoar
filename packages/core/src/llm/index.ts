@@ -37,7 +37,11 @@ export type LlmChunk =
       tokens?: number;
     }
   | { kind: "usage"; tokens: number }
-  | { kind: "done" }
+  /**
+   * 流结束。finishReason 透传上游结束原因（如 "stop"/"length"）：
+   * "length" 表示被 max_tokens 截断，tool_loop 据此自动续写，避免长回复断在半句。
+   */
+  | { kind: "done"; finishReason?: string }
   | { kind: "error"; message: string };
 
 // LLM 客户端接口：流式调用，返回异步可迭代的 Chunk 队列。

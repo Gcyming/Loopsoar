@@ -327,7 +327,7 @@ export default function ChromePage({
         );
 
   return (
-    <div className="chrome-page" style={styles.root} role="region" aria-label={title}>
+    <div className="chrome-page" data-fullpage-overlay="chrome-page" style={styles.root} role="region" aria-label={title}>
       <header style={styles.topBar}>
         <button type="button" className="icon-btn" style={styles.backBtn} title={tr("chromePage.back")} aria-label={tr("chromePage.back")} onClick={onClose} autoFocus>
           <Icon name="back" size={16} />

@@ -30,6 +30,7 @@ import { BRAND, MOTION, NO_DRAG_REGION, RADIUS, SHADOW } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
 import Popover from "./AnchoredPopover.js";
+import { usePopover } from "./popover.js";
 import { getLanguage, useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import type { SessionMeta, SidebarMode, WorkspaceRecord } from "./types.js";
@@ -57,6 +58,8 @@ export interface AgentSidebarProps {
   sessionOpen: boolean;
   /** 点会话 chip：刷新列表并切换下拉开合（App 侧组合两个动作）。 */
   onToggleSession: () => void;
+  /** 收起会话历史下拉（usePopover 的点击外部 / dismissAllPopovers 统一收起时机回调）。 */
+  onCloseSession: () => void;
   onNewSession: () => void;
   onSwitchSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -98,6 +101,7 @@ export default function AgentSidebar({
   compactUi,
   sessionOpen,
   onToggleSession,
+  onCloseSession,
   onNewSession,
   onSwitchSession,
   onDeleteSession,
@@ -107,6 +111,10 @@ export default function AgentSidebar({
 }: AgentSidebarProps): React.JSX.Element {
   const tr = useT();
   const isCollapsed = mode === "collapsed";
+  // 会话历史下拉：走全局浮层协调（点击外部 / Esc / 其它浮层打开 / dismissAllPopovers 统一收起）。
+  usePopover("app-session", sessionOpen, (next) => {
+    if (!next) onCloseSession();
+  });
   const isFloat = mode === "float";
 
   /**

@@ -187,10 +187,14 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
       // 非流式兜底：服务端没按 stream 返回时，转成一次性 text/tool_call + done
       if (!res.body || contentType.includes("application/json")) {
         const data = (await res.json()) as {
-          choices?: { message?: { content?: string; reasoning_content?: string; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] } }[];
+          choices?: {
+            message?: { content?: string; reasoning_content?: string; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] };
+            finish_reason?: string;
+          }[];
           usage?: { total_tokens?: number };
         };
-        const msg = data.choices?.[0]?.message ?? {};
+        const choice = data.choices?.[0] ?? {};
+        const msg = choice.message ?? {};
         if (msg.reasoning_content) yield { kind: "reasoning", text: msg.reasoning_content };
         if (msg.content) yield { kind: "text", text: msg.content };
         for (const tc of msg.tool_calls ?? []) {
@@ -204,7 +208,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
           };
         }
         if (data.usage?.total_tokens) yield { kind: "usage", tokens: data.usage.total_tokens };
-        yield { kind: "done" };
+        yield choice.finish_reason ? { kind: "done", finishReason: choice.finish_reason } : { kind: "done" };
         return;
       }
 
@@ -212,6 +216,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
       const decoder = new TextDecoder();
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
       let usageTokens: number | undefined;
+      let finishReason: string | undefined;
       let buffer = "";
 
       const flushToolCalls = function* (): Generator<LlmChunk> {
@@ -227,7 +232,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
           };
         }
         if (usageTokens !== undefined) yield { kind: "usage", tokens: usageTokens };
-        yield { kind: "done" };
+        yield finishReason ? { kind: "done", finishReason } : { kind: "done" };
       };
 
       for (;;) {
@@ -246,7 +251,10 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             return;
           }
           let obj: {
-            choices?: { delta?: { content?: string; reasoning_content?: string; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] } }[];
+            choices?: {
+              delta?: { content?: string; reasoning_content?: string; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] };
+              finish_reason?: string | null;
+            }[];
             usage?: { total_tokens?: number };
           };
           try {
@@ -254,7 +262,8 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
           } catch {
             continue; // 半行/心跳注释：跳过
           }
-          const delta = obj.choices?.[0]?.delta ?? {};
+          const choice = obj.choices?.[0];
+          const delta = choice?.delta ?? {};
           if (delta.reasoning_content) yield { kind: "reasoning", text: delta.reasoning_content };
           if (delta.content) yield { kind: "text", text: delta.content };
           for (const tc of delta.tool_calls ?? []) {
@@ -265,6 +274,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             if (tc.function?.arguments) cur.args += tc.function.arguments;
             toolCalls.set(key, cur);
           }
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
           if (obj.usage?.total_tokens !== undefined) usageTokens = obj.usage.total_tokens;
         }
       }

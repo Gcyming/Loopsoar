@@ -166,7 +166,7 @@ export default function Onboarding({ open, onClose, onOpenSettings }: Onboarding
   const current = steps[Math.min(step, steps.length - 1)];
 
   return (
-    <div className="onboarding-overlay" role="presentation">
+    <div className="onboarding-overlay" data-fullpage-overlay="onboarding" role="presentation">
       <div
         ref={dialogRef}
         className="onboarding-panel"

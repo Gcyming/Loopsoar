@@ -784,6 +784,37 @@
 - **复核时间**：打包阶段（长历史、窄侧栏、深浅主题）
 
 
+## ADR-0045 长度截断自动续写：finish_reason=length 透传 + 同一轮续写
+
+- **背景**：用户（m02115 ④）截图长回复结尾断在半句（「（老陈的铁盒」），要求修。排查发现 UI 渲染无重复/劈开（E2E 断言 bodyLen 1692 且以句号结尾、`scrollGap=0`、无 stream-gate），根因指向 OpenAI 兼容上游默认 `max_tokens` 截断：上游以 `finish_reason="length"` 结束，但适配器丢弃该字段、tool_loop 不知情直接收束，用户看到的就是「消息被截断」。旧行为既不可观测也无法自愈。
+- **决策**：
+  1. `LlmChunk` 的 `done` 增加 `finishReason?: string`；`openai.ts` 在流式（`choices[0].finish_reason`，含 `[DONE]` flush 与无 `[DONE]` 正常结束）与非流式兜底都携带；`anthropic.ts` 把 `stop_reason:"max_tokens"` 映射为 `"length"`，其余原样透传（单一映射函数 `anthropicFinishReason`）。
+  2. `tool_loop.ts` 在正文轮收尾（`sawDone`、无工具调用、无待注入引导）时：若 `finishReason` 为 `length`/`max_tokens` 且续写次数 < `maxLengthContinuations`（默认 4）→ `emit("progress",{note:"输出达到上游长度上限，自动续写…"})`，回灌 `{role:"assistant",content:roundText}` + `{role:"user",content:"请紧接上文继续输出未完成的内容：不要重复已写内容，不要重新开头，不要总结。"}` 后 `continue`，**同一助手消息内**续写（不新开用户轮、不打断）。
+  3. `ToolLoopOpts.maxLengthContinuations`（默认 4，0=关闭续写）；每轮结束重置 `roundFinishReason`；达到上限以现有正文正常收束（不报错、不静默丢内容）。
+- **理由**：用户感知的是「话没说完」，模型自然结束与长度截断必须区分；同轮续写让长文写作无需手动「继续」，且不改变消息气泡数量；透传 finishReason 让该故障从不可见变为可观测（progress 文案 + 日志）。
+- **替代方案**：按模型 spec 调大 `max_tokens`（否：大量上游无 maxOutput 声明、仍可能截断，且只是延后问题）；前端提示「可能被截断」（否，治标）；用户手动点「继续」（否，长文写作体验差）。
+- **后果**：长回复可能触发额外上游调用（多耗 token，受 `maxLengthContinuations` 与预算四闸双重约束）；续写时 UI 出现一条 progress 提示；对不返回 finish_reason 的旧客户端零影响（`undefined` 不续写，行为与旧版一致）。
+- **验证方式**：`tests/core/lengthContinuation.spec.ts` 4 例（length → 自动续写并拼接 finalText、done 只发一次；stop 不续写；无 finishReason 向后兼容；`maxLengthContinuations` 封顶不无限续写）；现有 openai/anthropic 适配器测试全绿；`pnpm typecheck` 5/5；真机 E2E：用本地假上游（`e2e-evidence/mock-llm-server.mjs`）确定性返回首轮 `finish_reason=length`、次轮 `stop`，界面同一助手消息拼接为「第一段被上游长度上限截断在这里自动续写完，正文完整结束。」（`hasPart1/hasPart2/contiguous` 全 true、`continuationSeen` true、无中断标签；日志 `[LOOP] length continuation` + `outcome rounds:2`）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-08）
+- **回退条件**：续写造成重复内容或 token 成本异常 → `maxLengthContinuations` 设 0（等价关闭，行为回到 ADR 前）；上游不兼容 → 保持旧行为。
+- **复核时间**：打包阶段（长文写作、上游默认 max_tokens 差异）
+
+## ADR-0046 图标几何居中 + 浮层阴影收敛 + 全局点外/切界面收起 + 全屏层不挡窗口按钮
+
+- **背景**：用户（m02115）四项 UI 问题：①标签页关闭 × 等图标没在圆形按钮正中间，要求全面排查所有图标；②浏览器「更多」浮层外圈出现莫名大方框阴影；③进入设置等其它界面后，会话内展开的列表（如「本会话工具权限」）还浮在新界面上；要求改成全局规则：点击展开列表以外区域自动收起，且覆盖以后新增的列表；④全屏界面下多次点右上角退出键无反应——全屏覆盖层盖住了 TitleBar 的窗口按钮。
+- **决策**：
+  1. **图标居中**：新增纯 Node 几何测量（`scripts/icon-center-lib.mjs` 曲线采样算 alpha bbox，`scripts/icon-center-check.mjs` 扫描 47 个 `public/icons`），对 bbox 中心偏离 viewBox 中心 >2% 的 11 个图标（back/forward/play/settings/agent/edit/check/bolt/download/folders/guide-arrow）在 SVG 内用 `<g transform="translate(dx dy)">` 校正到居中；守卫 `tests/ui/iconCenter.spec.ts`（全量 |偏移|≤2.5% + 11 个修复图标必须保留 translate + 1024 viewBox）。**不做** Icon 组件按图标补偿（保持组件单一职责、避免每个用法都要传参）。
+  2. **阴影收敛**：删除 `.chrome-pop-card` 的大投影（`0 18px 48px rgba(0,0,0,.55)` → `none`；独立透明浮层窗口 shell 侧 `hasShadow:false`，内层投影会溢出成方框）；窗口内 Portal 菜单（AnchoredPopover）投影收轻为 `0 10px 26px rgba(0,0,0,.42)`；settings/snapshot/onboarding/ask/Toast/terminal/TopicRail 等保留原有轻微层叠阴影（清单见实现报告），不做一刀切。
+  3. **全局收起（单一入口）**：`packages/ui/src/popover.ts` 新增 `dismissAllPopovers()`、`getOpenPopoverId()`、`subscribePopovers()`；`usePopover` 收到广播自动关闭；App 在「进入设置/整页/工作区/快照/向导、切会话、新建会话、切浏览器标签、窗口失焦、`otherInterfaceOpen` effect」统一调用；会话历史下拉迁移到 AgentSidebar 内 `usePopover("app-session")`，删除 App 自维护状态。**不做 preventDefault/stopPropagation**（否则吞掉触发界面切换的第一次点击）。模块头注释 + `tests/ui/popoverDismiss.spec.ts` 静态守卫约定：所有展开列表必须走 usePopover 或响应 dismissAllPopovers。
+  4. **全屏层让位窗口按钮**：Settings/ChromePage/WorkspacePanel/SnapshotPanel/Onboarding/PermissionDialog/AskUserDialog 统一从标题栏下方开始（`top = LAYOUT.TITLE_BAR_HEIGHT`，即 40px；CSS 覆盖层用 `inset: 40px 0 0 0`），并加 `data-fullpage-overlay="settings|chrome-page|workspace|snapshot|onboarding|permission|ask"` 标记；TitleBar 关闭按钮先 `dismissAllPopovers()` 再 `api.window.close()`（agent 窗走 `closeAgentWindow`，preload 缺失时 `window.close()` 兜底）。守卫 `tests/ui/fullPageOverlay.spec.ts`。
+- **理由**：用户明确要「全局规则」而非逐处打补丁——浮层收起必须只有一个登记/广播产地，未来新增列表只要用 `usePopover` 就自动覆盖；窗口按钮是窗口自身 chrome，任何内容界面都不得遮挡；图标居中问题若在组件层做偏移补偿会散布魔法数字，改 SVG 一次生效且可脚本复核。
+- **替代方案**：每个浮层各自加 document 监听（否：漏掉未来新增与界面切换时机）；提高 TitleBar z-index（否：覆盖层仍会吃掉点击，且层级打架）；用 Electron `capturePage` 测图标 bbox（否：本机 Chromium 沙箱/离屏渲染会崩，且不必要）；把全部阴影一刀切删掉（否：合理层叠感会丢失）。
+- **后果**：全屏模态顶部留出 40px 标题栏（窗口按钮始终可点）；会话下拉改为 AgentSidebar 内部登记（App 少一个 usePopover）；新增列表必须走统一入口（守卫测试会拦）；11 个 SVG 文件内多了 `<g transform>` 包裹层。
+- **验证方式**：`tests/ui/iconCenter.spec.ts`（3）、`tests/ui/popoverDismiss.spec.ts`（5）、`tests/ui/fullPageOverlay.spec.ts`（5）、`pnpm vitest run tests/ui` 22 文件/144 tests 全绿；`pnpm typecheck` 5/5；全量 `pnpm test` 151 文件/1301 tests 全绿；真机 E2E（1600×1000）：会话下拉可打开、`window blur` 后 `.anchored-popover` 计数归 0；从 Composer 权限菜单进入设置后 popover 自动收起、`[data-fullpage-overlay="settings"]` 的 computed top=40px、`document.elementFromPoint` 命中 `.win-btn`、Esc 关闭设置正常；长回复渲染完整（截图 `e2e-evidence/turn8b.png`）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-08）
+- **回退条件**：40px 顶部留白破坏整页视觉 → 改为抬高 TitleBar z-index（保留 data 标记）；全局收起误关用户正在操作的浮层 → dismissAllPopovers 只作用于「界面切换/失焦」时机（不回退 pointerdown 逻辑）；图标 transform 导致某些渲染器偏移 → 撤回对应 SVG（守卫阈值可调 2.5%→3%）。
+- **复核时间**：打包阶段（窄窗口、浅色主题、浮层贴边、图标在 4K/125% 缩放下）
+
 ---
 
 ## 附：ADR 索引与状态总览
@@ -834,3 +865,5 @@
 | ADR-0042 | 启动优化：记忆加载后台化 + 非关键任务首帧后移 + 启动计时锚点 + UI 面板懒加载 | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0043 | 不做跨供应商静默降级：模型 chip 与实际调用一致，用不了直接报上游错误 | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0044 | 回复元信息下移 + 复制图标统一 + 模式提示归状态栏 + 思考时间线图标化 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0045 | 长度截断自动续写：finish_reason=length 透传 + 同轮续写（修复长回复断在半句） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0046 | 图标几何居中 + 浮层阴影收敛 + 全局点外/切界面收起 + 全屏层不挡窗口按钮 | ✅ 自动化 + 真机 E2E 已验证 |
