@@ -74,10 +74,16 @@ describe("长度截断自动续写", () => {
       maxLengthContinuations: 2,
     });
     expect(outcome.status).toBe("done");
-    expect(outcome.finalText).toBe("ABC");
+    // 续写次数用尽仍被截断：正文完整保留 + 末尾显式中断标记（绝不静默截断）
+    expect(outcome.finalText).toContain("ABC");
+    expect(outcome.finalText).toContain("（输出因上游长度上限中断");
     const continuationNotes = events.filter(
-      (e) => e.type === "progress" && String(e.data?.note ?? "").includes("自动续写"),
+      (e) => e.type === "progress" && String(e.data?.note ?? "").includes("自动续写（第"),
     );
     expect(continuationNotes).toHaveLength(2);
+    const exhaustionNotes = events.filter(
+      (e) => e.type === "progress" && String(e.data?.note ?? "").includes("自动续写次数用尽"),
+    );
+    expect(exhaustionNotes).toHaveLength(1);
   });
 });

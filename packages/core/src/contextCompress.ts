@@ -25,6 +25,11 @@ export interface ContextCompressOptions {
   budgetChars?: number;
   /** 原样保留的最近消息条数。 */
   keepRecent?: number;
+  /**
+   * 收紧压缩时「最近消息」的下限（条数）。默认 2（允许为进预算牺牲保留条数）；
+   * /compact 这类用户显式操作传 14，保证「摘要 + 最近 14 条」的可预期语义。
+   */
+  minKeepRecent?: number;
   /** 摘要中每条早期消息保留的字符数。 */
   summaryItemChars?: number;
 }
@@ -37,9 +42,11 @@ export interface ContextCompressResult {
   afterChars: number;
   /** 压缩摘要（供 UI/日志展示；未压缩时为空）。 */
   summary: string;
+  /** 尝试所有收紧策略后仍超出预算（说明历史仍可能超过模型上下文，调用方应给用户可见提示）。 */
+  stillOverBudget?: boolean;
 }
 
-export const DEFAULT_CONTEXT_BUDGET_CHARS = 120_000;
+export const DEFAULT_CONTEXT_BUDGET_CHARS = 60_000;
 export const DEFAULT_KEEP_RECENT = 14;
 export const DEFAULT_SUMMARY_ITEM_CHARS = 240;
 
@@ -83,9 +90,11 @@ export function compressConversation(
 
   let keepRecent = Math.min(Math.max(1, options.keepRecent ?? DEFAULT_KEEP_RECENT), conversation.length - 1);
   let summaryItemChars = Math.max(40, options.summaryItemChars ?? DEFAULT_SUMMARY_ITEM_CHARS);
+  const minKeepRecent = Math.max(1, Math.floor(options.minKeepRecent ?? 2));
 
-  // 最多尝试 4 轮收紧：保留更少最近消息 + 更短摘要，直到进入预算
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  // 尽量收紧直到进入预算；最近 N 条消息**永远不会被截断**（只减少保留条数/压缩更早的摘要），
+  // 因为那才是模型继续任务所需的上下文。若穷尽策略仍超预算，返回 stillOverBudget 让调用方可见提示。
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     const older = conversation.slice(0, conversation.length - keepRecent);
     const recent = conversation.slice(-keepRecent);
     const summaryLines = older.map((message) => summarizeMessage(message, summaryItemChars));
@@ -100,7 +109,7 @@ export function compressConversation(
       ...recent,
     ];
     const afterChars = compacted.reduce((sum, message) => sum + messageChars(message), 0);
-    if (afterChars <= budgetChars || attempt === 3) {
+    if (afterChars <= budgetChars || attempt === 7) {
       return {
         messages: compacted,
         compressed: true,
@@ -108,18 +117,23 @@ export function compressConversation(
         beforeChars,
         afterChars,
         summary: `已自动压缩 ${older.length} 条早期消息（${beforeChars} → ${afterChars} 字符）`,
+        ...(afterChars > budgetChars ? { stillOverBudget: true } : {}),
       };
     }
-    keepRecent = Math.max(2, Math.floor(keepRecent * 0.6));
+    keepRecent = Math.max(minKeepRecent, Math.floor(keepRecent * 0.6));
     summaryItemChars = Math.max(40, Math.floor(summaryItemChars * 0.7));
   }
   // 理论不可达
   return { messages, compressed: false, droppedCount: 0, beforeChars, afterChars: beforeChars, summary: "" };
 }
 
-/** 由模型上下文窗口（token）推导历史预算字符数（预留一半给输出/工具/注入）。 */
+/**
+ * 由模型上下文窗口（token）推导历史预算字符数。
+ * 口径：历史占上下文窗口 ~60%（其余留给 system/工具结果/输出），中英混合约 2 字符/token；
+ * 未探测到窗口时用保守默认 6 万字符（≈ 2.4~3 万 token），宁可多压缩，也不让上游静默截断提示词。
+ * 注意：旧实现有 32k 字符下限，对 8k/16k 窗口的小模型会把历史撑爆 → 上游 400 或静默丢上下文。
+ */
 export function historyBudgetChars(contextWindowTokens?: number): number {
   if (!contextWindowTokens || contextWindowTokens <= 0) return DEFAULT_CONTEXT_BUDGET_CHARS;
-  // 经验：中英混合 ≈ 2.5~3 字符/token；历史只占上下文窗口的 50%，其余留给系统段/工具结果/输出。
-  return Math.max(32_000, Math.min(600_000, Math.floor(contextWindowTokens * 3 * 0.5)));
+  return Math.max(8_000, Math.min(600_000, Math.floor(contextWindowTokens * 1.2)));
 }

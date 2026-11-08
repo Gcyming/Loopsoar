@@ -48,6 +48,12 @@ export interface DoneInfo {
   usage: { rounds?: number; toolCalls?: number; totalTokens?: number };
   interrupted?: { status: string; reason: string };
   statusText: string;
+  /**
+   * 服务端权威全文（含长回复自动续写、输出过滤后的最终结果）。
+   * UI 在 done 时用它覆盖本地累积文本：即使有 chunk 在传输中丢失/乱序，
+   * 最终展示与持久化文本也一定是完整的（m02515：截断必须根除，不能靠运气）。
+   */
+  finalText?: string;
 }
 
 /** 正文增量：不存在则创建助手消息（并开始时间线），存在则累加。 */
@@ -111,12 +117,15 @@ export function applyLateChunk(
     return applyChunk(messages, target.id, delta, options);
   }
   const next = [...messages];
+  // 迟到 chunk 去重：done 已用权威全文覆盖 text 时，若这段增量已经是正文尾部，不再重复追加
+  //（重复追加会在界面上出现「后半段被写两遍」，同样属于内容错误）。
+  const alreadyIncluded = delta.length > 0 && target.text.endsWith(delta);
   next[index] = {
     ...target,
-    text: target.text + delta,
-    tail: delta,
+    text: alreadyIncluded ? target.text : target.text + delta,
+    tail: alreadyIncluded ? target.tail : delta,
     tailSeq: options.tailSeq ?? target.tailSeq,
-    timeline: appendTimelineStep(target.timeline ?? [], { kind: "body", text: delta }),
+    timeline: alreadyIncluded ? target.timeline : appendTimelineStep(target.timeline ?? [], { kind: "body", text: delta }),
   };
   return next;
 }
@@ -241,15 +250,18 @@ export function parseDone(raw: string | undefined): DoneInfo {
       status?: string;
       reason?: string;
       usage?: { rounds?: number; toolCalls?: number; totalTokens?: number };
+      finalText?: string;
     };
+    const finalText = typeof parsed.finalText === "string" ? parsed.finalText : undefined;
     if (parsed.status && parsed.status !== "done") {
       return {
         usage: parsed.usage ?? {},
         interrupted: { status: parsed.status, reason: parsed.reason ?? "未提供原因" },
         statusText: `已中断（${parsed.status}）：${parsed.reason ?? ""}`,
+        ...(finalText !== undefined ? { finalText } : {}),
       };
     }
-    return { usage: parsed.usage ?? {}, statusText: "完成" };
+    return { usage: parsed.usage ?? {}, statusText: "完成", ...(finalText !== undefined ? { finalText } : {}) };
   } catch {
     return { usage: {}, statusText: "完成" };
   }
@@ -279,8 +291,13 @@ export function applyDone(
   const totalMs = timing.startedAt > 0 ? (timing.now ?? Date.now()) - timing.startedAt : undefined;
   return messages.map((message) => {
     if (message.status !== "streaming") return message;
+    // done 携带服务端权威全文：直接覆盖本地累积文本。
+    // 为什么：流式 chunk 可能在传输/处理后丢失（迟到、过滤缓冲、边界 bug），
+    // 本地拼接一旦少一段就是用户看到的「截断」；权威全文是唯一可信来源（m02515）。
+    const authoritative = typeof info.finalText === "string" && info.finalText.length > 0 ? info.finalText : undefined;
     return {
       ...message,
+      ...(authoritative !== undefined ? { text: authoritative } : {}),
       status: "done",
       tail: undefined,
       timing: { firstTokenMs: firstMs, totalMs, ...info.usage },

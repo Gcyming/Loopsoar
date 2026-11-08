@@ -65,6 +65,27 @@ export function sanitizeErrorMessage(raw: string): string {
 /** 生成中的会话：UI 的 saveTimeline 可能早于会话落库到达（done 事件先于 sessions.append），先暂存。 */
 const activeStreams = new Set<string>();
 const stagedTimelines = new Map<string, unknown[]>();
+/**
+ * 生成中的会话 → 已流出的正文累积。
+ * 用于「应用退出/崩溃前」把已生成内容落盘：否则退出瞬间还在生成的那条回复会整段丢失，
+ * 重启后看起来像「回复被截断」。正常结束时由 .then 落库并清除。
+ */
+const activePartials = new Map<string, string>();
+
+/**
+ * 退出前把仍在生成中的回复（已流出的部分）落盘。
+ * 由 shutdown 流程调用；调用后清空内存记录，避免重复写入。
+ */
+export function flushActivePartials(save: (sessionId: string, text: string) => void): void {
+  for (const [sessionId, text] of activePartials) {
+    try {
+      if (text.trim()) save(sessionId, `${text}\n\n（应用退出时本轮回复尚未完成，以上为已生成内容）`);
+    } catch (err) {
+      console.warn("[Loopsoar] 退出时保存生成中回复失败（已忽略）：", err);
+    }
+  }
+  activePartials.clear();
+}
 
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
 function startStream(
@@ -85,7 +106,11 @@ function startStream(
   void deps.chatService
     .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort }, (item) => {
       const type = String(item.meta?.type ?? "chunk");
-      if (type === "chunk") assistantText += item.content;
+      if (type === "chunk") {
+        assistantText += item.content;
+        // 记录已流出正文（退出/崩溃时落盘的来源；正常结束会清除）
+        activePartials.set(sessionId, assistantText);
+      }
       if (type === "steer") {
         // 引导注入回执：走专用事件（不进 chat:stream:* 通用流），UI 撤待发卡并折进思考历程
         let parsed: { items?: { id?: string; text?: string; kind?: string; fromName?: string }[] } = {};
@@ -112,6 +137,7 @@ function startStream(
     })
     .then(async (result) => {
       const finalText = result.finalText || assistantText;
+      activePartials.delete(sessionId);
       // 会话持久化（恢复上次会话的数据来源）
       deps.sessions?.append(sessionId, payload.message, finalText, modelInfo);
       // 时间线回填：done 事件先于 append 到达，UI 的 saveTimeline 可能先落进暂存区；
@@ -144,7 +170,17 @@ function startStream(
     .catch((err: unknown) => {
       activeStreams.delete(sessionId);
       stagedTimelines.delete(sessionId);
+      activePartials.delete(sessionId);
       const cleaned = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
+      // 异常中断也要把已经流式产出的正文落库：否则重启后这段内容凭空消失，
+      // 用户看到的就是「回复被截断/丢了尾巴」（m02515 截断根除）。没有产出正文时保持原样。
+      if (assistantText.trim()) {
+        try {
+          deps.sessions?.append(sessionId, payload.message, `${assistantText}\n\n（本轮异常中断：${cleaned}）`, modelInfo);
+        } catch (appendErr) {
+          console.warn("[Loopsoar] 异常中断时保存部分回复失败（已忽略）：", appendErr);
+        }
+      }
       deps.push("chat:stream:error", { sessionId, content: cleaned, message: cleaned });
     });
   return { accepted: true, sessionId };

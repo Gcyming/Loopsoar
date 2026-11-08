@@ -23,7 +23,15 @@ export interface AnthropicClientOptions {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * 硬性总超时（毫秒；默认 0 = 不启用）。
+   * 固定总超时会掐断「仍在正常流式输出」的长回复 → 截断（用户 m02515）。防挂死改用 idleTimeoutMs。
+   */
   timeoutMs?: number;
+  /** 空闲超时（毫秒，默认 120000）：连续该时长没有新数据才判定上游卡死。每收到数据即重置。 */
+  idleTimeoutMs?: number;
+  /** 首包超时（默认 120s，收到响应头即清零）。 */
+  firstByteTimeoutMs?: number;
   maxRetries?: number;
   /** 自定义请求头（会在默认头之后合并）。 */
   headers?: Record<string, string>;
@@ -88,14 +96,37 @@ function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages
 
 export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
   const endpoint = `${opts.baseUrl.replace(/\/+$/, "")}/messages`;
-  const timeoutMs = opts.timeoutMs ?? 300_000;
+  const hardTimeoutMs = opts.timeoutMs ?? 0;
+  const idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
+  const firstByteTimeoutMs = opts.firstByteTimeoutMs ?? 120_000;
   const maxRetries = opts.maxRetries ?? 2;
 
   async function* invokeOnce(req: LlmRequest): AsyncGenerator<LlmChunk> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 超时语义：首包超时管「连不上/没有响应头」；空闲超时管「流中途卡死」；
+    // 硬总超时默认关闭（它会截断正常的长输出）。三者分别记录原因，便于可读报错。
+    let firstByteTimedOut = false;
+    let idleTimedOut = false;
+    let totalTimedOut = false;
+    const firstByteTimer = setTimeout(() => {
+      firstByteTimedOut = true;
+      controller.abort();
+    }, firstByteTimeoutMs);
+    let idleTimer: NodeJS.Timeout | null = null;
+    const armIdleTimer = (): void => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        controller.abort();
+      }, idleTimeoutMs);
+      idleTimer.unref?.();
+    };
+    const totalTimer = hardTimeoutMs > 0 ? setTimeout(() => {
+      totalTimedOut = true;
+      controller.abort();
+    }, hardTimeoutMs) : null;
     // 外部中止（用户点「停止」/会话取消）必须穿透到在途 fetch，否则上游卡住时
-    // 停止要等到总超时（300s）才生效，UI 一直停在「思考中」。
+    // 停止要等到首字节超时（120s）才生效，UI 一直停在「思考中」。
     const onExternalAbort = (): void => controller.abort();
     if (req.signal) {
       if (req.signal.aborted) controller.abort();
@@ -135,6 +166,8 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      // 已拿到响应头：首包计时结束；后面由「空闲计时器」接管（每次读到数据重置）。
+      clearTimeout(firstByteTimer);
       if (!res.ok) {
         const bodyText = (await res.text()).slice(0, 800);
         const info = parseUpstreamError(res.status, bodyText);
@@ -255,35 +288,102 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
         }
       };
 
-      while (!done) {
-        const { value, done: readerDone } = await reader.read();
-        if (readerDone) break;
-        buffer += decoder.decode(value, { stream: true });
-        let sep = buffer.indexOf("\n\n");
-        while (sep >= 0) {
-          const rawEvent = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
-          for (const line of rawEvent.split("\n")) {
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
-            for (const chunk of handleEvent(data)) yield chunk;
-            if (done) break;
-          }
-          if (done) break;
-          sep = buffer.indexOf("\n\n");
+      /**
+       * 解析一个完整 SSE 事件块。兼容 \n\n 与 \r\n\r\n 事件分隔：
+       * 旧实现只认 "\n\n"，CRLF 上游（如某些代理/网关）会整段不解析 → 看起来像「模型没输出」。
+       */
+      const emitEvent = function* (rawEvent: string): Generator<LlmChunk> {
+        for (const rawLine of rawEvent.split("\n")) {
+          const line = rawLine.trim();
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+          yield* handleEvent(data);
+          if (done) return;
         }
+      };
+      /** 从 buffer 中尽量多地取出已完成的事件（\n\n 或 \r\n\r\n 分隔，取最早出现的那个）。 */
+      const drainEvents = function* (): Generator<LlmChunk> {
+        for (;;) {
+          const crlf = buffer.indexOf("\r\n\r\n");
+          const lf = buffer.indexOf("\n\n");
+          let sep = -1;
+          let sepLen = 0;
+          if (crlf >= 0 && (lf < 0 || crlf < lf)) {
+            sep = crlf;
+            sepLen = 4;
+          } else if (lf >= 0) {
+            sep = lf;
+            sepLen = 2;
+          }
+          if (sep < 0) return;
+          const rawEvent = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + sepLen);
+          yield* emitEvent(rawEvent);
+          if (done) return;
+        }
+      };
+
+      try {
+        while (!done) {
+          // 每次读取前重置空闲计时器：只有「连续 N 秒没数据」才判卡死，正常长输出不会被砍断。
+          armIdleTimer();
+          const { value, done: readerDone } = await reader.read();
+          if (readerDone) break;
+          buffer += decoder.decode(value, { stream: true });
+          yield* drainEvents();
+        }
+        // 流结束：先把解码器里最后几个字节吐出来，再把没有尾分隔符的最后一个事件解析掉。
+        // 旧实现直接丢弃残留 buffer → 最后一帧 text_delta / message_delta 会静默丢失（截断）。
+        buffer += decoder.decode();
+        yield* drainEvents();
+        if (!done && buffer.trim()) {
+          const trailing = buffer;
+          buffer = "";
+          yield* emitEvent(trailing);
+        }
+        if (outputTokens > 0) yield { kind: "usage", tokens: outputTokens };
+        yield stopReason ? { kind: "done", finishReason: anthropicFinishReason(stopReason) } : { kind: "done" };
+      } catch (err) {
+        // 用户主动停止：把 AbortError 上抛（tool_loop 归一为 aborted），不伪装成「请求超时」错误块
+        if (req.signal?.aborted) throw err;
+        if (idleTimedOut) {
+          yield {
+            kind: "error",
+            message: `上游空闲超时：${Math.round(idleTimeoutMs / 1000)}s 未收到任何新数据（已输出内容已保留）`,
+          };
+          yield { kind: "done" };
+          return;
+        }
+        if (firstByteTimedOut) {
+          yield {
+            kind: "error",
+            message: `上游首包超时：${Math.round(firstByteTimeoutMs / 1000)}s 未返回响应数据（已输出内容已保留）`,
+          };
+          yield { kind: "done" };
+          return;
+        }
+        if (totalTimedOut) {
+          yield { kind: "error", message: `请求超过硬超时 ${Math.round(hardTimeoutMs / 1000)}s（已输出内容已保留）` };
+          yield { kind: "done" };
+          return;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        yield { kind: "error", message };
+        yield { kind: "done" };
+      } finally {
+        clearTimeout(firstByteTimer);
+        if (idleTimer) clearTimeout(idleTimer);
+        if (totalTimer) clearTimeout(totalTimer);
+        req.signal?.removeEventListener("abort", onExternalAbort);
       }
-      if (outputTokens > 0) yield { kind: "usage", tokens: outputTokens };
-      yield stopReason ? { kind: "done", finishReason: anthropicFinishReason(stopReason) } : { kind: "done" };
     } catch (err) {
-      // 用户主动停止：把 AbortError 上抛（tool_loop 归一为 aborted），不伪装成「请求超时」错误块
-      if (req.signal?.aborted) throw err;
-      const message = err instanceof Error ? err.message : String(err);
-      yield { kind: "error", message: message.includes("abort") ? "请求超时" : message };
-      yield { kind: "done" };
+      // fetch / 响应处理阶段的异常：原样上抛给 invoke 的重试逻辑（已产出内容由调用方保留）
+      throw err;
     } finally {
-      clearTimeout(timer);
+      clearTimeout(firstByteTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (totalTimer) clearTimeout(totalTimer);
       req.signal?.removeEventListener("abort", onExternalAbort);
     }
   }

@@ -84,6 +84,8 @@ export interface ChatServiceOptions {
   getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
   /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 12 万字符）。 */
   getContextWindow?: () => number | undefined;
+  /** 当前模型的最大输出 tokens（有 spec 时显式传给上游，减少默认 max_tokens 截断）。 */
+  getMaxOutput?: () => number | undefined;
   /** Agent 循环上限（设置 · 通用可调；缺省使用 core 默认）。 */
   getAgentLimits?: () => {
     maxRounds?: number;
@@ -441,6 +443,14 @@ export class ChatService {
         beforeChars: compression.beforeChars,
         afterChars: compression.afterChars,
       });
+      // 穷尽压缩策略仍超预算：明确提示，避免上游静默截断提示词后模型「忘事/答非所问」，
+      // 用户却以为是回复被截断（m02515：所有截断都要可见、可定位）。
+      if (compression.stillOverBudget) {
+        emit("progress", {
+          note: `历史仍超出模型上下文预算（压缩后 ${compression.afterChars} 字符），上游可能截断提示词；建议 /compact 压缩或新建会话`,
+          contextOverBudget: true,
+        });
+      }
     }
     const messages = [
       { role: "system" as const, content: stableContent },
@@ -535,6 +545,8 @@ export class ChatService {
         steers,
         signal: controller.signal,
         verifyRound,
+        // 模型 spec 声明的最大输出：显式传上游，从源头降低默认 max_tokens 截断概率
+        maxOutputTokens: this.opts.getMaxOutput?.(),
       } satisfies ToolLoopOpts;
       // Agent-Loop 注入（ADR-0010）：有 runner 走 LoopRegistry（可插拔 + 安全回退），否则内置循环
       const loopOutcome = this.opts.runLoop

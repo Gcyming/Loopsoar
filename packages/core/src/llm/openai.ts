@@ -20,8 +20,17 @@ export interface OpenAiClientOptions {
   baseUrl: string;
   apiKey?: string;
   model: string;
-  /** 总超时（默认 300s）。 */
+  /**
+   * 硬性总超时（毫秒；默认 0 = 不启用）。
+   * 为什么不默认启用：固定总超时会在「模型仍在正常流式输出」时把连接掐断，
+   * 导致长回复被截断（用户 m02515 要求根除截断）。防止挂死改用 idleTimeoutMs。
+   */
   timeoutMs?: number;
+  /**
+   * 空闲超时（毫秒，默认 120000）：超过该时长没有收到任何新数据才判定上游卡死。
+   * 每收到一个 chunk 都会重置，所以正常的长时间流式输出不会被误杀。
+   */
+  idleTimeoutMs?: number;
   /** 首包超时（默认 120s，收到响应头即清零）。 */
   firstByteTimeoutMs?: number;
   /** 最大重试次数（默认 3）。 */
@@ -89,13 +98,35 @@ function safeParseArgs(raw: string | undefined): unknown {
 export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
   const endpoint = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const maxRetries = opts.maxRetries ?? 3;
-  const totalTimeoutMs = opts.timeoutMs ?? 300_000;
+  const hardTimeoutMs = opts.timeoutMs ?? 0;
+  const idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
   const firstByteTimeoutMs = opts.firstByteTimeoutMs ?? 120_000;
 
   async function* invokeOnce(req: LlmRequest): AsyncGenerator<LlmChunk> {
     const controller = new AbortController();
-    const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs);
-    const firstByteTimer = setTimeout(() => controller.abort(), firstByteTimeoutMs);
+    // 超时语义：首包超时只用于「连不上/没有响应头」；空闲超时用于「流中途卡死」；
+    // 硬总超时默认关闭（它会截断正常的长输出）。三者都 abort 同一个 controller，
+    // 但要分别记录原因，才能给用户/上层一个可读的「为什么断了」。
+    let firstByteTimedOut = false;
+    let idleTimedOut = false;
+    let totalTimedOut = false;
+    const firstByteTimer = setTimeout(() => {
+      firstByteTimedOut = true;
+      controller.abort();
+    }, firstByteTimeoutMs);
+    let idleTimer: NodeJS.Timeout | null = null;
+    const armIdleTimer = (): void => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        controller.abort();
+      }, idleTimeoutMs);
+      idleTimer.unref?.();
+    };
+    const totalTimer = hardTimeoutMs > 0 ? setTimeout(() => {
+      totalTimedOut = true;
+      controller.abort();
+    }, hardTimeoutMs) : null;
     // 外部中止（用户点「停止」/会话取消）必须穿透到在途 fetch。
     // 只靠调用方轮询中止标志不够：上游卡住（迟迟没有 chunk）时，停止要等到首字节超时（120s）
     // 才会生效 —— 用户看到的是「点了没反应，还一直显示思考中」。超时与外部中止共用一个 controller。
@@ -235,54 +266,102 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
         yield finishReason ? { kind: "done", finishReason } : { kind: "done" };
       };
 
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let nlIndex: number;
-        while ((nlIndex = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, nlIndex).trim();
-          buffer = buffer.slice(nlIndex + 1);
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") {
-            yield* flushToolCalls();
-            return;
-          }
-          let obj: {
-            choices?: {
-              delta?: { content?: string; reasoning_content?: string; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] };
-              finish_reason?: string | null;
-            }[];
-            usage?: { total_tokens?: number };
-          };
-          try {
-            obj = JSON.parse(payload);
-          } catch {
-            continue; // 半行/心跳注释：跳过
-          }
-          const choice = obj.choices?.[0];
-          const delta = choice?.delta ?? {};
-          if (delta.reasoning_content) yield { kind: "reasoning", text: delta.reasoning_content };
-          if (delta.content) yield { kind: "text", text: delta.content };
-          for (const tc of delta.tool_calls ?? []) {
-            const key = tc.index ?? 0;
-            const cur = toolCalls.get(key) ?? { id: "", name: "", args: "" };
-            if (tc.id) cur.id = tc.id;
-            if (tc.function?.name) cur.name += tc.function.name;
-            if (tc.function?.arguments) cur.args += tc.function.arguments;
-            toolCalls.set(key, cur);
-          }
-          if (choice?.finish_reason) finishReason = choice.finish_reason;
-          if (obj.usage?.total_tokens !== undefined) usageTokens = obj.usage.total_tokens;
+      /**
+       * 处理一行 SSE。返回 true 表示遇到 [DONE]。
+       * 抽成单函数是为了让「流结束时的残留 buffer」走完全相同的解析路径：
+       * 很多上游最后一帧不带尾换行/不带 [DONE]，旧实现会直接丢掉最后一行 →
+       * 用户看到的正文结尾被静默截断（m02515 要求根除）。
+       */
+      const handleLine = function* (line: string): Generator<LlmChunk, boolean> {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) return false;
+        const payload = trimmed.slice(5).trim();
+        if (!payload) return false;
+        if (payload === "[DONE]") return true;
+        let obj: {
+          choices?: {
+            delta?: { content?: string; reasoning_content?: string; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] };
+            finish_reason?: string | null;
+          }[];
+          usage?: { total_tokens?: number };
+        };
+        try {
+          obj = JSON.parse(payload);
+        } catch {
+          return false; // 半行/心跳注释：跳过
         }
+        const choice = obj.choices?.[0];
+        const delta = choice?.delta ?? {};
+        if (delta.reasoning_content) yield { kind: "reasoning", text: delta.reasoning_content };
+        if (delta.content) yield { kind: "text", text: delta.content };
+        for (const tc of delta.tool_calls ?? []) {
+          const key = tc.index ?? 0;
+          const cur = toolCalls.get(key) ?? { id: "", name: "", args: "" };
+          if (tc.id) cur.id = tc.id;
+          if (tc.function?.name) cur.name += tc.function.name;
+          if (tc.function?.arguments) cur.args += tc.function.arguments;
+          toolCalls.set(key, cur);
+        }
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        if (obj.usage?.total_tokens !== undefined) usageTokens = obj.usage.total_tokens;
+        return false;
+      };
+
+      try {
+        for (;;) {
+          // 每轮读取前重置空闲计时器：只有「连续 N 秒没有任何数据」才判定卡死，
+          // 正常的长输出（哪怕 5 分钟）不会因为总时长被砍断。
+          armIdleTimer();
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let nlIndex: number;
+          while ((nlIndex = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, nlIndex);
+            buffer = buffer.slice(nlIndex + 1);
+            if (yield* handleLine(line)) {
+              yield* flushToolCalls();
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        // 用户主动停止：原样上抛（tool_loop 归一 aborted，不当作错误）
+        if (req.signal?.aborted) throw err;
+        if (idleTimedOut) {
+          yield {
+            kind: "error",
+            message: `上游空闲超时：${Math.round(idleTimeoutMs / 1000)}s 未收到任何新数据（已输出内容已保留）`,
+          };
+          return;
+        }
+        if (firstByteTimedOut) {
+          yield {
+            kind: "error",
+            message: `上游首包超时：${Math.round(firstByteTimeoutMs / 1000)}s 未返回响应数据（已输出内容已保留）`,
+          };
+          return;
+        }
+        if (totalTimedOut) {
+          yield {
+            kind: "error",
+            message: `请求超过硬超时 ${Math.round(hardTimeoutMs / 1000)}s（已输出内容已保留）`,
+          };
+          return;
+        }
+        throw err;
       }
-      // 没有收到 [DONE] 的流正常结束：flush 残余
+      // 流正常结束但没有 [DONE] / 最后一帧没有尾换行：把残留字节与残留行全部吃掉再收尾。
+      buffer += decoder.decode();
+      for (const line of buffer.split("\n")) {
+        if (yield* handleLine(line)) break;
+      }
       yield* flushToolCalls();
     } finally {
       clearTimeout(firstByteTimer);
-      clearTimeout(totalTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (totalTimer) clearTimeout(totalTimer);
       req.signal?.removeEventListener("abort", onExternalAbort);
     }
   }

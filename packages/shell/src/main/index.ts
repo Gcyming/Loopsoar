@@ -39,7 +39,7 @@ import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
-import { registerChatDomain } from "./domains/chat.js";
+import { flushActivePartials, registerChatDomain } from "./domains/chat.js";
 import { registerCompactDomain } from "./domains/compact.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
@@ -1258,6 +1258,12 @@ app.whenReady().then(async () => {
       const spec = active?.models?.find((m) => m.id === active.model);
       return spec?.contextWindow;
     },
+    // 当前模型最大输出（tokens）：显式传上游，减少「上游默认 max_tokens 太小」造成的截断
+    getMaxOutput: () => {
+      const active = providers.active();
+      const spec = active?.models?.find((m) => m.id === active.model);
+      return spec?.maxOutput;
+    },
     // Agent 请求上限（设置 · 通用）
     getAgentLimits: () => {
       const prefs = loadPreferences(dirs.configDir);
@@ -1570,6 +1576,16 @@ app.whenReady().then(async () => {
 
   // 退出清理装配（P0）：子进程/终端/落盘/审计全部收尾后再退出
   shutdownHandler = createShutdownHandler({
+    // 生成中的回复先落盘（退出瞬间已流出的正文不能丢，否则重启后像「回复截断」）
+    flushActiveStreams: () => {
+      flushActivePartials((sessionId, text) => {
+        try {
+          sessions.appendAssistantPartial(sessionId, text);
+        } catch (err) {
+          console.warn("[Loopsoar] 退出时保存部分回复失败（已忽略）：", err);
+        }
+      });
+    },
     saveBrowserStates: saveAllBrowserStates,
     shutdownMcp: () => mcp.shutdown(),
     stopExtensions: () => extensionRuntime.stopAll(),

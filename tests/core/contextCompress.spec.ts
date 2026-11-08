@@ -54,10 +54,10 @@ describe("上下文自动压缩", () => {
     expect(result.messages[result.messages.length - 1].content).toBe(messages[messages.length - 1].content);
   });
 
-  it("预算换算：按上下文窗口 50% 给历史，且有上下限", () => {
-    expect(historyBudgetChars(undefined)).toBe(120_000);
-    expect(historyBudgetChars(8000)).toBe(32_000);
-    expect(historyBudgetChars(128_000)).toBe(192_000);
+  it("预算换算：按上下文窗口比例给历史，且有上下限", () => {
+    expect(historyBudgetChars(undefined)).toBe(60_000);
+    expect(historyBudgetChars(8000)).toBe(9_600);
+    expect(historyBudgetChars(128_000)).toBe(153_600);
     expect(historyBudgetChars(2_000_000)).toBe(600_000);
   });
 

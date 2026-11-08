@@ -58,8 +58,12 @@ export default function ChatMessageView({
       ? tr("chat.replyDuration", { time: formatDurationMs(m.timing.totalMs) })
       : undefined;
   const products = hasStructuredTimeline ? collectProducts(timelineSteps) : [];
+  /**
+   * 正文权威来源 = ChatMessage.text（去掉内部 diff 载荷标记后渲染）。
+   * 时间线的 body 分片只用于「思考历程」里的交错展示，绝不作为最终正文/复制的来源
+   * （用户 m02515：长回复被截断/被分片覆盖）。
+   */
   const displayText = stripDiffMarkers(m.text);
-  const showThinking = m.status === "streaming" && !m.text && !hasStructuredTimeline;
   const timeText = new Date(m.createdAt ?? Date.now()).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
@@ -92,7 +96,7 @@ export default function ChatMessageView({
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
             <Icon name="reload" size={12} />
           </button>
-          <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(displayText).catch(() => {})}>
+          <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}>
             <Icon name="copy" size={12} />
           </button>
         </div>
@@ -158,7 +162,8 @@ export default function ChatMessageView({
         <div className="msg-body-divider" />
 
         <div className="msg-body-text" style={styles.assistantBody}>
-          {m.errorText ? null : streaming ? (
+          {/* 正文以 m.text 为权威：即使有错误横幅也完整渲染已有正文（不能因状态/错误把内容吞掉）。 */}
+          {streaming ? (
             /* 正文后置闸门：本轮结束前正文不开闸，只显示阶段占位；
                期间穿插正文由时间线的 body 节点（13.5px）承载，避免"正文抢跑" */
             <span className="stream-gate">
@@ -287,6 +292,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.55,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
+    overflowWrap: "anywhere",
   },
   compressText: { flex: 1, minWidth: 0 },
   compressHint: { flexShrink: 0, color: BRAND.linenFaint, fontSize: 10 },
@@ -360,7 +366,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   assistantName: { fontSize: 12, fontWeight: 700, color: BRAND.linenMuted },
   assistantMain: { flex: 1, minWidth: 0 },
-  assistantBody: { fontSize: 15, lineHeight: 1.75, color: BRAND.linen, wordBreak: "break-word" },
+  assistantBody: { fontSize: 15, lineHeight: 1.75, color: BRAND.linen, wordBreak: "break-word", overflowWrap: "anywhere" },
   errBox: {
     marginTop: 6,
     padding: "6px 9px",

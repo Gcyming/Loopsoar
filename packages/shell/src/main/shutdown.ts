@@ -12,6 +12,11 @@
 export interface ShutdownDeps {
   /** 把每个会话的浏览器标签状态落盘（同步或异步均可）。 */
   saveBrowserStates: () => void | Promise<void>;
+  /**
+   * 把「仍在生成中」的回复已流出部分落盘（同步）。
+   * 没有这一步时，退出瞬间正在写的回复会整段丢失，重启后表现为「回复截断」。
+   */
+  flushActiveStreams?: () => void;
   /** 断开并回收 MCP 子进程。 */
   shutdownMcp: () => void | Promise<void>;
   /** 停止扩展宿主子进程。 */
@@ -76,6 +81,7 @@ async function runShutdown(deps: ShutdownDeps): Promise<void> {
       : DEFAULT_TIMEOUT_MS;
 
   const steps: Array<[string, () => void | Promise<void>]> = [
+    ["flushActiveStreams", deps.flushActiveStreams ?? (() => undefined)],
     ["saveBrowserStates", deps.saveBrowserStates],
     ["shutdownMcp", deps.shutdownMcp],
     ["stopExtensions", deps.stopExtensions],

@@ -884,6 +884,9 @@
       margin: 4px 0 2px; padding: 2px 4px 2px 12px;
       border-left: 2px solid rgba(var(--ls-accent-rgb), 0.5);
       font-size: 13.5px; line-height: 1.75; color: #e6dfd2;
+      /* 时间线里的「穿插正文」也是正文：不得被 .think-step-text 的 320px 滚动区裁成半句。
+         只保留折叠/展开（历史分组），展开后完整显示，超出聊天区的部分由外层滚动承担。 */
+      max-height: none; overflow: visible;
     }
 
     /* 任务规划卡 */
@@ -1065,7 +1068,9 @@
     .think-tool-link:hover { border-color: var(--ls-accent-hover); }
 
     /* 正文排版（对齐 slime：正文 15px / 思考 12.5px） */
-    .msg-body-text { font-size: 15px; line-height: 1.75; color: var(--ls-text); word-break: break-word; }
+    /* 助手回复正文：权威内容，禁止任何 clamp / max-height / ellipsis / overflow:hidden 裁剪；
+       长单词/长 URL/宽表格靠换行或自身滚动容器（tableWrap/pre overflowX:auto）承载。 */
+    .msg-body-text { font-size: 15px; line-height: 1.75; color: var(--ls-text); word-break: break-word; overflow-wrap: anywhere; }
     .msg-body-text .md-heading { font-weight: 650; }
     .msg-body-text .md-del { opacity: 0.5; }
 

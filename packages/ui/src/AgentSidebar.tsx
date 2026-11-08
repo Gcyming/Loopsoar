@@ -72,8 +72,9 @@ export interface AgentSidebarProps {
 /** useT 返回的翻译函数类型（组件内传入，避免纯函数直接依赖 hook）。 */
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
-/** 把当前会话导出为 Markdown（用户/AI 气泡 + 引用式思考过程）。 */
-function conversationToMarkdown(messages: ChatMessage[], tr: Translate): string {
+/** 把当前会话导出为 Markdown（用户/AI 气泡 + 引用式思考过程）。
+ *  导出/复制必须使用消息的权威全文（m.text / 完整 think 文本），不得用任何 preview/截断字段。 */
+export function conversationToMarkdown(messages: ChatMessage[], tr: Translate): string {
   return messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => {

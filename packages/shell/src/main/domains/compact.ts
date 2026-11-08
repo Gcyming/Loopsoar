@@ -152,7 +152,9 @@ export function runCompact(
     if (deps.isBusy?.(sessionId)) return failure("会话正在生成中，请稍后再压缩", sessionId);
 
     const budgetChars = historyBudgetChars(deps.getContextWindow?.());
-    const result = compressConversation(toCompactable(persisted), { budgetChars });
+    // /compact 是用户显式操作：语义固定为「摘要 + 最近 14 条」（minKeepRecent=14），
+    // 不因为预算小就偷偷把保留条数缩到 2 条；若仍超预算由 stillOverBudget 在上层提示。
+    const result = compressConversation(toCompactable(persisted), { budgetChars, minKeepRecent: 14 });
     const before: CompactStats = { messages: persisted.length, chars: result.beforeChars };
 
     // 未触发压缩：before=after，不写盘、不推送（apply 也保持幂等无副作用）。

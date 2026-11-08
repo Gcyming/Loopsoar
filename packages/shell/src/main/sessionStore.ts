@@ -95,7 +95,23 @@ export class SessionStore {
 
   private writeJson(file: string, value: unknown): void {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
+    const payload = JSON.stringify(value, null, 2);
+    // 原子写：先写临时文件再 rename 替换。普通 writeFileSync 在进程被强杀/断电时会留下
+    // 半截 JSON，readJson 解析失败返回 null → 整个会话历史「凭空消失」；rename 保证
+    // 文件要么是旧完整版、要么是新完整版。
+    const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    try {
+      fs.writeFileSync(tmp, payload, "utf8");
+      fs.renameSync(tmp, file);
+    } catch {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        // 临时文件可能不存在：忽略
+      }
+      // 极端环境（目录权限/文件被占用）：退回直接写，至少不阻断正常功能
+      fs.writeFileSync(file, payload, "utf8");
+    }
   }
 
   private index(): SessionIndex {
@@ -391,6 +407,23 @@ export class SessionStore {
     }
     base.updatedAt = Date.now();
     return this.save(base);
+  }
+
+  /**
+   * 追加一条「只含助手已生成正文」的消息（应用退出 / 异常中断时保住已产出内容）。
+   * 与 append 的区别：不再补 user 消息（该轮的用户消息已在会话里或不需要），
+   * 防止退出瞬间已生成的正文丢失 —— 重启后用户看到「回复凭空少了后半段」。
+   */
+  appendAssistantPartial(sessionId: string, text: string): boolean {
+    const id = this.targetId(sessionId);
+    if (!id) return false;
+    if (!text.trim()) return false;
+    const current = this.get(id);
+    const base: PersistedSession = current ?? { sessionId: id, updatedAt: Date.now(), messages: [] };
+    base.messages.push({ role: "assistant", text, ts: Date.now() });
+    base.updatedAt = Date.now();
+    this.save(base);
+    return true;
   }
 
   remove(id: string): boolean {

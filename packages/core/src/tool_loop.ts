@@ -64,11 +64,16 @@ export interface ToolLoopOpts {
   /** 声称核验失败后最多注入几次强制工具轮（默认 2；0=不强制，只记录 progress）。 */
   maxVerifyForcedRounds?: number;
   /**
-   * 上游因输出长度上限截断（finishReason="length"）时最多自动续写几次（默认 4；0=不续写）。
+   * 上游因输出长度上限截断（finishReason="length"）时最多自动续写几次（默认 8；0=不续写）。
    * 为什么需要：很多 OpenAI 兼容上游默认 max_tokens 很小，长回复会被截断在半句；
    * 自动续写把同一助手消息续完整，用户不必手动「继续」。
    */
   maxLengthContinuations?: number;
+  /**
+   * 请求里显式传给上游的 max_tokens（有模型 spec 时用它的 maxOutput）。
+   * 不传则由上游默认值决定（往往偏小）—— 有值就显式传，从源头减少截断发生。
+   */
+  maxOutputTokens?: number;
   /**
    * 长等待工具名单（默认 ["ask_user"]）。
    * 为什么单独豁免：ask_user 等真人回答可能几分钟，按普通工具静默超时（90s）会被误杀。
@@ -129,7 +134,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   const maxVerifyForcedRounds = Math.max(0, Math.floor(opts.maxVerifyForcedRounds ?? 2));
   /** 已自动续写次数（上游 finish_reason=length 截断时累计，受 maxLengthContinuations 封顶）。 */
   let lengthContinuations = 0;
-  const maxLengthContinuations = Math.max(0, Math.floor(opts.maxLengthContinuations ?? 4));
+  const maxLengthContinuations = Math.max(0, Math.floor(opts.maxLengthContinuations ?? 8));
   /** 长等待工具集合：默认 ask_user（真人回答耗时不可控）。 */
   const longRunningTools = new Set(opts.longRunningTools ?? ["ask_user"]);
   const longRunningTimeoutMs = opts.longRunningTimeoutMs ?? 600_000;
@@ -251,7 +256,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       const request: LlmRequest = {
         messages: conversation,
         tools: tools(),
-        maxTokens: undefined,
+        maxTokens: opts.maxOutputTokens,
         reasoningEffort: opts.reasoningEffort,
         signal: abortController.signal,
       };
@@ -505,6 +510,27 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       // 本轮产生过工具调用：把 assistant(tool_calls) 与工具结果回灌，进入下一轮
       if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] round done", { round, sawDone, tools: roundToolCalls.length, text: roundText.length, finishReason: roundFinishReason });
       if (roundToolCalls.length > 0) {
+        // 工具调用参数被长度上限截断：参数 JSON 往往不完整（工具已执行失败），不能把这些残缺调用
+        // 回灌给模型，否则它会基于错误结果继续；改为丢弃本轮残缺工具轮 + 明确要求重发。
+        if ((roundFinishReason === "length" || roundFinishReason === "max_tokens") && lengthContinuations < maxLengthContinuations) {
+          lengthContinuations += 1;
+          emit("progress", {
+            note: `工具调用参数被上游长度上限截断，已丢弃并请求重发（第 ${lengthContinuations}/${maxLengthContinuations} 次）…`,
+          });
+          if (process.env.LOOPSOAR_LOOP_DEBUG) {
+            console.log("[LOOP] truncated tool round", { round, count: lengthContinuations, tools: roundToolCalls.length });
+          }
+          conversation = [
+            ...conversation,
+            { role: "assistant", content: roundText },
+            {
+              role: "user",
+              content:
+                "上一轮输出因长度上限被截断，工具调用参数不完整，已丢弃。请重新发起完整的工具调用；若已无需工具，请直接继续输出正文。",
+            },
+          ];
+          continue;
+        }
         conversation = [
           ...conversation,
           {
@@ -576,6 +602,16 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             },
           ];
           continue;
+        }
+        // 续写预算用尽但上游仍以长度上限结束：绝不能静默截断。
+        // 追加明确标记（进入 finalText / 持久化 / 复制）+ 进度提示，用户一眼能看出「这里是被截断的」。
+        if (roundFinishReason === "length" || roundFinishReason === "max_tokens") {
+          const marker = `\n\n（输出因上游长度上限中断，已自动续写 ${maxLengthContinuations} 次仍未结束）`;
+          emit("progress", {
+            note: `输出达到上游长度上限且自动续写次数用尽（${maxLengthContinuations} 次），已在末尾标注截断原因`,
+          });
+          emit("chunk", { text: marker });
+          finalText += marker;
         }
         // 中止优先于核验：用户已点停止就不再为收束做额外的核验 IO
         if (abortController.signal.aborted) {

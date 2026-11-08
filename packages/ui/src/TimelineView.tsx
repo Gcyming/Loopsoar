@@ -403,7 +403,7 @@ function ToolNode({
               {step.detail.slice(0, 120)}
             </a>
           ) : (
-            <span className="think-tool-detail">{step.detail.slice(0, 120)}</span>
+            <span className="think-tool-detail" title={step.detail}>{step.detail.slice(0, 120)}</span>
           )
         ) : null}
         <span
@@ -440,11 +440,12 @@ function ToolNode({
             ) : null}
             {resultText ? (
               isCommand ? (
-                <pre className="think-terminal">{resultText.slice(0, 6000)}{resultText.length > 6000 ? "\n…（已截断）" : ""}</pre>
+                <pre className="think-terminal">{resultText.slice(0, 6000)}{resultText.length > 6000 ? `\n…（已截断：共 ${resultText.length} 字符，仅显示前 6000）` : ""}</pre>
               ) : (
                 <div className="think-tool-result" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.linenMuted }}>
                   <span className="think-tool-result-mark" aria-hidden>{failed ? <Icon name="close" size={10} /> : <Icon name="check" size={10} />}</span>
-                  <span className="think-tool-result-text">{resultText.slice(0, 600)}{resultText.length > 600 ? "…" : ""}</span>
+                  {/* 工具结果不静默截断：完整文本放进可滚动的详情框（.think-tool-detail-box 自带 max-height+滚动）。 */}
+                  <span className="think-tool-result-text">{resultText}</span>
                 </div>
               )
             ) : null}
