@@ -68,8 +68,7 @@ export default function ChatMessageView({
     const { body, docs } = splitAttachments(m.text);
     return (
       <div className="msg-row" style={styles.msgRowUser} data-rail-label={tr("chat.railUser", { text: m.text.slice(0, 24) })} data-rail-role="user">
-        <div className={`msg-user-bubble${m.steer ? " is-steer" : ""}`} style={{ ...styles.userBubble, ...(m.steer ? styles.userBubbleSteer : {}) }}>
-          {m.steer ? <span style={styles.steerBadge}>{tr("chat.steerBadge")}</span> : null}
+        <div className="msg-user-bubble" style={styles.userBubble}>
           {docs.length > 0 ? (
             <div style={styles.attachRow}>
               {docs.map((path) =>
@@ -297,17 +296,6 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.55,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
-  },
-  userBubbleSteer: { background: BRAND.ochreSoft, border: `1px dashed ${BRAND.ochre}` },
-  steerBadge: {
-    display: "inline-block",
-    fontSize: 10,
-    padding: "0 5px",
-    marginRight: 6,
-    borderRadius: 999,
-    background: "rgba(0,0,0,0.18)",
-    color: "#1a140f",
-    fontWeight: 600,
   },
   compressText: { flex: 1, minWidth: 0 },
   compressHint: { flexShrink: 0, color: BRAND.linenFaint, fontSize: 10 },

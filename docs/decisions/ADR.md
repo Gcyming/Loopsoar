@@ -626,6 +626,43 @@
 
 ---
 
+## ADR-0037 会话栏最小宽度 = 窗口宽度比例（当前比例即下限，单一夹紧产地）
+
+- **背景**：用户（m00005）要求「把当前左右栏比例固定为右侧会话栏的最小窄度」——当前窗口 2048 CSS px、会话栏 720px（≈35.2%），用户认可这一比例，不希望被拖得比现在更窄（浏览器列被挤压）。
+- **决策**：
+  1. 契约 `packages/contracts/src/layout.ts` 新增常量：`SIDEBAR_MIN_WIDTH_RATIO: 0.35`、`SIDEBAR_MIN_WIDTH_FLOOR: 240`、`SIDEBAR_MAX_WIDTH: 720`、`BROWSER_COLUMN_MIN_WIDTH: 320`，并导出 `computeSidebarMinWidth(viewportWidth)` / `computeSidebarMaxWidth(viewportWidth)`：下限 = `min(720, max(240, round(w × 0.35)))`，上限 = `max(下限, min(720, w - 320))`。
+  2. UI 三处夹紧共用同一对函数：拖拽分隔条（`startResize`）、窗口 resize、偏好水合/启动（clamp effect，依赖 `preferences?.sidebarWidth`）。
+  3. 偏好 schema 的 240/720 数据合法性约束保持不动（它是「存量数据是否可信」而非「当前窗口比例」的语义），不写迁移。
+- **理由**：按**比例**而非绝对像素设下限，窗口缩放时用户认可的比例关系保持不变（1280 宽时下限自动降到 448，而不是硬卡 720 把浏览器列挤没）；上下限兜底保证极窄窗口不出现负区间；单一产地避免拖拽/resize/水合三处各算各的导致「拖得动但重启后更窄」的不一致。
+- **替代方案**：写死 720（否，小窗口下浏览器列不可用）；只改拖拽手感（否，resize/重启仍可绕过）；把比例逻辑塞进 preferences schema（否，schema 不感知窗口宽度，且会破坏存量数据兼容）。
+- **后果**：2048 窗口下可调区间 **[717, 720]**（720/2048≈35.16%，取整差 3px，等效锁死当前宽度）；1280 → [448, 720]；1024 → [358, 704]；800 → [280, 480]；任何窗口 max ≥ min。既有 `preferences.sidebarWidth: 720` 合法，无需迁移。
+- **验证方式**：新增 `tests/core/sidebar-width.spec.ts` 7 tests、`tests/core/layout.spec.ts` 14 tests、`tests/guards/ui-contract.spec.ts` 7 tests 全绿；`pnpm --filter loopsoar-contracts typecheck` 通过；真机 E2E（拖到最窄应停在 ≈717）待跑。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（1600 窗口拖拽 723→566、下限 560；2048 最大化侧栏 717）
+- **回退条件**：用户想恢复「能拖得更窄」→ 调低 `SIDEBAR_MIN_WIDTH_RATIO`（或改为偏好项）；高 DPI/窗口缩放导致夹紧抖动 → clamp 内加取整阈值。
+- **复核时间**：打包阶段（多窗口尺寸、高 DPI）
+
+---
+
+## ADR-0038 引导/插入（steer + 待发队列）移植：入队不打断 + 注入回执折进思考历程
+
+- **背景**：用户（m00005）指出 Loopsoar 的「引导 / 插入」功能异常，要求对照 `D:\pilot project`（slime）移植，并明确指出 slime 里也有同类错误、部分错误代码只是被注释掉但依旧存在，只搬运**正确、有用、经检验精简后**的实现。Loopsoar 旧实现：运行中发送 = 乐观把用户气泡塞进对话 + 独立 `steerBus` 字符串队列，在轮次边界拼成 `【转向提示】` 用户消息；UI 用 `is-steer` 气泡 + 「转向」徽标；无待发卡、无回执、无自动续发、无撤销/修改，失败时消息已经写进记录且无法回收。
+- **决策**：
+  1. **core**：`SteerBus` 结构化（`SteerItem {id,text,kind?,fromName?,createdAt?}`、`STEER_MAX_PENDING=8`、`STEER_TEXT_MAX=2000`、同 id 覆盖保留位置、`take/list/drain/size`、`push` 返回 `ok|full|empty`）；`tool_loop` 在轮次边界 drain 后 emit 新循环事件 `steer {items}`，注入文案「用户在你运行期间插入了下面的请求（把它们当作本轮新增的指令一并考虑）」，注入消息标记为「运行中插入的指令」，删除旧的 progress note「已注入 N 条转向提示」。
+  2. **契约**：`ChatSteerSchema` 增加可选 `steerId`；新增 `ChatSteerResultSchema {accepted,steerId,reason?}` 与 `ChatSteerCancelSchema`；新通道 `chat:steerCancel`；新事件 `chat:steer:applied`；全部经 `pnpm gen` 生成、`pnpm check` 逐字节校验。
+  3. **services/shell**：`chatService.steer(sessionId,text,steerId?)` 返回结构化 `{accepted,steerId,reason:"no-running"|"full"|"empty"|"duplicate"}`，新增 `steerCancel`；shell 把 `steer` 循环事件转成 `chat:steer:applied {sessionId,items}` 推给渲染层（不走 `chat:stream:*`）。
+  4. **UI**：运行中 Enter = 入「待发队列」并立即投递（绝不打断当前输出），待发卡分两态：待发 = 虚线左条 + 「待发」徽标 + 三图标（`edit` 修改取回 / `guide-arrow` 引导注入，A-1151 用户指定图标、替换被评"太简陋"的 arrow-narrow-right / `close` 撤销删除）；已注入 = 实线强调左条 + 「已注入」徽标 + 「已作为引导注入当前这轮 · 模型响应中」状态行（不再出现箭头）。收到 `chat:steer:applied` 才撤卡并把文案折进当轮 assistant 的「引导」时间线卡（`applySteerToLatest`，不乐观提前塞）；本轮结束仍未注入 → 改回 queued 并自动续发为下一轮（`handleStreamSettled`）；队列按会话隔离、上限 8；删除旧的 `is-steer` 用户气泡/「转向」徽标及对应 i18n。
+  5. **core 引导续轮（slime A-1061⑥）**：模型只出正文、没有工具轮的收尾点**再 drain 一次**——若有引导：emit `steer` 事件、把本轮 assistant 正文与引导 user 消息回灌 conversation，并 `continue` **同一轮**继续跑。引导永远在模型当前这轮的思考历程里被消费，不会落到"本轮结束后按排队续发"而表现成一条新用户消息（"插队"观感正来自缺少这一步）。
+  6. **收尾竞态修复**：`ChatService` 的循环 `done` 不再映射为渲染层 done（只认 finally 的权威 done），且 finally 先 flush 再发 done —— 否则渲染层先收到 done、后收到迟到 chunk 会新建一条"幽灵助手消息"；UI 的 `saveTimeline` 在会话 `append` 之前到达，shell 侧改为按会话暂存、append 完成后挂到新助手消息上（否则时间线会覆盖上一条消息、重启后引导卡丢失）。
+- **理由**：乐观写正文会在投递失败时留下无法撤销的假记录（旧实现的核心病）；slime 的经验是「注入成功回执驱动 UI」——失败可重试/撤销/修改，成功才落痕。`steer` 以独立循环事件暴露（而不是复用 progress 文案），让主进程到渲染层有结构化时间线数据；待发卡沿用 slime 的三图标操作，按钮与图标一一对照（`gui/icon/icon_fpbc119q3rk`，其中 `arrow-narrow-right.svg` 已复制进 `packages/ui/public/icons`）。
+- **替代方案**：直接在 UI 侧提前把引导塞进 timeline（否，失败无法撤回，与旧 bug 同类）；轮次边界用 progress note 传文本（否，无 id、无法回执/撤销）；全局单一队列（否，多会话并行会串消息）；复用 slime ChatPanel 整块代码（否，7954 行且含被注释的旧实现，按用户要求只取正确语义重写）。
+- **后果**：运行中发送不再产生独立用户气泡（旧 `chat.steerBadge`/`chat.userSteer` 删除）；`chat:steer` 返回结构由 boolean 变对象（`chat.steer` 的 UI 调用方已同步）；轮次边界多一次 `chat:steer:applied` 事件；待发队列上限 8 条、单条 2000 字；跨会话切走再切回队列仍在；引导注入后**只出现在思考历程**（TimelineView 的「引导」卡），正文与用户记录都不落；重启后仍可见（时间线随会话持久化）。
+- **验证方式**：`pnpm typecheck` 5/5、`pnpm gen`+`pnpm check` 逐字节一致、`pnpm test` **138 文件 / 1241 tests 全绿**（含新增 `tests/core/steerBus.spec.ts` 6、`tests/core/tool_loop_steer.spec.ts` 2（续轮：正文轮收尾注入 → 同轮第二次 LLM 调用收到引导、done 只发一次）、`tests/ui/steerQueue.spec.ts` 8、`tests/ui/steerAppliedTimeline.spec.ts` 5、`tests/shell/browserRestoreAttach.spec.ts` 4）；**真机 E2E（2026-11-08）**：运行中发引导 → 待发卡「已注入」→ 思考历程出现「引导」卡（无用户气泡、无 ABORT、未打断输出），流自然收尾；**重启 App 后引导卡仍在思考历程**（证据 `e2e-evidence/steer-final.png` / `steer-restored.png`；DOM 断言 steerCards:1、userBubbleHasSteerText:false、aborted:false）。
+- **状态**：✅ 已验证（自动化 + 真机 E2E；用户确认保留「运行中回车即作为引导注入当前轮」语义，不改为 slime 的"仅排队"变体）
+- **回退条件**：注入回执丢失导致卡片不撤 → `handleStreamSettled` 的 requeue 已兜底，仍异常则改为「发起新轮前清空 delivered」；待发卡遮挡小窗输入区 → 卡片折叠为单行 pill；自动续发抢跑（用户还没看结果）→ 关闭 `handleStreamSettled` 的自动续发，改为仅在用户点「直接插入」时续发。
+- **复核时间**：打包阶段（多会话并发、压缩窗口内投递、子代理回流）
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -666,3 +703,5 @@
 | ADR-0034 | 收紧网页/会话分区间隙（splitter 2px/内容铺满）+ 删除会话顶部阴影 | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0035 | 网页面板右侧留白再收紧（4px）+ 会话内容右侧收窄 6px | ✅ 已验证（自动化 + 真机 E2E） |
 | ADR-0036 | 拖拽命中区对齐视觉交界（6px 热区）+ 会话内容再收窄 4px | ✅ 已验证（自动化 + 真机 E2E） |
+| ADR-0037 | 会话栏最小宽度 = 窗口宽度比例（当前比例即下限，单一夹紧产地） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0038 | 引导/插入队列（slime 移植）：入队不打断 + 同轮续轮注入 + 回执折进思考历程（重启仍可见） | ✅ 已验证（自动化 + 真机 E2E） |

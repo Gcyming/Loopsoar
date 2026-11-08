@@ -40,7 +40,12 @@ export interface HostView extends WebContentsViewLike {
 
 export interface BrowserHostDeps {
   createView: () => HostView;
-  attachView: (view: HostView) => void;
+  /**
+   * 把原生视图挂到主窗口（contentView.addChildView）。
+   * 返回 false 表示窗口还没就绪（典型场景：启动恢复时窗口尚未创建）→ 宿主在下一次 applyLayout
+   * 重试挂载；返回 true/void 都视为已挂上（void 兼容既有实现）。
+   */
+  attachView: (view: HostView) => boolean | void;
   detachView: (view: HostView) => void;
   getWindowSize: () => WindowSize;
   /** 当前会话标签变化推送（UI 标签栏）。 */
@@ -94,6 +99,11 @@ interface TabEntry {
   index: number;
   /** 外壳发起的导航进行中：此期间忽略 WebContents 的导航事件，避免重复入栈。 */
   navigating?: boolean;
+  /**
+   * 原生视图是否已挂到主窗口。启动恢复发生在 createMainWindow 之前，当时 attachView 拿不到
+   * 窗口会返回 false（旧实现静默 no-op）→ applyLayout 发现未挂载时补挂，页面才会真正显示。
+   */
+  attached: boolean;
 }
 
 interface SessionGroup {
@@ -143,9 +153,17 @@ export class BrowserHost {
     return this.activeSession;
   }
 
+  /**
+   * 尝试把视图挂到主窗口。
+   * 返回 false = 窗口未就绪（启动恢复）/挂载失败 → 保持 attached=false，applyLayout 会重试。
+   */
+  private tryAttach(view: HostView): boolean {
+    return this.deps.attachView(view) !== false;
+  }
+
   private createTab(sessionId: string): TabEntry {
     const view = this.deps.createView();
-    this.deps.attachView(view);
+    const attached = this.tryAttach(view);
     const id = this.nextId();
     // 网页内点击/重定向/SPA 路由：同步地址、标题与历史栈，让地址栏与网页始终一致。
     const adapter = createWebContentsViewAdapter({
@@ -175,7 +193,7 @@ export class BrowserHost {
         this.emitTabs(sessionId);
       },
     });
-    const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1 };
+    const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1, attached };
     const group = this.group(sessionId);
     group.tabs.set(id, entry);
     // 新标签必须立即成为该会话的活动标签
@@ -274,6 +292,8 @@ export class BrowserHost {
     actual: { x: number; y: number; width: number; height: number } | null;
     sessionId: string;
     tabId: string | null;
+    /** 活动标签的原生视图是否已挂到主窗口（重启恢复 bug 的直接观测点）。 */
+    attached: boolean;
     /** 侧栏宽度与底部让位高度（诊断/回归断言用，说明 bounds 是怎么算出来的）。 */
     sidebarWidth: number;
     bottomInset: number;
@@ -296,6 +316,7 @@ export class BrowserHost {
       actual,
       sessionId: this.activeSession,
       tabId: this.activeEntryId(),
+      attached: entry?.attached ?? false,
       sidebarWidth: this.sidebarWidth,
       bottomInset: this.bottomInset,
     };
@@ -330,6 +351,10 @@ export class BrowserHost {
     });
     for (const [sessionId, group] of this.groups) {
       for (const [id, entry] of group.tabs) {
+        // 启动恢复先于窗口创建：createTab 时 attachView 拿不到主窗口（旧实现静默 no-op），
+        // 窗口就绪后必须在这里补挂，否则恢复的页面永远不会出现在窗口里（刷新也无效）。
+        // 幂等：attached 为 true 时不重复 addChildView。
+        if (!entry.attached) entry.attached = this.tryAttach(entry.view);
         entry.view.setBounds(bounds);
         // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
         const visible =
@@ -614,8 +639,15 @@ export class BrowserHost {
       try {
         const result = await entry.adapter.navigate(tab.url);
         entry.url = result.url;
-      } catch {
-        // 加载失败保留空白标签，用户可重试
+      } catch (err) {
+        // 加载失败也要把 URL 留在标签里（视图显示 Chromium 错误页，用户能看到失败而不是白屏；
+        // 地址栏/刷新也能针对该 URL 重试）。旧行为是留空白标签 + 静默，重启后页面像是「丢了」。
+        entry.url = tab.url;
+        console.warn(
+          "[browser] 恢复页面失败，保留 URL 供刷新重试",
+          tab.url,
+          err instanceof Error ? err.message : String(err),
+        );
       } finally {
         entry.navigating = false;
       }

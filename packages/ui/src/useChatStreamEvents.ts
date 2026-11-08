@@ -209,6 +209,10 @@ export interface ChatStreamEventOptions {
   setCurrentUrl: (value: string) => void;
   setBusy: (value: boolean) => void;
   setNotice: (value: string) => void;
+  /** 待发指令注入回执（chat:steer:applied）：App 据此撤卡并把文案折进当轮时间线。 */
+  onSteerApplied?: (sessionId: string, items: Array<{ id: string; text: string }>) => void;
+  /** 某会话一轮收尾（done/error 结算后调用；后台会话也会调用，用于待发队列自动续发）。 */
+  onStreamSettled?: (sessionId: string) => void;
 }
 
 /** 订阅后端事件并路由进 per-session 缓存；卸载时逐条退订。 */
@@ -229,6 +233,8 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
     setCurrentUrl,
     setBusy,
     setNotice,
+    onSteerApplied,
+    onStreamSettled,
   } = options;
 
   React.useEffect(() => {
@@ -329,6 +335,25 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         if (parsed.note) pushTransient(sid, "system", parsed.note);
       }),
       api.on("chat:stream:heartbeat", () => {}),
+      // 待发指令注入回执：主进程在轮次边界真正注入后才会发这个事件（旧 shell 未登记事件时降级不订阅）
+      ((): () => void => {
+        try {
+          return api.on("chat:steer:applied", (payload) => {
+            const p = payload as { sessionId?: string; items?: unknown };
+            const sid = p.sessionId ?? sessionIdRef.current;
+            const rawItems = Array.isArray(p.items) ? p.items : [];
+            const items = rawItems.filter(
+              (item): item is { id: string; text: string } =>
+                Boolean(item) &&
+                typeof (item as { id?: unknown }).id === "string" &&
+                typeof (item as { text?: unknown }).text === "string",
+            );
+            if (sid && items.length > 0) onSteerApplied?.(sid, items);
+          });
+        } catch {
+          return () => {};
+        }
+      })(),
       api.on("perm:request", (payload) => {
         const req = payload as {
           requestId?: string;
@@ -421,6 +446,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         meta.activeId = null;
         meta.startedAt = 0;
         meta.firstTokenAt = 0;
+        onStreamSettled?.(sid);
         if (sid !== sessionIdRef.current) return; // 后台会话收尾：缓存里已是完成态，切回时展示
         const params = new URLSearchParams(location.search);
         if (finishedId && params.get("expandTimeline") !== "1") {
@@ -468,6 +494,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           meta.activeId = null;
           meta.startedAt = 0;
           meta.firstTokenAt = 0;
+          onStreamSettled?.(sid);
           if (sid === sessionIdRef.current) {
             setBusy(false);
             setNotice("已停止");
@@ -478,6 +505,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         meta.activeId = null;
         meta.startedAt = 0;
         meta.firstTokenAt = 0;
+        onStreamSettled?.(sid);
         if (sid === sessionIdRef.current) {
           setBusy(false);
           setNotice("回复失败");

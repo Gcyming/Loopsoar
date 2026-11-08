@@ -62,6 +62,10 @@ export function sanitizeErrorMessage(raw: string): string {
   return text.length > 320 ? `${text.slice(0, 320)}…` : text;
 }
 
+/** 生成中的会话：UI 的 saveTimeline 可能早于会话落库到达（done 事件先于 sessions.append），先暂存。 */
+const activeStreams = new Set<string>();
+const stagedTimelines = new Map<string, unknown[]>();
+
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
 function startStream(
   deps: ChatDeps,
@@ -76,11 +80,29 @@ function startStream(
   }
   let assistantText = "";
   const modelInfo = deps.getModelInfo?.();
+  activeStreams.add(sessionId);
 
   void deps.chatService
     .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort }, (item) => {
       const type = String(item.meta?.type ?? "chunk");
       if (type === "chunk") assistantText += item.content;
+      if (type === "steer") {
+        // 引导注入回执：走专用事件（不进 chat:stream:* 通用流），UI 撤待发卡并折进思考历程
+        let parsed: { items?: { id?: string; text?: string; kind?: string; fromName?: string }[] } = {};
+        try {
+          parsed = JSON.parse(item.content) as typeof parsed;
+        } catch {
+          parsed = {};
+        }
+        const items = Array.isArray(parsed.items)
+          ? parsed.items.filter(
+              (it): it is { id: string; text: string; kind?: string; fromName?: string } =>
+                Boolean(it) && typeof it.id === "string" && typeof it.text === "string",
+            )
+          : [];
+        deps.push("chat:steer:applied", { sessionId, items });
+        return;
+      }
       const content = type === "error" ? sanitizeErrorMessage(item.content) : item.content;
       deps.push(`chat:stream:${type}`, {
         sessionId,
@@ -92,6 +114,14 @@ function startStream(
       const finalText = result.finalText || assistantText;
       // 会话持久化（恢复上次会话的数据来源）
       deps.sessions?.append(sessionId, payload.message, finalText, modelInfo);
+      // 时间线回填：done 事件先于 append 到达，UI 的 saveTimeline 可能先落进暂存区；
+      // 这里（append 之后）再挂到刚追加的助手消息上，否则会错误覆盖上一条助手消息的时间线。
+      activeStreams.delete(sessionId);
+      const stagedTimeline = stagedTimelines.get(sessionId);
+      stagedTimelines.delete(sessionId);
+      if (stagedTimeline && stagedTimeline.length > 0) {
+        deps.sessions?.attachTimeline(sessionId, stagedTimeline);
+      }
       // 记忆自动汇总：抽取候选 → 五门治理 → 落盘（失败不阻断对话）
       if (deps.memory && (deps.shouldAutoCapture?.() ?? true) && finalText.trim()) {
         try {
@@ -112,6 +142,8 @@ function startStream(
       }
     })
     .catch((err: unknown) => {
+      activeStreams.delete(sessionId);
+      stagedTimelines.delete(sessionId);
       const cleaned = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
       deps.push("chat:stream:error", { sessionId, content: cleaned, message: cleaned });
     });
@@ -128,14 +160,26 @@ export function registerChatDomain(deps: ChatDeps): void {
   );
 
   handleTrusted(deps, "chat:steer", (payload) => {
-    const p = payload as { message: string; sessionId?: string };
-    const accepted = deps.chatService.steer(p.sessionId ?? undefined, p.message);
-    return { accepted };
+    const p = payload as { message: string; sessionId?: string; steerId?: string };
+    return deps.chatService.steer(p.sessionId ?? undefined, p.message, p.steerId);
+  });
+
+  // 撤销尚未注入的引导（待发卡的修改/撤销删除动作）
+  handleTrusted(deps, "chat:steerCancel", (payload) => {
+    const p = payload as { steerId: string; sessionId?: string };
+    return { cancelled: deps.chatService.steerCancel(p.sessionId ?? undefined, p.steerId) };
   });
 
   handleTrusted(deps, "chat:saveTimeline", (payload) => {
     const p = payload as { sessionId?: string; timeline?: unknown[] };
-    const ok = deps.sessions?.attachTimeline(p.sessionId ?? null, Array.isArray(p.timeline) ? p.timeline : []) ?? false;
+    const timeline = Array.isArray(p.timeline) ? p.timeline : [];
+    // done 事件先于会话落库到达：本轮流仍在跑（append 未完成）时先暂存，
+    // 由 startStream 在 append 之后挂到新助手消息上；否则立即挂到已有会话的最后一条助手消息。
+    if (p.sessionId && activeStreams.has(p.sessionId)) {
+      stagedTimelines.set(p.sessionId, timeline);
+      return { ok: true };
+    }
+    const ok = deps.sessions?.attachTimeline(p.sessionId ?? null, timeline) ?? false;
     return { ok };
   });
 

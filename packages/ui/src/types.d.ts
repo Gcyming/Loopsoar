@@ -596,6 +596,7 @@ export type LoopsoarEvent =
   | "chat:stream:done"
   | "chat:stream:error"
   | "chat:stream:heartbeat"
+  | "chat:steer:applied"
   | "perm:request"
   | "boot:ready"
   | "browser:tabs"
@@ -638,7 +639,14 @@ export interface LoopsoarAPI {
     }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId?: string }): Promise<{ stopped: boolean }>;
     rollback(payload: { keepCount: number; sessionId?: string }): Promise<{ ok: boolean; session: unknown }>;
-    steer(payload: { message: string; sessionId?: string }): Promise<{ accepted: boolean }>;
+    /** 投递一条「待发指令」（运行中插入）：accepted=false 时看 reason（no-running/full/empty/duplicate）。 */
+    steer(payload: { message: string; sessionId?: string; steerId?: string }): Promise<{
+      accepted: boolean;
+      steerId: string;
+      reason?: "no-running" | "full" | "empty" | "duplicate";
+    }>;
+    /** 撤销尚未注入的待发指令（取出主进程 steer 缓冲区里的同 id 条目）。 */
+    steerCancel(payload: { steerId: string; sessionId?: string }): Promise<{ cancelled: boolean }>;
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
     saveTimeline(payload: { sessionId?: string; timeline: unknown[] }): Promise<{ ok: boolean }>;
     sessions(): Promise<{ sessions: SessionMeta[]; currentId: string | null }>;

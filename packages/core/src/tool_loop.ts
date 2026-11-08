@@ -175,13 +175,22 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       // 轮次计数（每轮递增，第一轮从 1 开始）
       usage.rounds = round + 1;
 
-      // 转向注入（轮次边界）：从 SteerBus 取出所有当前转向，注入到系统提示中
-      const steerTexts = steers.drain();
-      const steerPrompt = steerTexts.length > 0
-        ? `\n[系统转向提示] ${steerTexts.join(" · ")}\n`
-        : "";
-      if (steerTexts.length > 0) {
-        emit("progress", { note: `已注入 ${steerTexts.length} 条转向提示（下一轮生效）` });
+      // 引导注入（轮次边界）：取走运行中插入的引导 → 先发 steer 事件（UI 据此把待发卡折进思考历程），
+      // 再把文案作为一条 user 消息注入本轮对话（模型下一轮看到，不打断当前输出）。
+      const steerItems = steers.drain();
+      let steerPrompt = "";
+      if (steerItems.length > 0) {
+        emit("steer", {
+          items: steerItems.map((it) => ({
+            id: it.id,
+            text: it.text,
+            kind: it.kind ?? "user",
+            fromName: it.fromName,
+          })),
+        });
+        steerPrompt = `\n用户在你运行期间插入了下面的请求（把它们当作本轮新增的指令一并考虑）：\n${steerItems
+          .map((it) => `- ${it.text}`)
+          .join("\n")}\n`;
       }
 
       // 无进度检测预热：每轮开始记录当前进度状态（用于后续判断）
@@ -206,7 +215,10 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             ];
       }
       if (steerPrompt) {
-        conversation = [...conversation, { role: "user", content: `【转向提示】${steerPrompt}` }];
+        conversation = [
+          ...conversation,
+          { role: "user", content: `【运行中插入的指令】${steerPrompt}` },
+        ];
       }
       const request: LlmRequest = {
         messages: conversation,
@@ -429,6 +441,31 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           }),
         ];
       } else if (sawDone) {
+        // 引导续轮（移植 slime A-1061⑥）：模型只出正文、没有工具轮，本轮即将收尾；
+        // 若运行中还有插入的引导，取走并在**同一轮**继续跑 —— 不另起用户消息、不打断当前输出，
+        // UI 会把这批引导折进当前 assistant 的思考历程（chat:steer:applied → 「引导」卡）。
+        const lateSteers = steers.drain();
+        if (lateSteers.length > 0) {
+          emit("steer", {
+            items: lateSteers.map((it) => ({
+              id: it.id,
+              text: it.text,
+              kind: it.kind ?? "user",
+              fromName: it.fromName,
+            })),
+          });
+          conversation = [
+            ...conversation,
+            { role: "assistant", content: roundText },
+            {
+              role: "user",
+              content: `\n【运行中插入的指令】\n用户在你运行期间插入了下面的请求（把它们当作本轮新增的指令一并考虑）：\n${lateSteers
+                .map((it) => `- ${it.text}`)
+                .join("\n")}\n`,
+            },
+          ];
+          continue;
+        }
         // 每轮声称核验（可选）：模型准备收束但本轮没调工具 → 先核验它的「已完成」声称。
         // 为什么在这里拦：等最终收束后再核验，用户已经看到「已保存/已完成」的假完成了；
         // 核验未通过就注入一条 user 提示，逼模型用工具实际核实（最多 maxVerifyForcedRounds 次）。

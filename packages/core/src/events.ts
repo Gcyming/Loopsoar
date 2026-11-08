@@ -9,6 +9,7 @@ export type LoopEventType =
   | "reasoning"
   | "tool"
   | "tool_start"
+  | "steer"
   | "progress"
   | "done"
   | "error"

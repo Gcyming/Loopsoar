@@ -568,8 +568,8 @@ export default function Composer({
             }}
             onClick={interruptMode ? onStop : requestSend}
             disabled={sendDisabled}
-            title={interruptMode ? tr("composer.stop") : busy ? tr("composer.sendSteer") : tr("composer.send")}
-            aria-label={interruptMode ? tr("composer.stop") : busy ? tr("composer.sendSteer") : tr("composer.send")}
+            title={interruptMode ? tr("composer.stop") : busy ? tr("composer.queueSend") : tr("composer.send")}
+            aria-label={interruptMode ? tr("composer.stop") : busy ? tr("composer.queueSend") : tr("composer.send")}
           >
             <Icon name={interruptMode ? "stop" : "send"} size={15} />
           </button>

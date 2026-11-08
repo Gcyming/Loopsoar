@@ -15,6 +15,13 @@
       "hasRequest": true
     },
     {
+      "channel": "chat:steerCancel",
+      "domain": "chat",
+      "method": "steerCancel",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "chat:rollback",
       "domain": "chat",
       "method": "rollback",
@@ -794,6 +801,7 @@
     "chat:stream:done",
     "chat:stream:error",
     "chat:stream:heartbeat",
+    "chat:steer:applied",
     "perm:request",
     "boot:ready",
     "browser:tabs",

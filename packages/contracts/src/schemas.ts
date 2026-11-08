@@ -26,8 +26,24 @@ export const ChatStreamSchema = z.object({
   reasoningEffort: z.string().max(30).optional(),
 });
 export const ChatSteerSchema = z.object({
-  /** 运行中注入的转向提示（轮次边界生效，不打断当前输出）。 */
+  /** 运行中注入的引导（轮次边界生效，不打断当前输出）。 */
   message: z.string().min(1).max(4000),
+  sessionId: SessionIdSchema.optional(),
+  /** 客户端生成的引导 id：UI 用它与主进程注入回执对账（同 id 重复提交按覆盖处理）。 */
+  steerId: z.string().min(1).max(64).optional(),
+});
+/**
+ * 引导投递结果：accepted=false 时 reason 说明原因（UI 据此保留待发卡，本轮收尾后继续投递）。
+ * · no-running 当前没有运行中的回复 · full 队列已满（8 条）· empty 文本为空 · duplicate 同一 id 已在队列
+ */
+export const ChatSteerResultSchema = z.object({
+  accepted: z.boolean(),
+  steerId: z.string().optional(),
+  reason: z.enum(["no-running", "full", "empty", "duplicate"]).optional(),
+});
+/** 撤销一条尚未注入的引导（待发卡的「修改 / 撤销删除」动作）。 */
+export const ChatSteerCancelSchema = z.object({
+  steerId: z.string().min(1).max(64),
   sessionId: SessionIdSchema.optional(),
 });
 /** 思考时间线节点（持久化用；字段宽进严出，未知字段丢弃）。 */
@@ -403,6 +419,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "steer",
     request: ChatSteerSchema,
+    sensitive: true,
+  },
+  "chat:steerCancel": {
+    domain: "chat",
+    method: "steerCancel",
+    request: ChatSteerCancelSchema,
     sensitive: true,
   },
   "chat:rollback": {
@@ -1096,6 +1118,7 @@ export const EVENTS = [
   "chat:stream:done",
   "chat:stream:error",
   "chat:stream:heartbeat",
+  "chat:steer:applied",
   "perm:request",
   "boot:ready",
   "browser:tabs",

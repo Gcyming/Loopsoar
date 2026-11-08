@@ -153,7 +153,16 @@ export function createElectronBrowserHost(
     },
     attachView: (view) => {
       const win = getWindow();
-      win?.contentView.addChildView(view as unknown as WebContentsView);
+      // 启动恢复发生在新窗口创建之前：此时没有窗口可挂，必须返回 false 让宿主在下一次
+      // applyLayout 重试；否则恢复出来的标签页永远不会出现在窗口里（重载/刷新也救不回来）。
+      if (!win || win.isDestroyed()) return false;
+      try {
+        win.contentView.addChildView(view as unknown as WebContentsView);
+        return true;
+      } catch (err) {
+        console.warn("[browser] 挂载网页视图失败", err instanceof Error ? err.message : String(err));
+        return false;
+      }
     },
     detachView: (view) => {
       const win = getWindow();

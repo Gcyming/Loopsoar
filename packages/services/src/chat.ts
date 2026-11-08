@@ -34,16 +34,24 @@ export interface ChatAgent {
   role: string;
 }
 
-/** 事件类型（与 core LoopEvent.type 对齐；shell 按此映射到 chat:stream:<type>）。 */
+/** 事件类型（与 core LoopEvent.type 对齐；shell 按此映射到 chat:stream:<type>，steer 走专用事件）。 */
 export type ChatEventType =
   | "chunk"
   | "reasoning"
   | "tool"
   | "tool_start"
+  | "steer"
   | "progress"
   | "done"
   | "error"
   | "heartbeat";
+
+/** 引导投递结果（与契约 ChatSteerResultSchema 对齐）。 */
+export interface SteerDeliveryResult {
+  accepted: boolean;
+  steerId: string;
+  reason?: "no-running" | "full" | "empty" | "duplicate";
+}
 
 /**
  * Agent-Loop 注入签名：入参与 runToolLoop 一致（含事件 sink），额外带 sessionId 供 loop
@@ -508,6 +516,11 @@ export class ChatService {
         repeatToolStopAt: agentLimits.repeatToolStopAt,
         budget: { rounds: 0, toolCalls: 0, totalTokens: 0, wallClockMs: 0 },
         sink: (event: LoopEvent) => {
+          // 工具循环收尾时会 emit("done")，但 ChatService 在 finally 里还会发一次权威 done
+          //（带输出过滤后的 finalText / claims）。这里也映射会让渲染层收到两次 done：
+          // 第二次 done 到达时上一条已结算，收尾批次里迟到的 chunk 会被当成**新消息** →
+          // 界面上多出一条幽灵回复，且它的空时间线会把真实时间线覆盖掉。done 只认 finally 那次。
+          if (event.type === "done") return;
           // LoopEvent → ChatEventType（type 同名，data 原样传递）
           emit(event.type as ChatEventType, event.data);
         },
@@ -554,23 +567,41 @@ export class ChatService {
         const reasoningTail = reasoningFilter.flush();
         if (reasoningTail) batcher.push({ content: reasoningTail, meta: { type: "reasoning" } });
       }
-      emit("done", { status: outcome, reason, finalText, usage, claims });
+      // 先把已缓冲的增量全部推出，再推 done：否则 UI 会先收到 done、随后才收到迟到 chunk
+      //（那条 chunk 会在 activeId 已清空后新建一条幽灵消息）。
       batcher.flushNow();
+      emit("done", { status: outcome, reason, finalText, usage, claims });
       batcher.close();
     }
 
     return { status: outcome, reason, finalText, usage, chunks, claims };
   }
 
-  /** 注入转向提示：运行中在下一轮边界生效；无运行中会话返回 false。 */
-  steer(sessionId: string | undefined, text: string): boolean {
-    // 未指定会话时：若只有一个运行中的会话，默认注入到它（UI 通常只有一个活动流）
+  /**
+   * 投递一条运行中引导：进入该会话的 SteerBus，模型在下一个轮次边界注入。
+   * 返回结构化结果供 UI 区分「已投递」/「排队等下一轮」（no-running/full 保留待发卡）。
+   */
+  steer(sessionId: string | undefined, text: string, steerId?: string): SteerDeliveryResult {
+    const trimmed = text.trim();
+    const id = steerId?.trim() || `steer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    if (!trimmed) return { accepted: false, steerId: id, reason: "empty" };
+    // 未指定会话时：若只有一个运行中的会话，默认投给它（UI 通常只有一个活动流）
     const fallbackId = this.steerBuses.size === 1 ? [...this.steerBuses.keys()][0] : undefined;
-    const id = sessionId && this.steerBuses.has(sessionId) ? sessionId : (fallbackId ?? "");
-    const bus = id ? this.steerBuses.get(id) : undefined;
-    if (!bus || !text.trim()) return false;
-    bus.push(text.trim());
-    return true;
+    const target = sessionId && this.steerBuses.has(sessionId) ? sessionId : (fallbackId ?? "");
+    const bus = target ? this.steerBuses.get(target) : undefined;
+    if (!bus) return { accepted: false, steerId: id, reason: "no-running" };
+    const result = bus.push({ id, text: trimmed, kind: "user", createdAt: Date.now() });
+    if (result === "full") return { accepted: false, steerId: id, reason: "full" };
+    return { accepted: true, steerId: id };
+  }
+
+  /** 撤销一条尚未注入的引导（待发卡的「修改 / 撤销删除」）；返回是否确实撤销。 */
+  steerCancel(sessionId: string | undefined, steerId: string): boolean {
+    const fallbackId = this.steerBuses.size === 1 ? [...this.steerBuses.keys()][0] : undefined;
+    const target = sessionId && this.steerBuses.has(sessionId) ? sessionId : (fallbackId ?? "");
+    const bus = target ? this.steerBuses.get(target) : undefined;
+    if (!bus || !steerId.trim()) return false;
+    return bus.take(steerId) !== undefined;
   }
 
   /** 当前挂起确认数（界面状态条/测试用）。 */

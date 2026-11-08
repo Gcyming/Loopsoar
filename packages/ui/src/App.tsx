@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LAYOUT } from "loopsoar-contracts/layout";
+import { LAYOUT, computeSidebarMaxWidth, computeSidebarMinWidth } from "loopsoar-contracts/layout";
 import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
@@ -47,12 +47,23 @@ import {
 } from "./useE2eDeepLinks.js";
 import { nextId } from "./ids.js";
 import {
-  applySteer,
+  applySteerToLatest,
   createSessionStreamMeta,
   restoreMessages,
   type ChatMessage,
   type SessionStreamMeta,
 } from "./chatStreamState.js";
+import PendingSteers from "./PendingSteers.js";
+import {
+  PENDING_STEER_MAX,
+  enqueuePending,
+  mergeDelivered,
+  nextResendable,
+  removePending,
+  requeueUndelivered,
+  setPendingStatus,
+  type PendingSteer,
+} from "./steerQueue.js";
 
 /**
  * Loopsoar 主界面（GUI-3）：品牌三色 + 自定义标题栏 + 图标系统 + 交互反馈/动画。
@@ -109,6 +120,13 @@ export default function App(): React.JSX.Element {
   const [currentUrl, setCurrentUrl] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
+  // 待发指令（运行中插入的引导）：按会话保队列（切走再切回不丢），当前会话的队列镜像到 UI。
+  // 队列上限与 core/steerBus 的 STEER_MAX_PENDING 对齐（见 pendingSteers.ts）。
+  const pendingRef = useRef<Map<string, PendingSteer[]>>(new Map());
+  const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
+  /** 事件订阅（在 useChatStreamEvents 内一次绑定）读取最新回调的引用桥。 */
+  const steerAppliedRef = useRef<((sessionId: string, items: Array<{ id: string; text: string }>) => void) | null>(null);
+  const streamSettledRef = useRef<((sessionId: string) => void) | null>(null);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => {
     if (typeof location === "undefined") return false;
     return new URLSearchParams(location.search).get("e2e") === "settings";
@@ -231,6 +249,16 @@ export default function App(): React.JSX.Element {
     [readSessionMessages, writeSessionMessages],
   );
 
+  /** 读取某会话的待发指令队列（App 内唯一数据源，按会话隔离）。 */
+  const readPending = useCallback((sessionId: string): PendingSteer[] => pendingRef.current.get(sessionId) ?? [], []);
+
+  /** 写回某会话的待发队列；若是当前会话，同步 UI 镜像。 */
+  const writePending = useCallback((sessionId: string, next: PendingSteer[]): void => {
+    if (next.length === 0) pendingRef.current.delete(sessionId);
+    else pendingRef.current.set(sessionId, next);
+    if (sessionId === sessionIdRef.current) setPendingSteers(next);
+  }, []);
+
   // 提示自动消失：成功 4.5s、失败/中断 8s；避免每条提示都要手动点掉
   useEffect(() => {
     if (!notice) return;
@@ -280,6 +308,9 @@ export default function App(): React.JSX.Element {
     setCurrentUrl,
     setBusy,
     setNotice,
+    // 事件订阅只绑一次：通过 ref 桥接最新回调（见下方 steerAppliedRef/streamSettledRef 赋值）
+    onSteerApplied: (sessionId, items) => steerAppliedRef.current?.(sessionId, items),
+    onStreamSettled: (sessionId) => streamSettledRef.current?.(sessionId),
   });
 
   // E2E/演示：恢复会话后把最后一条时间线滚到可视区（只做一次）
@@ -324,16 +355,19 @@ export default function App(): React.JSX.Element {
     };
   }, [api]);
 
-  // 侧栏最小宽度硬约束：窗口变窄时自动夹紧，避免输入区被挤压变形
+  // 侧栏宽度硬约束（ADR-0037）：最小宽度 = 窗口宽度 × 比例（用户裁决：当前左右栏比例即最小窄度），
+  // 最大宽度 = min(720, 窗口宽度 - 320)；窗口 resize 与偏好水合后都要重新夹紧，避免启动时
+  // 落回默认 360 而短暂窄于下限（拖拽本身的夹紧在 startResize 里，共用同一对契约函数）。
   useEffect(() => {
     const clamp = (): void => {
-      const max = Math.max(320, Math.min(720, window.innerWidth - 320));
-      setSidebarWidth((w) => Math.min(Math.max(280, w), max));
+      const min = computeSidebarMinWidth(window.innerWidth);
+      const max = computeSidebarMaxWidth(window.innerWidth);
+      setSidebarWidth((w) => Math.min(Math.max(min, w), max));
     };
     clamp();
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
-  }, []);
+  }, [preferences?.sidebarWidth]);
 
   // 侧栏拖拽：mousemove 实时改 DOM 宽度，松开时持久化 + 同步原生视图
   const startResize = useCallback(
@@ -341,9 +375,10 @@ export default function App(): React.JSX.Element {
       event.preventDefault();
       const startX = event.clientX;
       const startWidth = sidebarWidth;
-      // 可调范围：侧栏 280~720，且浏览器区至少保留 320 → 任意宽度下都能拖出比例
-      const minWidth = 280;
-      const maxForWindow = (): number => Math.max(minWidth + 40, Math.min(720, window.innerWidth - 320));
+      // 可调范围（ADR-0037）：下限 = 窗口宽度 × 比例下限（契约函数，与启动/resize 夹紧同源），
+      // 上限 = min(720, 窗口宽度 - 320)，保证网页列始终留出可读宽度。
+      const minWidth = computeSidebarMinWidth(window.innerWidth);
+      const maxForWindow = (): number => computeSidebarMaxWidth(window.innerWidth);
       // 拖拽期间隐藏原生 WebContentsView，否则鼠标移入浏览器区后 mousemove 会被它吞掉
       void api?.browser.setOverlay({ open: true }).catch(() => {});
       sidebarDraggingRef.current = true;
@@ -569,31 +604,66 @@ export default function App(): React.JSX.Element {
     [api, metaFor, mode, provider, reasoningEffort, updateSessionMessages],
   );
 
+  /** 投递一条待发指令：运行中不打断，主进程在轮次边界注入后回执 chat:steer:applied。 */
+  const deliverSteer = useCallback(
+    (sid: string, item: PendingSteer): void => {
+      if (!api) return;
+      void api.chat
+        .steer({ message: item.text, sessionId: sid, steerId: item.id })
+        .then((result) => {
+          if (result.accepted) {
+            writePending(sid, setPendingStatus(readPending(sid), item.id, "delivered"));
+            return;
+          }
+          const reason =
+            result.reason === "full"
+              ? "队列已满（最多 8 条）"
+              : result.reason === "no-running"
+                ? "当前没有运行中的回复"
+                : "内容为空或重复";
+          // 没送达就留在队列里（queued）：本轮结束后由 onStreamSettled 自动续发
+          writePending(sid, setPendingStatus(readPending(sid), item.id, "queued", reason));
+          setNotice(`待发指令暂存队列：${reason}`);
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          writePending(sid, setPendingStatus(readPending(sid), item.id, "failed", message));
+          setNotice(`待发指令投递失败：${message}`);
+        });
+    },
+    [api, readPending, writePending],
+  );
+
+  /** 运行中发送：入队 + 立即投递（对齐 slime：先排队，绝不打断当前输出）。 */
+  const queueSteer = useCallback(
+    (raw: string): void => {
+      const text = raw.trim();
+      const sid = sessionIdRef.current;
+      if (!text || !sid || !api) return;
+      const current = readPending(sid);
+      if (current.length >= PENDING_STEER_MAX) {
+        setNotice(`待发队列已满（最多 ${PENDING_STEER_MAX} 条），请等本轮结束后再发`);
+        return;
+      }
+      const item: PendingSteer = { id: nextId("steer"), text, createdAt: Date.now(), status: "queued" };
+      writePending(sid, enqueuePending(current, item));
+      deliverSteer(sid, item);
+      setNotice(`已加入待发队列（${current.length + 1}/${PENDING_STEER_MAX}）：本轮结束前注入，下一轮开始生效`);
+    },
+    [api, deliverSteer, readPending, writePending],
+  );
+
   const send = useCallback((): void => {
     const text = input.trim();
     if (!text || !api) return;
     setInput("");
     if (busy) {
-      // 运行中：作为「转向提示」注入（轮次边界生效，不打断当前输出）
-      const sid = sessionIdRef.current;
-      if (sid) {
-        const active = metaFor(sid).activeId;
-        updateSessionMessages(sid, (prev) => {
-          const appended = active ? applySteer(prev, active, text) : prev;
-          return [
-            ...appended,
-            { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now(), steer: true },
-          ];
-        });
-      }
-      void api.chat
-        .steer({ message: text, sessionId: sessionIdRef.current ?? undefined })
-        .then((r) => setNotice(r.accepted ? "转向已注入（下一轮生效）" : "转向未生效：当前没有运行中的回复"))
-        .catch((err: unknown) => setNotice(`转向失败：${err instanceof Error ? err.message : String(err)}`));
+      // 运行中：Enter = 待发指令（入队 + 投递，不打断当前输出；slime 语义）
+      queueSteer(text);
       return;
     }
     sendText(text);
-  }, [api, busy, input, metaFor, sendText, updateSessionMessages]);
+  }, [api, busy, input, queueSteer, sendText]);
 
   /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
   const rollbackTo = useCallback(
@@ -660,6 +730,92 @@ export default function App(): React.JSX.Element {
         meta.stopping = false;
       });
   }, [api, metaFor]);
+
+  /* ------------------------- 待发指令卡片的三个操作 ------------------------- */
+
+  /** 修改：撤销主进程缓冲 → 移出队列 → 文本放回输入框。 */
+  const editPendingSteer = useCallback(
+    (id: string): void => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const item = readPending(sid).find((entry) => entry.id === id);
+      if (!item) return;
+      void api?.chat.steerCancel({ steerId: id, sessionId: sid }).catch(() => {});
+      writePending(sid, removePending(readPending(sid), id));
+      setInput((prev) => (prev ? `${prev}\n${item.text}` : item.text));
+      setNotice("已取回待发内容，可修改后重新发送");
+    },
+    [api, readPending, writePending],
+  );
+
+  /** 直接插入：已投递的提示等待注入；未送达的重试投递。 */
+  const insertPendingSteer = useCallback(
+    (id: string): void => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const item = readPending(sid).find((entry) => entry.id === id);
+      if (!item) return;
+      if (item.status === "delivered") {
+        setNotice("已投递，等待本轮注入");
+        return;
+      }
+      writePending(sid, setPendingStatus(readPending(sid), id, "queued"));
+      deliverSteer(sid, item);
+      setNotice("正在重新投递待发指令…");
+    },
+    [deliverSteer, readPending, writePending],
+  );
+
+  /** 撤销删除：撤销主进程缓冲并移出队列。 */
+  const removePendingSteer = useCallback(
+    (id: string): void => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      void api?.chat.steerCancel({ steerId: id, sessionId: sid }).catch(() => {});
+      writePending(sid, removePending(readPending(sid), id));
+      setNotice("已撤销待发指令");
+    },
+    [api, readPending, writePending],
+  );
+
+  /** 注入回执：撤卡 + 把文案折进当轮 assistant 的「引导」时间线卡（不乐观提前塞）。 */
+  const handleSteerApplied = useCallback(
+    (sessionId: string, items: Array<{ id: string; text: string }>): void => {
+      const { next, deliveredTexts } = mergeDelivered(readPending(sessionId), items);
+      writePending(sessionId, next);
+      if (deliveredTexts.length === 0) return;
+      updateSessionMessages(sessionId, (prev) => deliveredTexts.reduce((acc, text) => applySteerToLatest(acc, text), prev));
+      setNotice(deliveredTexts.length === 1 ? "引导已并入本轮思考历程" : `已并入 ${deliveredTexts.length} 条引导`);
+    },
+    [readPending, updateSessionMessages, writePending],
+  );
+
+  /** 一轮收尾：未注入的改回 queued；当前会话自动续发第一条（slime 的排队续发语义）。 */
+  const handleStreamSettled = useCallback(
+    (sessionId: string): void => {
+      const current = readPending(sessionId);
+      if (current.length === 0) return;
+      const requeued = requeueUndelivered(current);
+      writePending(sessionId, requeued);
+      if (sessionId !== sessionIdRef.current) return;
+      const next = nextResendable(requeued);
+      if (!next) return;
+      writePending(sessionId, removePending(requeued, next.id));
+      window.setTimeout(() => {
+        sendText(next.text);
+        setNotice("本轮已结束，待发指令已自动续发");
+      }, 120);
+    },
+    [readPending, sendText, writePending],
+  );
+
+  // 事件订阅在 useChatStreamEvents 内只绑一次：用 effect 把最新回调写进 ref 桥
+  useEffect(() => {
+    steerAppliedRef.current = handleSteerApplied;
+  }, [handleSteerApplied]);
+  useEffect(() => {
+    streamSettledRef.current = handleStreamSettled;
+  }, [handleStreamSettled]);
 
   const navigate = useCallback(
     (raw?: string): void => {
@@ -799,6 +955,7 @@ export default function App(): React.JSX.Element {
       } else {
         setMessages([]);
       }
+      setPendingSteers([]); // 新会话没有待发指令
       setBusy(false);
       setSessionOpen(false);
       setNotice("已新建会话");
@@ -893,6 +1050,8 @@ export default function App(): React.JSX.Element {
       writeSessionMessages(sessionId, msgs);
       const meta = metaFor(sessionId);
       setBusy(meta.busy);
+      // 切会话：把该会话自己的待发队列镜像回 UI（每个会话独立排队）
+      setPendingSteers(readPending(sessionId));
       setSessionOpen(false);
       setNotice("");
       void api.browser
@@ -907,7 +1066,7 @@ export default function App(): React.JSX.Element {
         })
         .catch(() => undefined);
     });
-  }, [api, metaFor, writeSessionMessages]);
+  }, [api, metaFor, readPending, writeSessionMessages]);
 
   /** 删除会话：当前会话被删时连同左侧标签切到下一个会话（原内联逻辑外置）。 */
   const deleteSession = useCallback(
@@ -917,9 +1076,12 @@ export default function App(): React.JSX.Element {
         .then((r) => {
           setSessions(r.sessions);
           setCurrentSession(r.currentId);
+          // 会话都没了：待发队列一并清掉
+          pendingRef.current.delete(sessionId);
           // 删除当前会话：右侧不能只清空，必须连同左侧标签一起切到下一个会话
           if (sessionId === currentSession) {
             setMessages([]);
+            setPendingSteers([]);
             if (r.currentId) switchSession(r.currentId);
           }
         })
@@ -1160,6 +1322,12 @@ export default function App(): React.JSX.Element {
             onRollback={rollbackTo}
             onRegenerate={regenerate}
             onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
+          />
+          <PendingSteers
+            items={pendingSteers}
+            onEdit={editPendingSteer}
+            onInsertNow={insertPendingSteer}
+            onRemove={removePendingSteer}
           />
           <Composer
             value={input}

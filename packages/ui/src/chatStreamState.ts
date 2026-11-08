@@ -34,7 +34,6 @@ export interface ChatMessage {
   compressNote?: string;
   /** 压缩报告明细（条数/前后字符数；用于可展开的压缩报告）。 */
   compressStats?: { dropped: number; beforeChars: number; afterChars: number };
-  steer?: boolean;
   /** 交错时间线（思考 / 穿插正文 / 工具 / 规划 / 播报 / 引导）。 */
   timeline?: TimelineStep[];
 }
@@ -169,6 +168,28 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
 export function applySteer(messages: ChatMessage[], id: string, text: string): ChatMessage[] {
   return messages.map((message) =>
     message.id === id ? { ...message, timeline: appendTimelineStep(message.timeline ?? [], { kind: "steer", text }) } : message,
+  );
+}
+
+/**
+ * 注入回执（chat:steer:applied）到达时：把引导文案折进「最后一条」assistant 消息的时间线。
+ *
+ * 旧实现是在发送时乐观调用 applySteer：主进程可能在轮次边界才注入（也可能注入前被撤销），
+ * 只有回执才是既成事实；先塞会让用户看到一条并未生效的引导卡。
+ */
+export function applySteerToLatest(messages: ChatMessage[], text: string): ChatMessage[] {
+  const content = text.trim();
+  if (!content) return messages;
+  let index = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "assistant") {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return messages;
+  return messages.map((message, i) =>
+    i === index ? { ...message, timeline: appendTimelineStep(message.timeline ?? [], { kind: "steer", text: content }) } : message,
   );
 }
 

@@ -1592,6 +1592,10 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
 
   createMainWindow();
+  // 启动恢复发生在 createMainWindow 之前：当时 attachView 拿不到主窗口（返回 false 跳过挂载），
+  // 窗口创建后立刻重排一次，让恢复出来的原生网页视图补挂并设置 bounds/可见性。
+  // 幂等：已挂上的视图不会重复挂载；没有标签页时只是一次空布局。
+  browserHost?.syncBounds();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });

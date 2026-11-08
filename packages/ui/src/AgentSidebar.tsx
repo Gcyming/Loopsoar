@@ -74,7 +74,7 @@ function conversationToMarkdown(messages: ChatMessage[], tr: Translate): string 
   return messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => {
-      const who = m.role === "user" ? (m.steer ? tr("chat.userSteer") : tr("chat.user")) : "Loopsoar";
+      const who = m.role === "user" ? tr("chat.user") : "Loopsoar";
       const thinkText = (m.timeline ?? [])
         .filter((step): step is Extract<TimelineStep, { kind: "think" }> => step.kind === "think")
         .map((step) => step.text)

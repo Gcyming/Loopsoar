@@ -27,6 +27,18 @@ export const LAYOUT = {
   BROWSER_VIEW_RADIUS: 14,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
   SIDEBAR_WIDTH: 360,
+  /**
+   * 侧栏最小宽度占窗口宽度的比例（ADR-0037，用户裁决：把当前左右栏比例固定为侧栏的最小窄度）。
+   * 当前布局实测：侧栏 720px / 窗口 2048px ≈ 35.2% ⇒ 取 0.35。
+   * 语义：拖拽不能把侧栏压到「窗口宽度 × 该比例」以下；窗口变窄时下限按比例同步降低。
+   */
+  SIDEBAR_MIN_WIDTH_RATIO: 0.35,
+  /** 侧栏最小宽度绝对下限（极窄窗口兜底；与偏好 schema 的 240 下限一致）。 */
+  SIDEBAR_MIN_WIDTH_FLOOR: 240,
+  /** 侧栏最大宽度（与偏好 schema 上限 720 一致；宽屏下比例下限由该上限截住）。 */
+  SIDEBAR_MAX_WIDTH: 720,
+  /** 浏览器列至少保留的宽度（侧栏上限不能把网页区挤没）。 */
+  BROWSER_COLUMN_MIN_WIDTH: 320,
   /** 侧栏收起态宽度（只剩图标/展开按钮）。 */
   SIDEBAR_COLLAPSED_WIDTH: 48,
   /** 小窗化（浮动卡片）模式下侧栏四周留白。 */
@@ -98,4 +110,35 @@ export function computeBrowserViewBounds(
     width,
     height,
   };
+}
+
+/**
+ * 视口宽度下侧栏的**最小宽度**（ADR-0037 的唯一产地，UI 拖拽夹紧与窗口 resize 夹紧共用）：
+ * 「窗口宽度 × SIDEBAR_MIN_WIDTH_RATIO」作为比例下限，再夹在 [FLOOR, MAX] 之间。
+ * 为什么按比例而不是写死 720：用户要求「把当前左右栏比例作为最小窄度」——
+ * 窗口变窄时若仍用绝对像素下限，会把浏览器列越挤越窄；按比例下限随窗口等比收缩，视觉比例恒定。
+ */
+export function computeSidebarMinWidth(
+  viewportWidth: number,
+  layout: typeof LAYOUT = LAYOUT,
+): number {
+  const width = Number.isFinite(viewportWidth) ? Math.max(0, viewportWidth) : 0;
+  const ratioMin = Math.round(width * layout.SIDEBAR_MIN_WIDTH_RATIO);
+  return Math.min(layout.SIDEBAR_MAX_WIDTH, Math.max(layout.SIDEBAR_MIN_WIDTH_FLOOR, ratioMin));
+}
+
+/**
+ * 视口宽度下侧栏的**最大宽度**：同时受绝对上限与「浏览器列至少 BROWSER_COLUMN_MIN_WIDTH」约束，
+ * 且永远不小于 min（避免极窄窗口出现 min > max 导致夹取结果为负区间）。
+ */
+export function computeSidebarMaxWidth(
+  viewportWidth: number,
+  layout: typeof LAYOUT = LAYOUT,
+): number {
+  const width = Number.isFinite(viewportWidth) ? Math.max(0, viewportWidth) : 0;
+  const capped = Math.min(
+    layout.SIDEBAR_MAX_WIDTH,
+    Math.max(0, width - layout.BROWSER_COLUMN_MIN_WIDTH),
+  );
+  return Math.max(computeSidebarMinWidth(width, layout), capped);
 }
