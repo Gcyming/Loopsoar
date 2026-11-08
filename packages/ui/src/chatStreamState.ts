@@ -80,6 +80,47 @@ export function applyChunk(messages: ChatMessage[], id: string, delta: string, o
   return next;
 }
 
+/**
+ * 迟到增量（done 之后才到达的尾部 chunk）：**绝不再新建一条助手消息**。
+ *
+ * 收尾顺序缺陷（done 先于最后一批增量推出，旧服务的 finally 顺序 / 旧构建）会让渲染层在
+ * activeId 已清空后收到 chunk；旧实现用 `nextId("a")` 新建气泡 ⇒ 正文被劈成两条：
+ * 前半缺尾、后半只有寥寥几字，只有重启 App 从会话库重读完整 finalText 才恢复。
+ *
+ * 这里把迟到增量并回**最后一条助手消息**（通常就是刚 done 的那条），正文始终完整；
+ * 一条助手都没有时才退回正常创建。
+ */
+export function applyLateChunk(
+  messages: ChatMessage[],
+  delta: string,
+  options: { tailSeq?: number; fallbackId?: string; now?: number } = {},
+): ChatMessage[] {
+  if (!delta) return messages;
+  let index = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "assistant") {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) {
+    return applyChunk(messages, options.fallbackId ?? `a-late-${Date.now()}`, delta, options);
+  }
+  const target = messages[index];
+  if (target.status === "streaming") {
+    return applyChunk(messages, target.id, delta, options);
+  }
+  const next = [...messages];
+  next[index] = {
+    ...target,
+    text: target.text + delta,
+    tail: delta,
+    tailSeq: options.tailSeq ?? target.tailSeq,
+    timeline: appendTimelineStep(target.timeline ?? [], { kind: "body", text: delta }),
+  };
+  return next;
+}
+
 /** 思考增量。 */
 export function applyReasoning(messages: ChatMessage[], id: string, delta: string): ChatMessage[] {
   return messages.map((message) =>

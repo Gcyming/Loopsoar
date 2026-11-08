@@ -31,6 +31,7 @@ import type {
 } from "./types.js";
 import {
   applyChunk,
+  applyLateChunk,
   applyDone,
   applyReasoning,
   applyToolResult,
@@ -244,10 +245,15 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
     const upsertAssistant = (sessionId: string, delta: string): void => {
       const meta = metaFor(sessionId);
       if (meta.firstTokenAt === 0) meta.firstTokenAt = Date.now();
-      const id = meta.activeId ?? nextId("a");
-      meta.activeId = id;
       tailSeqRef.current += 1;
       const tailSeq = tailSeqRef.current;
+      const id = meta.activeId;
+      if (!id) {
+        // 迟到增量（done 之后才到）：并回最后一条助手消息，绝不新建气泡 ——
+        // 否则正文会被劈成“前半缺尾 + 后半寥寥几字”，只有重启 App 才恢复。
+        updateSessionMessages(sessionId, (prev) => applyLateChunk(prev, delta, { tailSeq, fallbackId: nextId("a") }));
+        return;
+      }
       updateSessionMessages(sessionId, (prev) => applyChunk(prev, id, delta, { tailSeq }));
     };
 
