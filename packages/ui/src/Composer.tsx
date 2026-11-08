@@ -607,7 +607,7 @@ export default function Composer({
       </div>
       <div style={styles.composerFoot}>
         <span style={styles.notice}>
-          {notice || (busy ? tr("composer.generating") : mode === "plan" ? tr("composer.planFoot") : tr("composer.buildFoot"))}
+          {notice || (busy ? "" : mode === "plan" ? tr("composer.planFoot") : tr("composer.buildFoot"))}
         </span>
       </div>
     </div>

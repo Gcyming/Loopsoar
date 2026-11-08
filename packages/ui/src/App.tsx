@@ -215,11 +215,17 @@ export default function App(): React.JSX.Element {
   const tailSeqRef = useRef<number>(0);
   /** 消息按会话缓存：切走再切回时恢复该会话的实时状态（含后台仍在跑的流）。 */
   const messagesRef = useRef<ChatMessage[]>([]);
+  /** 输入框草稿按会话隔离：切会话时保存本会话草稿、恢复目标会话草稿，绝不串台。 */
+  const inputRef = useRef<string>("");
+  const draftRef = useRef<Map<string, string>>(new Map());
   const sessionCacheRef = useRef(new Map<string, ChatMessage[]>());
   const sessionMetaRef = useRef(new Map<string, SessionStreamMeta>());
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
 
   const metaFor = useCallback((sessionId: string): SessionStreamMeta => {
     let meta = sessionMetaRef.current.get(sessionId);
@@ -634,7 +640,15 @@ export default function App(): React.JSX.Element {
     [api, readPending, writePending],
   );
 
-  /** 运行中发送：入队 + 立即投递（对齐 slime：先排队，绝不打断当前输出）。 */
+  /**
+   * 运行中发送：**只入队，不投递**（对齐 slime 三选项语义）。
+   *
+   * 用户发出后先显示待发卡，由用户三选一：
+   *   · 什么都不做 → 本轮 Agent 输出结束后，自动把这条作为下一轮用户需求发出；
+   *   · 点卡片上的「引导」→ 作为 steer 投递，在当前这轮的下一个轮次边界并入思考历程（绝不打断）；
+   *   · 点「修改」/「撤销删除」→ 取回重写或丢弃。
+   * 此前是"入队即投递"，用户明确否掉了这一形态。
+   */
   const queueSteer = useCallback(
     (raw: string): void => {
       const text = raw.trim();
@@ -647,10 +661,9 @@ export default function App(): React.JSX.Element {
       }
       const item: PendingSteer = { id: nextId("steer"), text, createdAt: Date.now(), status: "queued" };
       writePending(sid, enqueuePending(current, item));
-      deliverSteer(sid, item);
-      setNotice(`已加入待发队列（${current.length + 1}/${PENDING_STEER_MAX}）：本轮结束前注入，下一轮开始生效`);
+      setNotice(`已排队（${current.length + 1}/${PENDING_STEER_MAX}）：本轮结束后自动发出；点「引导」可提前并入当前思考`);
     },
-    [api, deliverSteer, readPending, writePending],
+    [api, readPending, writePending],
   );
 
   const send = useCallback((): void => {
@@ -748,7 +761,7 @@ export default function App(): React.JSX.Element {
     [api, readPending, writePending],
   );
 
-  /** 直接插入：已投递的提示等待注入；未送达的重试投递。 */
+  /** 引导插入：仅此按钮会把排队内容作为 steer 投递给主进程（并入当前这轮思考，不打断）。 */
   const insertPendingSteer = useCallback(
     (id: string): void => {
       const sid = sessionIdRef.current;
@@ -756,12 +769,12 @@ export default function App(): React.JSX.Element {
       const item = readPending(sid).find((entry) => entry.id === id);
       if (!item) return;
       if (item.status === "delivered") {
-        setNotice("已投递，等待本轮注入");
+        setNotice("已作为引导投递，等待本轮注入");
         return;
       }
       writePending(sid, setPendingStatus(readPending(sid), id, "queued"));
       deliverSteer(sid, item);
-      setNotice("正在重新投递待发指令…");
+      setNotice("已作为引导插入当前这一轮（不打断输出）…");
     },
     [deliverSteer, readPending, writePending],
   );
@@ -886,6 +899,9 @@ export default function App(): React.JSX.Element {
     (tabId: string): void => {
       if (!api) return;
       void api.browser.selectTab({ tabId }).then(() => {
+        // 换界面收起：切标签属于切换界面，会话/模型下拉不应残留
+        setSessionOpen(false);
+        setModelMenuOpen(false);
         void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         const tab = tabs.find((t) => t.id === tabId);
         if (tab?.url) {
@@ -945,6 +961,8 @@ export default function App(): React.JSX.Element {
 
   const newSession = useCallback((): void => {
     if (!api) return;
+    // 会话隔离：旧会话的输入草稿先存住，回来还能接着写
+    draftRef.current.set(sessionIdRef.current, inputRef.current);
     void api.chat.newSession().then((r) => {
       setSessions(r.sessions);
       setCurrentSession(r.currentId);
@@ -958,6 +976,8 @@ export default function App(): React.JSX.Element {
       setPendingSteers([]); // 新会话没有待发指令
       setBusy(false);
       setSessionOpen(false);
+      setModelMenuOpen(false);
+      setInput("");
       setNotice("已新建会话");
       void api.browser
         .listTabs()
@@ -1040,6 +1060,7 @@ export default function App(): React.JSX.Element {
 
   const switchSession = useCallback((sessionId: string): void => {
     if (!api) return;
+    const previousSessionId = sessionIdRef.current;
     void api.chat.switchSession({ sessionId }).then((r) => {
       if (!r.ok) return;
       sessionIdRef.current = sessionId;
@@ -1052,7 +1073,11 @@ export default function App(): React.JSX.Element {
       setBusy(meta.busy);
       // 切会话：把该会话自己的待发队列镜像回 UI（每个会话独立排队）
       setPendingSteers(readPending(sessionId));
+      // 会话隔离：输入草稿跟着会话走（先存旧会话，再恢复新会话），浮层一律收起
+      draftRef.current.set(previousSessionId, inputRef.current);
+      setInput(draftRef.current.get(sessionId) ?? "");
       setSessionOpen(false);
+      setModelMenuOpen(false);
       setNotice("");
       void api.browser
         .listTabs()
@@ -1179,6 +1204,15 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (settingsOpen || workspacePanelOpen) setSnapshotData(null);
   }, [settingsOpen, workspacePanelOpen]);
+
+  // 界面隔离/换界面收起：进入设置、整页、工作区等其它界面时，聊天的浮层列表
+  // （模型选择 / 会话列表）必须一起收起，否则会压在新界面上（用户实测截图）。
+  const otherInterfaceOpen = settingsOpen || chromePage !== null || workspacePanelOpen || snapshotData !== null;
+  useEffect(() => {
+    if (!otherInterfaceOpen) return;
+    setModelMenuOpen(false);
+    setSessionOpen(false);
+  }, [otherInterfaceOpen]);
 
   // 页面变化后快照内容会过期：自动收起，避免展示与当前页不匹配的旧正文
   useEffect(() => {
