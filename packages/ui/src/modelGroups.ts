@@ -4,7 +4,7 @@
  * 背景：输入区的模型菜单只展示当前供应商，用户无法直接切到另一个供应商的模型。
  * 这里以 providers 列表为唯一输入：默认模型必须在、被停用的模型不展示、活动供应商置顶。
  */
-import type { ProviderItem } from "./types.js";
+import type { ProviderItem, ProviderModel } from "./types.js";
 
 export interface ModelChoice {
   id: string;
@@ -127,4 +127,87 @@ export function buildModelGroups(items: ProviderItem[], activeId: string | null)
   }
   // 活动供应商置顶，其余保持配置顺序
   return groups.sort((a, b) => Number(b.active) - Number(a.active));
+}
+
+/** 「获取模型列表」时可被上游刷新的能力字段（与 core 的 CAPABILITY_KEYS 对齐）。 */
+export const MODEL_CAPABILITY_KEYS = [
+  "contextWindow",
+  "maxOutput",
+  "vision",
+  "thinking",
+  "thinkingEfforts",
+  "inputModalities",
+  "functionCalling",
+  "structuredOutput",
+] as const;
+export type ModelCapabilityKey = (typeof MODEL_CAPABILITY_KEYS)[number];
+
+/** 后端返回的每个模型能力来源诊断（上游给了哪些字段、内置表推断出哪些）。 */
+export interface ProviderCapabilityMeta {
+  upstreamFields?: string[];
+  inferredCaps?: Record<string, unknown>;
+}
+
+export interface MergeFetchedModelsResult {
+  models: ProviderModel[];
+  /** 上游确实返回了能力字段的模型数。 */
+  upstreamModels: number;
+  /** 合并后至少带一项能力（上下文/输出/视觉/模态/工具/结构化输出/思考）的模型数。 */
+  enrichedModels: number;
+}
+
+const capabilityValueEqual = (a: unknown, b: unknown): boolean => {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((value, index) => value === b[index]);
+  return a === b;
+};
+
+/**
+ * 合并「刚拉取的上游模型列表」与本地已有模型配置，并贯彻三态优先级：
+ * **用户显式手填 > 上游实时元数据 > 内置表推断**。
+ *
+ * 判定「显式手填」：本地已有值且与内置表推断值不同（推断值由后端随 capabilityMeta 回传）。
+ * 这样再次点「获取模型列表」时，上游新值能刷新掉旧的自动填充，但不会覆盖用户手填的字段。
+ */
+export function mergeFetchedProviderModels(
+  fetched: ProviderModel[],
+  existing: ProviderModel[],
+  capabilityMeta: Record<string, ProviderCapabilityMeta> | undefined,
+  defaultModelId: string,
+): MergeFetchedModelsResult {
+  const existingById = new Map(
+    existing.filter((model) => typeof model.id === "string" && model.id.trim()).map((model) => [model.id, model]),
+  );
+  const seen = new Set<string>();
+  const models: ProviderModel[] = [];
+  let upstreamModels = 0;
+  for (const incoming of fetched) {
+    const id = typeof incoming.id === "string" ? incoming.id.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const prev = existingById.get(id);
+    const meta = capabilityMeta?.[id];
+    const upstreamFields = new Set(meta?.upstreamFields ?? []);
+    const inferredCaps = meta?.inferredCaps ?? {};
+    if (upstreamFields.size > 0) upstreamModels += 1;
+    const merged: ProviderModel = { ...incoming, id };
+    for (const key of MODEL_CAPABILITY_KEYS) {
+      const prevValue = prev?.[key];
+      const inferredValue = inferredCaps[key];
+      const incomingValue = incoming[key];
+      // 显式手填：本地值存在且与内置推断不同 → 刷新时保留用户值。
+      const manuallySet = prevValue !== undefined && (inferredValue === undefined || !capabilityValueEqual(prevValue, inferredValue));
+      if (manuallySet) {
+        (merged as unknown as Record<string, unknown>)[key] = prevValue;
+      } else if (incomingValue !== undefined) {
+        (merged as unknown as Record<string, unknown>)[key] = incomingValue;
+      }
+    }
+    // 勾选状态沿用本地；新模型默认只启用当前默认模型，其余停用（用户可手动勾选）。
+    merged.selected = prev?.selected ?? incoming.selected ?? id === defaultModelId;
+    models.push(merged);
+  }
+  const enrichedModels = models.filter((model) =>
+    MODEL_CAPABILITY_KEYS.some((key) => model[key] !== undefined),
+  ).length;
+  return { models, upstreamModels, enrichedModels };
 }

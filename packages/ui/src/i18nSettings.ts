@@ -276,7 +276,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Encrypted into the OS key store on save; never logged, never returned, only shown masked",
   },
   "settings.providers.keyPlaceholder": { zh: "sk-…（粘贴后点保存并启用）", en: "sk-… (paste, then save & enable)" },
-  "settings.providers.fetchModels": { zh: "获取模型列表", en: "Fetch model list" },
+  "settings.providers.fetchModels": { zh: "获取模型列表与能力", en: "Fetch model list & capabilities" },
+  "settings.providers.fetchSummary": {
+    zh: "已获取 {models} 个模型：{upstream} 个带上游能力数据，{enriched} 个已按内置能力表补全",
+    en: "Fetched {models} models: {upstream} with upstream capability data, {enriched} completed from built-in table",
+  },
   "settings.providers.fetching": { zh: "获取中…", en: "Fetching…" },
   "settings.providers.keyStatus": { zh: "密钥状态", en: "Key status" },
   "settings.providers.keyStatusHint": {

@@ -15,16 +15,18 @@ import {
   buildModelGroups,
   formatContextWindow,
   formatModalities,
+  mergeFetchedProviderModels,
   modalitiesToInput,
   parseModalitiesInput,
   supportsImageInput,
   triStateToValue,
   valueToTriState,
   type InputModality,
+  type ProviderCapabilityMeta,
 } from "../../packages/ui/src/modelGroups.ts";
 import { SETTINGS_I18N } from "../../packages/ui/src/i18nSettings.ts";
 import { t } from "../../packages/ui/src/i18n.ts";
-import type { ProviderItem } from "../../packages/ui/src/types.js";
+import type { ProviderItem, ProviderModel } from "../../packages/ui/src/types.js";
 
 const ROOT = process.cwd();
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -189,5 +191,66 @@ describe("i18n：能力相关文案 zh/en 齐全", () => {
     expect(t("en-US", "settings.providers.col.modalities")).toBe("Input modalities");
     expect(trZh("composer.modelBadge.image")).toBe("图");
     expect(t("en-US", "composer.modelBadge.image")).toBe("IMG");
+  });
+});
+
+describe("mergeFetchedProviderModels（拉列表时的三态合并：显式手填 > 上游实时 > 内置推断）", () => {
+  const model = (patch: Partial<ProviderModel> & { id: string }): ProviderModel => patch as ProviderModel;
+  const meta = (patch: ProviderCapabilityMeta): Record<string, ProviderCapabilityMeta> => ({ m1: patch });
+
+  it("旧值来自内置推断时，上游新值会刷新掉它", () => {
+    const existing = [model({ id: "m1", contextWindow: 512000, maxOutput: 65536, selected: true })];
+    const fetched = [model({ id: "m1", contextWindow: 1048576, maxOutput: 8192 })];
+    const result = mergeFetchedProviderModels(
+      fetched,
+      existing,
+      meta({ upstreamFields: ["contextWindow", "maxOutput"], inferredCaps: { contextWindow: 512000, maxOutput: 65536 } }),
+      "m1",
+    );
+    expect(result.models[0].contextWindow).toBe(1048576);
+    expect(result.models[0].maxOutput).toBe(8192);
+    expect(result.upstreamModels).toBe(1);
+    expect(result.models[0].selected).toBe(true);
+  });
+
+  it("用户显式手填的值不会被上游刷新覆盖", () => {
+    const existing = [model({ id: "m1", contextWindow: 200000, selected: true })];
+    const fetched = [model({ id: "m1", contextWindow: 1048576 })];
+    const result = mergeFetchedProviderModels(
+      fetched,
+      existing,
+      meta({ upstreamFields: ["contextWindow"], inferredCaps: { contextWindow: 512000 } }),
+      "m1",
+    );
+    expect(result.models[0].contextWindow).toBe(200000);
+  });
+
+  it("上游没有能力数据时保留内置推断值，并给出补全计数", () => {
+    const existing = [model({ id: "m1", contextWindow: 512000 })];
+    const fetched = [model({ id: "m1", contextWindow: 512000 })];
+    const result = mergeFetchedProviderModels(fetched, existing, meta({ upstreamFields: [], inferredCaps: { contextWindow: 512000 } }), "m1");
+    expect(result.models[0].contextWindow).toBe(512000);
+    expect(result.upstreamModels).toBe(0);
+    expect(result.enrichedModels).toBe(1);
+  });
+
+  it("勾选状态沿用本地，新模型仅默认模型启用", () => {
+    const existing = [model({ id: "a", selected: false })];
+    const fetched = [model({ id: "a" }), model({ id: "b" })];
+    const result = mergeFetchedProviderModels(fetched, existing, {}, "b");
+    expect(result.models.find((m) => m.id === "a")?.selected).toBe(false);
+    expect(result.models.find((m) => m.id === "b")?.selected).toBe(true);
+  });
+
+  it("按模型 id 去重，并只统计真正带上游字段的模型", () => {
+    const fetched = [model({ id: "m1", vision: false }), model({ id: "m1" }), model({ id: "m2", contextWindow: 128000 })];
+    const result = mergeFetchedProviderModels(
+      fetched,
+      [],
+      { m1: { upstreamFields: ["vision"], inferredCaps: {} }, m2: { upstreamFields: [], inferredCaps: {} } },
+      "m1",
+    );
+    expect(result.models.map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect(result.upstreamModels).toBe(1);
   });
 });

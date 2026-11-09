@@ -7,7 +7,7 @@ import {
 } from "loopsoar-contracts/headerTemplate";
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
-import { formatModalities, modalitiesToInput, parseModalitiesInput, triStateToValue, valueToTriState } from "./modelGroups.js";
+import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
 import type {
@@ -684,17 +684,25 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               apiKey: keyInput.trim() || undefined,
               headers: parseHeaderLines(pHeaders, tr) ?? undefined,
             });
-            const existing = new Map(pModels.filter((m) => typeof m.id === "string" && m.id.trim()).map((m) => [m.id, m]));
-            const merged = (r.models as ProviderModel[])
-              .filter((m) => typeof m.id === "string" && m.id.trim())
-              .map((m) => ({
-                ...m,
-                ...existing.get(m.id),
-                // 新拉取的模型默认只启用当前默认模型，其余保持停用（用户可手动勾选）
-                selected: existing.get(m.id)?.selected ?? m.selected ?? m.id === pForm.model,
-              }));
+            const existing = pModels.filter((m) => typeof m.id === "string" && m.id.trim());
+            const merge = mergeFetchedProviderModels(
+              r.models as ProviderModel[],
+              existing,
+              (r as { capabilityMeta?: Record<string, ProviderCapabilityMeta> }).capabilityMeta,
+              pForm.model,
+            );
+            const merged = merge.models;
             if (merged.length > 0) setPModels(merged);
             setPModelsError(r.error);
+            if (merged.length > 0 && !r.error) {
+              ok(
+                tr("settings.providers.fetchSummary", {
+                  models: merged.length,
+                  upstream: merge.upstreamModels,
+                  enriched: merge.enrichedModels,
+                }),
+              );
+            }
             if (!merged.some((m) => m.id === pForm.model)) {
               const first = merged.find((m) => m.selected !== false)?.id ?? merged[0]?.id ?? "";
               if (first) setPForm({ ...pForm, model: first });

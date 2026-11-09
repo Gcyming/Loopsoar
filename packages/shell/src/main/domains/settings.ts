@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { withProviderDefaults } from "../providerDefaults.js";
-import { enrichModelSpec } from "loopsoar-core/modelCapabilities";
+import { describeCapabilitySources, enrichModelSpec, type ModelSpec } from "loopsoar-core/modelCapabilities";
 import { isSameProviderTarget } from "../providerStore.js";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import { inferApiFormat } from "loopsoar-core/llm";
@@ -746,12 +746,23 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       }
       const data = (await response.json()) as { data?: Record<string, unknown>[]; models?: Record<string, unknown>[] };
       const rows = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
-      const models = rows
-        .slice(0, 500)
-        .map((m) => enrichModelSpec(m, { provider: cfg.provider, baseUrl: cfg.baseUrl }))
-        .filter((m) => typeof m.id === "string" && m.id.length > 0)
-        .slice(0, 200);
-      return { models, error: null };
+      const options = { provider: cfg.provider, baseUrl: cfg.baseUrl };
+      const models: ModelSpec[] = [];
+      // capabilityMeta：告诉渲染层「哪些字段来自上游、哪些只是内置表推断」，
+      // 让设置面板能按「用户显式手填 > 上游实时值 > 内置推断」合并，而不是被本地缓存覆盖。
+      const capabilityMeta: Record<string, { upstreamFields: string[]; inferredCaps: Record<string, unknown> }> = {};
+      for (const row of rows.slice(0, 500)) {
+        const spec = enrichModelSpec(row, options);
+        if (typeof spec.id !== "string" || spec.id.length === 0) continue;
+        if (models.length >= 200) break;
+        models.push(spec);
+        const sources = describeCapabilitySources(row, options);
+        capabilityMeta[spec.id] = {
+          upstreamFields: [...sources.upstreamFields],
+          inferredCaps: { ...sources.inferredCaps },
+        };
+      }
+      return { models, capabilityMeta, error: null };
     } catch (err) {
       return {
         models: [],

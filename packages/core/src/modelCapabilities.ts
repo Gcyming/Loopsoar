@@ -271,3 +271,42 @@ export function enrichModelSpec(
   if (merged.vision === true && !merged.inputModalities) merged.inputModalities = ["text", "image"];
   return { id, ...merged };
 }
+
+/** 「拉取模型列表」时可被上游元数据刷新的能力字段（也是显式/上游/推断三态判定的字段集合）。 */
+export const CAPABILITY_KEYS = [
+  "contextWindow",
+  "maxOutput",
+  "vision",
+  "thinking",
+  "thinkingEfforts",
+  "inputModalities",
+  "functionCalling",
+  "structuredOutput",
+] as const;
+export type CapabilityKey = (typeof CAPABILITY_KEYS)[number];
+
+/** 单个模型的能力来源诊断（供设置面板做「显式值 > 上游实时值 > 内置推断」合并）。 */
+export interface CapabilitySourceMeta {
+  /** 上游 /models 行里实际提供了值的字段（为空 = 该供应商没给能力数据）。 */
+  upstreamFields: CapabilityKey[];
+  /** 仅由内置表推断出的字段值（UI 据此判断配置里的值是否用户显式手填）。 */
+  inferredCaps: Partial<Record<CapabilityKey, unknown>>;
+}
+
+/** 计算一个上游模型行的能力来源：哪些字段来自上游、哪些只能靠内置表推断。 */
+export function describeCapabilitySources(
+  raw: Record<string, unknown>,
+  options: CapabilityInferenceOptions = {},
+): CapabilitySourceMeta {
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const upstream = parseUpstreamCapabilities(raw);
+  const upstreamFields = CAPABILITY_KEYS.filter((key) => upstream[key] !== undefined);
+  const inferredCaps: CapabilitySourceMeta["inferredCaps"] = {};
+  if (id) {
+    const inferred = inferModelCapabilities(id, options);
+    for (const key of CAPABILITY_KEYS) {
+      if (inferred[key] !== undefined) inferredCaps[key] = inferred[key];
+    }
+  }
+  return { upstreamFields, inferredCaps };
+}

@@ -801,7 +801,12 @@ export interface LoopsoarAPI {
       apiFormat?: "auto" | "openai" | "anthropic";
       apiKey?: string;
       headers?: Record<string, string>;
-    }): Promise<{ models: ProviderModel[]; error: string | null }>;
+    }): Promise<{
+      models: ProviderModel[];
+      /** 每个模型的能力来源诊断（上游给了哪些字段、内置表推断出哪些字段），用于三态合并。 */
+      capabilityMeta?: Record<string, { upstreamFields: string[]; inferredCaps: Record<string, unknown> }>;
+      error: string | null;
+    }>;
     listProviders(): Promise<{ items: ProviderItem[]; activeId: string | null }>;
     upsertProvider(payload: {
       id?: string;

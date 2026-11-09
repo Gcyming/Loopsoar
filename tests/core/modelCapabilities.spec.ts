@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  describeCapabilitySources,
   enrichModelSpec,
   findNimModelCapability,
   inferModelCapabilities,
@@ -174,5 +175,34 @@ describe("数据表守卫", () => {
     expect(MODEL_CAPABILITIES_META.slimeModels).toBe(148);
     expect(MODEL_CAPABILITIES_META.nimModels).toBe(23);
     expect(MODEL_CAPABILITIES_META.sources.join(" ")).toContain("NVIDIA_NIM");
+  });
+});
+
+describe("describeCapabilitySources（拉列表时的能力来源诊断）", () => {
+  it("上游行带能力字段时标记为 upstreamFields，其余来自内置推断", () => {
+    const raw = {
+      id: "kimi-k3",
+      context_length: 1048576,
+      max_completion_tokens: 16384,
+      architecture: { input_modalities: ["text", "image"] },
+      supports_function_calling: true,
+    };
+    const meta = describeCapabilitySources(raw, NIM);
+    expect(meta.upstreamFields).toEqual(expect.arrayContaining(["contextWindow", "maxOutput", "inputModalities", "functionCalling"]));
+    expect(meta.inferredCaps.contextWindow).toBe(1048576);
+    expect(meta.inferredCaps.thinking).toBe(true);
+  });
+
+  it("上游只返回 id 时 upstreamFields 为空、inferredCaps 提供内置值（供 UI 判定是否手填）", () => {
+    const meta = describeCapabilitySources({ id: "agnes-3.0-flash" }, { provider: "agnes", baseUrl: "https://api.agnes-ai.cn/v1" });
+    expect(meta.upstreamFields).toEqual([]);
+    expect(meta.inferredCaps.contextWindow).toBe(512000);
+    expect(meta.inferredCaps.maxOutput).toBe(65536);
+  });
+
+  it("未知模型既不标记上游也不编造内置值", () => {
+    const meta = describeCapabilitySources({ id: "totally-unknown-model-xyz" }, { provider: "x", baseUrl: "https://x.test/v1" });
+    expect(meta.upstreamFields).toEqual([]);
+    expect(meta.inferredCaps).toEqual({});
   });
 });
