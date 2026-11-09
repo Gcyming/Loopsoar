@@ -10,6 +10,7 @@ import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import type { PermissionsState, ProviderStatus } from "./types.js";
 import type { ModelGroup } from "./modelGroups.js";
+import { formatContextWindow, supportsImageInput } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { useT, getLanguage, t } from "./i18n.js";
@@ -482,6 +483,9 @@ export default function Composer({
                     </div>
                     {group.models.map((model) => {
                       const current = group.active && model.id === provider?.model;
+                      // 紧凑能力提示：上下文窗口（1M/131K）+ 图片输入徽标；无值不渲染，避免菜单变宽。
+                      const contextLabel = formatContextWindow(model.contextWindow);
+                      const imageInput = supportsImageInput(model.vision, model.inputModalities);
                       return (
                         <button
                           key={`${group.providerId}-${model.id}`}
@@ -489,12 +493,13 @@ export default function Composer({
                           className="model-item"
                           style={{ ...styles.modelMenuItem, ...(current ? styles.modelMenuItemActive : {}) }}
                           onClick={() => onChooseModel(model.id, group.providerId)}
-                          title={`${group.provider} · ${model.id}${model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}K` : ""}${model.thinkingEfforts?.length ? ` · ${model.thinkingEfforts.join("/")}` : ""}`}
+                          title={`${group.provider} · ${model.id}${contextLabel ? ` · ${contextLabel}` : ""}${imageInput ? ` · ${tr("composer.modelBadge.image")}` : ""}${model.thinkingEfforts?.length ? ` · ${model.thinkingEfforts.join("/")}` : ""}`}
                         >
                           <span style={styles.modelItemName}>
                             {model.id}
+                            {contextLabel ? <span style={styles.modelHint}>{contextLabel}</span> : null}
                             {model.thinking ? <span style={styles.modelBadge}>{tr("composer.modelBadge.thinking")}</span> : null}
-                            {model.vision ? <span style={styles.modelBadge}>{tr("composer.modelBadge.vision")}</span> : null}
+                            {imageInput ? <span style={styles.modelBadge}>{tr("composer.modelBadge.image")}</span> : null}
                           </span>
                           {current ? <Icon name="check" size={12} /> : null}
                         </button>
@@ -705,6 +710,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: BRAND.linenFaint,
     flexShrink: 0,
   },
+  /** 模型名后的紧凑能力提示（上下文窗口 1M/131K 等），只在有值时渲染。 */
+  modelHint: { fontSize: 9.5, color: BRAND.linenFaint, flexShrink: 0, fontVariantNumeric: "tabular-nums" },
   modelMenuErr: { fontSize: 10.5, color: "#f0a35e", padding: "4px 6px" },
   effortSection: { borderTop: `1px solid ${BRAND.border}`, marginTop: 6, paddingTop: 4 },
   effortRow: { display: "flex", gap: 4, flexWrap: "wrap", padding: "0 2px" },

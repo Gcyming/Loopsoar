@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { withProviderDefaults } from "../providerDefaults.js";
+import { enrichModelSpec } from "loopsoar-core/modelCapabilities";
 import { isSameProviderTarget } from "../providerStore.js";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
 import { inferApiFormat } from "loopsoar-core/llm";
@@ -257,48 +258,6 @@ export function ruleSourcesFromEntries(entries: RuleEntryState[]): RuleSource[] 
 
 export function currentRulesPrompt(deps: SettingsDeps): string {
   return rulesForPrompt(mergeRules(ruleSourcesFromEntries(readRuleEntries(deps))));
-}
-
-/** 从上游 /models 返回项中提取上下文/输出/视觉/思考/推理等级（兼容 OpenRouter 等常见字段）。 */
-function enrichModelSpec(raw: Record<string, unknown>): {
-  id: string;
-  contextWindow?: number;
-  maxOutput?: number;
-  vision?: boolean;
-  thinking?: boolean;
-  thinkingEfforts?: string[];
-} {
-  const id = typeof raw.id === "string" ? raw.id : "";
-  const num = (v: unknown): number | undefined =>
-    typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
-  const contextWindow =
-    num(raw.context_length) ??
-    num(raw.context_window) ??
-    num(raw.max_context_length) ??
-    num((raw.top_provider as { context_length?: unknown } | undefined)?.context_length) ??
-    num((raw.model_info as { context_length?: unknown } | undefined)?.context_length);
-  const maxOutput =
-    num(raw.max_output) ??
-    num(raw.max_output_tokens) ??
-    num(raw.max_completion_tokens) ??
-    num((raw.top_provider as { max_completion_tokens?: unknown } | undefined)?.max_completion_tokens);
-  const modalities = Array.isArray(raw.input_modalities) ? raw.input_modalities : [];
-  const arch = raw.architecture as { input_modalities?: unknown[] } | undefined;
-  const archModalities = Array.isArray(arch?.input_modalities) ? arch!.input_modalities : [];
-  const vision =
-    raw.vision === true ||
-    raw.supports_vision === true ||
-    modalities.includes("image") ||
-    archModalities.includes("image");
-  const reasoning = raw.reasoning as { supported_efforts?: unknown } | undefined;
-  const effortsRaw = Array.isArray(raw.thinking_efforts)
-    ? raw.thinking_efforts
-    : Array.isArray(reasoning?.supported_efforts)
-      ? (reasoning!.supported_efforts as unknown[])
-      : undefined;
-  const thinkingEfforts = effortsRaw?.filter((x): x is string => typeof x === "string").slice(0, 10);
-  const thinking = raw.thinking === true || Boolean(reasoning) || (thinkingEfforts?.length ?? 0) > 0;
-  return { id, contextWindow, maxOutput, vision, thinking, thinkingEfforts };
 }
 
 /* ───────────────────────── 供应商探测目标校验（SSRF） ───────────────────────── */
@@ -789,7 +748,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       const rows = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
       const models = rows
         .slice(0, 500)
-        .map((m) => enrichModelSpec(m))
+        .map((m) => enrichModelSpec(m, { provider: cfg.provider, baseUrl: cfg.baseUrl }))
         .filter((m) => typeof m.id === "string" && m.id.length > 0)
         .slice(0, 200);
       return { models, error: null };

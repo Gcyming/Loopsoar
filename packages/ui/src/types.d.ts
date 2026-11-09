@@ -269,6 +269,12 @@ export interface ProviderModel {
   vision?: boolean;
   thinking?: boolean;
   thinkingEfforts?: string[];
+  /** 输入模态（模型卡/上游元数据）：text/image/audio/video。 */
+  inputModalities?: Array<"text" | "image" | "audio" | "video">;
+  /** 是否支持函数/工具调用。 */
+  functionCalling?: boolean;
+  /** 是否支持结构化输出（JSON Schema / response_format）。 */
+  structuredOutput?: boolean;
 }
 
 export interface ProviderItem {

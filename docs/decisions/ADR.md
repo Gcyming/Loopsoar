@@ -836,6 +836,24 @@
 - **回退条件**：空闲超时对超慢上游误杀 → 调大 idleTimeoutMs；续写导致重复内容 → maxLengthContinuations=0（等价关闭续写）；原子写在某些网络盘不可用 → writeJson 已带直接写兜底。
 - **复核时间**：打包阶段（长文写作、慢速上游、断网/强杀、超大历史、小上下文模型）
 
+## ADR-0048 供应商模型能力信息补全（上下文/输出/视觉/模态/工具/结构化输出）
+
+- **背景**：用户（2026-11-09）要求「全面完善供应商那端的信息（上下文、输出、是否支持图片等等）」，参考 slime 的供应商能力数据；并明确 slime 的 NVIDIA NIM 数据略旧，NIM 以用户提供的《NVIDIA_NIM_模型池参数大全》（2026-10-07，build.nvidia.com 官方模型卡）为准。现状：Loopsoar 的模型元数据只来自上游 `/models` 返回项；多数官方 API（DeepSeek/OpenAI/Anthropic/NIM 等）只返回模型清单、不返回 context/vision 等，导致设置面板这些列长期为空，用户无法判断模型能力。
+- **决策**：
+  1. **内置能力表（离线兜底）**：新增 `packages/core/src/modelCapabilities.data.ts`（AUTO-GENERATED，`scripts/gen-model-capabilities.mjs` 生成）：
+     - slime `shared/gen/model-capabilities.ts` 的 33 个供应商 / 148 条模型能力正则（thinking/efforts/context/maxOut/endpoint/thinkingParam，**不搬定价**）；
+     - NVIDIA NIM 官方模型池 23 个对话/多模态模型（context、官方示例 maxOutput、inputModalities、functionCalling、structuredOutput、reasoning，来源为用户提供的 2026-10-07 文档；其中 maxOutput 是官方示例 `max_tokens`，注释里标注「实际可能更高」）。
+  2. **推断与合并**（`packages/core/src/modelCapabilities.ts`）：`inferModelCapabilities(id, {provider, baseUrl})` —— NIM 端点先查官方目录（含 `vendor/` 前缀归一），其余按 slime 表首个命中；非对话模型（embedding/rerank/图像/音频/视频）不推断思考/工具能力；未知模型保持未知（**绝不编造**）。`enrichModelSpec(raw, opts)` = 上游 `/models` 元数据优先 + 内置表补缺，是唯一合并入口。
+  3. **落盘与读取都补全**（`ProviderStore`）：保存供应商时自动补全模型缺失字段（显式值不覆盖）；读取旧 `providers.json`（只有 id/model）时也在内存补全并生成默认模型行；默认模型即可看到上下文/输出/视觉等，用户不需要手动填。`settings:listModels` 探测结果同样走 `enrichModelSpec`（上游优先）。
+  4. **契约与 UI**：`ProviderModelSchema` / `ProviderModel` 新增 `inputModalities`（text/image/audio/video）、`functionCalling`、`structuredOutput`；设置面板新增列并支持编辑；模型选择弹层补充上下文与图片能力提示。
+- **理由**：能力元数据是「用户能不能把模型用对」的前提（上下文预算、图片附件、工具/结构化输出选择都依赖它）；上游普遍不提供，必须内置兜底。NIM 数据用用户提供的一手文档更新，避免沿用 slime 的旧值。**上游优先**保证接入 OpenRouter/new-api 这类带元数据的网关时不被本地表覆盖；**未知不编造**避免把错误能力当成事实。
+- **替代方案**：只靠上游 `/models`（否：多数官方 API 无元数据）；手写一份 Loopsoar 自己的小表（否：覆盖不足、会漂移）；直接复制 slime 含定价的全表（否：Loopsoar 无定价模型，且会引入维护负担与旧 NIM 数据）。
+- **后果**：`providers.json` 里模型条目会多出能力字段（体积小幅增加）；显式手填/上游值不受影响；上下文窗口自动补全后，历史压缩预算与上下文占用环在更多模型上生效；NIM maxOutput 是示例值，遇到上游 400 时仍按「不传显式 max_tokens」策略处理（ADR-0047）。
+- **验证方式**：`tests/core/modelCapabilities.spec.ts`（15 例：NIM 官方规格、命名空间 id、非 NIM 家族兜底、未知不编造、非对话模型、上游字段解析、上游优先合并、数据表守卫 33/148/23）；`tests/shell/providerCapabilities.spec.ts`（5 例：保存自动补全、NIM 数据、显式值不覆盖、旧配置读取补全、落盘持久化）；`tests/ui/providerCapabilities.spec.ts`（13 例）；`pnpm typecheck` 5/5；全量 `pnpm test` 162 文件 / 1383 tests；真机 E2E（2026-11-09，数据副本 + 追加 nvidia-nim 供应商）：设置·模型服务卡片显示「上下文 512K · 输出 66K · 视觉 · 推理」等规格行；编辑 nvidia 供应商后 kimi-k3 行显示 上下文 1049K / 输出 16K / 视觉 ✓ / 模态 text,image / 函数调用 true / 结构化输出 true；编辑 agnes 后 agnes-3.0-flash 行上下文 512K、输出 66K、推理 ✓；模型选择弹层显示上下文提示（512K/1M）与「图」徽标。证据：`e2e-evidence/provider-capabilities.log`（E2E_EVAL ok:true）、`e2e-evidence/provider-capabilities.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：内置表某条正则误匹配导致错误能力显示 → 删除/收紧该条（数据与逻辑分离，改生成器即可）；能力字段让 providers.json 过大 → 保存时只写非默认值（后续优化）。
+- **复核时间**：打包阶段（各供应商模型上新、NIM 模型池更新、网关返回元数据的兼容性）
+
 ---
 
 ## 附：ADR 索引与状态总览
@@ -889,3 +907,4 @@
 | ADR-0045 | 长度截断自动续写：finish_reason=length 透传 + 同轮续写（修复长回复断在半句） | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0046 | 图标几何居中 + 浮层阴影收敛 + 全局点外/切界面收起 + 全屏层不挡窗口按钮 | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0047 | 截断根除：全链路不变量（SSE 残留/超时语义/续写/对账/退出落盘/压缩） | ✅ 自动化 + 真机 E2E 已验证（含真实上游 5000 字截断续写） |
+| ADR-0048 | 供应商模型能力补全：上下文/输出/视觉/模态/工具/结构化输出（slime 表 + NIM 官方文档） | ✅ 自动化 + 真机 E2E 已验证 |

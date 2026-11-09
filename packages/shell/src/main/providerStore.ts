@@ -8,15 +8,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { inferModelCapabilities, type ModelCapabilities } from "loopsoar-core/modelCapabilities";
 
-export interface ProviderModel {
+export interface ProviderModel extends ModelCapabilities {
   id: string;
   selected?: boolean;
-  contextWindow?: number;
-  maxOutput?: number;
-  vision?: boolean;
-  thinking?: boolean;
-  thinkingEfforts?: string[];
 }
 
 export interface ProviderItem {
@@ -81,7 +77,10 @@ export class ProviderStore {
       const filtered = raw.items
         .filter((x): x is ProviderItem => !!x && typeof x.id === "string" && typeof x.baseUrl === "string")
         .slice(0, 50);
-      const { items, alias } = this.dedupe(filtered);
+      const { items: rawItems, alias } = this.dedupe(filtered);
+      // 读取时也补全能力：老 users 的 providers.json 里只有 id/model，没有上下文/视觉等字段，
+      // 打开设置面板应该能看到完整信息（写回发生在下一次保存时，不增加读路径 IO）。
+      const items = rawItems.map((item) => ({ ...item, models: this.enrichModels(item) }));
       const wantedActive = raw.activeId ? (alias.get(raw.activeId) ?? raw.activeId) : null;
       const activeId = wantedActive && items.some((i) => i.id === wantedActive) ? wantedActive : (items[0]?.id ?? null);
       // 修复历史重复（旧版每次切模型都会 upsert 新供应商）：写回一次，避免用户重启后选中无请求头/无密钥的副本
@@ -118,6 +117,50 @@ export class ProviderStore {
       .map(([key, value]) => [key.trim(), value] as const)
       .slice(0, 30);
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+
+  /**
+   * 用内置能力表补全单个模型缺失的元数据（上下文/输出/视觉/思考/模态/工具调用…）。
+   * 规则：**显式值优先**（用户手填或上游 /models 返回的字段绝不被覆盖），只补 undefined。
+   * 数据源：core/modelCapabilities（slime 能力表 + 用户提供的 NVIDIA NIM 官方模型卡）。
+   */
+  private enrichModel(model: ProviderModel, provider: string, baseUrl: string): ProviderModel {
+    const inferred = inferModelCapabilities(model.id, { provider, baseUrl });
+    const { source: _source, vendor: _vendor, nonChat: _nonChat, ...caps } = inferred;
+    void _source;
+    void _vendor;
+    void _nonChat;
+    const explicit = Object.fromEntries(
+      Object.entries(model).filter(([, value]) => value !== undefined),
+    ) as Partial<ProviderModel>;
+    const merged = { ...caps, ...explicit } as ProviderModel;
+    // vision 与模态互相对齐：只要一个说有图片，另一个补全（UI 两列都有值）
+    if (merged.vision === undefined && merged.inputModalities?.includes("image")) merged.vision = true;
+    if (merged.vision === true && !merged.inputModalities) merged.inputModalities = ["text", "image"];
+    return merged;
+  }
+
+  /**
+   * 补全供应商的模型清单：
+   *   · 已有清单 → 逐条补字段；
+   *   · 没有清单但有默认模型 → 用默认模型生成一条（带内置能力），用户打开面板就能看到上下文/输出/视觉。
+   */
+  private enrichModels(item: {
+    provider: string;
+    baseUrl: string;
+    model: string;
+    models?: ProviderModel[];
+  }): ProviderModel[] | undefined {
+    const list =
+      item.models && item.models.length > 0
+        ? item.models
+        : item.model
+          ? [{ id: item.model, selected: true }]
+          : [];
+    if (list.length === 0) return item.models;
+    return list
+      .slice(0, 500)
+      .map((model) => this.enrichModel(model, item.provider, item.baseUrl));
   }
 
   /**
@@ -182,15 +225,23 @@ export class ProviderStore {
   }): ProviderItem {
     const file = this.load();
     const id = input.id || this.slug(input.provider, file.items.map((i) => i.id));
+    const baseUrl = input.baseUrl.replace(/\/+$/, "");
     const item: ProviderItem = {
       id,
       provider: input.provider,
-      baseUrl: input.baseUrl.replace(/\/+$/, ""),
+      baseUrl,
       model: input.model,
       apiFormat: input.apiFormat ?? "auto",
       rpm: input.rpm,
       headers: this.sanitizeHeaders(input.headers ?? file.items.find((i) => i.id === id)?.headers),
-      models: input.models ?? file.items.find((i) => i.id === id)?.models,
+      // 保存时补全能力字段：内置表能识别的模型（如 deepseek/kimi/glm/llama…）自动带上
+      // 上下文/最大输出/视觉/思考/模态/工具调用，用户不必手动查资料。
+      models: this.enrichModels({
+        provider: input.provider,
+        baseUrl,
+        model: input.model,
+        models: input.models ?? file.items.find((i) => i.id === id)?.models,
+      }),
     };
     const idx = file.items.findIndex((i) => i.id === id);
     if (idx >= 0) file.items[idx] = item;

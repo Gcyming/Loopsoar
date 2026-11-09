@@ -7,6 +7,7 @@ import {
 } from "loopsoar-contracts/headerTemplate";
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
+import { formatModalities, modalitiesToInput, parseModalitiesInput, triStateToValue, valueToTriState } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
 import type {
@@ -950,6 +951,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                             <th style={S.thTiny}>{tr("settings.providers.col.vision")}</th>
                             <th style={S.thTiny}>{tr("settings.providers.col.thinking")}</th>
                             <th style={S.th}>{tr("settings.providers.col.efforts")}</th>
+                            <th style={S.th} data-testid="col-input-modalities">{tr("settings.providers.col.modalities")}</th>
+                            <th style={S.thState} data-testid="col-function-calling">{tr("settings.providers.col.functionCalling")}</th>
+                            <th style={S.thState} data-testid="col-structured-output">{tr("settings.providers.col.structuredOutput")}</th>
                             <th style={S.thTiny}>{tr("settings.providers.col.default")}</th>
                             <th style={S.thTiny}></th>
                           </tr>
@@ -996,6 +1000,53 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                                     })
                                   }
                                 />
+                              </td>
+                              <td style={S.td}>
+                                {/* 输入模态：逗号分隔编辑（非法值自动过滤），悬停显示可读徽标文本 */}
+                                <input
+                                  style={S.tblInput}
+                                  value={modalitiesToInput(m.inputModalities)}
+                                  placeholder={tr("settings.providers.modalitiesPlaceholder")}
+                                  title={`${tr("settings.providers.col.modalities")}: ${formatModalities(m.inputModalities, tr)}`}
+                                  aria-label={tr("settings.providers.modalitiesHint")}
+                                  data-testid="model-cap-modalities"
+                                  data-model-id={m.id}
+                                  onChange={(e) => {
+                                    const next = parseModalitiesInput(e.target.value);
+                                    updateModel(idx, { inputModalities: next.length > 0 ? next : undefined });
+                                  }}
+                                />
+                              </td>
+                              <td style={S.tdState}>
+                                {/* 三态能力：auto=自动/未知(undefined)，supported=支持，unsupported=不支持 */}
+                                <select
+                                  style={S.tblSelect}
+                                  value={triStateToValue(m.functionCalling)}
+                                  title={tr("settings.providers.col.functionCalling")}
+                                  aria-label={tr("settings.providers.col.functionCalling")}
+                                  data-testid="model-cap-function-calling"
+                                  data-model-id={m.id}
+                                  onChange={(e) => updateModel(idx, { functionCalling: valueToTriState(e.target.value) })}
+                                >
+                                  <option value="">{tr("settings.providers.capAuto")}</option>
+                                  <option value="true">{tr("settings.providers.capSupported")}</option>
+                                  <option value="false">{tr("settings.providers.capUnsupported")}</option>
+                                </select>
+                              </td>
+                              <td style={S.tdState}>
+                                <select
+                                  style={S.tblSelect}
+                                  value={triStateToValue(m.structuredOutput)}
+                                  title={tr("settings.providers.col.structuredOutput")}
+                                  aria-label={tr("settings.providers.col.structuredOutput")}
+                                  data-testid="model-cap-structured-output"
+                                  data-model-id={m.id}
+                                  onChange={(e) => updateModel(idx, { structuredOutput: valueToTriState(e.target.value) })}
+                                >
+                                  <option value="">{tr("settings.providers.capAuto")}</option>
+                                  <option value="true">{tr("settings.providers.capSupported")}</option>
+                                  <option value="false">{tr("settings.providers.capUnsupported")}</option>
+                                </select>
                               </td>
                               <td style={S.tdCenter}>
                                 <input
@@ -1616,6 +1667,10 @@ const S: Record<string, React.CSSProperties> = {
   td: { padding: "3px 4px", borderBottom: `1px solid ${BRAND.border}` },
   tdCenter: { padding: "3px 3px", borderBottom: `1px solid ${BRAND.border}`, textAlign: "center" },
   tblInput: { width: "100%", height: 24, padding: "0 5px", borderRadius: 5, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 11, outline: "none", boxSizing: "border-box" },
+  /** 三态能力列（函数调用 / 结构化输出）：auto=自动/未知、supported=支持、unsupported=不支持。 */
+  thState: { textAlign: "center", padding: "6px 3px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, width: 52, whiteSpace: "nowrap" },
+  tdState: { padding: "3px 3px", borderBottom: `1px solid ${BRAND.border}`, textAlign: "center", width: 52 },
+  tblSelect: { width: "100%", height: 24, padding: "0 2px", borderRadius: 5, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 11, outline: "none", boxSizing: "border-box" },
   addCard: {
     minHeight: 84,
     display: "flex",

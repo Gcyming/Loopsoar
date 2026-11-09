@@ -74,6 +74,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.modelCurrent": "当前",
     "composer.modelBadge.thinking": "推理",
     "composer.modelBadge.vision": "视觉",
+    /** 输入模态含 image 时在模型菜单里的紧凑徽标（用户：图片输入能力要可见）。 */
+    "composer.modelBadge.image": "图",
     "composer.effortSection": "推理等级",
     "composer.effortOff": "关闭推理",
     // 待发指令（引导/插入队列：slime ChatPanel 待发卡移植）
@@ -269,6 +271,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.modelCurrent": "current",
     "composer.modelBadge.thinking": "reasoning",
     "composer.modelBadge.vision": "vision",
+    "composer.modelBadge.image": "IMG",
     "composer.effortSection": "Reasoning effort",
     "composer.effortOff": "Disable reasoning",
     // Pending instructions (steer/insert queue ported from slime)

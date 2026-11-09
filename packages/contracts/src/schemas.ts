@@ -116,6 +116,12 @@ export const ProviderModelSchema = z.object({
   vision: z.boolean().optional(),
   thinking: z.boolean().optional(),
   thinkingEfforts: z.array(z.string().max(30)).max(10).optional(),
+  /** 输入模态（模型卡/上游元数据）：text/image/audio/video。 */
+  inputModalities: z.array(z.enum(["text", "image", "audio", "video"])).max(4).optional(),
+  /** 是否支持函数/工具调用。 */
+  functionCalling: z.boolean().optional(),
+  /** 是否支持结构化输出（JSON Schema / response_format）。 */
+  structuredOutput: z.boolean().optional(),
 });
 export const ProviderItemSchema = z.object({
   id: z.string().min(1).max(64).optional(),
