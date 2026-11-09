@@ -152,7 +152,18 @@ describe("NodeNetAdapter · 其它接口", () => {
   it("resolveIps：本机回环可解析，未知域名返回空数组", async () => {
     const local = await net.resolveIps("localhost");
     expect(local.some((ip) => ip === "127.0.0.1" || ip === "::1")).toBe(true);
-    await expect(net.resolveIps("no-such-host.invalid")).resolves.toEqual([]);
+    const bogus = await net.resolveIps("no-such-host.invalid");
+    // 正常 DNS：.invalid 必须 NXDOMAIN → 空数组。
+    // 部分 VPN/代理会劫持 NXDOMAIN，把任意域名解析到保留网段（如 198.18.0.0/15、10/8、127/8）。
+    // 安全断言：绝不能把未知域名解析成公网地址；保留网段属于本地劫持特征，放行。
+    const reserved =
+      /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|198\.(1[89])\.|::1$|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i;
+    if (bogus.length > 0) {
+      expect(
+        bogus.every((ip) => reserved.test(ip)),
+        `未知域名被解析到公网地址（DNS 劫持风险）：${bogus.join(", ")}`,
+      ).toBe(true);
+    }
   });
 
   it("公网目标非白名单端口在连接前就被拒（不发起真实网络请求）", async () => {

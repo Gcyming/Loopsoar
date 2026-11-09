@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, BADGE } from "./theme.js";
 import {
@@ -123,6 +124,34 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [testRes, setTestRes] = useState<TestProviderResult | null>(null);
+  /** 供应商编辑大弹窗的滚动容器：打开/切换编辑对象时回到顶部，避免"一点编辑就跳到最下面"。 */
+  const editBodyRef = React.useRef<HTMLDivElement | null>(null);
+  /** 供应商操作的浮动反馈（保存/密钥/列表拉取）：固定在设置面板右上角，成功 3.2s 自动消失，错误常驻。 */
+  const [providerToast, setProviderToast] = useState<{ kind: "ok" | "error"; text: string; key: number } | null>(null);
+  const providerOk = useCallback((text: string) => setProviderToast({ kind: "ok", text, key: Date.now() }), []);
+  const providerBad = useCallback(
+    (e: unknown) => setProviderToast({ kind: "error", text: e instanceof Error ? e.message : String(e), key: Date.now() }),
+    [],
+  );
+  useEffect(() => {
+    if (!providerToast || providerToast.kind !== "ok") return;
+    const timer = setTimeout(() => setProviderToast(null), 3200);
+    return () => clearTimeout(timer);
+  }, [providerToast]);
+  useEffect(() => {
+    if (editingProviderId === null) return;
+    const frame = requestAnimationFrame(() => editBodyRef.current?.scrollTo({ top: 0 }));
+    return () => cancelAnimationFrame(frame);
+  }, [editingProviderId]);
+  /** Esc 关闭供应商编辑弹窗（与遮罩点击、取消按钮行为一致）。 */
+  useEffect(() => {
+    if (editingProviderId === null) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setEditingProviderId(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editingProviderId]);
   const [rules, setRules] = useState<RulesSnapshot | null>(null);
   const [drafts, setDrafts] = useState<DraftRule[]>([]);
   const [deleted, setDeleted] = useState<string[]>([]);
@@ -695,7 +724,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             if (merged.length > 0) setPModels(merged);
             setPModelsError(r.error);
             if (merged.length > 0 && !r.error) {
-              ok(
+              providerOk(
                 tr("settings.providers.fetchSummary", {
                   models: merged.length,
                   upstream: merge.upstreamModels,
@@ -755,9 +784,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             setEditingProviderId(null);
             await api.settings.getProvider().then(setProvider).catch(() => {});
             notifyProviders();
-            ok(tr("settings.providers.saved"));
+            providerOk(tr("settings.providers.saved"));
           } catch (e) {
-            bad(e);
+            providerBad(e);
           }
         };
         const protoLabel = (f?: string): string =>
@@ -801,9 +830,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       {item.rpm ? <span style={S.tag}>RPM {item.rpm}</span> : null}
                     </span>
                     <span style={S.icons}>
-                      <Btn label={tr("settings.test")} small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model, headers: item.headers }).then(setTestRes).catch(bad)} />
+                      <Btn label={tr("settings.test")} small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model, headers: item.headers }).then(setTestRes).catch(providerBad)} />
                       <Btn label={tr("settings.edit")} small onClick={() => startEdit(item)} />
-                      <Btn label={tr("settings.delete")} small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); }).catch(bad)} />
+                      <Btn label={tr("settings.delete")} small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); }).catch(providerBad)} />
                     </span>
                   </div>
                   <div style={S.providerRows}>
@@ -834,18 +863,31 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                           : tr("settings.providers.keyMissing")}
                       </span>
                       {item.hasKey ? (
-                        <Btn label={tr("settings.providers.clear")} small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); ok(tr("settings.providers.cleared")); }).catch(bad)} />
+                        <Btn label={tr("settings.providers.clear")} small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); providerOk(tr("settings.providers.cleared")); }).catch(providerBad)} />
                       ) : null}
                     </div>
                   </div>
                 </div>
               );
             })}
-            {editingProviderId === null ? (
-              <div style={S.btns}><Btn label={tr("settings.providers.add")} primary onClick={() => startEdit()} /></div>
-            ) : (
-              <div className="panel-card" style={S.card}>
-                <div style={S.formHead}>{editingProviderId === "new" ? tr("settings.providers.addTitle") : tr("settings.providers.editTitle")}</div>
+            <div style={S.btns}><Btn label={tr("settings.providers.add")} primary onClick={() => startEdit()} /></div>
+            {editingProviderId !== null
+              ? createPortal(
+                  <div style={S.modalBackdrop} role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setEditingProviderId(null); }}>
+                <div style={S.modal} role="dialog" aria-modal="true" aria-label={editingProviderId === "new" ? tr("settings.providers.addTitle") : tr("settings.providers.editTitle")}>
+                  <div style={S.modalHead}>
+                    <div style={S.modalHeadText}>
+                      <div style={S.modalTitle}>{editingProviderId === "new" ? tr("settings.providers.addTitle") : tr("settings.providers.editTitle")}</div>
+                      <div style={S.modalSub}>
+                        {pForm.provider || "—"}
+                        {pForm.baseUrl ? ` · ${pForm.baseUrl}` : ""}
+                      </div>
+                    </div>
+                    <button type="button" className="icon-btn" title={tr("settings.close")} aria-label={tr("settings.close")} onClick={() => setEditingProviderId(null)}>
+                      <Icon name="close" size={13} />
+                    </button>
+                  </div>
+                  <div style={S.modalBody} ref={editBodyRef}>
                 <div style={S.presetRow}>
                   <span style={S.tag}>{tr("settings.providers.quickFill")}</span>
                   {presets.map((preset) => (
@@ -902,12 +944,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       small
                       onClick={() => {
                         if (!keyInput.trim()) {
-                          bad(tr("settings.providers.pasteKeyFirst"));
+                          providerBad(tr("settings.providers.pasteKeyFirst"));
                           return;
                         }
                         const saved = providerItems.find((i) => i.id === editingProviderId);
                         if (!saved) {
-                          bad(tr("settings.providers.createFirst"));
+                          providerBad(tr("settings.providers.createFirst"));
                           return;
                         }
                         void api.settings
@@ -917,11 +959,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                             await refreshProviders();
                             await api.settings.getProvider().then(setProvider).catch(() => {});
                             notifyProviders();
-                            ok(tr("settings.providers.keySavedOk", {
+                            providerOk(tr("settings.providers.keySavedOk", {
                               mode: r.storageMode === "os" ? tr("settings.providers.storageOs") : tr("settings.providers.storageDegraded"),
                             }));
                           })
-                          .catch(bad);
+                          .catch(providerBad);
                       }}
                     />
                   </div>
@@ -1076,19 +1118,31 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     </div>
                   )}
                 </div>
-                <div style={S.btns}>
-                  <Btn label={tr("settings.providers.testConnection")} onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default", headers: parseHeaderLines(pHeaders, tr) }).then(setTestRes).catch(bad)} />
-                  <Btn label={tr("settings.providers.saveEnable")} primary onClick={() => void commit()} />
-                  <Btn label={tr("settings.cancel")} onClick={() => setEditingProviderId(null)} />
-                  {testRes ? (
-                    <span style={testRes.ok ? S.okText : S.errText}>
-                      <Icon name={testRes.ok ? "check" : "close"} size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
-                      {testRes.message}
-                    </span>
-                  ) : null}
+                  </div>
+                  <div style={S.modalFoot}>
+                    <div style={S.modalStatus}>
+                      {testRes ? (
+                        <span style={testRes.ok ? S.okText : S.errText}>
+                          <Icon name={testRes.ok ? "check" : "close"} size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                          {testRes.message}
+                        </span>
+                      ) : pModelsError ? (
+                        <span style={S.errText}>{pModelsError}</span>
+                      ) : (
+                        <span style={S.fieldHint}>{tr("settings.providers.modalHint")}</span>
+                      )}
+                    </div>
+                    <div style={S.btns}>
+                      <Btn label={tr("settings.providers.testConnection")} onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default", headers: parseHeaderLines(pHeaders, tr) }).then(setTestRes).catch(providerBad)} />
+                      <Btn label={tr("settings.providers.saveEnable")} primary onClick={() => void commit()} />
+                      <Btn label={tr("settings.cancel")} onClick={() => setEditingProviderId(null)} />
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
+              </div>,
+                  document.body,
+                )
+              : null}
             <div style={S.note}>{tr("settings.providers.securityNote")}</div>
           </div>
         );
@@ -1525,6 +1579,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           </div>
         </div>
       </div>
+      {providerToast ? (
+        <div
+          key={providerToast.key}
+          role="status"
+          aria-live="polite"
+          style={{ ...S.providerToast, ...(providerToast.kind === "ok" ? S.providerToastOk : S.providerToastErr) }}
+        >
+          <Icon name={providerToast.kind === "ok" ? "check" : "warning"} size={13} style={{ marginTop: 2, flex: "none" }} />
+          <span>{providerToast.text}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1638,8 +1703,8 @@ const S: Record<string, React.CSSProperties> = {
   navHint: { fontSize: 10.5, color: BRAND.linenFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   content: { flex: 1, minWidth: 0, overflowY: "auto", padding: "16px 20px" },
   field: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "10px 0", borderBottom: `1px solid ${BRAND.border}` },
-  fieldLabel: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, color: BRAND.linen, minWidth: 140 },
-  fieldHint: { fontSize: 10.5, color: BRAND.linenFaint, lineHeight: 1.5 },
+  fieldLabel: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, color: BRAND.linen, minWidth: 140, maxWidth: 400 },
+  fieldHint: { fontSize: 10.5, color: BRAND.linenFaint, lineHeight: 1.5, overflowWrap: "anywhere" },
   fieldCtl: { flex: 1, display: "flex", justifyContent: "flex-end", alignItems: "center", minWidth: 0 },
   input: { width: "100%", maxWidth: 380, height: 30, padding: "0 10px", borderRadius: 7, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 12.5, outline: "none" },
   area: { width: "100%", maxWidth: 380, borderRadius: 7, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 12, padding: 8, resize: "vertical", outline: "none", boxSizing: "border-box" },
@@ -1667,8 +1732,8 @@ const S: Record<string, React.CSSProperties> = {
   modelSection: { borderTop: `1px solid ${BRAND.border}`, paddingTop: 10, marginTop: 6 },
   modelSectionHead: { fontSize: 12.5, fontWeight: 700, marginBottom: 8 },
   modelAddRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8, justifyContent: "flex-end" },
-  tableWrap: { maxHeight: 320, overflow: "auto", border: `1px solid ${BRAND.border}`, borderRadius: 8 },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 11.5 },
+  tableWrap: { maxHeight: 380, overflow: "auto", border: `1px solid ${BRAND.border}`, borderRadius: 8 },
+  table: { width: "100%", minWidth: 1080, borderCollapse: "collapse", fontSize: 11.5 },
   th: { textAlign: "left", padding: "6px 6px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, whiteSpace: "nowrap" },
   thNarrow: { textAlign: "left", padding: "6px 4px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, width: 62, whiteSpace: "nowrap" },
   thTiny: { textAlign: "center", padding: "6px 3px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, width: 38 },
@@ -1722,6 +1787,59 @@ const S: Record<string, React.CSSProperties> = {
   providerKey: { width: 54, flexShrink: 0, color: BRAND.linenFaint },
   providerVal: { color: BRAND.linen, fontFamily: "ui-monospace, Consolas, monospace", fontSize: 11, wordBreak: "break-all" },
   formHead: { fontSize: 13, fontWeight: 700, marginBottom: 10 },
+  /** 供应商编辑大弹窗：独立于页面滚动，打开即定位到标题/顶部，保存与测试结果固定在底部状态栏 + 右上角浮动提示。 */
+  modalBackdrop: {
+    position: "fixed",
+    top: LAYOUT.TITLE_BAR_HEIGHT,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(8,9,12,0.62)",
+    backdropFilter: "blur(3px)",
+    zIndex: 70,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    animation: "fadeOnly 140ms ease both",
+  },
+  modal: {
+    width: "min(1160px, 96vw)",
+    maxHeight: "min(880px, 92vh)",
+    display: "flex",
+    flexDirection: "column",
+    background: BRAND.inkRaised,
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: 14,
+    overflow: "hidden",
+    boxShadow: "0 28px 70px rgba(0,0,0,0.6)",
+  },
+  modalHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "14px 20px", borderBottom: `1px solid ${BRAND.border}`, background: BRAND.inkPanel },
+  modalHeadText: { minWidth: 0 },
+  modalTitle: { fontSize: 15, fontWeight: 700, color: BRAND.linen },
+  modalSub: { marginTop: 4, fontSize: 11.5, color: BRAND.linenFaint, wordBreak: "break-all" },
+  modalBody: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "4px 20px 14px" },
+  modalFoot: { display: "flex", alignItems: "center", gap: 14, padding: "10px 20px", borderTop: `1px solid ${BRAND.border}`, background: BRAND.inkPanel, flexWrap: "wrap" },
+  modalStatus: { flex: 1, minWidth: 240, fontSize: 11.5, color: BRAND.linenMuted, lineHeight: 1.6, wordBreak: "break-word" },
+  /** 供应商操作浮动反馈：固定右上角，成功自动消失、错误常驻，避免"提示在最下面找不到"。 */
+  providerToast: {
+    position: "fixed",
+    top: LAYOUT.TITLE_BAR_HEIGHT + 16,
+    right: 22,
+    zIndex: 80,
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 8,
+    maxWidth: 440,
+    padding: "10px 14px",
+    borderRadius: 10,
+    fontSize: 12,
+    lineHeight: 1.6,
+    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+    border: `1px solid ${BRAND.border}`,
+  },
+  providerToastOk: { background: "rgba(18,52,44,0.96)", color: "#5eead4", borderColor: "rgba(94,234,212,0.35)" },
+  providerToastErr: { background: "rgba(56,22,24,0.96)", color: "#f87171", borderColor: "rgba(248,113,113,0.35)" },
   presetRow: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 10 },
   meta: { display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
   icons: { display: "inline-flex", gap: 4, flexShrink: 0 },

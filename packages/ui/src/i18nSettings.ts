@@ -281,6 +281,10 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     zh: "已获取 {models} 个模型：{upstream} 个带上游能力数据，{enriched} 个已按内置能力表补全",
     en: "Fetched {models} models: {upstream} with upstream capability data, {enriched} completed from built-in table",
   },
+  "settings.providers.modalHint": {
+    zh: "编辑区可滚动；保存/测试结果会显示在此状态栏与右上角提示",
+    en: "The editor scrolls; save & test results appear in this status bar and the top-right toast",
+  },
   "settings.providers.fetching": { zh: "获取中…", en: "Fetching…" },
   "settings.providers.keyStatus": { zh: "密钥状态", en: "Key status" },
   "settings.providers.keyStatusHint": {
