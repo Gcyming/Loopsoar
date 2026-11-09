@@ -820,7 +820,7 @@
 - **背景**：用户（m02515）要求「从方方面面彻底根除截断，不论长短回复」，并指出首个试做项目 slime 因早期没发现该问题而长期受困。前一版只修了「上游 max_tokens 截断自动续写」一个点；本轮按链路逐层审计出 9 类截断/丢文风险并全部修复。
 - **决策（全链路不变量）**：任何一条助手消息在任意正常/异常路径下必须满足 —— ①流式拼接文本(过滤后) == done.finalText == 持久化文本；②早退（中止/错误/上限/超时/退出）必须保留已产出正文；③不得静默截断：截断必须带显式标记或可见提示。逐层：
   1. **LLM 适配层**（core/llm）：SSE 解析补「无 [DONE] / 末帧无尾换行 / CRLF 事件分隔（\r\n\r\n）」的残留 flush（旧实现会丢掉最后一帧）；超时语义改为「首包超时 + 空闲超时（每收到数据重置）+ 硬总超时默认关闭」，避免 300s 总超时掐断正常长输出；finish_reason/stop_reason 全路径透传（max_tokens→length）。
-  2. **工具循环**（core/tool_loop）：长度截断自动同轮续写（默认 8 次，受轮次预算约束）；工具调用参数被长度截断 → 丢弃本轮残缺工具轮并要求重发；续写用尽仍在截断 → 正文末尾追加显式标记「（输出因上游长度上限中断…）」+ progress；`maxOutputTokens`（模型 spec 的 maxOutput）显式传上游，从源头减少默认 max_tokens 过小。
+  2. **工具循环**（core/tool_loop）：长度截断自动同轮续写（默认 8 次，受轮次预算约束）；工具调用参数被长度截断 → 丢弃本轮残缺工具轮并要求重发；续写用尽仍在截断 → 正文末尾追加显式标记「（输出因上游长度上限中断…）」+ progress；**不向上游传显式 max_tokens**（各供应商输出上限差异巨大，传大可能被 400、传小反而制造截断）——长度上限统一交给 finish_reason 续写兜底。
   3. **服务层**（services/chat）：流式过滤器的跨 chunk 尾部在 finally flush 后、done 之前补发；done 携带权威 `finalText`；中止/异常时 finalText 保留已产出正文。
   4. **UI 对账**（packages/ui）：done 用服务端 `finalText` 覆盖本地累积正文（chunk 丢失/乱序也不截断）；迟到 chunk 若已是正文尾部则不重复追加；渲染层无任何正文 clamp/ellipsis（正文以 `m.text` 为权威，timeline body 仅展示）。
   5. **持久化**（shell）：SessionStore 原子写（tmp+rename，避免半截 JSON 让整段历史「消失」）；新增 `appendAssistantPartial` + 退出时 `flushActivePartials`（生成中被关闭也把已流出正文落盘并标注「应用退出时尚未完成」）；异常中断也保存部分回复。
@@ -828,8 +828,11 @@
 - **理由**：截断不是单点 bug 而是「任何一层丢一小段」的链式风险；只有用「文本一致性 + 早退保留 + 可见标记」三条不变量贯穿全部层，才能保证新增功能不会重新引入截断。
 - **替代方案**：只在上游层调大 max_tokens（否：上游各异、仍会截断）；只在前端做兜底（否：持久化/异常退出仍丢）；把超时调到很大（否：卡死无法恢复）。
 - **后果**：长文可能多次上游续写（token 成本受预算闸与续写上限控制）；/compact 保留最近 14 条语义不变、但预算口径更保守（更早触发压缩）；截断标记会出现在正文末尾（这是刻意的可观测性）。
-- **验证方式**：新增/更新 7 组专项测试（`tests/core/streamResidual`、`toolLoopTruncation`、`contextBudget`、`lengthContinuation`、`tests/ui/doneReconcile`、`tests/shell/sessionPartial`、`shutdownFlush`、`tests/services/chat-truncation`）；`pnpm typecheck` 5/5、`pnpm test` **159 文件 / 1348 tests 全绿**；确定性真机 E2E（本地假上游）：①首轮 finish_reason=length → 同轮续写，且第二轮「无 [DONE]、末帧无尾换行」仍拼接为连续全文「第一段被上游长度上限截断在这里自动续写完，正文完整结束。」；②生成中关闭应用 → 会话落盘已流出正文 + 退出标记；③持久化文本与 UI 展示逐字一致。
-- **状态**：✅ 自动化 + 确定性真机 E2E 已验证（2026-11-08）；🟡 流式过程中「mock 慢速上游的分段渲染」还差一次真机复验（不影响完成态与持久化不变量）。
+- **验证方式**：新增/更新 7 组专项测试（`tests/core/streamResidual`、`toolLoopTruncation`、`contextBudget`、`lengthContinuation`、`tests/ui/doneReconcile`、`tests/shell/sessionPartial`、`shutdownFlush`、`tests/services/chat-truncation`）；`pnpm typecheck` 5/5、`pnpm test` **159 文件 / 1348 tests 全绿**；真机 E2E：
+  - 真实上游（agnes）：短回复「收到」完整；`~5000字` 长文请求中上游在第 1 轮 5287 字处以 `finish_reason=length` 截断 → 自动续写第 2 轮 2699 字 `stop` → 最终正文 **7986 字**，结尾「潮声没有停。」完整收束（持久化文本与 UI 展示一致；截图 `e2e-evidence/trunc-real-long.png`）。
+  - 本地假上游确定性场景：①length 续写 + 第二轮「无 [DONE]、末帧无尾换行」→ 拼接为连续全文；②生成中关闭应用 → 已流出正文+退出标记落盘；③持久化文本与 UI 展示逐字一致。
+  - 流式过程中的「正文后置闸门」是既有 UI 设计（流式时阶段占位在正文区、文本走思考历程，done 后正文开闸），E2E 探针曾误判为「不渲染」，非截断缺陷。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
 - **回退条件**：空闲超时对超慢上游误杀 → 调大 idleTimeoutMs；续写导致重复内容 → maxLengthContinuations=0（等价关闭续写）；原子写在某些网络盘不可用 → writeJson 已带直接写兜底。
 - **复核时间**：打包阶段（长文写作、慢速上游、断网/强杀、超大历史、小上下文模型）
 
@@ -885,4 +888,4 @@
 | ADR-0044 | 回复元信息下移 + 复制图标统一 + 模式提示归状态栏 + 思考时间线图标化 | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0045 | 长度截断自动续写：finish_reason=length 透传 + 同轮续写（修复长回复断在半句） | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0046 | 图标几何居中 + 浮层阴影收敛 + 全局点外/切界面收起 + 全屏层不挡窗口按钮 | ✅ 自动化 + 真机 E2E 已验证 |
-| ADR-0047 | 截断根除：全链路不变量（SSE 残留/超时语义/续写/对账/退出落盘/压缩） | ✅ 自动化 + 确定性真机 E2E（流式分段复验待补） |
+| ADR-0047 | 截断根除：全链路不变量（SSE 残留/超时语义/续写/对账/退出落盘/压缩） | ✅ 自动化 + 真机 E2E 已验证（含真实上游 5000 字截断续写） |

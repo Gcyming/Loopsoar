@@ -70,11 +70,6 @@ export interface ToolLoopOpts {
    */
   maxLengthContinuations?: number;
   /**
-   * 请求里显式传给上游的 max_tokens（有模型 spec 时用它的 maxOutput）。
-   * 不传则由上游默认值决定（往往偏小）—— 有值就显式传，从源头减少截断发生。
-   */
-  maxOutputTokens?: number;
-  /**
    * 长等待工具名单（默认 ["ask_user"]）。
    * 为什么单独豁免：ask_user 等真人回答可能几分钟，按普通工具静默超时（90s）会被误杀。
    */
@@ -256,7 +251,10 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       const request: LlmRequest = {
         messages: conversation,
         tools: tools(),
-        maxTokens: opts.maxOutputTokens,
+        // 不向上游传显式 max_tokens：各供应商对「最大输出」的上限差异巨大（从 4k 到数十万），
+        // 传大了会被上游 400 拒绝，传小了反而制造截断。长度上限交给 finish_reason=length
+        // 的同轮续写兜底（ADR-0045/0047），这是对未知上游最安全的行为。
+        maxTokens: undefined,
         reasoningEffort: opts.reasoningEffort,
         signal: abortController.signal,
       };
@@ -612,6 +610,10 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           });
           emit("chunk", { text: marker });
           finalText += marker;
+        }
+        // 上游内容安全过滤掐断：同样不能静默，给用户一个可见原因。
+        if (roundFinishReason === "content_filter") {
+          emit("progress", { note: "上游内容安全过滤截断了回复（finish_reason=content_filter）" });
         }
         // 中止优先于核验：用户已点停止就不再为收束做额外的核验 IO
         if (abortController.signal.aborted) {

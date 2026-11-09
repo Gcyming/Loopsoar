@@ -7,7 +7,7 @@
  *
  * 语义（与 ChatService 的自动压缩共用同一份纯逻辑 core/contextCompress）：
  *   1. 读取目标会话的持久化消息（SessionStore.loadMessages；缺省 = 当前会话）；
- *   2. 预算 = historyBudgetChars(当前模型 contextWindow)（32K~600K 字符，默认 120K）；
+ *   2. 预算 = historyBudgetChars(当前模型 contextWindow)（8K~600K 字符，默认 60K）；
  *   3. 未超预算 → compressed=false，什么都不改（apply 也安全）；
  *   4. 超预算 → 保留最近 14 条原文，更早的消息压成确定性摘要（每条 240 字符），
  *      不额外调用模型（多一次请求 = 多一次失败/延迟/费用）；

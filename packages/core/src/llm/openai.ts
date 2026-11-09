@@ -284,11 +284,20 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             finish_reason?: string | null;
           }[];
           usage?: { total_tokens?: number };
+          /** 部分上游在 HTTP 200 的 SSE 里返回错误对象（流内错误）。 */
+          error?: { message?: string; type?: string } | string;
         };
         try {
           obj = JSON.parse(payload);
         } catch {
           return false; // 半行/心跳注释：跳过
+        }
+        // 流内错误：旧实现会把它当"没有 choices 的心跳"忽略掉，最后表现为「模型没有返回内容」，
+        // 用户无法知道是上游出错（也是一种"静默截断"）。这里显式转成 error chunk。
+        if (obj.error) {
+          const msg = typeof obj.error === "string" ? obj.error : (obj.error.message ?? JSON.stringify(obj.error));
+          yield { kind: "error", message: `上游流内错误：${msg}` };
+          return false;
         }
         const choice = obj.choices?.[0];
         const delta = choice?.delta ?? {};

@@ -82,10 +82,8 @@ export interface ChatServiceOptions {
   getLlm?: (sessionId?: string) => LlmClient | undefined;
   /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
   getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
-  /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 12 万字符）。 */
+  /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 6 万字符）。 */
   getContextWindow?: () => number | undefined;
-  /** 当前模型的最大输出 tokens（有 spec 时显式传给上游，减少默认 max_tokens 截断）。 */
-  getMaxOutput?: () => number | undefined;
   /** Agent 循环上限（设置 · 通用可调；缺省使用 core 默认）。 */
   getAgentLimits?: () => {
     maxRounds?: number;
@@ -545,8 +543,6 @@ export class ChatService {
         steers,
         signal: controller.signal,
         verifyRound,
-        // 模型 spec 声明的最大输出：显式传上游，从源头降低默认 max_tokens 截断概率
-        maxOutputTokens: this.opts.getMaxOutput?.(),
       } satisfies ToolLoopOpts;
       // Agent-Loop 注入（ADR-0010）：有 runner 走 LoopRegistry（可插拔 + 安全回退），否则内置循环
       const loopOutcome = this.opts.runLoop

@@ -1258,12 +1258,6 @@ app.whenReady().then(async () => {
       const spec = active?.models?.find((m) => m.id === active.model);
       return spec?.contextWindow;
     },
-    // 当前模型最大输出（tokens）：显式传上游，减少「上游默认 max_tokens 太小」造成的截断
-    getMaxOutput: () => {
-      const active = providers.active();
-      const spec = active?.models?.find((m) => m.id === active.model);
-      return spec?.maxOutput;
-    },
     // Agent 请求上限（设置 · 通用）
     getAgentLimits: () => {
       const prefs = loadPreferences(dirs.configDir);

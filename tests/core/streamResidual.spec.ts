@@ -79,6 +79,19 @@ describe("OpenAI SSE 尾巴", () => {
     const chunks = await collect(client.invoke({ messages: [] }));
     expect(lastDone(chunks)?.finishReason).toBe("length");
   });
+
+  it("HTTP 200 的 SSE 流内错误 → error chunk（不伪装成空回复）", async () => {
+    globalThis.fetch = (async () =>
+      sseResponse([
+        'data: {"choices":[{"delta":{"content":"部分内容"}}]}\n\n',
+        'data: {"error":{"message":"upstream overloaded","type":"server_error"}}\n\n',
+      ])) as typeof fetch;
+    const client = createOpenAiClient({ baseUrl: "http://x/v1", model: "m" });
+    const chunks = await collect(client.invoke({ messages: [] }));
+    const err = chunks.find((c): c is { kind: "error"; message: string } => c.kind === "error");
+    expect(err?.message).toContain("上游流内错误");
+    expect(err?.message).toContain("upstream overloaded");
+  });
 });
 
 describe("Anthropic SSE 尾巴", () => {

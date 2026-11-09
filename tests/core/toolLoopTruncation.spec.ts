@@ -67,7 +67,22 @@ describe("截断恢复", () => {
     expect(notes.some((n) => n.includes("自动续写次数用尽"))).toBe(true);
   });
 
-  it("maxOutputTokens 显式透传到 LLM 请求", async () => {
+  it("finish_reason=content_filter → 可见 progress 提示（不静默）", async () => {
+    const llm = new MockLlmClient();
+    llm.addScript([{ kind: "text", text: "部分正文" }, { kind: "done", finishReason: "content_filter" }]);
+    const events: LoopEvent[] = [];
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      llm,
+      executeTool: { invoke: async () => ({ ok: true, content: "" }) },
+      sink: (e) => events.push(e),
+    });
+    expect(outcome.status).toBe("done");
+    const notes = events.filter((e) => e.type === "progress").map((e) => String(e.data?.note ?? ""));
+    expect(notes.some((n) => n.includes("content_filter"))).toBe(true);
+  });
+
+  it("不向上游传显式 max_tokens（避免不同供应商上限差异导致 400；长度截断靠 finish_reason 续写兜底）", async () => {
     const seen: (number | undefined)[] = [];
     const client: LlmClient = {
       async *invoke(req: LlmRequest): AsyncIterable<LlmChunk> {
@@ -81,9 +96,8 @@ describe("截断恢复", () => {
       llm: client,
       executeTool: { invoke: async () => ({ ok: true, content: "" }) },
       sink: () => undefined,
-      maxOutputTokens: 123456,
     });
     expect(outcome.status).toBe("done");
-    expect(seen[0]).toBe(123456);
+    expect(seen[0]).toBeUndefined();
   });
 });
