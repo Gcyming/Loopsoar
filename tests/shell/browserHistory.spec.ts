@@ -373,3 +373,31 @@ describe("端到端：BrowserHost → 全局历史 → 落盘 → 重启恢复",
     expect(restored[0].visitCount).toBe(2);
   });
 });
+
+/* ──────────────────────── 批量删除（历史页勾选删除） ──────────────────────── */
+describe("BrowserHistoryStore：批量删除", () => {
+  it("按 URL 删除选中项、保留其余、落盘、幂等", () => {
+    const store = new BrowserHistoryStore(historyFile);
+    store.record({ url: "https://a.example/", title: "A" });
+    store.record({ url: "https://b.example/", title: "B" });
+    store.record({ url: "https://c.example/", title: "C" });
+
+    expect(store.remove(["https://a.example/", "https://c.example/", "https://missing.example/"])).toBe(2);
+    expect(store.list().map((e) => e.url)).toEqual(["https://b.example/"]);
+
+    // 落盘：新实例读回删除后的结果
+    expect(new BrowserHistoryStore(historyFile).list().map((e) => e.url)).toEqual(["https://b.example/"]);
+
+    // 幂等：再删一次返回 0，不破坏已有数据
+    expect(store.remove(["https://a.example/"])).toBe(0);
+    expect(store.list().map((e) => e.url)).toEqual(["https://b.example/"]);
+  });
+
+  it("非法 URL / 空数组 → 不删除任何条目", () => {
+    const store = new BrowserHistoryStore(historyFile);
+    store.record({ url: "https://a.example/" });
+    expect(store.remove([])).toBe(0);
+    expect(store.remove(["javascript:alert(1)", "  "])).toBe(0);
+    expect(store.list()).toHaveLength(1);
+  });
+});

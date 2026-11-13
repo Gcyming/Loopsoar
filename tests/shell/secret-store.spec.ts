@@ -108,3 +108,17 @@ describe("SecretStore：跨重启加密模式兼容", () => {
     expect(second.get("mock")).toBe("sk-os-mode-5678");
   });
 });
+
+describe("SecretStore：供应商合并迁移所需的元信息", () => {
+  it("ids()/meta() 只给 id、hint、updatedAt，不泄露明文", () => {
+    const store = new SecretStore(root, fakeBackend);
+    store.set("opencode-go-2", "oc-super-secret-7lyv");
+    store.set("opencode-go", "oc-another-secret-DO2x");
+    expect(store.ids().sort()).toEqual(["opencode-go", "opencode-go-2"]);
+    const meta = store.meta("opencode-go-2");
+    expect(meta?.hint).toBe("oc-…7lyv".slice(0, 3) + "…" + "7lyv");
+    expect(typeof meta?.updatedAt).toBe("number");
+    expect(store.meta("missing")).toBeNull();
+    expect(JSON.stringify(meta)).not.toContain("super-secret");
+  });
+});

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loopsoar</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      #icon {
+        width: 56px;
+        height: 56px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 14px;
+        background: #0a0c10;
+        overflow: hidden;
+        user-select: none;
+        touch-action: none;
+        cursor: grab;
+        -webkit-app-region: no-drag;
+      }
+      #icon:active {
+        cursor: grabbing;
+      }
+      #icon img {
+        display: block;
+        width: 56px;
+        height: 56px;
+        pointer-events: none;
+        -webkit-user-drag: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      独立 56px 图标窗口（Agent 小窗最小化态）。
+      为什么单独开窗口而不是把大窗口 resize/shape：透明窗口 resize/setShape 在 Windows 上会产生
+      合成闪烁与黑色块（用户 m06958）。这里只渲染一个图标，拖动/点击通过 preload API 交给主进程。
+    -->
+    <div id="icon" title="恢复 Agent 对话" role="button" aria-label="恢复 Agent 对话">
+      <img src="./logo.png" alt="Loopsoar" draggable="false" />
+    </div>
+    <script>
+      (() => {
+        const api = window.loopsoarAPI;
+        const el = document.getElementById("icon");
+        if (!api) return;
+        let drag = null;
+        const finish = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", cancel);
+          drag = null;
+        };
+        const move = (event) => {
+          if (!drag) return;
+          const dx = event.screenX - drag.x;
+          const dy = event.screenY - drag.y;
+          if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+          if (!drag.moved || (dx === 0 && dy === 0)) return;
+          drag.x = event.screenX;
+          drag.y = event.screenY;
+          void api.ui.moveAgentWindow({ dx, dy }).catch(() => undefined);
+        };
+        const up = () => {
+          const state = drag;
+          finish();
+          if (state && !state.moved) void api.ui.restoreAgentWindow().catch(() => undefined);
+        };
+        const cancel = () => finish();
+        el.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          drag = { x: event.screenX, y: event.screenY, moved: false };
+          window.addEventListener("pointermove", move);
+          window.addEventListener("pointerup", up);
+          window.addEventListener("pointercancel", cancel);
+        });
+        el.addEventListener("contextmenu", (event) => event.preventDefault());
+      })();
+    </script>
+  </body>
+</html>

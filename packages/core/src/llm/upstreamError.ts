@@ -63,12 +63,36 @@ export function classifyFatalUpstreamError(info: UpstreamErrorInfo): string | nu
   const text = `${info.type ?? ""} ${info.code ?? ""} ${info.message} ${info.raw}`.toLowerCase();
   const has = (re: RegExp): boolean => re.test(text);
 
+  // OpenCode 免费额度（429 FreeUsageLimitError；官方文案含 "free models work in OpenCode…subscribe to OpenCode Go"）
+  if (has(/free models work in opencode|subscribe to opencode go to keep going/)) {
+    return "OpenCode 免费额度已用尽：请等待额度重置，或订阅 OpenCode Go（opencode.ai/go）后使用 Go 模型";
+  }
   // ① 额度 / 余额 / 订阅（含 env 免费模型耗尽；这类重试必然继续失败）
   if (has(/freeusage|free usage|usage limit|usage_limit|quota|insufficient_quota|exceeded your current quota/)) {
     return "上游额度已用尽（免费额度或账户额度）：请等待额度重置/充值，或切换其它供应商与模型";
   }
+  // OpenCode 计费账户区分：Go 订阅额度与按量付费（Zen）余额是两个账户；同名模型走错端点常见 402
+  if (has(/insufficient account funds/)) {
+    return "OpenCode 按量付费余额不足（Go 订阅额度与按量付费余额是两个账户）：有 Go 订阅请把活动供应商切到 opencode-go（https://opencode.ai/inference/go/openai/v1）；否则需在 opencode.ai 控制台充值";
+  }
   if (has(/insufficient|balance|余额|credit|funds|payment required|billing|arrears/)) {
     return "上游账户余额不足：请充值或切换其它供应商";
+  }
+  // OpenCode 专项（2026-11 实测三类 403/400；比通用「订阅/地区」提示更具体，必须排在它们前面）
+  if (has(/missing x-opencode-session|missingsessionid/)) {
+    return "OpenCode Go 要求请求头 x-opencode-session：请保留内置默认请求头（设置 · 供应商 → 请求头里的 x-opencode-session: {{sessionId}}），不要删除";
+  }
+  if (has(/opencode go subscription is required|subscription is required to use go models|active opencode go subscription/)) {
+    return "该 API Key 所在工作区没有有效的 OpenCode Go 订阅：请在 opencode.ai/go 订阅，并使用订阅所在工作区的 Key；Go 供应商地址应为 https://opencode.ai/inference/go/openai/v1";
+  }
+  if (has(/model access is disabled/)) {
+    return "该 API Key 是 Go 订阅 Key，不能用于按量付费端点：请把活动供应商切到 opencode-go（https://opencode.ai/inference/go/openai/v1）；按量付费需在 Console 充值并使用 /inference/openai/v1";
+  }
+  if (has(/not available in your (country|region)|regionerror|unsupported_country|country_not_supported/)) {
+    return "该模型在当前地区不可用（OpenCode 免费/贡献者模型有地区限制，或控制台 Settings › Privacy 的 Regions 未放开）：请改用其他模型，或调整控制台区域设置";
+  }
+  if (has(/only available from within opencode|free[- ]tier (chat )?models/)) {
+    return "该模型是 OpenCode 免费模型，官方文档说明第三方客户端会 403：请改用付费模型，或订阅 OpenCode Go 后使用 Go 模型";
   }
   if (has(/subscription|not subscribed|plan required|upgrade|membership/)) {
     return "当前供应商需要有效订阅（或套餐不含该模型）：请订阅/升级套餐，或切换供应商";

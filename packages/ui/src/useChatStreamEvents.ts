@@ -486,7 +486,10 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           }, 500);
         }
         setBusy(false);
-        setNotice(wasStopping ? "已停止" : info.statusText);
+        // 错误/中断原因已经在会话消息里完整展示（红字/中断标记），这里不再重复弹底部提示挡住内容
+        // （用户：「会话内都有说明了，这个提示也挡信息了」）。
+        if (wasStopping) setNotice("已停止");
+        else if (!info.interrupted) setNotice(info.statusText);
       }),
       api.on("chat:stream:error", (payload) => {
         const p = payload as { content?: string; message?: string; sessionId?: string };
@@ -528,7 +531,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         onStreamSettled?.(sid);
         if (sid === sessionIdRef.current) {
           setBusy(false);
-          setNotice("回复失败");
+          // 与 done 路径一致：失败原因已在消息气泡里展示，不再重复弹底部提示。
         }
         updateSessionMessages(sid, (prev) => {
           if (prev.some((m) => m.status === "streaming")) {

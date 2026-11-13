@@ -141,9 +141,23 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:closeSessionTabs",
+      "domain": "browser",
+      "method": "closeSessionTabs",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:selectTab",
       "domain": "browser",
       "method": "selectTab",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:resolveFavicon",
+      "domain": "browser",
+      "method": "resolveFavicon",
       "sensitive": true,
       "hasRequest": true
     },
@@ -372,9 +386,51 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:setDevToolsPanel",
+      "domain": "browser",
+      "method": "setDevToolsPanel",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:toggleDevTools",
+      "domain": "browser",
+      "method": "toggleDevTools",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:listExtensions",
+      "domain": "browser",
+      "method": "listExtensions",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "browser:installExtension",
+      "domain": "browser",
+      "method": "installExtension",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:removeExtension",
+      "domain": "browser",
+      "method": "removeExtension",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:history",
       "domain": "browser",
       "method": "history",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:historyRemove",
+      "domain": "browser",
+      "method": "historyRemove",
       "sensitive": true,
       "hasRequest": true
     },
@@ -446,7 +502,7 @@
       "domain": "chat",
       "method": "newSession",
       "sensitive": true,
-      "hasRequest": false
+      "hasRequest": true
     },
     {
       "channel": "chat:switchSession",
@@ -477,9 +533,30 @@
       "hasRequest": true
     },
     {
+      "channel": "workspace:bindSession",
+      "domain": "workspace",
+      "method": "bindSession",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "workspace:select",
       "domain": "workspace",
       "method": "select",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "workspace:rename",
+      "domain": "workspace",
+      "method": "rename",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "workspace:openFolder",
+      "domain": "workspace",
+      "method": "openFolder",
       "sensitive": true,
       "hasRequest": true
     },
@@ -694,6 +771,13 @@
       "hasRequest": true
     },
     {
+      "channel": "ui:togglePopover",
+      "domain": "ui",
+      "method": "togglePopover",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "ui:closePopover",
       "domain": "ui",
       "method": "closePopover",
@@ -727,6 +811,27 @@
       "method": "minimizeAgentWindow",
       "sensitive": true,
       "hasRequest": false
+    },
+    {
+      "channel": "ui:dragAgentWindow",
+      "domain": "ui",
+      "method": "dragAgentWindow",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "ui:restoreAgentWindow",
+      "domain": "ui",
+      "method": "restoreAgentWindow",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "ui:moveAgentWindow",
+      "domain": "ui",
+      "method": "moveAgentWindow",
+      "sensitive": true,
+      "hasRequest": true
     },
     {
       "channel": "chat:compact",
@@ -790,6 +895,13 @@
       "method": "history",
       "sensitive": true,
       "hasRequest": true
+    },
+    {
+      "channel": "terminal:diagnose",
+      "domain": "terminal",
+      "method": "diagnose",
+      "sensitive": true,
+      "hasRequest": false
     }
   ],
   "events": [
@@ -817,7 +929,12 @@
     "loop:fallback",
     "loop:changed",
     "chrome:popoverAction",
+    "chrome:popoverClosed",
+    "chrome:dismissPopovers",
+    "chrome:devToolsPanel",
     "chrome:agentWindowClosed",
+    "chrome:agentWindowIconMode",
+    "chrome:agentWindowTransition",
     "chat:compacted"
   ]
 }

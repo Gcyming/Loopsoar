@@ -49,7 +49,7 @@ export interface Preferences {
   language: "zh-CN" | "en-US";
   animations: "full" | "reduced" | "off";
   restoreSession: boolean;
-  searchEngine: "bing" | "google" | "duckduckgo";
+  searchEngine: "bing" | "google" | "baidu";
   /** 广告/追踪请求拦截（webRequest 层；缺省 true，误拦时可关闭）。 */
   adBlockEnabled?: boolean;
   downloadDir?: string;
@@ -57,6 +57,8 @@ export interface Preferences {
   memoryStorePath?: string;
   memoryAutoCapture: boolean;
   sidebarWidth: number;
+  /** Vibecoding 模式独立侧栏宽度（可选；未设置时进入 vibe 用其最小宽度）。 */
+  vibeSidebarWidth?: number;
   agentMaxRounds?: number;
   agentMaxToolCalls?: number;
   agentRepeatToolWarn?: number;
@@ -178,16 +180,67 @@ export interface TabState {
   active: boolean;
   canBack: boolean;
   canForward: boolean;
+  /** 主框架加载中：原生视图隐藏，BrowserSurface 显示加载页。 */
+  loading?: boolean;
+  /** 站点图标（data: URL；来自主进程 page-favicon-updated）。 */
+  favicon?: string;
+  /** 最近一次主框架加载失败（已过滤 ERR_ABORTED）。 */
+  loadFailure?: {
+    code: number;
+    description: string;
+    url: string;
+    isMainFrame?: boolean;
+  } | null;
 }
 
 /** 全局历史条目（所有标签/会话共享；旧字段 index/current 仅向后兼容保留）。 */
 export interface HistoryEntry {
   url: string;
   title?: string;
+  /** 站点图标（data: URL；来自主进程抓取）。 */
+  favicon?: string;
   visitedAt?: number;
   visitCount?: number;
   index?: number;
   current?: boolean;
+}
+
+/** 浏览器扩展（Chrome/Edge 系，Electron 支持子集）。 */
+export interface BrowserExtensionInfo {
+  id: string;
+  name: string;
+  version: string;
+  manifestVersion: number;
+  description?: string;
+  source: "store" | "folder" | "bundled";
+  dir: string;
+  enabled: boolean;
+  error?: string;
+}
+
+/** 终端环境自检里的单项 CLI 依赖。 */
+export interface TerminalToolCheck {
+  key: string;
+  label: string;
+  category: "shell" | "runtime" | "tool" | "vcs";
+  command: string;
+  available: boolean;
+  version?: string;
+  path?: string;
+  detail?: string;
+  installHint?: string;
+}
+
+/** 设置页「终端环境」自检结果。 */
+export interface TerminalDiagnostics {
+  platform: string;
+  arch: string;
+  release: string;
+  defaultShell: string;
+  profiles: TerminalProfileInfo[];
+  tools: TerminalToolCheck[];
+  ready: boolean;
+  checkedAt: number;
 }
 
 export interface DownloadItem {
@@ -620,11 +673,16 @@ export type LoopsoarEvent =
   | "loop:changed"
   | "loop:fallback"
   | "chrome:popoverAction"
+  | "chrome:popoverClosed"
+  | "chrome:dismissPopovers"
   | "chrome:agentWindowClosed"
+  | "chrome:devToolsPanel"
+  | "chrome:agentWindowIconMode"
+  | "chrome:agentWindowTransition"
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
-export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads";
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces";
 
 /** 浏览器管理整页种类（更多菜单「查看更多」/设置打开）。 */
 export type ChromePageKind = "history" | "downloads" | "bookmarks" | "settings";
@@ -656,7 +714,7 @@ export interface LoopsoarAPI {
     history(): Promise<{ session: { sessionId: string; updatedAt: number; messages: ChatHistoryMessage[] } | null }>;
     saveTimeline(payload: { sessionId?: string; timeline: unknown[] }): Promise<{ ok: boolean }>;
     sessions(): Promise<{ sessions: SessionMeta[]; currentId: string | null }>;
-    newSession(): Promise<{ session: { sessionId: string } | null; sessions: SessionMeta[]; currentId: string | null }>;
+    newSession(payload?: { workspaceId?: string | null }): Promise<{ session: { sessionId: string } | null; sessions: SessionMeta[]; currentId: string | null }>;
     switchSession(payload: { sessionId: string }): Promise<{ ok: boolean; session: { sessionId: string; messages: ChatHistoryMessage[] } | null }>;
     deleteSession(payload: { sessionId: string }): Promise<{ removed: boolean; sessions: SessionMeta[]; currentId: string | null }>;
     /** /compact：压缩会话历史（apply=false 只预览统计；apply=true 写回持久化）。 */
@@ -670,6 +728,8 @@ export interface LoopsoarAPI {
   /** 浏览器工具栏浮层（独立子窗口渲染）。 */
   ui: LoopsoarDomain & {
     openPopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US" }): Promise<{ ok: boolean; error?: string }>;
+    /** 原子开关：已打开 → 关闭（open:false），否则打开（open:true）。 */
+    togglePopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US" }): Promise<{ ok: boolean; open: boolean; error?: string }>;
     closePopover(): Promise<{ ok: boolean }>;
     popoverAction(payload: { action: string; payload?: unknown }): Promise<{ ok: boolean }>;
     /** 打开 Agent 会话栏独立窗口（真·窗口化；可拖动/缩放/最小化）。 */
@@ -678,6 +738,12 @@ export interface LoopsoarAPI {
     closeAgentWindow(): Promise<{ ok: boolean }>;
     /** 最小化会话栏独立窗口（自绘无系统边框后由标题栏按钮调用）。 */
     minimizeAgentWindow(): Promise<{ ok: boolean }>;
+    /** 图标模式下还原小窗（点击图标按钮）。 */
+    restoreAgentWindow(): Promise<{ ok: boolean }>;
+    /** 图标模式下拖动小窗图标（dx/dy 为屏幕坐标增量，主进程夹取工作区）。 */
+    moveAgentWindow(payload: { dx: number; dy: number }): Promise<{ ok: boolean }>;
+    /** 普通态 Agent 窗口标题栏拖拽（屏幕增量）。 */
+    dragAgentWindow(payload: { dx: number; dy: number; phase?: "start" | "move" | "end" }): Promise<{ ok: boolean }>;
   };
   loop: LoopsoarDomain & {
     /** 可运行的 Agent-Loop 列表 + 当前选择 + 回退历史。 */
@@ -704,6 +770,24 @@ export interface LoopsoarAPI {
       activeId: string | null;
       error?: string;
     }>;
+    /** 把工作区绑定到当前会话（输入框下方工作区选择器）。 */
+    bindSession(payload: { sessionId?: string; workspaceId: string }): Promise<{
+      ok: boolean;
+      sessions?: SessionMeta[];
+      workspaces?: WorkspaceRecord[];
+      activeId?: string | null;
+      error?: string;
+    }>;
+    /** 重命名工作区（只改显示名）。 */
+    rename(payload: { id: string; name: string }): Promise<{
+      ok: boolean;
+      workspace?: WorkspaceRecord;
+      workspaces: WorkspaceRecord[];
+      activeId: string | null;
+      error?: string;
+    }>;
+    /** 在系统文件管理器中打开工作区根目录。 */
+    openFolder(payload: { id: string }): Promise<{ ok: boolean; root?: string; error?: string }>;
     remove(payload: { id: string }): Promise<{
       ok: boolean;
       workspaces: WorkspaceRecord[];
@@ -733,6 +817,8 @@ export interface LoopsoarAPI {
     navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; tabId?: string; error?: string }>;
     newTab(payload?: { url?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
     closeTab(payload: { tabId: string }): Promise<{ closed: boolean }>;
+    /** 删除会话时关闭该会话名下的全部网页（工作区 > 会话 > 网页；删会话才关网页，关网页不删会话）。 */
+    closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[] }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
@@ -742,11 +828,24 @@ export interface LoopsoarAPI {
     back(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     forward(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     reload(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
+    /** 切换当前标签的底部开发者工具面板（F12 / Ctrl+Shift+I / 状态栏按钮）。 */
+    toggleDevTools(payload?: { tabId?: string }): Promise<{ ok: boolean; open?: boolean; error?: string }>;
+    /** 同步底部调试面板的高度/开合（渲染层布局变化时调用）。 */
+    setDevToolsPanel(payload: { open: boolean; height?: number }): Promise<{ open: boolean }>;
+    /** 历史/快捷入口缺图标时按页面 URL 回抓（data URL）。 */
+    resolveFavicon(payload: { url: string }): Promise<{ favicon: string | null }>;
+    /** 浏览器扩展列表。 */
+    listExtensions(): Promise<{ extensions: BrowserExtensionInfo[] }>;
+    /** 安装扩展：path=本地未打包目录；url=Chrome 应用商店链接或 32 位扩展 ID。 */
+    installExtension(payload: { path?: string; url?: string }): Promise<{ ok: boolean; extension?: BrowserExtensionInfo; error?: string }>;
+    removeExtension(payload: { id: string }): Promise<{ ok: boolean; error?: string }>;
     history(payload?: { tabId?: string }): Promise<{ entries: HistoryEntry[] }>;
+    /** 删除选中的历史条目（urls 来自 history().entries；幂等）。 */
+    historyRemove(payload: { urls: string[] }): Promise<{ removed: number }>;
     downloads(): Promise<{ downloads: DownloadItem[] }>;
     downloadAction(payload: { id: string; action: "cancel" | "open" | "showInFolder" | "remove" }): Promise<{ ok: boolean }>;
     snapshot(): Promise<BrowserSnapshotResult>;
-    screenshot(): Promise<{ ok: boolean; data?: string; error?: string }>;
+    screenshot(payload?: { selector?: string }): Promise<{ ok: boolean; data?: string; error?: string }>;
     /** 保存当前页面 HTML 全页到下载目录 saved-pages/。 */
     savePage(payload?: { tabId?: string }): Promise<SavePageResult>;
   };
@@ -775,6 +874,8 @@ export interface LoopsoarAPI {
     close(payload: { terminalId: string }): Promise<boolean>;
     /** 回放终端输出缓冲；null = 该 id 不认识/已关闭。 */
     history(payload: { terminalId: string }): Promise<TerminalHistoryResult | null>;
+    /** 终端环境自检（配置档 + 常见 CLI 依赖；只读探测）。 */
+    diagnose(): Promise<TerminalDiagnostics>;
   };
   memory: LoopsoarDomain & {
     list(): Promise<MemoryListResult>;
@@ -828,6 +929,10 @@ export interface LoopsoarAPI {
       provider: string;
       baseUrl: string;
       model: string;
+      /** 被测供应商 id：服务端据此取该供应商自己的密钥（缺省按 provider+baseUrl 匹配）。 */
+      id?: string;
+      /** 表单里刚输入、尚未保存的密钥（只用于本次探测，不落盘）。 */
+      apiKey?: string;
       headers?: Record<string, string>;
     }): Promise<TestProviderResult>;
     clearProvider(): Promise<{ cleared: boolean }>;

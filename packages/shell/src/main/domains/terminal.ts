@@ -9,12 +9,16 @@
  *     展示中文错误；其余通道用 { ok, error? } / boolean / null 表达业务失败，不抛跨进程异常。
  */
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
+import { diagnoseTerminalEnvironment } from "../terminalDiagnostics.js";
 import type { TerminalProfileKey } from "../terminalProfiles.js";
 import type { TerminalSessionManager } from "../terminalSession.js";
 
 export function registerTerminalDomain(deps: TrustedIpcDeps, manager: TerminalSessionManager): void {
   // 可用配置档探测（60s 缓存；不可用的档带安装提示）
   handleTrusted(deps, "terminal:profiles", () => manager.profiles());
+
+  // 设置页「终端环境」自检：配置档 + 常见 CLI 依赖（只读探测）。
+  handleTrusted(deps, "terminal:diagnose", () => diagnoseTerminalEnvironment());
 
   // 终端列表（含 exited 未 close 的回放条目；UI 据此恢复标签页）
   handleTrusted(deps, "terminal:list", () => manager.list());

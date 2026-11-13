@@ -10,10 +10,11 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  AGENT_WINDOW_BACKGROUND,
   AGENT_WINDOW_DEFAULT_HEIGHT,
   AGENT_WINDOW_DEFAULT_WIDTH,
   AGENT_WINDOW_EDGE_GAP,
+  AGENT_WINDOW_ICON_ANIM_MS,
+  AGENT_WINDOW_ICON_SIZE,
   AGENT_WINDOW_MIN_HEIGHT,
   AGENT_WINDOW_MIN_WIDTH,
   AGENT_WINDOW_SLIDE_IN_MS,
@@ -21,6 +22,7 @@ import {
   AGENT_WINDOW_SLIDE_OUT_MS,
   AGENT_WINDOW_TITLE,
   computeAgentWindowBounds,
+  computeAgentWindowIconBounds,
   createAgentWindowManager,
   easeCubicBezier,
   type AgentWindowLike,
@@ -48,6 +50,10 @@ class FakeAgentWindow implements AgentWindowLike {
   bounds: AgentWindowRect;
   opacity = 1;
   setBoundsCalls = 0;
+  /** 图标模式测试：窗口装饰状态。 */
+  resizable = true;
+  alwaysOnTop = false;
+  minSize: [number, number];
   /** 同步抛错（模拟 loadURL 同步失败）。 */
   syncLoadError: Error | null = null;
   /** 异步 reject（模拟 loadURL Promise 失败）。 */
@@ -63,6 +69,7 @@ class FakeAgentWindow implements AgentWindowLike {
       width: options.width,
       height: options.height,
     };
+    this.minSize = [options.minWidth, options.minHeight];
   }
 
   loadURL(url: string): Promise<void> {
@@ -70,8 +77,16 @@ class FakeAgentWindow implements AgentWindowLike {
     if (this.syncLoadError) throw this.syncLoadError;
     return this.loadFailure ? Promise.reject(this.loadFailure) : Promise.resolve();
   }
+  hidden = false;
   show(): void {
     this.shown = true;
+    this.hidden = false;
+  }
+  hide(): void {
+    this.hidden = true;
+  }
+  isVisible(): boolean {
+    return !this.hidden;
   }
   focus(): void {
     this.focusCount += 1;
@@ -103,8 +118,27 @@ class FakeAgentWindow implements AgentWindowLike {
     this.bounds = { ...bounds };
     this.setBoundsCalls += 1;
   }
+  setResizable(value: boolean): void {
+    this.resizable = value;
+  }
+  setAlwaysOnTop(value: boolean): void {
+    this.alwaysOnTop = value;
+  }
+  setMinimumSize(width: number, height: number): void {
+    this.minSize = [width, height];
+  }
+  /** setShape 记录（图标态窗口不缩放，用 shape 裁出 56px 可交互区）。 */
+  shape: AgentWindowRect[] | null = null;
+  setShape(rects: AgentWindowRect[]): void {
+    this.shape = rects.map((r) => ({ ...r }));
+  }
   getBounds(): AgentWindowRect {
     return { ...this.bounds };
+  }
+  capturePageCalls = 0;
+  async capturePage(): Promise<{ toDataURL(): string }> {
+    this.capturePageCalls += 1;
+    return { toDataURL: () => "data:image/png;base64,AAAA" };
   }
   setOpacity(opacity: number): void {
     this.opacity = opacity;
@@ -251,17 +285,19 @@ describe("createAgentWindowManager：无边框窗口创建参数", () => {
       height: AGENT_WINDOW_DEFAULT_HEIGHT,
       minWidth: AGENT_WINDOW_MIN_WIDTH,
       minHeight: AGENT_WINDOW_MIN_HEIGHT,
-      // 无系统边框 + 圆角：标题栏由渲染层自绘（用户明确要求）
+      // 无系统边框 + 透明窗口：圆角与背景交给渲染层（图标态只画一个圆角图标，无窗框）
       frame: false,
       titleBarStyle: "hidden",
-      roundedCorners: true,
+      transparent: true,
+      roundedCorners: false,
+      hasShadow: false,
       show: false,
       resizable: true,
       maximizable: true,
       skipTaskbar: false,
       title: AGENT_WINDOW_TITLE,
       autoHideMenuBar: true,
-      backgroundColor: AGENT_WINDOW_BACKGROUND,
+      backgroundColor: "rgba(0,0,0,0)",
     });
     // 独立顶层窗口：绝不能有 parent（否则会变成主窗口的子窗口/被主窗口约束）
     expect("parent" in win.options).toBe(false);
@@ -398,16 +434,61 @@ describe("createAgentWindowManager：单实例与聚焦", () => {
 /* ────────────────────────── 管理器：最小化 / webContentsId ────────────────────────── */
 
 describe("createAgentWindowManager：最小化与 webContentsId", () => {
-  it("minimize：无窗口 false；有窗口调用窗口 minimize 并返回 true", () => {
-    const harness = makeHarness();
+  it("minimize：缩成图标按钮（56px），不缩到任务栏；restore 还原原 bounds", () => {
+    const notifications: boolean[] = [];
+    const transitions: Array<{
+      phase: string;
+      from: { width: number; height: number };
+      to: { width: number; height: number };
+    }> = [];
+    const harness = makeHarness({
+      onIconModeChange: (icon) => notifications.push(icon),
+      onTransition: (payload) =>
+        transitions.push({ phase: payload.phase, from: payload.from, to: payload.to }),
+    });
     expect(harness.manager.minimize()).toBe(false);
     harness.manager.open();
+    const win = harness.created[0];
+    const before = { ...win.bounds };
     expect(harness.manager.minimize()).toBe(true);
-    expect(harness.created[0].minimizeCount).toBe(1);
-    expect(harness.created[0].minimized).toBe(true);
+    // 面板过渡：窗口不动，渲染层拿 from(整窗)→to(图标矩形)；动画结束才落最终 bounds。
+    expect(transitions[0]).toMatchObject({
+      phase: "minimize",
+      from: { width: before.width, height: before.height },
+      to: { width: AGENT_WINDOW_ICON_SIZE, height: AGENT_WINDOW_ICON_SIZE },
+    });
+    harness.scheduler.tick(Math.ceil(AGENT_WINDOW_ICON_ANIM_MS / 16) + 1);
+    // Agent 大窗口 bounds 不变、被隐藏；独立 56px 图标窗口出现在图标位置
+    expect(win.bounds.width).toBe(before.width);
+    expect(win.bounds.height).toBe(before.height);
+    expect(win.isVisible()).toBe(false);
+    const icon = computeAgentWindowIconBounds(before, WORK_AREA);
+    const iconWin = harness.created[1];
+    expect(iconWin).toBeTruthy();
+    expect(iconWin.bounds).toEqual({ x: icon.x, y: icon.y, width: AGENT_WINDOW_ICON_SIZE, height: AGENT_WINDOW_ICON_SIZE });
+    expect(iconWin.isVisible()).toBe(true);
+    expect(iconWin.options.skipTaskbar).toBe(true);
+    expect(win.minimizeCount).toBe(0); // 不再调用系统最小化（否则会缩到任务栏）
+    expect(harness.manager.isIconMode()).toBe(true);
+    expect(notifications).toEqual([true]);
+
+    expect(harness.manager.restore()).toBe(true);
+    expect(transitions[1]).toMatchObject({
+      phase: "restore",
+      from: { width: AGENT_WINDOW_ICON_SIZE, height: AGENT_WINDOW_ICON_SIZE },
+      to: { width: before.width, height: before.height },
+    });
+    harness.scheduler.tick(Math.ceil(AGENT_WINDOW_ICON_ANIM_MS / 16) + 1);
+    expect(harness.manager.isIconMode()).toBe(false);
+    // Agent 大窗口重新显示，原点对齐到图标位置（此处图标由原窗口右上角计算，故等于原 bounds）
+    expect(win.isVisible()).toBe(true);
+    expect(win.bounds).toEqual(before);
+    expect(iconWin.isVisible()).toBe(false);
+    expect(win.alwaysOnTop).toBe(false);
+    expect(win.resizable).toBe(true);
+    expect(notifications).toEqual([true, false]);
     harness.manager.dispose();
   });
-
   it("webContentsId：无窗口 null；有窗口返回 webContents.id（域层 sender 校验用）", () => {
     const harness = makeHarness();
     expect(harness.manager.webContentsId()).toBeNull();
@@ -444,10 +525,71 @@ describe("createAgentWindowManager：最小化与 webContentsId", () => {
   });
 });
 
+
+describe("createAgentWindowManager：普通态拖动会话", () => {
+  it("begin/drag/end：按累计屏幕增量移动，尺寸固定为拖动起点（不随帧漂移）", () => {
+    const harness = makeHarness();
+    const win = openAndFinish(harness);
+    const start: AgentWindowRect = { ...win.bounds };
+    expect(harness.manager.beginAgentWindowDrag()).toBe(true);
+    expect(harness.manager.dragBy(20, 15)).toBe(true);
+    expect(harness.manager.dragBy(20, 15)).toBe(true);
+    expect(win.bounds.x).toBe(start.x + 40);
+    expect(win.bounds.y).toBe(start.y + 30);
+    expect(win.bounds.width).toBe(start.width);
+    expect(win.bounds.height).toBe(start.height);
+    expect(harness.manager.endAgentWindowDrag()).toBe(true);
+
+    // 新一次拖动从当前窗口位置重新取起点，不继承上一次的累计位移。
+    harness.manager.beginAgentWindowDrag();
+    harness.manager.dragBy(-10, -5);
+    expect(win.bounds.x).toBe(start.x + 30);
+    expect(win.bounds.y).toBe(start.y + 25);
+    harness.manager.dispose();
+  });
+
+  it("未显式 begin 时，首个 dragBy 自动捕获起点；零增量仍保持尺寸", () => {
+    const harness = makeHarness();
+    const win = openAndFinish(harness);
+    const start: AgentWindowRect = { ...win.bounds };
+    expect(harness.manager.dragBy(0, 0)).toBe(true);
+    expect(win.bounds).toEqual(start);
+    expect(harness.manager.dragBy(12, -8)).toBe(true);
+    expect(win.bounds.x).toBe(start.x + 12);
+    expect(win.bounds.y).toBe(start.y - 8);
+    harness.manager.dispose();
+  });
+
+  it("拖动被屏幕工作区夹取：标题栏始终留在可见范围", () => {
+    const harness = makeHarness();
+    const win = openAndFinish(harness);
+    const start: AgentWindowRect = { ...win.bounds };
+    harness.manager.beginAgentWindowDrag();
+    harness.manager.dragBy(-5000, -5000);
+    expect(win.bounds.x).toBeGreaterThanOrEqual(WORK_AREA.x - start.width + 120);
+    expect(win.bounds.y).toBeGreaterThanOrEqual(WORK_AREA.y);
+    expect(win.bounds.width).toBe(start.width);
+    expect(win.bounds.height).toBe(start.height);
+    harness.manager.endAgentWindowDrag();
+    harness.manager.dispose();
+  });
+
+  it("图标态下 begin/drag 返回 false（图标窗口自行拖动）", () => {
+    const harness = makeHarness();
+    openAndFinish(harness);
+    harness.manager.minimize();
+    harness.scheduler.tick(Math.ceil(AGENT_WINDOW_ICON_ANIM_MS / 16) + 5);
+    expect(harness.manager.isIconMode()).toBe(true);
+    expect(harness.manager.beginAgentWindowDrag()).toBe(false);
+    expect(harness.manager.dragBy(20, 15)).toBe(false);
+    harness.manager.dispose();
+  });
+});
+
 /* ────────────────────────── 关闭：滑出动画 ────────────────────────── */
 
 describe("createAgentWindowManager：滑出动画与关闭语义", () => {
-  it("close()：调用瞬间 isOpen=false；160ms 滑出到工作区右缘外、淡出后销毁", () => {
+  it("close()：调用瞬间 isOpen=false；160ms 原地淡出后销毁（不再逐帧移动窗口，避免透明窗拖影）", () => {
     const harness = makeHarness();
     const win = openAndFinish(harness);
     const startX = win.bounds.x;
@@ -459,16 +601,17 @@ describe("createAgentWindowManager：滑出动画与关闭语义", () => {
     expect(harness.scheduler.pending()).toBeGreaterThan(0);
 
     harness.scheduler.tick(2);
-    expect(win.bounds.x > startX).toBe(true);
+    // 淡出期间窗口位置不变（逐帧 setBounds 是透明窗拖影/掉帧的来源）
+    expect(win.bounds.x).toBe(startX);
     expect(win.opacity < 1).toBe(true);
 
     harness.scheduler.tick(Math.ceil(AGENT_WINDOW_SLIDE_OUT_MS / 16));
-    expect(win.bounds.x).toBe(WORK_AREA.x + WORK_AREA.width);
+    expect(win.bounds.x).toBe(startX);
     expect(win.opacity).toBe(0);
     expect(win.destroyed).toBe(true);
     expect(win.destroyCount).toBe(1);
     expect(harness.scheduler.pending()).toBe(0);
-    // 程序性关闭：窗口真正销毁后仍触发一次关闭通知（主窗口据此恢复右侧侧栏，时机在滑出结束之后）
+    // 程序性关闭：窗口真正销毁后仍触发一次关闭通知（主窗口据此恢复右侧侧栏，时机在淡出结束之后）
     expect(harness.events).toEqual(["deps:onClosed"]);
     harness.manager.dispose();
   });
@@ -666,6 +809,8 @@ interface FakeManagerCalls {
   closeCount: number;
   isOpen: boolean;
   minimizeCount: number;
+  restoreCount: number;
+  moves: Array<[number, number]>;
   /** 当前 Agent 窗口 webContents id（null = 窗口未打开）。 */
   webContentsId: number | null;
 }
@@ -678,7 +823,7 @@ function makeDomain(overrides: Partial<Record<string, unknown>> = {}) {
       handlers.set(channel.replace(/^loopsoar:/, ""), fn as (event: unknown, payload: unknown) => Promise<unknown>);
     },
   };
-  const calls: FakeManagerCalls = { opened: [], closeCount: 0, isOpen: false, minimizeCount: 0, webContentsId: 2 };
+  const calls: FakeManagerCalls = { opened: [], closeCount: 0, isOpen: false, minimizeCount: 0, restoreCount: 0, moves: [], webContentsId: 2 };
   const pushes: { event: string; payload: unknown }[] = [];
   let closedListener: (() => void) | null = null;
   const manager: AgentWindowManager = {
@@ -700,7 +845,16 @@ function makeDomain(overrides: Partial<Record<string, unknown>> = {}) {
       calls.minimizeCount += 1;
       return true;
     },
+    moveBy: (dx, dy) => {
+      calls.moves.push([dx, dy]);
+      return true;
+    },
     reposition: () => false,
+    restore: () => {
+      calls.restoreCount += 1;
+      return true;
+    },
+    isIconMode: () => false,
     webContentsId: () => calls.webContentsId,
     onClosed: (listener) => {
       closedListener = listener;
@@ -797,7 +951,7 @@ describe("registerAgentWindowDomain：IPC 入口", () => {
     await expect(domain.invoke("ui:closeAgentWindow", { unexpected: true })).rejects.toThrow(/不接受参数/);
   });
 
-  it("ui:minimizeAgentWindow：Agent 窗口自身调用 → manager.minimize()", async () => {
+  it("ui:minimizeAgentWindow：Agent 窗口自身调用 → manager.minimize()，不再推送 closed（小窗仍以图标存在）", async () => {
     const domain = makeDomain();
     const result = await domain.invoke("ui:minimizeAgentWindow", null, {
       senderFrame: { url: "loopsoar://app/index.html?agentWindow=1" },
@@ -805,6 +959,29 @@ describe("registerAgentWindowDomain：IPC 入口", () => {
     });
     expect(result).toEqual({ ok: true });
     expect(domain.calls.minimizeCount).toBe(1);
+    expect(domain.pushes).toEqual([]);
+  });
+
+  it("ui:restoreAgentWindow：Agent 窗口自身调用 → manager.restore()", async () => {
+    const domain = makeDomain();
+    expect(
+      await domain.invoke("ui:restoreAgentWindow", null, {
+        senderFrame: { url: "loopsoar://app/index.html?agentWindow=1" },
+        sender: { id: 2 },
+      }),
+    ).toEqual({ ok: true });
+    expect(domain.calls.restoreCount).toBe(1);
+  });
+
+  it("ui:moveAgentWindow：Agent 窗口自身调用 → manager.moveBy(dx,dy)", async () => {
+    const domain = makeDomain();
+    expect(
+      await domain.invoke("ui:moveAgentWindow", { dx: 12, dy: -6 }, {
+        senderFrame: { url: "loopsoar://app/index.html?agentWindow=1" },
+        sender: { id: 2 },
+      }),
+    ).toEqual({ ok: true });
+    expect(domain.calls.moves).toEqual([[12, -6]]);
   });
 
   it("ui:minimizeAgentWindow：主窗口调用 → 拒绝（只有 Agent 窗口能最小化自己）", async () => {

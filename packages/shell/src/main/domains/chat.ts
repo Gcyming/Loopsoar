@@ -18,8 +18,10 @@ export interface ChatDeps extends TrustedIpcDeps {
   getModelInfo?: () => { provider?: string; model?: string } | undefined;
   /** 新建会话归属的当前工作区。 */
   getActiveWorkspaceId?: () => string | null;
+  /** 默认工作区（新会话首次对话时自动认领）。 */
+  getDefaultWorkspaceId?: () => string | null;
   /** 会话被打开/新建（壳层据此切换浏览器标签"文件夹"）。可等待：返回前完成标签组切换。 */
-  onSessionOpened?: (sessionId: string) => void | Promise<void>;
+  onSessionOpened?: (sessionId: string, requestedWorkspaceId?: string | null) => void | Promise<void>;
   /** 删除会话前清理它的 worktree（会话文件删除后拿不到路径）。 */
   onSessionDeleting?: (sessionId: string) => void | Promise<void>;
   /** 会话被删除（壳层据此销毁对应标签组并切到 nextId）。 */
@@ -96,9 +98,13 @@ function startStream(
   let sessionId = payload.sessionId ?? deps.sessions?.currentId() ?? null;
   if (!sessionId) {
     sessionId =
-      deps.sessions?.newSession(deps.getActiveWorkspaceId?.() ?? null).sessionId ?? `sess-${Date.now()}`;
-    deps.onSessionOpened?.(sessionId);
+      deps.sessions?.newSession(null).sessionId ?? `sess-${Date.now()}`;
+    deps.onSessionOpened?.(sessionId, null);
   }
+  // 新标签页/新会话默认不认领工作区：首次真正对话时自动落到「默认工作区」（用户 m08041 规则）。
+  const sessionBeforeSend = deps.sessions?.get(sessionId) ?? null;
+  // 用户规则（m09384）：只有完全没选工作区的新用户直接对话才落到「未归属工作区」；
+  // 不再自动绑定默认工作区（工作区由输入框/左侧下拉选择，新建页不创建会话）。
   let assistantText = "";
   const modelInfo = deps.getModelInfo?.();
   activeStreams.add(sessionId);
@@ -254,9 +260,12 @@ export function registerChatDomain(deps: ChatDeps): void {
     currentId: deps.sessions?.currentId() ?? null,
   }));
 
-  handleTrusted(deps, "chat:newSession", async () => {
-    const session = deps.sessions?.newSession(deps.getActiveWorkspaceId?.() ?? null) ?? null;
-    if (session?.sessionId) await deps.onSessionOpened?.(session.sessionId);
+  handleTrusted(deps, "chat:newSession", async (payload) => {
+    const p = (payload ?? {}) as { workspaceId?: string | null };
+    // undefined = 旧行为（当前活动工作区）；null = 暂不归属，等首次对话自动落默认工作区。
+    const workspaceId = p.workspaceId === undefined ? deps.getActiveWorkspaceId?.() ?? null : p.workspaceId;
+    const session = deps.sessions?.newSession(workspaceId) ?? null;
+    if (session?.sessionId) await deps.onSessionOpened?.(session.sessionId, workspaceId);
     return { session, sessions: deps.sessions?.list() ?? [], currentId: session?.sessionId ?? null };
   });
 

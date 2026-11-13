@@ -8,7 +8,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
-import type { PermissionsState, ProviderStatus } from "./types.js";
+import type { PermissionsState, ProviderStatus, WorkspaceRecord } from "./types.js";
 import type { ModelGroup } from "./modelGroups.js";
 import { formatContextWindow, supportsImageInput } from "./modelGroups.js";
 import { usePopover } from "./popover.js";
@@ -49,6 +49,11 @@ export interface ComposerProps {
   onCommand?: (command: string) => void;
   /** 组件内异步操作（粘贴图片/选文件/命令）的提示出口；缺省则静默。 */
   onNotice?: (text: string) => void;
+  /** 工作区选择（输入框下方可展开按钮）：已有工作区 + 添加工作区。 */
+  workspaces?: WorkspaceRecord[];
+  activeWorkspaceId?: string | null;
+  onSelectWorkspace?: (workspaceId: string) => void;
+  onAddWorkspace?: () => void;
 }
 
 const PERMISSION_CATEGORIES = [
@@ -122,11 +127,16 @@ export default function Composer({
   onPickAttachment,
   onCommand,
   onNotice,
+  workspaces = [],
+  activeWorkspaceId = null,
+  onSelectWorkspace,
+  onAddWorkspace,
 }: ComposerProps): React.ReactElement {
-  // 权限/模型菜单互斥：同一时刻只开一个（打开另一个会自动收起）。
-  const [openMenu, setOpenMenu] = React.useState<"perm" | "model" | null>(null);
+  // 输入区左下角「+」菜单 / 权限菜单 / 模型菜单互斥：同一时刻只开一个。
+  const [openMenu, setOpenMenu] = React.useState<"plus" | "perm" | "model" | null>(null);
   const permAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   const modelAnchorRef = React.useRef<HTMLSpanElement | null>(null);
+  const plusAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   const sendAnchorRef = React.useRef<HTMLButtonElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const api = useLoopsoarApi();
@@ -332,6 +342,22 @@ export default function Composer({
   usePopover("composer-model", modelMenuOpen, (next) => {
     if (!next) onCloseModelMenu();
   });
+  const [workspaceOpen, setWorkspaceOpen] = React.useState(false);
+  const workspaceAnchorRef = React.useRef<HTMLSpanElement | null>(null);
+  usePopover("composer-workspace", workspaceOpen, (next) => {
+    if (!next) setWorkspaceOpen(false);
+  });
+  const activeWorkspaceName =
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId)?.name ?? tr("chat.workspaceFallback");
+
+  usePopover("composer-plus", openMenu === "plus", (next) => {
+    if (!next) setOpenMenu(null);
+  });
+  /** 左下角「+」：圆形框格，目前只放「附件」；后续新增项统一收进这里。 */
+  const openPlusMenu = (): void => {
+    onCloseModelMenu();
+    setOpenMenu((prev) => (prev === "plus" ? null : "plus"));
+  };
   const openPermissionMenu = (): void => {
     if (!permSummary) return;
     onCloseModelMenu();
@@ -377,6 +403,39 @@ export default function Composer({
           aria-label={tr("composer.placeholder")}
         />
         <div style={styles.chipRow}>
+          {/* 左下角圆形「+」：附件等入口收进这里（用户 2026-11-10：先放「附件」） */}
+          <span ref={plusAnchorRef} style={styles.anchor} data-popover-trigger>
+            <button
+              type="button"
+              className="composer-plus"
+              style={styles.plusBtn}
+              title={tr("composer.moreActions")}
+              aria-label={tr("composer.moreActions")}
+              aria-haspopup="menu"
+              aria-expanded={openMenu === "plus"}
+              onClick={openPlusMenu}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            <Popover anchorRef={plusAnchorRef} open={openMenu === "plus"} onClose={() => setOpenMenu(null)} width={200}>
+              <div style={styles.modelMenuHead}>{tr("composer.moreActions")}</div>
+              <button
+                type="button"
+                className="model-item"
+                style={styles.modelMenuItem}
+                onClick={() => {
+                  setOpenMenu(null);
+                  onPickAttachment();
+                }}
+              >
+                <span style={styles.modelItemName}>
+                  <Icon name="file" size={14} style={{ marginRight: 8 }} />
+                  {tr("composer.attachLabel")}
+                </span>
+              </button>
+            </Popover>
+          </span>
+
           <button
             type="button"
             className="chip"
@@ -467,6 +526,25 @@ export default function Composer({
             </button>
             <Popover anchorRef={modelAnchorRef} open={modelMenuOpen} onClose={onCloseModelMenu} width={340}>
               <div style={styles.modelMenuHead}>{tr("composer.modelMenuTitle")}</div>
+              {effortOptions.length > 0 ? (
+                <div style={styles.effortSection}>
+                  <div style={styles.modelMenuHead}>{tr("composer.effortSection")}</div>
+                  <div style={styles.effortRow}>
+                    {["", ...effortOptions].map((effort) => (
+                      <button
+                        key={effort || "off"}
+                        type="button"
+                        className="chip"
+                        style={{ ...styles.chip, ...(reasoningEffort === effort ? styles.chipActive : {}) }}
+                        onClick={() => onReasoningEffortChange(effort)}
+                        title={effort || tr("composer.effortOff")}
+                      >
+                        {effortLabel(effort).replace(/^(推理：|Reasoning:\s*)/i, "")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {modelGroups === null ? (
                 <div style={styles.modelMenuItem}>{tr("composer.modelMenuLoading")}</div>
               ) : modelGroups.length === 0 ? (
@@ -476,6 +554,11 @@ export default function Composer({
                   <div key={group.providerId} style={styles.modelGroup}>
                     <div style={styles.modelGroupHead}>
                       <span style={styles.modelGroupName}>{group.provider}</span>
+                      {group.plan ? (
+                        <span style={styles.modelGroupBadge}>
+                          {tr(group.plan === "go" ? "composer.modelPlanGo" : "composer.modelPlanPayg")}
+                        </span>
+                      ) : null}
                       {group.active ? <span style={styles.modelGroupBadge}>{tr("composer.modelCurrent")}</span> : null}
                       <span style={styles.modelGroupHost} title={group.baseUrl}>
                         {group.baseUrl.replace(/^https?:\/\//, "").slice(0, 28)}
@@ -508,25 +591,6 @@ export default function Composer({
                   </div>
                 ))
               )}
-              {effortOptions.length > 0 ? (
-                <div style={styles.effortSection}>
-                  <div style={styles.modelMenuHead}>{tr("composer.effortSection")}</div>
-                  <div style={styles.effortRow}>
-                    {["", ...effortOptions].map((effort) => (
-                      <button
-                        key={effort || "off"}
-                        type="button"
-                        className="chip"
-                        style={{ ...styles.chip, ...(reasoningEffort === effort ? styles.chipActive : {}) }}
-                        onClick={() => onReasoningEffortChange(effort)}
-                        title={effort || tr("composer.effortOff")}
-                      >
-                        {effortLabel(effort).replace(/^(推理：|Reasoning:\s*)/i, "")}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
               <div
                 role="button"
                 tabIndex={0}
@@ -548,17 +612,6 @@ export default function Composer({
             </Popover>
           </span>
 
-          <button
-            type="button"
-            className="chip"
-            style={{ ...styles.chip, ...(compactUi ? styles.chipCompact : {}) }}
-            title={tr("composer.attach")}
-            aria-label={tr("composer.attach")}
-            onClick={onPickAttachment}
-          >
-            <Icon name="file" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-            {compactUi ? null : tr("composer.attachLabel")}
-          </button>
           <span style={styles.spacer} />
           <button
             ref={sendAnchorRef}
@@ -608,6 +661,58 @@ export default function Composer({
           </div>
         </Popover>
       </div>
+      {/* 输入框下方：工作区选择（可展开；已有工作区 + 添加工作区） */}
+      <div style={styles.workspaceRow}>
+        <span ref={workspaceAnchorRef} data-popover-trigger style={styles.anchor}>
+          <button
+            type="button"
+            style={styles.workspaceChip}
+            title={tr("chat.workspaceTitle")}
+            aria-haspopup="menu"
+            aria-expanded={workspaceOpen}
+            data-testid="composer-workspace"
+            onClick={() => setWorkspaceOpen((value) => !value)}
+          >
+            <Icon name="folder" size={11} style={{ marginRight: 4 }} />
+            <span style={styles.workspaceChipText}>{activeWorkspaceName}</span>
+            <Icon name="chevron-down" size={10} style={{ marginLeft: 3, opacity: 0.65 }} />
+          </button>
+        </span>
+        <Popover anchorRef={workspaceAnchorRef} open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} width={240}>
+          <div style={styles.modelMenuHead}>{tr("chat.workspaceTitle")}</div>
+          <div style={styles.workspaceList}>
+            {workspaces.length === 0 ? <div style={styles.workspaceEmpty}>{tr("chat.workspaceFallback")}</div> : null}
+            {workspaces.map((workspace) => (
+              <button
+                key={workspace.id}
+                type="button"
+                style={styles.workspaceItem}
+                onClick={() => {
+                  onSelectWorkspace?.(workspace.id);
+                  setWorkspaceOpen(false);
+                }}
+              >
+                <Icon name="folder" size={12} style={{ marginRight: 6 }} />
+                <span style={styles.workspaceItemName}>{workspace.name}</span>
+                {workspace.id === activeWorkspaceId ? <Icon name="check" size={12} /> : null}
+              </button>
+            ))}
+          </div>
+          <div style={styles.workspaceDivider} />
+          <button
+            type="button"
+            style={styles.workspaceAdd}
+            data-testid="composer-workspace-add"
+            onClick={() => {
+              onAddWorkspace?.();
+              setWorkspaceOpen(false);
+            }}
+          >
+            <Icon name="workspace-add" size={13} style={{ marginRight: 6 }} />
+            {tr("chat.addWorkspace")}
+          </button>
+        </Popover>
+      </div>
     </div>
   );
 }
@@ -616,6 +721,31 @@ const styles: Record<string, React.CSSProperties> = {
   // 只让「输入框本身」是一个独立色块：外层保持会话栏底色（raised），
   // 卡片下沉到更深的 ink 一档并保留圆角，形成清晰的凹陷输入区，而不是把周围整条涂深。
   composer: { flex: "none", padding: "10px 12px 8px" },
+  workspaceRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, minWidth: 0 },
+  workspaceChip: {
+    maxWidth: 240,
+    height: 26,
+    padding: "0 10px",
+    fontSize: 11.5,
+    fontWeight: 600,
+    display: "inline-flex",
+    alignItems: "center",
+    minWidth: 0,
+    color: BRAND.ochreHover,
+    background: BRAND.ochreSoft,
+    border: "1px solid rgba(200,118,60,0.55)",
+    borderRadius: 999,
+    boxShadow: "0 2px 10px rgba(200,118,60,0.12)",
+    cursor: "pointer",
+    transition: "background 120ms, border-color 120ms, color 120ms",
+  },
+  workspaceChipText: { maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  workspaceList: { display: "flex", flexDirection: "column", gap: 1, maxHeight: 240, overflowY: "auto" },
+  workspaceItem: { display: "flex", alignItems: "center", gap: 2, width: "100%", padding: "6px 8px", border: "none", borderRadius: 6, background: "transparent", color: BRAND.linen, fontSize: 12, cursor: "pointer", textAlign: "left" },
+  workspaceItemName: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  workspaceEmpty: { padding: "8px", fontSize: 11.5, color: BRAND.linenFaint },
+  workspaceDivider: { height: 1, background: BRAND.border, margin: "4px 0" },
+  workspaceAdd: { display: "flex", alignItems: "center", width: "100%", padding: "6px 8px", border: "none", borderRadius: 6, background: "transparent", color: BRAND.linenMuted, fontSize: 12, cursor: "pointer", textAlign: "left" },
   composerBox: {
     display: "flex",
     flexDirection: "column",
@@ -640,6 +770,21 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: 160,
   },
   chipRow: { display: "flex", alignItems: "center", gap: 5, flexWrap: "nowrap" },
+  /** 左下角圆形「+」：圆形框格（用户 2026-11-10）；与 chip 同高但更圆、更醒目一点。 */
+  plusBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 26,
+    height: 26,
+    padding: 0,
+    borderRadius: "50%",
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    cursor: "pointer",
+    transition: "background 120ms, border-color 120ms, color 120ms",
+  },
   chip: {
     display: "inline-flex",
     alignItems: "center",

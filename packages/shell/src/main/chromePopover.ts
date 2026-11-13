@@ -35,9 +35,9 @@ export interface PopoverSize {
 }
 
 /** 浮层种类（与契约 PopoverKindSchema 保持一致）。 */
-export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads";
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces";
 
-export const CHROME_POPOVER_KINDS: readonly ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads"];
+export const CHROME_POPOVER_KINDS: readonly ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces"];
 
 /** 浮层与锚点之间的默认间距。 */
 export const DEFAULT_POPOVER_GAP = 6;
@@ -54,6 +54,7 @@ export const DEFAULT_POPOVER_SIZES: Record<ChromePopoverKind, PopoverSize> = {
   bookmarks: { width: 340, height: 440 },
   history: { width: 340, height: 460 },
   downloads: { width: 360, height: 440 },
+  workspaces: { width: 230, height: 300 },
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -116,6 +117,8 @@ export function isPointWithin(rect: PopoverRect, point: PopoverPoint, padding = 
 export interface PopoverMainWindowLike {
   getContentBounds(): PopoverRect;
   isDestroyed?(): boolean;
+  /** 主窗口是否获得焦点（用于「点回主窗口不立即关浮层」的判定）。 */
+  isFocused?(): boolean;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   removeListener?(event: string, listener: (...args: unknown[]) => void): unknown;
 }
@@ -233,6 +236,11 @@ export interface ChromePopoverManagerDeps {
   additionalArguments?: string[];
   /** 浮层动作回调（缺省由 domain 层转发；两条路径不重复触发）。 */
   onAction?: (payload: ChromePopoverActionInput) => void;
+  /**
+   * 浮层被关闭（任何路径：Esc / 失焦 / hover 离开 / 切 kind / 动作后）时回调。
+   * 渲染层据此同步「当前打开的浮层」状态，实现「已展开时点击一次即收起」而不闪烁。
+   */
+  onClosed?: () => void;
   /** 窗口背景（transparent 下的兜底色，默认全透明）。 */
   backgroundColor?: string;
   /** 尺寸策略（默认 DEFAULT_POPOVER_SIZES）。 */
@@ -330,6 +338,12 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
         if (!win.isDestroyed()) win.close();
       } catch {
         // 窗口可能已被系统销毁：忽略
+      }
+      // 通知渲染层「浮层已关闭」，用于「再次点击即收起」的状态同步（避免切 kind 时误判）
+      try {
+        deps.onClosed?.();
+      } catch {
+        // 回调异常不影响关闭（渲染层正在销毁等）
       }
     }
     detachMainListeners();
@@ -437,9 +451,13 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
         }
         startPolling(screenApi);
       });
-      // 浮层失焦（用户点了主窗口/别处）→ 关闭
+      // 浮层失焦 → 关闭；但用户点回主窗口时先不关（让 click 的 toggle 正确收起，
+      // 也避免 pointerdown 先关、click 再开导致「再次点击重复展开」）；离开菜单/锚点的点击由 hover 轮询兜底关闭。
       win.on("blur", () => {
-        if (popover === win) close();
+        if (popover !== win) return;
+        const main = deps.getMainWindow();
+        if (main && !main.isDestroyed?.() && main.isFocused?.()) return;
+        close();
       });
       win.on("closed", () => {
         if (popover === win) close();

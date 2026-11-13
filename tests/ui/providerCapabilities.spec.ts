@@ -126,7 +126,7 @@ describe("纯函数：上下文窗口格式化与图片输入判定", () => {
 });
 
 describe("模型菜单：模态透传与紧凑能力提示", () => {
-  it("buildModelGroups 透传 inputModalities（默认模型也能从配置项补全）", () => {
+  it("buildModelGroups 透传 inputModalities（模型能力随清单原样带出）", () => {
     const items: ProviderItem[] = [
       {
         id: "nvidia",
@@ -205,7 +205,6 @@ describe("mergeFetchedProviderModels（拉列表时的三态合并：显式手�
       fetched,
       existing,
       meta({ upstreamFields: ["contextWindow", "maxOutput"], inferredCaps: { contextWindow: 512000, maxOutput: 65536 } }),
-      "m1",
     );
     expect(result.models[0].contextWindow).toBe(1048576);
     expect(result.models[0].maxOutput).toBe(8192);
@@ -220,7 +219,6 @@ describe("mergeFetchedProviderModels（拉列表时的三态合并：显式手�
       fetched,
       existing,
       meta({ upstreamFields: ["contextWindow"], inferredCaps: { contextWindow: 512000 } }),
-      "m1",
     );
     expect(result.models[0].contextWindow).toBe(200000);
   });
@@ -228,16 +226,16 @@ describe("mergeFetchedProviderModels（拉列表时的三态合并：显式手�
   it("上游没有能力数据时保留内置推断值，并给出补全计数", () => {
     const existing = [model({ id: "m1", contextWindow: 512000 })];
     const fetched = [model({ id: "m1", contextWindow: 512000 })];
-    const result = mergeFetchedProviderModels(fetched, existing, meta({ upstreamFields: [], inferredCaps: { contextWindow: 512000 } }), "m1");
+    const result = mergeFetchedProviderModels(fetched, existing, meta({ upstreamFields: [], inferredCaps: { contextWindow: 512000 } }));
     expect(result.models[0].contextWindow).toBe(512000);
     expect(result.upstreamModels).toBe(0);
     expect(result.enrichedModels).toBe(1);
   });
 
-  it("勾选状态沿用本地，新模型仅默认模型启用", () => {
+  it("拉列表时本地开关保留，新模型默认打开（拨片开关语义）", () => {
     const existing = [model({ id: "a", selected: false })];
     const fetched = [model({ id: "a" }), model({ id: "b" })];
-    const result = mergeFetchedProviderModels(fetched, existing, {}, "b");
+    const result = mergeFetchedProviderModels(fetched, existing, {});
     expect(result.models.find((m) => m.id === "a")?.selected).toBe(false);
     expect(result.models.find((m) => m.id === "b")?.selected).toBe(true);
   });
@@ -248,7 +246,6 @@ describe("mergeFetchedProviderModels（拉列表时的三态合并：显式手�
       fetched,
       [],
       { m1: { upstreamFields: ["vision"], inferredCaps: {} }, m2: { upstreamFields: [], inferredCaps: {} } },
-      "m1",
     );
     expect(result.models.map((m) => m.id)).toEqual(["m1", "m2"]);
     expect(result.upstreamModels).toBe(1);

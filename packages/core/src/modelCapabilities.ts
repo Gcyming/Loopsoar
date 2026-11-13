@@ -185,33 +185,57 @@ export function inferModelCapabilities(
 export function parseUpstreamCapabilities(raw: Record<string, unknown>): ModelCapabilities {
   const num = (v: unknown): number | undefined =>
     typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
+  // OpenCode Console /models 形态：{ limit: {context, output}, modalities: {input: ["text","image/png",…]},
+  //   capabilities: { tools: {supported}, reasoning: {effort:[…]}, structured_output: true } }
+  const limit = raw.limit as { context?: unknown; output?: unknown } | undefined;
+  const opencodeCaps = raw.capabilities as
+    | {
+        tools?: { supported?: unknown };
+        reasoning?: { effort?: unknown };
+        structured_output?: unknown;
+      }
+    | undefined;
   const contextWindow =
     num(raw.context_length) ??
     num(raw.context_window) ??
     num(raw.max_context_length) ??
     num(raw.context_size) ??
     num((raw.top_provider as { context_length?: unknown } | undefined)?.context_length) ??
-    num((raw.model_info as { context_length?: unknown } | undefined)?.context_length);
+    num((raw.model_info as { context_length?: unknown } | undefined)?.context_length) ??
+    num(limit?.context);
   const maxOutput =
     num(raw.max_output) ??
     num(raw.max_output_tokens) ??
     num(raw.max_completion_tokens) ??
     num(raw.max_tokens) ??
-    num((raw.top_provider as { max_completion_tokens?: unknown } | undefined)?.max_completion_tokens);
+    num((raw.top_provider as { max_completion_tokens?: unknown } | undefined)?.max_completion_tokens) ??
+    num(limit?.output);
   const modalitiesRaw = Array.isArray(raw.input_modalities)
     ? raw.input_modalities
     : Array.isArray((raw.architecture as { input_modalities?: unknown } | undefined)?.input_modalities)
       ? ((raw.architecture as { input_modalities?: unknown[] }).input_modalities as unknown[])
-      : [];
-  const inputModalities = modalitiesRaw
-    .filter((m): m is InputModality => m === "text" || m === "image" || m === "audio" || m === "video")
-    .slice(0, 4);
+      : Array.isArray((raw.modalities as { input?: unknown } | undefined)?.input)
+        ? ((raw.modalities as { input: unknown[] }).input as unknown[])
+        : [];
+  // 上游常见两种写法：类别名（text/image）与 MIME（image/png、audio/mpeg、video/mp4、application/pdf）。
+  const normalizeModality = (m: unknown): InputModality | undefined => {
+    if (typeof m !== "string") return undefined;
+    const value = m.trim().toLowerCase();
+    if (value === "text") return "text";
+    if (value.startsWith("image")) return "image";
+    if (value.startsWith("audio")) return "audio";
+    if (value.startsWith("video")) return "video";
+    return undefined;
+  };
+  const inputModalities = [...new Set(modalitiesRaw.map(normalizeModality).filter((m): m is InputModality => m !== undefined))].slice(0, 4);
   const reasoning = raw.reasoning as { supported_efforts?: unknown } | undefined;
   const effortsRaw = Array.isArray(raw.thinking_efforts)
     ? raw.thinking_efforts
     : Array.isArray(reasoning?.supported_efforts)
       ? (reasoning!.supported_efforts as unknown[])
-      : undefined;
+      : Array.isArray(opencodeCaps?.reasoning?.effort)
+        ? (opencodeCaps!.reasoning!.effort as unknown[])
+        : undefined;
   const thinkingEfforts = effortsRaw
     ?.filter((x): x is string => typeof x === "string")
     .slice(0, 10);
@@ -225,11 +249,13 @@ export function parseUpstreamCapabilities(raw: Record<string, unknown>): ModelCa
     raw.supports_function_calling === true ||
     raw.supports_tool_calling === true ||
     raw.function_calling === true ||
-    raw.tool_call === true;
+    raw.tool_call === true ||
+    opencodeCaps?.tools?.supported === true;
   const structuredOutput =
     raw.supports_structured_output === true ||
     raw.structured_output === true ||
-    raw.response_format === true;
+    raw.response_format === true ||
+    opencodeCaps?.structured_output === true;
   return {
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(maxOutput !== undefined ? { maxOutput } : {}),

@@ -81,3 +81,7 @@
 2. 同步更新本文件映射表；更新源图标时以「目标文件 ← 源文件」重新复制；
 3. 不要全量拷贝图标库（约 168 个），只保留 UI 实际用到的一套（当前 47 个）；
 4. 删除图标前先确认 `packages/ui/src/**` 无 `<Icon name="...">` 引用（`tests/ui/icons.spec.ts` 会兜底）。
+
+| `devtools.svg` | `D:/下载/操作-调试.svg` | 状态栏调试按钮 / DevTools 面板图标 | 2026-11-13 |
+| `extension-feature.svg` | `D:/下载/扩展功能.svg` | 设置 · Agent 扩展 | 2026-11-13 |
+| `browser-plugin.svg` | `D:/下载/组件、插件.svg` | 设置 · 浏览器扩展 | 2026-11-13 |

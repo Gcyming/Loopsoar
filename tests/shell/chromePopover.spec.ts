@@ -574,18 +574,21 @@ function makeDomain(overrides: Partial<Omit<TrustedIpcDeps, "ipc">> & Record<str
   };
   const calls: DomainCalls = { opened: [], closed: 0, actions: [] };
   const pushes: { event: string; payload: unknown }[] = [];
+  const state = { open: false };
   const manager: ChromePopoverManager = {
     open: (input) => {
       calls.opened.push(input);
+      state.open = true;
       return { ok: true };
     },
     close: () => {
       calls.closed += 1;
+      state.open = false;
     },
     handleAction: (payload) => {
       calls.actions.push(payload);
     },
-    isOpen: () => false,
+    isOpen: () => state.open,
     dispose: () => {},
   };
   registerChromePopoverDomain(
@@ -662,10 +665,44 @@ describe("registerChromePopoverDomain：IPC 入口", () => {
     expect(domain.calls.closed).toBe(1);
   });
 
+  it("ui:togglePopover：未打开 → 打开；已打开 → 关闭（原子切换，绝不重开连闪）", async () => {
+    const domain = makeDomain();
+    const payload = { kind: "more", anchor: { x: 1, y: 2, width: 3, height: 4 } };
+    expect(await domain.invoke("ui:togglePopover", payload)).toEqual({ ok: true, open: true });
+    expect(domain.calls.opened).toHaveLength(1);
+    expect(await domain.invoke("ui:togglePopover", payload)).toEqual({ ok: true, open: false });
+    expect(domain.calls.closed).toBe(1);
+    expect(domain.calls.opened).toHaveLength(1); // 关掉即可，不能再打开（旧实现关→开连闪）
+    // 再点一次又能正常打开（状态没有被卡死）
+    expect(await domain.invoke("ui:togglePopover", payload)).toEqual({ ok: true, open: true });
+    expect(domain.calls.opened).toHaveLength(2);
+  });
+
   it("getMainWebContentsId 返回 null（主窗口不可用）→ fail-closed 拒绝", async () => {
     const domain = makeDomain({ getMainWebContentsId: () => null });
     await expect(
       domain.invoke("ui:openPopover", { kind: "more", anchor: { x: 1, y: 2, width: 3, height: 4 } }),
     ).rejects.toThrow(/仅主窗口/);
+  });
+});
+
+describe("createChromePopoverManager：onClosed 状态同步（点击收起不闪烁）", () => {
+  it("浮层关闭（close/失焦/动作/切 kind）时回调 onClosed；没有浮层时不回调", () => {
+    let closedCount = 0;
+    const harness = makeHarness({ onClosed: () => { closedCount += 1; } });
+    harness.manager.close(); // 没有浮层 → 不回调
+    expect(closedCount).toBe(0);
+    openReady(harness);
+    harness.manager.close();
+    expect(closedCount).toBe(1);
+    // 切 kind：先关旧（+1）再开新；新窗口还没 ready，不算关闭
+    openReady(harness);
+    const second = openReady(harness);
+    expect(second.closed).toBe(false);
+    expect(closedCount).toBe(2);
+    second.emit("blur");
+    expect(closedCount).toBe(3);
+    harness.manager.dispose();
+    expect(closedCount).toBe(3); // dispose 时已无浮层
   });
 });

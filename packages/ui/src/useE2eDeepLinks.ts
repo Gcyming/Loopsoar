@@ -11,7 +11,7 @@
  * 依赖数组与原内联 effect 保持一致（切换回调来自 useCallback，引用变化时重排定时器）。
  */
 import * as React from "react";
-import type { LoopsoarAPI } from "./types.js";
+import type { ChromePageKind, LoopsoarAPI } from "./types.js";
 
 /** 最小 ref 形状。 */
 interface MutableRef<T> {
@@ -170,6 +170,20 @@ export function useE2eSettingsDeepLink(
     setSettingsOpen(true);
     const wanted = params.get("section");
     if (wanted) setSettingsSection(wanted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
+/** `?e2e=chromepage&kind=history|downloads|bookmarks|settings`：直接打开浏览器管理整页（E2E 专用）。 */
+export function useE2eChromePageDeepLink(open: (kind: ChromePageKind) => void): void {
+  React.useEffect(() => {
+    if (typeof location === "undefined") return;
+    const params = new URLSearchParams(location.search);
+    if (params.get("e2e") !== "chromepage") return;
+    const kind = params.get("kind");
+    if (kind !== "history" && kind !== "downloads" && kind !== "bookmarks" && kind !== "settings") return;
+    const timer = window.setTimeout(() => open(kind), 900);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }

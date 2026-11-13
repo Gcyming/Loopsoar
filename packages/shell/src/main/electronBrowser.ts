@@ -4,11 +4,15 @@
  * 修复 ①：webContents.setWindowOpenHandler 把 target=_blank/window.open 转为应用内新标签，
  *        不再产生 Electron 独立窗口（旧行为看起来像「弹窗」）。
  */
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { lookup } from "node:dns/promises";
 import { app, BrowserWindow, session, shell, WebContentsView } from "electron";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { SESSION_PARTITION } from "../shared/brand.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { BrowserHost, type BrowserVisit, type HostView, type PersistedBrowserState } from "./browserHost.js";
 import {
   browserRequestHost,
@@ -29,6 +33,15 @@ export interface ElectronBrowserHostOptions {
   onVisited?: (visit: BrowserVisit) => void;
   /** 页面标题迟到 → 刷新全局历史里同 URL 条目的标题（不新增访问）。 */
   onTitleChanged?: (url: string, title: string) => void;
+  /** 页面图标迟到 → 刷新全局历史里同 URL 条目的图标（不新增访问）。 */
+  onFaviconChanged?: (url: string, favicon: string) => void;
+  /** 底部开发者工具面板（由 index 创建；未装配时平台上仍保持旧 detach 行为）。 */
+  devToolsPanel?: BrowserDevToolsPanel;
+  /**
+   * 原生网页视图获得焦点（用户点了网页区域）。网页是 WebContentsView，DOM 收不到这层
+   * pointerdown —— 主窗口里的内联浮层（模型菜单/会话列表等）需要靠这个信号收起。
+   */
+  onViewFocused?: () => void;
 }
 
 /** 默认 DNS 解析：只把地址交给守卫，解析失败返回空数组（守卫按 fail-closed 拦截）。 */
@@ -123,12 +136,232 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
   });
 }
 
+/** favicon 抓取缓存：同站点图标 6 小时内只抓一次；失败也缓存空结果，避免反复请求。 */
+const FAVICON_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const FAVICON_MAX_BYTES = 96 * 1024;
+const faviconCache = new Map<string, { at: number; dataUrl: string | null }>();
+
+/**
+ * 把 page-favicon-updated 给的图标 URL 抓成 data URL。
+ * 为什么必须转换：渲染层 CSP 是 `img-src self data:`，直接 <img src="https://…"> 会被拦；
+ * 同时统一成 data URL 后历史文件离线也可显示。只接受 http(s) 与图片 MIME、限制 96KB。
+ */
+async function fetchFaviconDataUrl(url: string): Promise<string | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const cached = faviconCache.get(url);
+  if (cached && Date.now() - cached.at < FAVICON_CACHE_TTL_MS) return cached.dataUrl;
+  try {
+    const response = await session.fromPartition(SESSION_PARTITION).fetch(url, {
+      headers: { Accept: "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*;q=0.8" },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const mime = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!mime.startsWith("image/")) throw new Error(`非图片类型：${mime || "unknown"}`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength === 0 || buffer.byteLength > FAVICON_MAX_BYTES) throw new Error("图标体积超限");
+    const dataUrl = `data:${mime};base64,${buffer.toString("base64")}`;
+    faviconCache.set(url, { at: Date.now(), dataUrl });
+    return dataUrl;
+  } catch (err) {
+    faviconCache.set(url, { at: Date.now(), dataUrl: null });
+    return null;
+  }
+}
+
+/**
+ * 底部开发者工具面板：把 Chromium DevTools 前端渲染到主窗口内的 WebContentsView，
+ * 停靠在「终端面板」所在的底部区域（而非独立窗口）。Electron 的 setDevToolsWebContents
+ * 允许把 devtools 前端画到任意 WebContents，这里用 WebContentsView 作为画布。
+ *
+ * 生命周期：open( inspected ) → 建 view + setDevToolsWebContents + inspected.openDevTools；
+ * inspected 侧关闭 devtools（快捷键/菜单）会触发 devtools-closed → 自动清理并回调壳层。
+ */
+export class BrowserDevToolsPanel {
+  private view: WebContentsView | null = null;
+  private inspected: Electron.WebContents | null = null;
+  private win: BrowserWindow | null = null;
+  private panelHeight = 320;
+  private visible = true;
+  private readonly onResize = (): void => this.syncBounds();
+
+  constructor(
+    private readonly options: {
+      getWindow: () => BrowserWindow | null;
+      onOpenChange?: (open: boolean) => void;
+    },
+  ) {}
+
+  isOpen(): boolean {
+    return this.view !== null;
+  }
+
+  /** 打开/切换被调试的 WebContents；失败返回 false（不抛）。 */
+  open(inspected: Electron.WebContents): boolean {
+    if (!inspected || inspected.isDestroyed()) return false;
+    if (this.view && this.inspected?.id === inspected.id) {
+      this.syncBounds();
+      return true;
+    }
+    this.close();
+    const win = this.options.getWindow();
+    if (!win || win.isDestroyed()) return false;
+    try {
+      const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+      win.contentView.addChildView(view);
+      this.view = view;
+      this.inspected = inspected;
+      this.win = win;
+      inspected.setDevToolsWebContents(view.webContents);
+      inspected.once("devtools-closed", this.onInspectedClosed);
+      win.on("resize", this.onResize);
+      inspected.openDevTools({ mode: "detach" });
+      this.syncBounds();
+      this.options.onOpenChange?.(true);
+      return true;
+    } catch (err) {
+      console.warn("[devtools] 打开底部调试面板失败", err instanceof Error ? err.message : String(err));
+      this.destroyView();
+      return false;
+    }
+  }
+
+  private onInspectedClosed = (): void => {
+    this.destroyView();
+    this.options.onOpenChange?.(false);
+  };
+
+  private destroyView(): void {
+    const view = this.view;
+    this.view = null;
+    const win = this.win;
+    this.win = null;
+    try {
+      win?.removeListener("resize", this.onResize);
+    } catch {
+      // window 已销毁
+    }
+    if (win && !win.isDestroyed() && view) {
+      try {
+        win.contentView.removeChildView(view);
+      } catch {
+        // 已移除
+      }
+    }
+    try {
+      view?.webContents.close();
+    } catch {
+      // 已销毁
+    }
+  }
+
+  close(): void {
+    const inspected = this.inspected;
+    this.inspected = null;
+    if (inspected && !inspected.isDestroyed()) {
+      try {
+        inspected.closeDevTools();
+      } catch {
+        // ignore
+      }
+    }
+    // devtools-closed 可能同步触发 destroyView；这里兜底清一次（幂等）
+    this.destroyView();
+  }
+
+  /** 面板高度（由渲染层传入，与底部终端同一坐标空间）；同步一次几何。 */
+  setPanel(height: number): void {
+    const next = Number.isFinite(height) ? Math.round(height) : this.panelHeight;
+    this.panelHeight = Math.max(120, Math.min(1200, next));
+    this.syncBounds();
+  }
+
+  /** 设置面板高度并保持打开（渲染层恢复布局时调用）。 */
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    try {
+      this.view?.setVisible(visible);
+    } catch {
+      // ignore
+    }
+  }
+
+  syncBounds(): void {
+    const view = this.view;
+    const win = this.win;
+    if (!view || !win || win.isDestroyed()) return;
+    const [width, height] = win.getContentSize();
+    // 状态栏在 DOM 里被推到面板上方（成为展开面板的顶栏），所以面板从窗口底部往上占满：
+    // y = height - panelHeight（不再让出 STATUS_BAR_HEIGHT）。
+    const panelHeight = Math.max(120, Math.min(this.panelHeight, height - 120));
+    const y = Math.max(0, height - panelHeight);
+    try {
+      view.setBounds({ x: 0, y, width, height: panelHeight });
+      if (this.visible) view.setVisible(true);
+    } catch {
+      // 视图已销毁
+    }
+  }
+
+  dispose(): void {
+    this.close();
+  }
+}
+
+/** 浏览器标签页 preload（商店安装按钮 → Loopsoar 扩展安装通道）。src 与 bundle 两种运行目录都兼容。 */
+function browserPreloadPath(): string | undefined {
+  const candidates = [path.join(__dirname, "../src/preload/browser.cjs"), path.join(__dirname, "../../src/preload/browser.cjs")];
+  return candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** 历史/快捷入口补图标：抓页面 HTML 里的 <link rel=icon>，否则退回 /favicon.ico、/favicon.png。 */
+export async function resolveFaviconForPage(pageUrl: string): Promise<string | null> {
+  let origin: string;
+  try {
+    const parsed = new URL(pageUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    origin = parsed.origin;
+  } catch {
+    return null;
+  }
+  const candidates: string[] = [];
+  try {
+    const response = await session.fromPartition(SESSION_PARTITION).fetch(pageUrl, {
+      headers: { Accept: "text/html,application/xhtml+xml" },
+    });
+    if (response.ok) {
+      const html = (await response.text()).slice(0, 256 * 1024);
+      const page = /<link[^>]+rel=["']?(?:shortcut icon|icon|apple-touch-icon)[^>]*>/i.exec(html);
+      const href = page ? /href=["']([^"']+)["']/i.exec(page[0])?.[1] : undefined;
+      if (href) candidates.push(new URL(href, pageUrl).href);
+    }
+  } catch {
+    // 页面抓不到就退回标准路径
+  }
+  candidates.push(`${origin}/favicon.ico`, `${origin}/favicon.png`);
+  for (const candidate of candidates) {
+    const dataUrl = await fetchFaviconDataUrl(candidate);
+    if (dataUrl) return dataUrl;
+  }
+  return null;
+}
+
 export function createElectronBrowserHost(
   getWindow: () => BrowserWindow | null,
   openInNewTab: (url: string) => void,
   options: ElectronBrowserHostOptions = {},
-): BrowserHost {
-  // 守卫必须在任何 WebContentsView 创建之前装好（否则首批请求会漏检）；
+): BrowserHost {  // 守卫必须在任何 WebContentsView 创建之前装好（否则首批请求会漏检）；
   // 只在浏览器分区上挂，不影响主窗口（loopsoar://）与下载。
   installBrowserRequestGuard(session.fromPartition(SESSION_PARTITION), options);
   return new BrowserHost({
@@ -136,19 +369,30 @@ export function createElectronBrowserHost(
     onSessionStateChanged: options.onSessionStateChanged,
     onVisited: options.onVisited,
     onTitleChanged: options.onTitleChanged,
+    fetchFavicon: fetchFaviconDataUrl,
+    onFaviconChanged: options.onFaviconChanged,
+    openDevToolsPanel: options.devToolsPanel ? (webContents) => options.devToolsPanel!.open(webContents as Electron.WebContents) : undefined,
+    closeDevToolsPanel: options.devToolsPanel ? () => options.devToolsPanel!.close() : undefined,
+    isDevToolsPanelOpen: options.devToolsPanel ? () => options.devToolsPanel!.isOpen() : undefined,
     createView: () => {
+      const browserPreload = browserPreloadPath();
       const view = new WebContentsView({
         webPreferences: {
           sandbox: true,
           contextIsolation: true,
           nodeIntegration: false,
           partition: SESSION_PARTITION,
+          ...(browserPreload ? { preload: browserPreload } : {}),
         },
       });
       // 网页面板圆角：与 DOM 页框（StartPage.browserPane）共用同一契约值，
       // 原生视图切掉的四角露出应用底色，不再出现「网页直角顶到边缘」的硬缝。
       view.setBorderRadius(LAYOUT.BROWSER_VIEW_RADIUS);
       view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
+      // 点网页区域 = 点到「列表外」：通知主窗口收起按钮展开的浮层（DOM 收不到原生视图的点击）
+      if (options.onViewFocused) {
+        view.webContents.on("focus", () => options.onViewFocused?.());
+      }
       return view as unknown as HostView;
     },
     attachView: (view) => {

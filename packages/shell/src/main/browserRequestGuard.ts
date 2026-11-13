@@ -126,6 +126,11 @@ export function createBrowserRequestPolicy(opts: BrowserRequestPolicyOptions = {
     } catch {
       return block("无法解析的 URL");
     }
+    // DevTools 前端/扩展内部资源：Chromium 自己的协议，网页 JS 无法伪造发起（不是 SSRF 面）；
+    // 放行它们，否则 F12 调试器会因 ERR_BLOCKED_BY_CLIENT 打不开，扩展资源也可能被误杀。
+    if (url.protocol === "devtools:" || url.protocol === "chrome-extension:" || url.protocol === "chrome:") {
+      return allow();
+    }
     if (!BROWSER_SAFE_PROTOCOLS.has(url.protocol)) {
       return block(`非浏览器安全协议（${url.protocol}）`);
     }
@@ -219,6 +224,15 @@ export function createBrowserRequestChecker(options: BrowserRequestCheckerOption
   return async (rawUrl: string): Promise<BrowserRequestDecision> => {
     const decided = policy(rawUrl);
     if (decided.action === "block") return decided;
+
+    // Chromium 内部协议（devtools:/chrome-extension:/chrome:）不参与 DNS 判定：同步策略已放行，
+    // 这里不能再拿 hostname 去解析，否则 F12/扩展资源会被「无法解析主机名」误杀。
+    try {
+      const scheme = new URL(String(rawUrl ?? "")).protocol;
+      if (!["http:", "https:", "ws:", "wss:"].includes(scheme)) return allow();
+    } catch {
+      // 交给下面统一处理
+    }
 
     let url: URL;
     try {

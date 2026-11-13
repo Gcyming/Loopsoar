@@ -92,7 +92,9 @@ describe("dismissAllPopovers（全局收起入口）", () => {
     expect((app.match(/dismissAllPopovers\(\)/g) ?? []).length).toBeGreaterThanOrEqual(6);
     expect(app).toMatch(/const openSettings[\s\S]{0,200}dismissAllPopovers\(\)/);
     expect(app).toMatch(/const selectTab[\s\S]{0,200}dismissAllPopovers\(\)/);
-    expect(app).toMatch(/const newSession[\s\S]{0,200}dismissAllPopovers\(\)/);
+    // 新建会话/新标签统一走 createFreshSessionAndTab（内部先 dismissAllPopovers）
+    expect(app).toMatch(/const createFreshSessionAndTab[\s\S]{0,400}dismissAllPopovers\(\)/);
+    expect(app).toMatch(/const newSession[\s\S]{0,200}createFreshSessionAndTab/);
     expect(app).toMatch(/const switchSession[\s\S]{0,200}dismissAllPopovers\(\)/);
   });
 });

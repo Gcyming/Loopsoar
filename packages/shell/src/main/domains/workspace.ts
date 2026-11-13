@@ -27,6 +27,8 @@ export interface WorkspaceDeps extends TrustedIpcDeps {
   worktreesRoot?: string;
   /** 弹系统文件夹选择框；返回 null=取消。 */
   pickFolder?: () => Promise<string | null>;
+  /** 用系统文件管理器打开目录（index 注入 shell.openPath，避免本文件 import electron）。 */
+  openPath?: (target: string) => Promise<string> | string;
   /**
    * 会话工作根解析（worktree > 会话工作区 > 活动工作区），由 index.ts 装配注入。
    * 为什么注入而不是在这里读 store：文件 IPC 必须和 Agent 工具用同一个根（否则两边判定不一致）；
@@ -165,6 +167,22 @@ export function registerWorkspaceDomain(deps: WorkspaceDeps): void {
     };
   });
 
+  /** 把工作区绑定到会话（工作区选择器；会话/标签页与工作区绑定）。 */
+  handleTrusted(deps, "workspace:bindSession", (payload) => {
+    const p = payload as { sessionId?: string; workspaceId: string };
+    const sessionId = p.sessionId ?? deps.sessions?.currentId() ?? null;
+    const workspace = deps.workspaces?.get(p.workspaceId) ?? null;
+    if (!sessionId || !workspace) return { ok: false, error: "会话或工作区不存在" };
+    deps.sessions?.setWorkspaceId(sessionId, workspace.id);
+    deps.workspaces?.select(workspace.id);
+    return {
+      ok: true,
+      sessions: deps.sessions?.list() ?? [],
+      workspaces: deps.workspaces?.list() ?? [],
+      activeId: deps.workspaces?.activeId() ?? null,
+    };
+  });
+
   handleTrusted(deps, "workspace:select", (payload) => {
     const p = payload as { id: string };
     const workspace = deps.workspaces?.select(p.id) ?? null;
@@ -177,6 +195,36 @@ export function registerWorkspaceDomain(deps: WorkspaceDeps): void {
     };
   });
 
+  /** 重命名工作区：只改显示名，不移动目录；名字去空白后为空则拒绝。 */
+  handleTrusted(deps, "workspace:rename", (payload) => {
+    const p = payload as { id: string; name: string };
+    const name = String(p.name ?? "").trim();
+    if (!name) {
+      return { ok: false, error: "工作区名称不能为空", workspaces: deps.workspaces?.list() ?? [], activeId: deps.workspaces?.activeId() ?? null };
+    }
+    const renamed = deps.workspaces?.rename(p.id, name.slice(0, 64)) ?? null;
+    return {
+      ok: Boolean(renamed),
+      workspace: renamed ?? undefined,
+      workspaces: deps.workspaces?.list() ?? [],
+      activeId: deps.workspaces?.activeId() ?? null,
+      ...(renamed ? {} : { error: "工作区不存在" }),
+    };
+  });
+
+  /** 在系统文件管理器中打开工作区根目录（路径不存在时返回可读错误）。 */
+  handleTrusted(deps, "workspace:openFolder", async (payload) => {
+    const p = payload as { id: string };
+    const workspace = deps.workspaces?.get(p.id) ?? null;
+    if (!workspace) return { ok: false, error: "工作区不存在" };
+    if (!deps.openPath) return { ok: false, error: "当前环境无法打开文件夹" };
+    try {
+      const result = await deps.openPath(workspace.root);
+      return result ? { ok: false, error: result } : { ok: true, root: workspace.root };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
   handleTrusted(deps, "workspace:remove", (payload) => {
     const p = payload as { id: string };
     const boundSessions = (deps.sessions?.list() ?? []).filter((item) => item.workspaceId === p.id);

@@ -12,12 +12,14 @@ export const PreferencesSchema = z.object({
   language: z.enum(["zh-CN", "en-US"]),
   animations: AnimationsSchema,
   restoreSession: z.boolean(),
-  searchEngine: z.enum(["bing", "google", "duckduckgo"]),
+  searchEngine: z.enum(["bing", "google", "baidu"]),
   downloadDir: z.string().max(1024).optional(),
   workspaceRoot: z.string().max(1024).optional(),
   memoryStorePath: z.string().max(1024).optional(),
   memoryAutoCapture: z.boolean(),
   sidebarWidth: z.number().int().min(240).max(720),
+  /** Vibecoding 模式独立侧栏宽度（空 = 未单独设置，进入时用 vibe 最小宽度）。 */
+  vibeSidebarWidth: z.number().int().min(100).max(720).optional(),
   theme: z.enum(["soft", "classic"]).optional(),
   sidebarMode: z.enum(["docked", "collapsed", "float"]).optional(),
   /** Agent 单次任务最多请求轮数（防止无限循环；默认 40）。 */
@@ -64,7 +66,13 @@ export const DEFAULT_PREFERENCES: Preferences = {
 
 /** 合并：未知字段丢弃、缺字段补默认、非法值抛可读错误。 */
 export function mergePreferences(raw: unknown): Preferences {
-  const merged = { ...DEFAULT_PREFERENCES, ...(typeof raw === "object" && raw !== null ? raw : {}) };
+  const source = typeof raw === "object" && raw !== null ? { ...(raw as Record<string, unknown>) } : {};
+  // 历史兼容：旧版本默认搜索引擎是 DuckDuckGo（已下线），读到旧配置时迁移到 Bing，
+  // 否则 schema 校验失败会把整份偏好判为非法（用户升级后设置页直接报错）。
+  if (source.searchEngine === "duckduckgo" || typeof source.searchEngine !== "string") {
+    delete source.searchEngine;
+  }
+  const merged = { ...DEFAULT_PREFERENCES, ...source };
   const parsed = PreferencesSchema.safeParse(merged);
   if (!parsed.success) {
     const detail = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("；");
@@ -94,8 +102,8 @@ export function searchUrlFor(engine: Preferences["searchEngine"], query: string)
   switch (engine) {
     case "google":
       return `https://www.google.com/search?q=${q}`;
-    case "duckduckgo":
-      return `https://duckduckgo.com/?q=${q}`;
+    case "baidu":
+      return `https://www.baidu.com/s?wd=${q}`;
     case "bing":
     default:
       return `https://www.bing.com/search?q=${q}`;

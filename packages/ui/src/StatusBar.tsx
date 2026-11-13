@@ -20,6 +20,9 @@ export interface StatusBarProps {
   mode: "build" | "plan";
   terminalOpen: boolean;
   onToggleTerminal: () => void;
+  /** 底部开发者工具面板是否打开（按钮在终端按钮左侧）。 */
+  devtoolsOpen: boolean;
+  onToggleDevtools: () => void;
 }
 
 export default function StatusBar({
@@ -30,6 +33,8 @@ export default function StatusBar({
   mode,
   terminalOpen,
   onToggleTerminal,
+  devtoolsOpen,
+  onToggleDevtools,
 }: StatusBarProps): React.JSX.Element {
   const tr = useT();
   const modeHintKey = mode === "plan" ? "composer.planFoot" : "composer.buildFoot";
@@ -46,6 +51,20 @@ export default function StatusBar({
       <span style={styles.statusItem}>agent: {agentLabel}</span>
       <span style={styles.statusItem}>{providerLabel}</span>
       <span style={{ ...styles.statusItem, ...styles.statusUrl }}>{currentUrl || "about:start"}</span>
+      <span style={styles.bottomActions}>
+      <button
+        type="button"
+        className="chip"
+        style={{ ...styles.chip, ...styles.devtoolsToggle, ...(devtoolsOpen ? styles.terminalToggleOpen : {}) }}
+        title={tr("browser.devtoolsToggle")}
+        aria-label={tr("browser.devtoolsToggle")}
+        aria-pressed={devtoolsOpen}
+        data-testid="status-devtools"
+        onClick={onToggleDevtools}
+      >
+        <Icon name="devtools" size={13} />
+        <span>{tr("browser.devtoolsLabel")}</span>
+      </button>
       <button
         type="button"
         className="chip"
@@ -58,6 +77,7 @@ export default function StatusBar({
         <Icon name="terminal" size={12} />
         {tr("browser.terminalToggleLabel")}
       </button>
+      </span>
     </footer>
   );
 }
@@ -103,6 +123,15 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
+  },
+  /** 状态栏「调试」按钮（终端左侧）：打开时同样用品牌赭石强调。 */
+  bottomActions: { display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 },
+  devtoolsToggle: {
+    height: 22,
+    gap: 4,
+    padding: "0 8px",
+    flexShrink: 0,
+    fontSize: 10.5,
   },
   /** 状态栏「终端」按钮：打开时用品牌赭石强调。 */
   terminalToggle: {

@@ -74,9 +74,9 @@ describe("全屏覆盖层从标题栏下方开始", () => {
   it("窗口关闭按钮：先 dismissAllPopovers()，再 IPC 关闭，并有 window.close() 兜底", () => {
     const text = read("packages/ui/src/TitleBar.tsx");
     expect(text).toContain("dismissAllPopovers()");
-    expect(text).toContain("api.window.close()");
+    expect(text).toMatch(/api\.window\s*\.?\s*close\(\)/);
     expect(text).toContain("window.close()");
     // 先 dismiss 再 close：断言源码顺序
-    expect(text.indexOf("dismissAllPopovers()")).toBeLessThan(text.indexOf("api.window.close()"));
+    expect(text.indexOf("dismissAllPopovers()")).toBeLessThan(text.indexOf("api.window"));
   });
 });

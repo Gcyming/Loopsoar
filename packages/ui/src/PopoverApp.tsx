@@ -22,7 +22,7 @@ import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
-import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry } from "./types.js";
+import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry, WorkspaceRecord } from "./types.js";
 
 export interface PopoverAppProps {
   kind: ChromePopoverKind;
@@ -36,8 +36,15 @@ const SEARCH_PARAMS = typeof location !== "undefined" ? new URLSearchParams(loca
 const LANG_PARAM = SEARCH_PARAMS.get("lang");
 if (LANG_PARAM === "zh-CN" || LANG_PARAM === "en-US") setLanguage(LANG_PARAM);
 
-/** 浮层窗口透明背景（CSS 里 html[data-popover] 兜底，这里同步打标避免首帧白底闪烁）。 */
-if (typeof document !== "undefined") {
+/**
+ * 浮层窗口透明背景（CSS 里 html[data-popover] 兜底，这里同步打标避免首帧白底闪烁）。
+ *
+ * 必须只在浮层窗口（?popover=）打标：主窗口也会 import 本模块（main.tsx 静态引入），
+ * 若无条件给 <html> 打上 data-popover，主窗口整页都会命中 `[data-popover]` 选择器，
+ * usePopover 的「点击列表外收起」会把**任何点击**都当成点在浮层内部 → 所有菜单都收不起来
+ * （用户 2026-11-10 报障「一个都收不起来」的根因）。
+ */
+if (typeof document !== "undefined" && SEARCH_PARAMS.has("popover")) {
   document.documentElement.dataset.popover = "1";
 }
 
@@ -46,7 +53,7 @@ const BOOKMARK_PREVIEW = 8;
 const HISTORY_PREVIEW = 8;
 const DOWNLOAD_PREVIEW = 5;
 
-const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads"];
+const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces"];
 
 function isPopoverKind(value: unknown): value is ChromePopoverKind {
   return typeof value === "string" && POPOVER_KINDS.includes(value as ChromePopoverKind);
@@ -88,6 +95,8 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   const [bookmarks, setBookmarks] = React.useState<BookmarkItem[] | null>(null);
   const [history, setHistory] = React.useState<HistoryEntry[] | null>(null);
   const [downloads, setDownloads] = React.useState<DownloadItem[] | null>(null);
+  const [workspaces, setWorkspaces] = React.useState<WorkspaceRecord[] | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
 
   /* ------------------------------ 数据拉取 ------------------------------ */
@@ -116,6 +125,12 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
         } else if (kind === "downloads") {
           const result = await api?.browser.downloads();
           if (alive) setDownloads(result?.downloads ?? []);
+        } else if (kind === "workspaces") {
+          const result = await api?.workspace.list();
+          if (alive) {
+            setWorkspaces(result?.workspaces ?? []);
+            setActiveWorkspaceId(result?.activeId ?? null);
+          }
         }
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : String(err));
@@ -208,6 +223,35 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
     <div className="chrome-pop-error">{tr("browser.popover.loadFailed", { error: message })}</div>
   );
   const emptyView = (label: string): React.ReactElement => <div className="chrome-pop-empty">{label}</div>;
+
+  const renderWorkspaces = (): React.ReactElement => {
+    if (workspaces === null) return loadingView();
+    return (
+      <div className="chrome-pop-menu" role="menu" aria-label={tr("browser.workspaceMenuTitle")} onKeyDown={onListKeyDown}>
+        <div className="chrome-pop-head">
+          <span className="chrome-pop-title">{tr("browser.workspaceMenuTitle")}</span>
+        </div>
+        {workspaces.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={item.id === activeWorkspaceId}
+            className="chrome-pop-item"
+            onClick={() => void dispatch("selectWorkspace", { id: item.id })}
+          >
+            <Icon name={item.id === activeWorkspaceId ? "check" : "folder"} size={14} className="chrome-pop-icon" />
+            <span className="chrome-pop-label">{item.name}</span>
+          </button>
+        ))}
+        <div className="chrome-pop-sep" role="separator" />
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => void dispatch("addWorkspace")}>
+          <Icon name="workspace-add" size={14} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("chat.addWorkspace")}</span>
+        </button>
+      </div>
+    );
+  };
 
   const renderMore = (): React.ReactElement => (
     <div className="chrome-pop-menu" role="menu" aria-label={tr("browser.more")} onKeyDown={onListKeyDown}>
@@ -402,11 +446,13 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
       <div className={`chrome-pop-card chrome-pop-${kind}`} role="presentation">
         {kind === "more"
           ? renderMore()
-          : kind === "bookmarks"
-            ? renderBookmarks()
-            : kind === "history"
-              ? renderHistory()
-              : renderDownloads()}
+          : kind === "workspaces"
+            ? renderWorkspaces()
+            : kind === "bookmarks"
+              ? renderBookmarks()
+              : kind === "history"
+                ? renderHistory()
+                : renderDownloads()}
       </div>
     </div>
   );

@@ -6,12 +6,19 @@ import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { BrowserHost } from "../browserHost.js";
 import type { BrowserHistoryStore } from "../browserHistoryStore.js";
 import type { DownloadsBridge } from "../electronBrowser.js";
+import type { BrowserExtensionHost } from "../browserExtensions.js";
 
 export interface BrowserDeps extends TrustedIpcDeps {
   browser?: BrowserHost;
   downloads?: DownloadsBridge;
   /** 全局历史（跨标签/跨会话共享，持久化）；未装配时 browser:history 返回空列表。 */
   history?: BrowserHistoryStore;
+  /** 浏览器扩展宿主（未装配时列表为空、安装返回错误）。 */
+  browserExtensions?: BrowserExtensionHost;
+  /** 历史/快捷入口缺图标时按页面 URL 回抓（主进程实现，含 HTML link 解析）。 */
+  resolveFavicon?: (pageUrl: string) => Promise<string | null>;
+  /** 底部开发者工具面板（开合/高度/可见性）。 */
+  devtoolsPanel?: { setPanel: (height: number) => void; close: () => void; isOpen: () => boolean; setVisible: (visible: boolean) => void };
 }
 
 export function registerBrowserDomain(deps: BrowserDeps): void {
@@ -29,6 +36,11 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:closeTab", async (payload) => {
     if (!deps.browser) return { closed: false };
     return { closed: await deps.browser.closeTab((payload as { tabId: string }).tabId) };
+  });
+
+  handleTrusted(deps, "browser:closeSessionTabs", async (payload) => {
+    if (!deps.browser) return { closed: 0 };
+    return { closed: await deps.browser.closeSessionTabs((payload as { sessionId: string }).sessionId) };
   });
 
   handleTrusted(deps, "browser:selectTab", (payload) => {
@@ -62,6 +74,7 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:setOverlay", (payload) => {
     const open = (payload as { open: boolean }).open;
     deps.browser?.setOverlayOpen(open);
+    deps.devtoolsPanel?.setVisible(!open);
     return { open };
   });
 
@@ -81,11 +94,58 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     return deps.browser.reload((payload as { tabId?: string } | null)?.tabId);
   });
 
+  // 底部开发者工具面板：渲染层在布局变化时把高度同步给主进程；open=false 表示用户收起。
+  handleTrusted(deps, "browser:setDevToolsPanel", (payload) => {
+    const p = (payload ?? {}) as { open?: boolean; height?: number };
+    if (typeof p.height === "number") deps.devtoolsPanel?.setPanel(p.height);
+    if (p.open === false) deps.devtoolsPanel?.close();
+    return { open: deps.devtoolsPanel?.isOpen() ?? false };
+  });
+
+  // 开发者工具：当前标签切换底部调试面板（F12 / 状态栏按钮）。
+  handleTrusted(deps, "browser:toggleDevTools", (payload) => {
+    if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
+    return deps.browser.toggleDevTools((payload as { tabId?: string } | null)?.tabId);
+  });
+
+  // 浏览器扩展（Chrome/Edge 系，Electron 子集）：列表 / 安装（本地目录或 Chrome 商店）/ 卸载。
+  handleTrusted(deps, "browser:listExtensions", () => ({
+    extensions: deps.browserExtensions?.list() ?? [],
+  }));
+  handleTrusted(deps, "browser:installExtension", async (payload) => {
+    if (!deps.browserExtensions) return { ok: false, error: "扩展宿主未装配" };
+    const p = (payload ?? {}) as { path?: string; url?: string };
+    try {
+      if (p.path) return { ok: true, extension: await deps.browserExtensions.installFromFolder(p.path) };
+      if (p.url) return { ok: true, extension: await deps.browserExtensions.installFromStore(p.url) };
+      return { ok: false, error: "需要 path（本地目录）或 url（Chrome 商店链接/扩展 ID）" };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+  handleTrusted(deps, "browser:removeExtension", async (payload) => {
+    if (!deps.browserExtensions) return { ok: false, error: "扩展宿主未装配" };
+    return deps.browserExtensions.remove((payload as { id: string }).id);
+  });
+
+  // 历史条目缺图标（旧数据/抓取失败）时补抓一次，并写回历史。
+  handleTrusted(deps, "browser:resolveFavicon", async (payload) => {
+    const url = (payload as { url: string }).url;
+    const favicon = (await deps.resolveFavicon?.(url)) ?? null;
+    if (favicon) deps.history?.updateFavicon(url, favicon);
+    return { favicon };
+  });
+
   // 全局历史（跨标签/跨会话共享，持久化）：历史面板的唯一数据源。
   // 兼容字段 `tab`：当前标签的内部历史栈（后退/前进语义），旧调用方/诊断仍可用，但不再作为面板数据源。
   handleTrusted(deps, "browser:history", (payload) => ({
     entries: deps.history?.list() ?? [],
     tab: deps.browser?.history((payload as { tabId?: string } | null)?.tabId) ?? [],
+  }));
+
+  /** 历史页勾选删除：按 url 批量移除（幂等；返回实际删除条数）。 */
+  handleTrusted(deps, "browser:historyRemove", (payload) => ({
+    removed: deps.history?.remove((payload as { urls: string[] }).urls) ?? 0,
   }));
 
   // 下载管理（electron 会话级 will-download → DownloadsBridge）

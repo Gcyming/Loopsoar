@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LAYOUT, computeSidebarMaxWidth, computeSidebarMinWidth } from "loopsoar-contracts/layout";
+import { LAYOUT, computeSidebarMaxWidth, computeSidebarMinWidth, computeVibeSidebarBounds } from "loopsoar-contracts/layout";
 import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
@@ -15,7 +15,7 @@ import type {
   TabState,
   WorkspaceRecord,
 } from "./types.js";
-import { BRAND, MOTION, applyTheme } from "./theme.js";
+import { BRAND, MOTION, NO_DRAG_REGION, applyTheme } from "./theme.js";
 const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
@@ -24,12 +24,13 @@ import { dismissAllPopovers } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import BrowserTabs from "./BrowserTabs.js";
 import TitleBar from "./TitleBar.js";
+import WorkspaceSwitcher from "./WorkspaceSwitcher.js";
 import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 const TerminalPanel = React.lazy(() => import("./TerminalPanel.js"));
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
-import { setLanguage } from "./i18n.js";
+import { setLanguage, getLanguage, t } from "./i18n.js";
 import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
 import AskUserDialog from "./AskUserDialog.js";
 const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
@@ -41,6 +42,7 @@ import StartPage from "./StartPage.js";
 import { useBootstrapData, useChatStreamEvents } from "./useChatStreamEvents.js";
 import {
   useE2eChatAutoSend,
+  useE2eChromePageDeepLink,
   useE2eMenuDeepLinks,
   useE2eRestoredScroll,
   useE2eSettingsDeepLink,
@@ -102,6 +104,9 @@ function readTerminalHeight(): number {
 
 /* ---------------------------------- 主界面 ---------------------------------- */
 
+/** 与 DOM 侧栏 CSS 过渡保持一致（MOTION.sidebarDuration = 320ms）。 */
+const SIDEBAR_ANIMATION_MS_UI = 320;
+
 export default function App(): React.JSX.Element {
   const api = useLoopsoarApi();
   const [boot, setBoot] = useState<BootStatus | null>(null);
@@ -113,6 +118,9 @@ export default function App(): React.JSX.Element {
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
   // 应用内终端（P0-4）：面板开合 + 高度（高度 localStorage 持久化；布局范围来自契约 LAYOUT）。
   const [terminalOpen, setTerminalOpen] = useState(false);
+  /** 底部开发者工具面板（与终端同区域；打开时终端自动收起）。 */
+  const [devtoolsOpen, setDevtoolsOpen] = useState(false);
+  const [devtoolsHeight] = useState(360);
   const [terminalHeight, setTerminalHeight] = useState<number>(() => readTerminalHeight());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -144,6 +152,128 @@ export default function App(): React.JSX.Element {
   const miniWindow =
     typeof location !== "undefined" && new URLSearchParams(location.search).get("mini") === "1";
   const [agentWindowOpen, setAgentWindowOpen] = useState(false);
+  /**
+   * Agent 小窗的「最小化（缩成图标按钮）」状态：由主进程事件 chrome:agentWindowIconMode 驱动。
+   * 图标模式只换视图，不卸载会话；点击图标 → ui:restoreAgentWindow 还原。
+   */
+  const [agentIconMode, setAgentIconMode] = useState(false);
+  React.useEffect(() => {
+    if (!miniWindow || !api) return;
+    return api.on("chrome:agentWindowIconMode", (payload) => {
+      setAgentIconMode(Boolean((payload as { icon?: boolean } | null)?.icon));
+    });
+  }, [miniWindow, api]);
+  /**
+   * 最小化/还原的「面板几何过渡」（Slime float 同款）：
+   *   · minimize：窗口尺寸不动；面板 left/top/width/height 从整窗过渡到图标矩形，
+   *     内容钉在原尺寸 + overflow:hidden 裁切（零重排），内容淡出、图标淡入；
+   *     过渡结束主进程把窗口一次性落到图标 bounds。
+   *   · restore：窗口已瞬间落到目标 bounds；面板从图标矩形展开成整窗，内容淡入、图标淡出。
+   */
+  const [agentFloat, setAgentFloat] = useState<{
+    phase: "minimize" | "restore";
+    durationMs: number;
+    from: { x: number; y: number; width: number; height: number };
+    to: { x: number; y: number; width: number; height: number };
+  } | null>(null);
+  const [agentFloatStarted, setAgentFloatStarted] = useState(false);
+  /** 图标态稳定后面板应停留的矩形（相对窗口）：窗口不再缩放，面板靠它保持 56px 图标位置。 */
+  const [agentIconRect, setAgentIconRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [agentFloatFreeze, setAgentFloatFreeze] = useState<{ width: number; height: number } | null>(null);
+  React.useEffect(() => {
+    if (!miniWindow || !api) return;
+    return api.on("chrome:agentWindowTransition", (payload) => {
+      const p = (payload ?? {}) as {
+        phase?: string;
+        durationMs?: number;
+        from?: { x?: number; y?: number; width?: number; height?: number };
+        to?: { x?: number; y?: number; width?: number; height?: number };
+      };
+      if (p.phase !== "minimize" && p.phase !== "restore") return;
+      const rect = (value?: { x?: number; y?: number; width?: number; height?: number }): { x: number; y: number; width: number; height: number } | null => {
+        if (!value) return null;
+        const { x, y, width, height } = value;
+        if (![x, y, width, height].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+        return {
+          x: x as number,
+          y: y as number,
+          width: Math.max(1, width as number),
+          height: Math.max(1, height as number),
+        };
+      };
+      const from = rect(p.from);
+      const to = rect(p.to);
+      if (!from || !to) return;
+      const full = p.phase === "minimize" ? from : to;
+      if (p.phase === "restore") setAgentIconRect(null);
+      setAgentFloat({
+        phase: p.phase,
+        durationMs: Number(p.durationMs) || 400,
+        from,
+        to,
+      });
+      setAgentFloatStarted(false);
+      setAgentFloatFreeze({ width: Math.round(full.width), height: Math.round(full.height) });
+    });
+  }, [miniWindow, api]);
+  React.useEffect(() => {
+    if (!agentFloat) return;
+    // 先以起点几何挂载一帧，再切到终点 → 触发 CSS transition（Slime 用同一手法）。
+    const raf = requestAnimationFrame(() => setAgentFloatStarted(true));
+    return () => cancelAnimationFrame(raf);
+  }, [agentFloat]);
+  React.useEffect(() => {
+    if (!agentFloat) return;
+    // 兜底清理（主进程正常会在动画结束后通知 iconMode 切换，这里防丢事件卡在过渡态）。
+    const timer = window.setTimeout(() => setAgentFloat(null), agentFloat.durationMs + 240);
+    return () => window.clearTimeout(timer);
+  }, [agentFloat]);
+  React.useEffect(() => {
+    if (!agentFloat) return;
+    if (agentFloat.phase === "minimize" && agentIconMode) {
+      // 已收成图标：窗口 bounds 不变，面板固定停在图标矩形；内容保持钉住（避免在 56px 下重排整页 UI）。
+      setAgentIconRect(agentFloat.to);
+      setAgentFloat(null);
+    } else if (agentFloat.phase === "restore" && !agentIconMode) {
+      // 已展开：弹回普通布局（内容 100% 自动布局）。
+      setAgentFloat(null);
+      setAgentFloatFreeze(null);
+      setAgentIconRect(null);
+    }
+  }, [agentFloat, agentIconMode]);
+  React.useEffect(() => {
+    if (!agentFloat) return;
+    // Slime startFloatGeometryFade 同款：按面板宽度进度驱动内容透明度（不是固定时长淡出）——
+    // 宽度 > 90% 区间全亮，在 90%→45% 区间 smoothstep 淡出/淡入，避免「窗口还很大内容就没了」。
+    const node = contentRef.current;
+    if (!node) return;
+    const fromW = agentFloat.from.width;
+    const toW = agentFloat.to.width;
+    const span = Math.max(1, Math.abs(fromW - toW));
+    const minW = Math.min(fromW, toW);
+    const lo = minW + span * 0.45;
+    const hi = minW + span * 0.9;
+    const band = Math.max(1, hi - lo);
+    const duration = Math.max(1, agentFloat.durationMs);
+    const started = performance.now();
+    let raf = 0;
+    node.style.transition = "none";
+    const step = (): void => {
+      const u = Math.min(1, (performance.now() - started) / duration);
+      const width = fromW + (toW - fromW) * u;
+      const raw = Math.max(0, Math.min(1, (width - lo) / band));
+      const opacity = raw * raw * (3 - 2 * raw);
+      node.style.opacity = String(opacity);
+      if (u < 1) raf = requestAnimationFrame(step);
+      else node.style.opacity = "";
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(raf);
+      node.style.transition = "";
+      node.style.opacity = "";
+    };
+  }, [agentFloat]);
   React.useEffect(() => {
     if (!miniWindow) return;
     document.documentElement.dataset.mini = "1";
@@ -156,6 +286,10 @@ export default function App(): React.JSX.Element {
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => !isOnboardingDone());
   const [tabs, setTabs] = useState<TabState[]>([]);
+  /** 新标签页/整页会话处于 Vibecoding 状态（侧栏会话按钮据此变成「会话列表」按钮）。 */
+  const [vibeModeActive, setVibeModeActive] = useState(false);
+  /** 用户是否刚在会话列表里主动选过会话：直接回话时才复用，否则每次直接回话都新建会话。 */
+  const pickedSessionRef = useRef(false);
   const [mode, setMode] = useState<"build" | "plan">("build");
   const [reasoningEffort, setReasoningEffort] = useState<string>("");
   const [permReq, setPermReq] = useState<{
@@ -171,11 +305,32 @@ export default function App(): React.JSX.Element {
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [sidebarWidth, setSidebarWidth] = useState<number>(360);
+  /** Vibecoding 模式独立侧栏宽度（0 = 未初始化，进入时用 vibe 最小宽度）。 */
+  const [vibeSidebarWidth, setVibeSidebarWidth] = useState<number>(0);
   /** 侧栏拖拽中：拖拽时宽度必须逐帧跟手，不能开 CSS 过渡（否则手感变「橡皮筋」）。 */
   const [sidebarDragging, setSidebarDragging] = useState(false);
   /** 供 IPC effect 同步读取（state 更新是异步的，拖拽时序里必须用 ref）。 */
   const sidebarDraggingRef = React.useRef(false);
-  /** 原生视图宽度是否已完成启动水合：首次同步必须瞬时落位（不播动画），之后才允许 320ms 过渡。 */
+  /** 最近一次逻辑对齐宽度（诊断/动画回退用）。 */
+  const nativeSidebarWidthRef = React.useRef<number | null>(null);
+  /** 渲染层 rAF 驱动的侧栏宽度动画（主进程逐帧 setBounds，渲染层 60/120Hz 调度比主进程计时器稳）。 */
+  const sidebarRafRef = React.useRef<number | null>(null);
+  /** 与侧栏 DOM 同一条 cubic-bezier(0.2,0,0.2,1) 曲线。 */
+  const easeSidebar = React.useCallback((t: number): number => {
+    // 牛顿迭代解 cubic-bezier(0.2, 0, 0.2, 1) 的 x→t，再取 y。
+    let x = t;
+    for (let i = 0; i < 6; i++) {
+      const cx = 3 * 0.2 * (1 - x) * (1 - x) * x + 3 * 0.2 * (1 - x) * x * x + x * x * x;
+      const dx = 3 * 0.2 * (1 - x) * (1 - 2 * x) + 3 * 0.2 * (2 * x - 3 * x * x) + 3 * x * x;
+      if (Math.abs(cx - t) < 1e-4 || Math.abs(dx) < 1e-6) break;
+      x -= (cx - t) / dx;
+      x = Math.max(0, Math.min(1, x));
+    }
+    return 3 * (1 - x) * (1 - x) * x * 0 + 3 * (1 - x) * x * x * 1 + x * x * x;
+  }, []);
+  /** 侧栏宽度动画进行中：AgentSidebar 内容先隐藏，避免逐帧重排文字（有网页时尤其卡）。 */
+  const [sidebarWidthAnimating, setSidebarWidthAnimating] = React.useState(false);
+    /** 原生视图宽度是否已完成启动水合：首次同步必须瞬时落位（不播动画），之后才允许 320ms 过渡。 */
   const nativeSidebarReadyRef = React.useRef(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
@@ -184,6 +339,10 @@ export default function App(): React.JSX.Element {
   // 页面快照面板：null=关闭；非空时隐藏原生浏览器视图并渲染可读浮层
   const [snapshotData, setSnapshotData] = useState<BrowserSnapshotResult | null>(null);
   const [sessionOpen, setSessionOpen] = useState(false);
+  /** 新标签页/新会话令牌：StartPage 据此重置回「搜索」初始页。 */
+  const [freshSessionToken, setFreshSessionToken] = useState(0);
+  /** 新建会话（不换页）令牌：只把主页面切回初始页，保留搜索/Vibecoding 模式。 */
+  const [sessionResetToken, setSessionResetToken] = useState(0);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
@@ -193,6 +352,8 @@ export default function App(): React.JSX.Element {
   // 启动时先为空：真实会话 ID 必须来自 shell（恢复历史或 chat:sessions 的 currentId），
   // 否则未恢复历史的冷启动会拿一个假 ID 发送，消息落到索引外的"幽灵会话"。
   const sessionIdRef = useRef<string>("");
+  /** 标签页 ↔ 会话绑定：会话只在首次对话时创建并绑定当前标签页；切回旧标签页恢复其会话。 */
+  const tabSessionRef = useRef<Map<string, string>>(new Map());
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   /** 最近一次同步到地址栏的 URL（仅活动标签 URL 变化时才覆盖，避免打断用户输入）。 */
   const lastSyncedUrlRef = useRef<string>("");
@@ -372,43 +533,58 @@ export default function App(): React.JSX.Element {
       const min = computeSidebarMinWidth(window.innerWidth);
       const max = computeSidebarMaxWidth(window.innerWidth);
       setSidebarWidth((w) => Math.min(Math.max(min, w), max));
+      const vibe = computeVibeSidebarBounds(window.innerWidth);
+      setVibeSidebarWidth((w) => (w > 0 ? Math.min(Math.max(vibe.min, w), vibe.max) : vibe.min));
     };
     clamp();
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
-  }, [preferences?.sidebarWidth]);
+  }, [preferences?.sidebarWidth, preferences?.vibeSidebarWidth]);
+
+  // 偏好水合：读取用户上次在 Vibecoding 模式拖出的宽度（无效则回到 vibe 最小宽度）。
+  useEffect(() => {
+    const vibe = computeVibeSidebarBounds(window.innerWidth);
+    const saved = preferences?.vibeSidebarWidth;
+    setVibeSidebarWidth((w) => {
+      const base = w > 0 ? w : (typeof saved === "number" ? saved : vibe.min);
+      return Math.min(Math.max(vibe.min, base), vibe.max);
+    });
+  }, [preferences?.vibeSidebarWidth]);
 
   // 侧栏拖拽：mousemove 实时改 DOM 宽度，松开时持久化 + 同步原生视图
   const startResize = useCallback(
     (event: React.MouseEvent<HTMLDivElement>): void => {
       event.preventDefault();
       const startX = event.clientX;
-      const startWidth = sidebarWidth;
-      // 可调范围（ADR-0037）：下限 = 窗口宽度 × 比例下限（契约函数，与启动/resize 夹紧同源），
-      // 上限 = min(720, 窗口宽度 - 320)，保证网页列始终留出可读宽度。
-      const minWidth = computeSidebarMinWidth(window.innerWidth);
-      const maxForWindow = (): number => computeSidebarMaxWidth(window.innerWidth);
+      // Vibecoding 模式用独立的窄区间（约为标准最小宽度的一半 ~ 3/5）；切回搜索模式后恢复标准区间。
+      const vibe = computeVibeSidebarBounds(window.innerWidth);
+      const bounds = vibeModeActive
+        ? { min: vibe.min, max: vibe.max }
+        : { min: computeSidebarMinWidth(window.innerWidth), max: computeSidebarMaxWidth(window.innerWidth) };
+      const startWidth = vibeModeActive ? Math.min(Math.max(vibe.min, vibeSidebarWidth || vibe.min), vibe.max) : sidebarWidth;
       // 拖拽期间隐藏原生 WebContentsView，否则鼠标移入浏览器区后 mousemove 会被它吞掉
       void api?.browser.setOverlay({ open: true }).catch(() => {});
       sidebarDraggingRef.current = true;
       setSidebarDragging(true);
       const onMove = (e: MouseEvent): void => {
-        const next = Math.max(minWidth, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
-        setSidebarWidth(next);
+        const next = Math.max(bounds.min, Math.min(bounds.max, startWidth - (e.clientX - startX)));
+        if (vibeModeActive) setVibeSidebarWidth(next);
+        else setSidebarWidth(next);
       };
       const onUp = (e: MouseEvent): void => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
         sidebarDraggingRef.current = false;
         setSidebarDragging(false);
-        const next = Math.max(minWidth, Math.min(maxForWindow(), startWidth - (e.clientX - startX)));
-        setSidebarWidth(next);
+        const next = Math.max(bounds.min, Math.min(bounds.max, startWidth - (e.clientX - startX)));
+        if (vibeModeActive) setVibeSidebarWidth(next);
+        else setSidebarWidth(next);
         void api?.browser.setOverlay({ open: false }).catch(() => {});
         // 松手时原生视图宽度直接落位（拖拽过程视图是隐藏的，不需要补动画）
         void api?.browser.setSidebarWidth({ width: next, animate: false }).catch(() => {});
         if (api && preferences) {
           void api.settings
-            .setPreferences({ ...preferences, sidebarWidth: next })
+            .setPreferences(vibeModeActive ? { ...preferences, vibeSidebarWidth: next } : { ...preferences, sidebarWidth: next })
             .then((r) => setPreferences(r.preferences))
             .catch(() => {});
         }
@@ -416,7 +592,7 @@ export default function App(): React.JSX.Element {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [api, preferences, sidebarWidth],
+    [api, preferences, sidebarWidth, vibeModeActive, vibeSidebarWidth],
   );
 
   /** 侧栏模式切换：收起/展开写偏好；「小窗化」改为打开独立 Agent 窗口（真窗口化）。 */
@@ -439,13 +615,22 @@ export default function App(): React.JSX.Element {
         return;
       }
       if (!preferences) return;
-      void api.settings
-        .setPreferences({ ...preferences, sidebarMode: next })
-        .then((r) => setPreferences(r.preferences))
-        .catch(() => {});
+      const persist = (): void => {
+        void api.settings
+          .setPreferences({ ...preferences, sidebarMode: next })
+          .then((r) => setPreferences(r.preferences))
+          .catch(() => {});
+      };
+      persist();
     },
     [api, preferences, agentWindowOpen, currentSession],
   );
+
+  useEffect(() => {
+    if (!vibeModeActive) return;
+    const vibe = computeVibeSidebarBounds(window.innerWidth);
+    setVibeSidebarWidth(vibe.min);
+  }, [vibeModeActive]);
 
   // 独立窗口被用户关闭（或主进程回收）→ 主窗口恢复侧栏
   React.useEffect(() => {
@@ -455,30 +640,147 @@ export default function App(): React.JSX.Element {
 
   /** 生效的侧栏宽度（收起态只用图标条宽度，让网页区自然变宽）。 */
   // 独立窗口模式下主窗口侧栏完全隐藏 → 网页区铺满（宽度 0）
+  const vibeBounds = computeVibeSidebarBounds(typeof window === "undefined" ? 1440 : window.innerWidth);
+  /** Vibecoding 生效宽度：始终夹在 [vibe.min, vibe.max]；未初始化时回落到最小宽度。 */
+  const activeVibeWidth = Math.min(
+    Math.max(vibeBounds.min, vibeSidebarWidth > 0 ? vibeSidebarWidth : vibeBounds.min),
+    vibeBounds.max,
+  );
   const effectiveSidebarWidth = agentWindowOpen
     ? 0
     : sidebarMode === "collapsed"
       ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH
-      : sidebarWidth;
+      : vibeModeActive
+        ? activeVibeWidth
+        : sidebarWidth;
   React.useEffect(() => {
     if (!api || miniWindow || !preferences) return;
-    // 收起/展开/窗口化：DOM 侧栏用 CSS 过渡 320ms，原生网页视图必须用同一曲线同步让位，
-    // 否则会出现「DOM 拉丝、网页瞬移」的不同拍。拖拽时禁用动画（逐帧跟手）。
-    // 启动水合（默认宽度 360 → 偏好里的宽度/收起态）必须瞬时落位，否则启动瞬间会误播一次收起动画。
+    const target = effectiveSidebarWidth;
+    const previous = nativeSidebarWidthRef.current;
+    // 启动水合（默认宽度→偏好宽度/收起态）必须瞬时落位；拖拽时逐帧跟手且不播动画。
     const animate = nativeSidebarReadyRef.current && !sidebarDraggingRef.current;
     nativeSidebarReadyRef.current = true;
-    void api.browser.setSidebarWidth({ width: effectiveSidebarWidth, animate }).catch(() => {});
+    // 宽度没变（只是其它偏好更新导致 effect 重跑）：不能重播动画/重抓截图，否则会留下静态快照遮住网页。
+    if (previous === target) {
+      setSidebarWidthAnimating(false);
+      return;
+    }
+    nativeSidebarWidthRef.current = target;
+    if (!animate) {
+      setSidebarWidthAnimating(false);
+      void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
+      return;
+    }
+    // 左右同拍：DOM 侧栏 CSS 过渡 320ms；原生网页视图由渲染层 rAF 逐帧驱动
+    // （主进程 setInterval 在 Windows 上实际只有 ~40fps，rAF 跟随合成器，通常 60/120Hz）。
+    setSidebarWidthAnimating(true);
+    const from = typeof previous === "number" ? previous : target;
+    const startedAt = performance.now();
+    if (sidebarRafRef.current !== null) cancelAnimationFrame(sidebarRafRef.current);
+    const step = (now: number): void => {
+      const t = Math.min(1, (now - startedAt) / SIDEBAR_ANIMATION_MS_UI);
+      const eased = easeSidebar(t);
+      const width = Math.round(from + (target - from) * eased);
+      void api.browser.setSidebarWidth({ width, animate: false }).catch(() => {});
+      if (t < 1) {
+        sidebarRafRef.current = requestAnimationFrame(step);
+      } else {
+        sidebarRafRef.current = null;
+        void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
+        setSidebarWidthAnimating(false);
+      }
+    };
+    sidebarRafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (sidebarRafRef.current !== null) {
+        cancelAnimationFrame(sidebarRafRef.current);
+        sidebarRafRef.current = null;
+      }
+    };
   }, [api, effectiveSidebarWidth, miniWindow, preferences]);
 
   // 全宽终端占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
   React.useEffect(() => {
     if (!api) return;
-    const bottom = terminalOpen ? terminalHeight : 0;
+    const bottom = terminalOpen ? terminalHeight : devtoolsOpen ? devtoolsHeight : 0;
     const timer = window.setTimeout(() => {
       void api.browser.setBottomInset({ bottom }).catch(() => {});
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [api, terminalOpen, terminalHeight]);
+  }, [api, terminalOpen, terminalHeight, devtoolsOpen, devtoolsHeight]);
+
+  // 底部开发者工具：主进程负责面板开合（含页面内 F12 / devtools 自身关闭），渲染层只同步状态。
+  React.useEffect(() => {
+    if (!api) return;
+    return api.on("chrome:devToolsPanel", (payload) => {
+      const open = Boolean((payload as { open?: boolean } | null)?.open);
+      setDevtoolsOpen(open);
+    });
+  }, [api]);
+
+  // 面板高度/开合同步给主进程（窗口 resize 由主进程自己重算）。
+  React.useEffect(() => {
+    if (!api) return;
+    const timer = window.setTimeout(() => {
+      void api.browser.setDevToolsPanel({ open: devtoolsOpen, height: devtoolsHeight }).catch(() => undefined);
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [api, devtoolsOpen, devtoolsHeight]);
+
+  const toggleDevtools = useCallback((): void => {
+    if (!api) return;
+    if (terminalOpen) setTerminalOpen(false);
+    void api.browser
+      .toggleDevTools({})
+      .then((result) => {
+        if (!result.ok) setNotice(result.error ?? "无法打开开发者工具");
+      })
+      .catch((err: unknown) => setNotice(`无法打开开发者工具：${err instanceof Error ? err.message : String(err)}`));
+  }, [api, terminalOpen]);
+
+  // F12 / Ctrl+Shift+I：DOM 焦点在主窗口时也能开关底部调试面板（网页内由浏览器 adapter 处理）。
+  React.useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      const inspect = (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "i";
+      if (event.key !== "F12" && !inspect) return;
+      event.preventDefault();
+      toggleDevtools();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleDevtools]);
+
+  const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
+  // 标签页 ↔ 会话绑定：切回有会话的页面恢复该会话；新页面（未对话）回草稿。
+  React.useEffect(() => {
+    if (!activeTabId) return;
+    const mapped = tabSessionRef.current.get(activeTabId) ?? null;
+    if (mapped === (sessionIdRef.current || null)) return;
+    if (!mapped) {
+      sessionIdRef.current = "";
+      setCurrentSession(null);
+      setMessages([]);
+      setPendingSteers([]);
+      setBusy(false);
+      setInput("");
+      return;
+    }
+    const cached = sessionCacheRef.current.get(mapped);
+    if (!cached) return; // 非本运行期创建的会话：保持现状（切换浏览器标签组由 switchSession 负责）
+    sessionIdRef.current = mapped;
+    setCurrentSession(mapped);
+    setMessages(cached);
+    setPendingSteers(readPending(mapped));
+    setBusy(metaFor(mapped).busy);
+  }, [activeTabId]);
+
+  // 切标签时收起调试面板（面板绑定的是原标签的 WebContents，避免显示错页）。
+  React.useEffect(() => {
+    if (!devtoolsOpen || !api) return;
+    void api.browser.setDevToolsPanel({ open: false }).catch(() => undefined);
+    // 只在标签切换时触发；devtoolsOpen 作为守卫读取
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId, api]);
 
   // 终端抽屉高度：夹紧到契约范围并持久化（TerminalPanel 拖拽/键盘调整后回调）
   const changeTerminalHeight = useCallback((next: number): void => {
@@ -512,6 +814,25 @@ export default function App(): React.JSX.Element {
       .catch(() => setModelGroups([]));
   }, [api, modelMenuOpen, openSettings, provider]);
 
+  // 工作区清单预载：「+ 工作区」菜单与侧栏会话树启动即可用（WorkspacePanel 之外不再等到打开面板才加载）。
+  React.useEffect(() => {
+    if (!api) return;
+    void api.workspace
+      .list()
+      .then((r) => {
+        setWorkspaces(r.workspaces);
+        setActiveWorkspaceId(r.activeId);
+      })
+      .catch(() => undefined);
+  }, [api]);
+  // 新标签页 Vibecoding 的模型胶囊要立刻能展开：启动后预载一次跨供应商模型清单（离线、只读本地）。
+  React.useEffect(() => {
+    if (!api || modelGroups !== null) return;
+    void api.settings
+      .listProviders()
+      .then((result) => setModelGroups(buildModelGroups(result.items, result.activeId)))
+      .catch(() => setModelGroups([]));
+  }, [api, modelGroups]);
   // 当前模型声明的推理等级；为空则不显示「推理」chip
   const effortOptions = useMemo(() => {
     const spec = provider?.models?.find((m) => m.id === provider.model);
@@ -544,6 +865,205 @@ export default function App(): React.JSX.Element {
     [api, modelGroups],
   );
 
+  /**
+   * 新会话 = 新标签页（用户 m07920 规则）：会话绑定标签页、标签页绑定工作区。
+   * 先切到目标工作区，再 chat.newSession（旧会话标签组由 shell 存档），最后在新会话里补一个空白标签。
+   */
+  /**
+   * 新建页/启动/显式「新建会话」只重置为**草稿**，不创建会话记录：
+   * 用户规则（m09384）：没有与 Agent 对话之前不算新会话；首次发送时才创建并绑定当前工作区。
+   */
+  const createFreshSessionAndTab = useCallback(
+    async (options?: { workspaceId?: string; notice?: string; reset?: "search" | "keep"; newBlankTab?: boolean }): Promise<void> => {
+      if (!api) return;
+      pickedSessionRef.current = false;
+      dismissAllPopovers();
+      draftRef.current.set(sessionIdRef.current, inputRef.current);
+      if (options?.workspaceId && options.workspaceId !== activeWorkspaceId) {
+        const selected = await api.workspace.select({ id: options.workspaceId });
+        if (!selected.ok) {
+          setNotice(selected.error ?? "切换工作区失败");
+          return;
+        }
+        setWorkspaces(selected.workspaces);
+        setActiveWorkspaceId(selected.activeId);
+      }
+      // 草稿态：没有会话、没有消息；右侧只是「尚未归属工作区的会话栏」。
+      sessionIdRef.current = "";
+      setCurrentSession(null);
+      setMessages([]);
+      setPendingSteers([]);
+      setBusy(false);
+      setInput("");
+      let tabs = await api.browser.listTabs();
+      if (options?.newBlankTab) {
+        await api.browser.newTab({});
+        tabs = await api.browser.listTabs();
+      } else if (tabs.tabs.length === 0) {
+        await api.browser.newTab({});
+        tabs = await api.browser.listTabs();
+      }
+      setTabs(tabs.tabs);
+      const activeTab = tabs.tabs.find((tab) => tab.active);
+      lastSyncedUrlRef.current = activeTab?.url ?? "";
+      setAddress(activeTab?.url ?? "");
+      setCurrentUrl(activeTab?.url ?? "");
+      if ((options?.reset ?? "search") === "search") setFreshSessionToken((value) => value + 1);
+      else setSessionResetToken((value) => value + 1);
+      setNotice(options?.notice ?? (options?.reset === "keep" ? "新会话草稿：发送后才会创建" : "已新建标签页"));
+    },
+    [api, activeWorkspaceId],
+  );
+
+  /** 新建标签页 = 新会话（每次都进入一个新的搜索页，不再和当前会话共用标签组）。 */
+  /** 新标签页/整页会话的「+ 工作区」：选择已有工作区（影响之后新建的会话归属）。 */
+  const selectWorkspaceForChat = useCallback(
+    (id: string): void => {
+      if (!api) return;
+      void api.workspace
+        .select({ id })
+        .then((r) => {
+          if (!r.ok) {
+            setNotice(r.error ?? "切换工作区失败");
+            return;
+          }
+          setWorkspaces(r.workspaces);
+          setActiveWorkspaceId(r.activeId);
+          setNotice(`工作区：${r.workspace?.name ?? ""}`);
+        })
+        .catch((err: unknown) => setNotice(`切换工作区失败：${err instanceof Error ? err.message : String(err)}`));
+    },
+    [api],
+  );
+
+  /** 输入框下方工作区选择器：草稿态只设后续活动工作区；已有会话才绑定。 */
+  const bindWorkspaceToCurrentSession = useCallback(
+    (workspaceId: string): void => {
+      if (!api) return;
+      if (!sessionIdRef.current) {
+        void api.workspace
+          .select({ id: workspaceId })
+          .then((r) => {
+            if (!r.ok) {
+              setNotice(r.error ?? "切换工作区失败");
+              return;
+            }
+            setWorkspaces(r.workspaces);
+            setActiveWorkspaceId(r.activeId);
+            setNotice("后续新建页/会话将在此工作区进行");
+          })
+          .catch((err: unknown) => setNotice("切换工作区失败：" + (err instanceof Error ? err.message : String(err))));
+        return;
+      }
+      void api.workspace
+        .bindSession({ workspaceId })
+        .then((r) => {
+          if (!r.ok) {
+            setNotice(r.error ?? "切换工作区失败");
+            return;
+          }
+          if (r.sessions) setSessions(r.sessions);
+          if (r.workspaces) setWorkspaces(r.workspaces);
+          if (r.activeId) setActiveWorkspaceId(r.activeId);
+          setNotice("已切换工作区");
+        })
+        .catch((err: unknown) => setNotice("切换工作区失败：" + (err instanceof Error ? err.message : String(err))));
+    },
+    [api],
+  );
+
+  /** 新标签页/整页会话的「+ 新加工作区」：原生文件夹选择器 → 挂载并设为当前工作区。 */
+  const addWorkspaceForChat = useCallback((): void => {
+    if (!api) return;
+    void api.workspace
+      .create({})
+      .then(async (r) => {
+        if (!r.ok) {
+          // 用户取消文件夹选择不算错误
+          if (r.error && !r.error.includes("取消") && !r.error.toLowerCase().includes("cancel")) setNotice(r.error);
+          return;
+        }
+        setWorkspaces(r.workspaces);
+        setActiveWorkspaceId(r.activeId);
+        // 新建工作区后直接进入该工作区的「新会话 + 新标签页」搜索页（用户 m07920）。
+        await createFreshSessionAndTab({
+          workspaceId: r.activeId ?? undefined,
+          notice: `已添加工作区：${r.workspace?.name ?? ""}`,
+        });
+      })
+      .catch((err: unknown) => setNotice(`添加工作区失败：${err instanceof Error ? err.message : String(err)}`));
+  }, [api, createFreshSessionAndTab]);
+
+  /** 通用附件选择：返回路径（用户取消返回 null），供右侧输入区与 Vibecoding 输入区共用。 */
+  const pickAttachmentPath = useCallback(async (): Promise<string | null> => {
+    try {
+      const r = await api?.dialog.pickPath({ kind: "file", title: "选择附件" });
+      return r && !r.canceled && r.path ? r.path : null;
+    } catch {
+      return null;
+    }
+  }, [api]);
+  /** 在指定工作区下新建会话：先切工作区，再新建「会话 + 空白标签页」。 */
+  const newSessionInWorkspace = useCallback(
+    (workspaceId: string): void => {
+      if (!api) return;
+      void createFreshSessionAndTab({ workspaceId, reset: "keep" }).catch((err: unknown) =>
+        setNotice("新建会话失败：" + (err instanceof Error ? err.message : String(err))),
+      );
+    },
+    [api, createFreshSessionAndTab],
+  );
+
+  /** 重命名工作区（只改显示名）。 */
+  const renameWorkspace = useCallback((workspaceId: string, name: string): void => {
+    if (!api) return;
+    void api.workspace
+      .rename({ id: workspaceId, name })
+      .then((r) => {
+        setWorkspaces(r.workspaces);
+        setActiveWorkspaceId(r.activeId);
+        setNotice(r.ok ? "工作区已重命名为「" + (r.workspace?.name ?? name) + "」" : (r.error ?? "重命名失败"));
+      })
+      .catch((err: unknown) => setNotice("重命名失败：" + (err instanceof Error ? err.message : String(err))));
+  }, [api]);
+
+  /** 删除工作区（后端会拒绝仍有会话绑定的工作区）。 */
+  const removeWorkspace = useCallback((workspaceId: string): void => {
+    if (!api) return;
+    void api.workspace
+      .remove({ id: workspaceId })
+      .then((r) => {
+        setWorkspaces(r.workspaces);
+        setActiveWorkspaceId(r.activeId);
+        setNotice(r.ok ? "工作区已删除" : (r.error ?? "删除工作区失败"));
+      })
+      .catch((err: unknown) => setNotice("删除工作区失败：" + (err instanceof Error ? err.message : String(err))));
+  }, [api]);
+
+  /** 在系统文件管理器中打开工作区根目录。 */
+  const openWorkspaceFolder = useCallback((workspaceId: string): void => {
+    if (!api) return;
+    void api.workspace
+      .openFolder({ id: workspaceId })
+      .then((r) => {
+        if (!r.ok) setNotice(r.error ?? "无法打开文件夹");
+      })
+      .catch((err: unknown) => setNotice("无法打开文件夹：" + (err instanceof Error ? err.message : String(err))));
+  }, [api]);
+  /** 推理强度：Composer 与新版会话页共用同一持久化逻辑。 */
+  const changeReasoningEffort = useCallback(
+    (value: string): void => {
+      setReasoningEffort(value);
+      if (!api || !preferences) return;
+      const next = { ...preferences, reasoningEffort: value };
+      setPreferences(next);
+      void api.settings
+        .setPreferences(next)
+        .then((r) => setPreferences(r.preferences))
+        .catch(() => undefined);
+    },
+    [api, preferences],
+  );
   const respondPermission = useCallback((choice: "allow-once" | "allow-session" | "deny"): void => {
     if (!api || !permReq) return;
     void api.perm.respond({ requestId: permReq.requestId, choice });
@@ -573,10 +1093,10 @@ export default function App(): React.JSX.Element {
 
   /** 发送一条文本：立即渲染用户消息 + 助手占位（不等首字），再发起流式请求。 */
   const sendText = useCallback(
-    (raw: string): void => {
+    (raw: string, targetSessionId?: string): void => {
       const text = raw.trim();
       if (!text || !api) return;
-      const sid = sessionIdRef.current;
+      const sid = targetSessionId ?? sessionIdRef.current;
       if (!sid) return;
       const meta = metaFor(sid);
       const assistantId = nextId("assistant");
@@ -613,6 +1133,42 @@ export default function App(): React.JSX.Element {
     [api, metaFor, mode, provider, reasoningEffort, updateSessionMessages],
   );
 
+  /** 首次发送：没有会话时创建（工作区=当前选择；没有选择则未归属），并切换到该会话。 */
+  const ensureSessionForSend = useCallback(async (): Promise<string | null> => {
+    if (!api) return null;
+    if (sessionIdRef.current) return sessionIdRef.current;
+    const created = await api.chat.newSession({ workspaceId: activeWorkspaceId ?? null });
+    const sid = created.session?.sessionId ?? created.currentId ?? null;
+    if (!sid) throw new Error("创建会话失败");
+    sessionIdRef.current = sid;
+    const boundTabId = tabs.find((tab) => tab.active)?.id;
+    if (boundTabId) tabSessionRef.current.set(boundTabId, sid);
+    writeSessionMessages(sid, []);
+    setSessions(created.sessions);
+    setCurrentSession(sid);
+    setMessages([]);
+    setPendingSteers([]);
+    setBusy(false);
+    setInput("");
+    return sid;
+  }, [activeWorkspaceId, api, tabs, writeSessionMessages]);
+
+  /** 新标签页 Vibecoding 首次发送：默认总是新建会话；只有刚在会话列表里主动选过会话才续接。 */
+  const startVibe = useCallback(
+    (raw: string): void => {
+      const text = raw.trim();
+      if (!text || !api) return;
+      const reusePicked = pickedSessionRef.current && Boolean(sessionIdRef.current);
+      pickedSessionRef.current = false;
+      const begin = async (): Promise<void> => {
+        const sid = reusePicked && sessionIdRef.current ? sessionIdRef.current : await ensureSessionForSend();
+        if (!sid) throw new Error("创建会话失败");
+        sendText(text, sid);
+      };
+      void begin().catch((err: unknown) => setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`));
+    },
+    [api, ensureSessionForSend, sendText],
+  );
   /** 投递一条待发指令：运行中不打断，主进程在轮次边界注入后回执 chat:steer:applied。 */
   const deliverSteer = useCallback(
     (sid: string, item: PendingSteer): void => {
@@ -678,8 +1234,12 @@ export default function App(): React.JSX.Element {
       queueSteer(text);
       return;
     }
-    sendText(text);
-  }, [api, busy, input, queueSteer, sendText]);
+    void ensureSessionForSend()
+      .then((sid) => {
+        if (sid) sendText(text, sid);
+      })
+      .catch((err: unknown) => setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`));
+  }, [api, busy, ensureSessionForSend, input, queueSteer, sendText]);
 
   /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
   const rollbackTo = useCallback(
@@ -833,26 +1393,38 @@ export default function App(): React.JSX.Element {
     streamSettledRef.current = handleStreamSettled;
   }, [handleStreamSettled]);
 
+  const changeSearchEngine = useCallback(
+    (engine: Preferences["searchEngine"]): void => {
+      if (!preferences) return;
+      const next = { ...preferences, searchEngine: engine };
+      setPreferences(next); // 即时生效：地址栏图标 + 下一次搜索立刻使用新引擎
+      void api?.settings
+        .setPreferences(next)
+        .then((r) => setPreferences(r.preferences))
+        .catch(() => {
+          // 落盘失败不阻塞当前会话；下次打开设置会重新读取
+        });
+    },
+    [api, preferences],
+  );
+
   const navigate = useCallback(
     (raw?: string): void => {
       if (!api) return;
       const input = raw ?? address;
-      const engine = (preferences?.searchEngine ?? "bing") as "bing" | "google" | "duckduckgo";
+      const engine = preferences?.searchEngine ?? "bing";
       const resolved = resolveOmniboxInput(input, engine);
       if (resolved.kind === "invalid") {
         setNotice(`导航被拒绝：${resolved.reason}`);
         return;
       }
-      if (resolved.kind === "search") {
-        setNotice(`搜索：${resolved.query}`);
-      } else {
-        setNotice("导航中…");
-      }
+      setNotice("");
+      // 乐观切换：地址栏/加载页立刻指向目标，加载完成后再用真实 URL 覆盖（重定向场景）。
+      setCurrentUrl(resolved.url);
       void api.browser.navigate({ url: resolved.url }).then((result) => {
         if (result.ok) {
           setCurrentUrl(result.url ?? resolved.url);
           setAddress(result.url ?? resolved.url);
-          setNotice("导航完成");
           void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         } else {
           setNotice(`导航失败：${result.error ?? "未知"}`);
@@ -864,6 +1436,23 @@ export default function App(): React.JSX.Element {
 
   // 浮层动作（独立子窗口经主进程转发）：打开整页管理 / 主窗口导航 / 保存页面
   const savePageRef = React.useRef<null | (() => void)>(null);
+  // 工具栏浮层（独立子窗口）的「点击列表外收起」：主窗口内任何非触发按钮的按下都关闭它。
+  // 触发按钮自己负责原子 toggle（ui:togglePopover），这里跳过，避免 pointerdown 先关、click 又开导致连闪。
+  React.useEffect(() => {
+    if (!api?.ui?.closePopover) return;
+    const onDown = (event: PointerEvent): void => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-chrome-popover-trigger]")) return;
+      void api.ui.closePopover().catch(() => undefined);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [api]);
+  React.useEffect(() => {
+    if (!api) return;
+    // 用户点原生网页面板（WebContentsView，DOM 收不到 pointerdown）也算「点列表外」→ 收起所有浮层。
+    return api.on("chrome:dismissPopovers", () => dismissAllPopovers());
+  }, [api]);
   React.useEffect(() => {
     if (!api) return;
     return api.on("chrome:popoverAction", (payload) => {
@@ -878,26 +1467,24 @@ export default function App(): React.JSX.Element {
         return;
       }
       if (p?.action === "savePage") savePageRef.current?.();
+      if (p?.action === "selectWorkspace") {
+        const id = (p.payload as { id?: unknown } | undefined)?.id;
+        if (typeof id === "string") bindWorkspaceToCurrentSession(id);
+        return;
+      }
+      if (p?.action === "addWorkspace") {
+        addWorkspaceForChat();
+        return;
+      }
     });
-  }, [api, navigate]);
+  }, [api, navigate, bindWorkspaceToCurrentSession, addWorkspaceForChat]);
 
   const newTab = useCallback((): void => {
     if (!api) return;
-    // 已是空白新建页：不再叠一个空标签，聚焦地址栏即可
-    const active = tabs.find((x) => x.active);
-    if (active && !active.url) {
-      setNotice("当前就是新建标签页，输入地址即可");
-      omniboxRef.current?.focus();
-      return;
-    }
-    void api.browser.newTab({}).then((r) => {
-      if (r.ok) {
-        setNotice("");
-        void api.browser.listTabs().then((t) => setTabs(t.tabs)).catch(() => {});
-        setTimeout(() => omniboxRef.current?.focus(), 50);
-      }
-    });
-  }, [api, tabs]);
+    void createFreshSessionAndTab({ newBlankTab: true }).catch((err: unknown) =>
+      setNotice("新建标签页失败：" + (err instanceof Error ? err.message : String(err))),
+    );
+  }, [api, createFreshSessionAndTab]);
 
   const selectTab = useCallback(
     (tabId: string): void => {
@@ -919,11 +1506,23 @@ export default function App(): React.JSX.Element {
   const closeTab = useCallback(
     (tabId: string): void => {
       if (!api) return;
+      // 浏览器惯例：关掉最后一个标签页 = 关闭浏览器窗口（本应用即退出主窗口）。
+      // 但必须先真正关闭标签并等持久化落盘：否则下次启动会从旧会话状态恢复出刚关掉的网页。
+      if (tabs.length <= 1) {
+        void api.browser
+          .closeTab({ tabId })
+          .catch(() => undefined)
+          // 主进程对标签状态落盘有 400ms 防抖：等它写完再退出，否则下次启动会恢复出刚关掉的网页。
+          .then(() => new Promise((resolve) => window.setTimeout(resolve, 560)))
+          .then(() => api.window.close())
+          .catch(() => undefined);
+        return;
+      }
       void api.browser.closeTab({ tabId }).then(() => {
         void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
       });
     },
-    [api],
+    [api, tabs.length],
   );
 
   const goBack = useCallback((): void => {
@@ -962,39 +1561,19 @@ export default function App(): React.JSX.Element {
     setSessionOpen((value) => !value);
   }, [refreshSessions]);
 
+  /** 收起态竖条：悬停/点条目后展开侧栏并打开会话列表（等宽度过渡结束再弹浮层，锚点才正确）。 */
+  const expandSidebarWithSessions = useCallback((): void => {
+    dismissAllPopovers();
+    // 只展开侧栏；会话/工作区列表由用户自己点开（用户 m10071：悬停自动展开时不要连带展开列表）
+    changeSidebarMode("docked");
+  }, [changeSidebarMode]);
+  /** 新建会话 = 新标签页（会话与标签页一一绑定）。 */
   const newSession = useCallback((): void => {
     if (!api) return;
-    // 新建会话属于切换界面：先收起所有展开列表/浮层（用户 m02115 全局规则）。
-    dismissAllPopovers();
-    // 会话隔离：旧会话的输入草稿先存住，回来还能接着写
-    draftRef.current.set(sessionIdRef.current, inputRef.current);
-    void api.chat.newSession().then((r) => {
-      setSessions(r.sessions);
-      setCurrentSession(r.currentId);
-      const nextIdValue = r.session?.sessionId;
-      if (nextIdValue) {
-        sessionIdRef.current = nextIdValue;
-        writeSessionMessages(nextIdValue, []);
-      } else {
-        setMessages([]);
-      }
-      setPendingSteers([]); // 新会话没有待发指令
-      setBusy(false);
-      setInput("");
-      setNotice("已新建会话");
-      void api.browser
-        .listTabs()
-        .then((r) => {
-          setTabs(r.tabs);
-          const active = r.tabs.find((tab) => tab.active);
-          const url = active?.url ?? "";
-          lastSyncedUrlRef.current = url;
-          setAddress(url);
-          setCurrentUrl(url);
-        })
-        .catch(() => undefined);
-    });
-  }, [api, writeSessionMessages]);
+    void createFreshSessionAndTab({ reset: "keep" }).catch((err: unknown) =>
+      setNotice("新建会话失败：" + (err instanceof Error ? err.message : String(err))),
+    );
+  }, [api, createFreshSessionAndTab]);
 
   /**
    * 斜杠命令执行（Composer 只负责解析/面板，动作由 App 统一接线）。
@@ -1068,7 +1647,10 @@ export default function App(): React.JSX.Element {
     const previousSessionId = sessionIdRef.current;
     void api.chat.switchSession({ sessionId }).then((r) => {
       if (!r.ok) return;
+      pickedSessionRef.current = true;
       sessionIdRef.current = sessionId;
+      const activeTabId = tabs.find((tab) => tab.active)?.id;
+      if (activeTabId) tabSessionRef.current.set(activeTabId, sessionId);
       setCurrentSession(sessionId);
       // 优先恢复该会话的实时缓存（后台可能仍在跑）；否则用持久化历史
       const cached = sessionCacheRef.current.get(sessionId);
@@ -1099,8 +1681,12 @@ export default function App(): React.JSX.Element {
   /** 删除会话：当前会话被删时连同左侧标签切到下一个会话（原内联逻辑外置）。 */
   const deleteSession = useCallback(
     (sessionId: string): void => {
-      void api?.chat
-        .deleteSession({ sessionId })
+      if (!api) return;
+      void (async () => {
+        // 工作区 > 会话 > 网页：删会话时先关掉它名下的全部网页（关网页则不会删会话）。
+        await api.browser.closeSessionTabs({ sessionId }).catch(() => undefined);
+        return api.chat.deleteSession({ sessionId });
+      })()
         .then((r) => {
           setSessions(r.sessions);
           setCurrentSession(r.currentId);
@@ -1137,6 +1723,16 @@ export default function App(): React.JSX.Element {
       })
       .catch((err: unknown) => setNotice(`刷新失败：${err instanceof Error ? err.message : String(err)}`));
   }, [api]);
+
+  /** 加载失败页的「重试」：有失败 URL 就重新导航（首次加载失败时标签 url 还是空的，reload 会 no-op）。 */
+  const retryActivePage = useCallback((): void => {
+    const active = tabs.find((tab) => tab.active);
+    if (active?.loadFailure?.url) {
+      navigate(active.loadFailure.url);
+      return;
+    }
+    reloadPage();
+  }, [navigate, reloadPage, tabs]);
 
   /** 保存当前页面 HTML 全页（主进程写到下载目录 saved-pages/），成功 toast 显示路径。 */
   const savePage = useCallback((): void => {
@@ -1188,17 +1784,37 @@ export default function App(): React.JSX.Element {
     setInput,
     setWorkspacePanelOpen,
   });
-  useE2eSettingsDeepLink(setSettingsOpen, setSettingsSection);
+  // 每次进入 Loopsoar 都是新会话（用户 m07920 规则）：shell 启动恢复完成后，
+  // 新建「会话 + 空白标签页」，旧会话仍保留在会话列表/各自标签组里。
+  const initialTabEnsuredRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!api || miniWindow || initialTabEnsuredRef.current || !boot) return;
+    initialTabEnsuredRef.current = true;
+    const timer = window.setTimeout(() => {
+      void createFreshSessionAndTab().catch((err: unknown) =>
+        setNotice("新建会话失败：" + (err instanceof Error ? err.message : String(err))),
+      );
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [api, miniWindow, boot, createFreshSessionAndTab]);
 
-  // 修复遮挡：应用内浮层（设置 / 工作区 / 快照面板 / 首次向导）打开时隐藏原生 WebContentsView
+  useE2eSettingsDeepLink(setSettingsOpen, setSettingsSection);
+  useE2eChromePageDeepLink(setChromePage);
+
+  // 修复遮挡：应用内浮层（设置 / 工作区面板 / 快照 / 向导 / 标题栏工作区菜单）
+  // 打开时隐藏原生 WebContentsView；菜单/浮层本身是主窗口 DOM，原生视图在它上面会盖住菜单。
+  // 注意不要每次依赖变化都 cleanup 成 false（会在连续切换时闪一帧页面），只在卸载时复位。
   useEffect(() => {
     if (!api) return;
-    const overlay = settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen || chromePage !== null;
+    const overlay =
+      settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen || chromePage !== null;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
-    return () => {
-      void api.browser.setOverlay({ open: false }).catch(() => {});
-    };
   }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage]);
+  useEffect(() => {
+    return () => {
+      void api?.browser.setOverlay({ open: false }).catch(() => undefined);
+    };
+  }, [api]);
 
   // 语言：偏好（启动加载 / 设置里修改）同步到 i18n store；已接入 i18n 的组件即时重渲染
   useEffect(() => {
@@ -1239,6 +1855,12 @@ export default function App(): React.JSX.Element {
     document.documentElement.dataset.animations = preferences?.animations ?? "full";
   }, [preferences]);
 
+  /** 当前会话实际绑定的工作区（未认领时为 null，选择器显示「选择工作区」）。 */
+  // 草稿态（尚未创建会话）跟随活动工作区；已有会话时显示它的真实归属（未归属为 null）。
+  const sessionWorkspaceId = currentSession
+    ? sessions.find((item) => item.id === currentSession)?.workspaceId ?? null
+    : activeWorkspaceId ?? null;
+
   const providerLabel = useMemo(() => {
     if (!provider) return "provider: 读取中…";
     if (!provider.configured) return "provider: 未配置";
@@ -1247,8 +1869,7 @@ export default function App(): React.JSX.Element {
       : `provider: ${provider.provider}（${provider.reason ?? "不可用"}）`;
   }, [provider]);
 
-  const agentLabel = agents.find((a) => a.isDefault)?.name ?? "—";
-  const permissionLabel = (state: PermissionsState): string => {
+  const agentLabel = agents.find((a) => a.isDefault)?.name ?? "—";  const permissionLabel = (state: PermissionsState): string => {
     const p = state.permissions;
     const risky = [p.write, p.terminal, p.network];
     if (risky.every((x) => x === "deny")) return "只读会话";
@@ -1258,8 +1879,77 @@ export default function App(): React.JSX.Element {
   // 运行中输入非空时仍可发送：此时作为「转向提示」注入（steer）
   const canSend = Boolean(api) && input.trim() !== "";
 
-  return (
-    <div style={styles.app}>
+  // 图标态：整窗透明 + 单层圆角图标（无窗框）。按下拖动=移动窗口，
+  // 单击（位移 < 4px）=还原会话视图——与 Slime「图标浮窗可拖、点一下回来」一致。
+  const iconDragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  const beginIconDrag = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    iconDragRef.current = { x: event.screenX, y: event.screenY, moved: false };
+    const move = (ev: PointerEvent): void => {
+      const state = iconDragRef.current;
+      if (!state) return;
+      const dx = ev.screenX - state.x;
+      const dy = ev.screenY - state.y;
+      if (!state.moved && Math.abs(dx) + Math.abs(dy) > 4) state.moved = true;
+      if (!state.moved || (dx === 0 && dy === 0)) return;
+      state.x = ev.screenX;
+      state.y = ev.screenY;
+      void api?.ui.moveAgentWindow({ dx, dy }).catch(() => undefined);
+    };
+    const finish = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      iconDragRef.current = null;
+    };
+    const up = (): void => {
+      const state = iconDragRef.current;
+      finish();
+      if (!state?.moved) void api?.ui.restoreAgentWindow().catch(() => undefined);
+    };
+    const cancel = (): void => {
+      finish();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+  };
+
+  // Slime float 同款：minimize 时窗口不动、面板从整窗收到图标矩形；restore 反向展开。
+  // 面板尺寸过渡期间，内容被钉在原窗口像素尺寸 + overflow:hidden 裁切 → 零重排。
+  const floatRect = agentFloat ? (agentFloatStarted ? agentFloat.to : agentFloat.from) : null;
+  /** 稳定图标态：面板停留在图标矩形（该大窗口在图标态被主进程隐藏，由独立 56px 图标窗口顶替）。 */
+  const stableIconRect = !agentFloat && agentIconMode ? agentIconRect : null;
+  const floatMs = agentFloat?.durationMs ?? 400;
+  const floatEase = "cubic-bezier(0,0,0.2,1)";
+  // 图标态 / 过渡相位决定内容与图标层的显隐：
+  //   minimize：内容淡出、图标淡入（Slime 的 180ms ease + 120ms delay）；
+  //   restore ：内容淡入、图标立即淡出（不再被 agentIconMode 的旧值挡住）；
+  //   静止图标态：只显示图标。
+  const contentHidden =
+    agentFloat?.phase === "minimize" ? true : agentFloat?.phase === "restore" ? false : agentIconMode;
+  const iconShown =
+    agentFloat?.phase === "minimize" ? true : agentFloat?.phase === "restore" ? false : agentIconMode;
+  // 内容透明度：过渡期间由 rAF 按宽度进度直接写 style（Slime 同款）；静止态用这个基准值。
+  const contentBaseOpacity = contentHidden || agentFloat?.phase === "restore" ? 0 : 1;
+  const iconTransition =
+    agentFloat?.phase === "minimize"
+      ? "opacity 180ms ease 120ms"
+      : agentFloat?.phase === "restore"
+        ? "opacity 160ms ease"
+        : "none";
+  // 起点几何挂载的那一帧必须关掉 transition（否则浏览器会从上一状态插值，出现「先摊满再缩」的假动画）。
+  const panelTransition =
+    agentFloat && agentFloatStarted
+      ? `left ${floatMs}ms ${floatEase}, top ${floatMs}ms ${floatEase}, width ${floatMs}ms ${floatEase}, height ${floatMs}ms ${floatEase}`
+      : "none";
+  const freezeW = agentFloatFreeze?.width;
+  const freezeH = agentFloatFreeze?.height;
+
+  const body = (
+    <>
       {/* Agent 独立窗口（?mini=1）也走自绘标题栏：无系统边框，只有最小化/关闭；
           主窗口标题栏同时承载标签页（与窗口按钮同一行，Chrome 式）。 */}
       <TitleBar
@@ -1268,6 +1958,12 @@ export default function App(): React.JSX.Element {
         {...(miniWindow
           ? {}
           : {
+              tabsLeading: (
+                <WorkspaceSwitcher
+                  workspaces={workspaces}
+                  activeWorkspaceId={activeWorkspaceId}
+                />
+              ),
               tabs: (
                 <BrowserTabs
                   tabs={tabs}
@@ -1285,12 +1981,14 @@ export default function App(): React.JSX.Element {
           （x=inset、y=titlebar+topbar+inset、宽度让出侧栏与 splitter）。 */}
       <div style={styles.workRow}>
         {miniWindow ? null : (
-          <div style={styles.pageColumn}>
+          <div style={{ ...styles.pageColumn, position: "relative" }}>
             <BrowserChrome
               tabs={tabs}
               address={address}
               currentUrl={currentUrl}
               omniboxRef={omniboxRef}
+              searchEngine={preferences?.searchEngine ?? "bing"}
+              onSearchEngineChange={changeSearchEngine}
               onAddressChange={setAddress}
               onNavigate={() => navigate()}
               onBack={goBack}
@@ -1299,7 +1997,56 @@ export default function App(): React.JSX.Element {
               onSnapshot={() => void snapshot()}
               onNotice={setNotice}
             />
-            <StartPage currentUrl={currentUrl} />
+            <StartPage
+              currentUrl={currentUrl}
+              loading={Boolean(tabs.find((tab) => tab.active)?.loading)}
+              failure={tabs.find((tab) => tab.active)?.loadFailure ?? null}
+              onRetry={retryActivePage}
+              onBack={tabs.find((tab) => tab.active)?.canBack ? goBack : undefined}
+              searchEngine={preferences?.searchEngine ?? "bing"}
+              onSubmitSearch={(text) => navigate(text)}
+              onOpenUrl={(url) => navigate(url)}
+              modelLabel={provider?.model ?? "未配置模型"}
+              modelGroups={modelGroups}
+              onChooseModel={chooseModel}
+              messages={messages}
+              chatMode={mode}
+              busy={busy}
+              contextUsed={contextUsage.used}
+              contextCap={contextUsage.cap}
+              contextPct={contextPct}
+              hidden={
+                Boolean(currentUrl) &&
+                !tabs.find((tab) => tab.active)?.loading &&
+                !tabs.find((tab) => tab.active)?.loadFailure &&
+                !vibeModeActive
+              }
+              thinkingOpen={thinkingOpen}
+              onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
+              onRollback={rollbackTo}
+              onRegenerate={regenerate}
+              onStartVibe={startVibe}
+              onSendMessage={(text) => sendText(text)}
+              onStop={stop}
+              onVibeModeChange={setVibeModeActive}
+              resetToken={freshSessionToken}
+              sessionResetToken={sessionResetToken}
+              effortOptions={effortOptions}
+              reasoningEffort={reasoningEffort}
+              onReasoningEffortChange={changeReasoningEffort}
+              effortLabel={effortLabel}
+              chatBuildMode={mode}
+              onToggleBuildMode={() => setMode(mode === "build" ? "plan" : "build")}
+              workspaces={workspaces}
+              activeWorkspaceId={sessionWorkspaceId}
+              onSelectWorkspace={bindWorkspaceToCurrentSession}
+              onAddWorkspace={addWorkspaceForChat}
+              onPickAttachment={pickAttachmentPath}
+              onOpenWorkspacePanel={() => {
+                dismissAllPopovers();
+                setWorkspacePanelOpen(true);
+              }}
+            />
           </div>
         )}
 
@@ -1331,7 +2078,9 @@ export default function App(): React.JSX.Element {
         <AgentSidebar
           // 侧栏列宽就是内容宽：之前传 sidebarWidth-16（为左右各 8px 的旧 padding 预留）叠加
           // wrapper 左 padding，实际把内容压窄 16–24px；现在 padding 归零，内容铺满整列。
-          width={miniWindow ? 0 : Math.max(240, sidebarWidth)}
+          width={miniWindow ? 0 : vibeModeActive ? activeVibeWidth : sidebarWidth}
+          liveWidth={sidebarDragging || miniWindow}
+          embeddedInAgentWindow={miniWindow}
           mode={miniWindow ? "docked" : sidebarMode}
           onModeChange={
             miniWindow
@@ -1352,13 +2101,20 @@ export default function App(): React.JSX.Element {
           onToggleSession={toggleSessionMenu}
           onCloseSession={() => setSessionOpen(false)}
           onNewSession={newSession}
+          onNewSessionInWorkspace={newSessionInWorkspace}
+          onRenameWorkspace={renameWorkspace}
+          onRemoveWorkspace={removeWorkspace}
+          onOpenWorkspaceFolder={openWorkspaceFolder}
           onSwitchSession={switchSession}
           onDeleteSession={deleteSession}
           onOpenWorkspacePanel={() => {
             dismissAllPopovers();
             setWorkspacePanelOpen(true);
           }}
+          onAddWorkspace={addWorkspaceForChat}
           onNotice={setNotice}
+          vibeMode={vibeModeActive}
+          onExpandFromRail={expandSidebarWithSessions}
         >
           <MessageList
             messages={messages}
@@ -1412,28 +2168,20 @@ export default function App(): React.JSX.Element {
             onChooseModel={chooseModel}
             effortOptions={effortOptions}
             reasoningEffort={reasoningEffort}
-            onReasoningEffortChange={(value) => {
-              setReasoningEffort(value);
-              if (!api || !preferences) return;
-              const next = { ...preferences, reasoningEffort: value };
-              setPreferences(next);
-              void api.settings
-                .setPreferences(next)
-                .then((r) => setPreferences(r.preferences))
-                .catch(() => {});
-            }}
+            onReasoningEffortChange={changeReasoningEffort}
             effortLabel={effortLabel}
             permissionLabel={permissionLabel}
+            workspaces={workspaces}
+            activeWorkspaceId={sessionWorkspaceId}
+            onSelectWorkspace={bindWorkspaceToCurrentSession}
+            onAddWorkspace={addWorkspaceForChat}
             onPickAttachment={() => {
-              void api?.dialog
-                .pickPath({ kind: "file", title: "选择附件" })
-                .then((r) => {
-                  if (r.canceled || !r.path) return;
-                  setInput((prev) => (prev ? `${prev}
-【附件】${r.path}` : `【附件】${r.path}`));
-                  setNotice("已添加附件（路径已放入消息）");
-                })
-                .catch(() => {});
+              void pickAttachmentPath().then((path) => {
+                if (!path) return;
+                setInput((prev) => (prev ? `${prev}
+【附件】${path}` : `【附件】${path}`));
+                setNotice("已添加附件（路径已放入消息）");
+              });
             }}
           />
         </AgentSidebar>
@@ -1475,9 +2223,29 @@ export default function App(): React.JSX.Element {
         currentUrl={currentUrl}
         mode={mode}
         terminalOpen={terminalOpen}
-        onToggleTerminal={() => setTerminalOpen((value) => !value)}
+        onToggleTerminal={() => {
+          if (!terminalOpen && devtoolsOpen) {
+            void api?.browser.setDevToolsPanel({ open: false }).catch(() => undefined);
+          }
+          setTerminalOpen((value) => !value);
+        }}
+        devtoolsOpen={devtoolsOpen}
+        onToggleDevtools={toggleDevtools}
       />
       )}
+
+      {/* 底部开发者工具面板：占位放在状态栏之后 → 面板增高时状态栏被平滑推上去，
+          成为展开面板的顶栏；真实 DevTools WebContentsView 由主进程覆盖在该区域上。 */}
+      <div
+        data-testid="devtools-panel-slot"
+        aria-hidden={!devtoolsOpen}
+        style={{
+          height: devtoolsOpen ? devtoolsHeight : 0,
+          flexShrink: 0,
+          overflow: "hidden",
+          transition: "height 240ms cubic-bezier(0.2, 0, 0.2, 1)",
+        }}
+      />
 
       <WorkspacePanel
         open={workspacePanelOpen}
@@ -1515,6 +2283,16 @@ export default function App(): React.JSX.Element {
             void api?.settings.getProvider().then(setProvider).catch(() => {});
           }}
           onPreferencesSaved={(next) => setPreferences(next)}
+          onOpenUrl={(url) => {
+            // 设置内点商店/外链：直接离开设置并打开该页（用户 m09567：不想退出设置才能看到跳转结果）
+            dismissAllPopovers();
+            setSettingsOpen(false);
+            setChromePage(null);
+            // 等浮层关闭、原生视图重新显示后再开新标签：同一 tick 内开标签会被还在遮罩状态的主进程布局隐藏
+            window.setTimeout(() => {
+              void api?.browser.newTab({ url }).catch(() => undefined);
+            }, 90);
+          }}
           onOpenOnboarding={() => {
             dismissAllPopovers();
             setOnboardingOpen(true);
@@ -1534,8 +2312,15 @@ export default function App(): React.JSX.Element {
             setChromePage(null);
             navigate(url);
           }}
-          onSavePage={savePage}
+          onOpenPage={(kind) => setChromePage(kind)}
           onOpenSettings={() => setChromePage("settings")}
+          onOpenUrl={(url) => {
+            // 整页设置内打开商店等外链：直接离开整页并打开目标页（等遮罩关闭再建标签）
+            setChromePage(null);
+            window.setTimeout(() => {
+              void api?.browser.newTab({ url }).catch(() => undefined);
+            }, 90);
+          }}
           onNotice={setNotice}
         />
         </React.Suspense>
@@ -1561,6 +2346,79 @@ export default function App(): React.JSX.Element {
       ) : null}
 
       {notice ? <Toast text={notice} onDismiss={() => setNotice("")} /> : null}
+    </>
+  );
+
+  if (!miniWindow) {
+    return <div style={styles.app}>{body}</div>;
+  }
+
+  // 独立小窗：透明窗口 + 一块可几何过渡的面板（Slime float 同款）。
+  // 面板内是真实 UI（尺寸钉住不重排）；最小化/还原时面板做 left/top/width/height 过渡，
+  // 图标层叠在面板上淡入淡出。
+  return (
+    <div style={styles.agentShellMini}>
+      <div
+        data-agent-panel
+        // 图标态把点击/拖动挂在面板层：连面板圆角裁切掉的四角也能接收事件（图标层在圆角外会被 clip 命中失败）。
+        onPointerDown={agentIconMode && !agentFloat ? beginIconDrag : undefined}
+        style={{
+          ...styles.agentPanel,
+          left: floatRect ? floatRect.x : stableIconRect ? stableIconRect.x : 0,
+          top: floatRect ? floatRect.y : stableIconRect ? stableIconRect.y : 0,
+          width: floatRect ? floatRect.width : stableIconRect ? stableIconRect.width : "100%",
+          height: floatRect ? floatRect.height : stableIconRect ? stableIconRect.height : "100%",
+          ...(agentFloat
+            ? {
+                transition: panelTransition,
+              }
+            : null),
+        }}
+      >
+        <div
+          ref={contentRef}
+          style={{
+            // 图标态稳定后直接不渲染会话内容：既避免 420×720 的隐形容器在 56px 窗口里继续布局/绘制，
+            // 也移除它内部的窗口拖拽区（-webkit-app-region: drag 会抢走图标上的点击 → 只有局部能点）。
+            display: agentIconMode && !agentFloat ? "none" : "flex",
+            flexDirection: "column",
+            width: freezeW ?? "100%",
+            height: freezeH ?? "100%",
+            flex: "0 0 auto",
+            minWidth: 0,
+            opacity: contentBaseOpacity,
+            transition: "none",
+            pointerEvents: contentHidden ? "none" : "auto",
+          }}
+        >
+          {body}
+        </div>
+        <div
+          className="agent-float-icon"
+          data-agent-icon
+          role="button"
+          aria-label={t(getLanguage(), "chat.agentIconRestore")}
+          title={t(getLanguage(), "chat.agentIconRestore")}
+          style={{
+            ...styles.agentFloatIcon,
+            // 全窗 no-drag：盖住隐藏内容可能残留的拖拽区，保证图标任意位置都能点击/拖动。
+            ...NO_DRAG_REGION,
+            opacity: iconShown ? 1 : 0,
+            pointerEvents: agentIconMode && !agentFloat ? "auto" : "none",
+            cursor: agentIconMode && !agentFloat ? "grab" : "default",
+            transition: iconTransition,
+          }}
+        >
+          <img
+            src="./logo.png"
+            alt="Loopsoar"
+            width={56}
+            height={56}
+            draggable={false}
+            style={{ display: "block" }}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1580,6 +2438,35 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif",
     boxSizing: "border-box",
     overflow: "hidden",
+  },
+  // 独立小窗：透明窗口只负责「桌面留白」，可见面全部由面板裁切（圆角/悬浮都由面板决定）。
+  agentShellMini: {
+    position: "relative",
+    width: "100%",
+    height: "100vh",
+    margin: 0,
+    background: "transparent",
+    overflow: "hidden",
+  },
+  // 小窗面板：Slime float 的盒模型（圆角 + overflow:hidden），左侧/顶部/宽高由过渡状态驱动。
+  agentPanel: {
+    position: "absolute",
+    boxSizing: "border-box",
+    overflow: "hidden",
+    background: BRAND.ink,
+    color: BRAND.linen,
+    borderRadius: 14,
+  },
+  // 面板上的图标层：固定 56px logo（不随面板缩放），淡入淡出，图标态可拖动/点击还原。
+  agentFloatIcon: {
+    position: "absolute",
+    inset: 0,
+    zIndex: 2,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    userSelect: "none",
+    touchAction: "none",
   },
   // chrome 外壳：工具条、splitter、会话栏共用同一块抬高的面（BRAND.inkRaised），
   // 页框四边内缩成「深色门户」；中间那一点缝（splitter + 会话栏左侧留白）因此被填满，

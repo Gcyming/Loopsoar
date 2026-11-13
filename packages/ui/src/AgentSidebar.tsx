@@ -31,6 +31,7 @@ import { Icon } from "./Icon.js";
 import { menuStyles } from "./BrowserMenus.js";
 import Popover from "./AnchoredPopover.js";
 import { usePopover } from "./popover.js";
+import SessionListPanel from "./SessionListPanel.js";
 import { getLanguage, useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import type { SessionMeta, SidebarMode, WorkspaceRecord } from "./types.js";
@@ -50,6 +51,11 @@ export interface AgentSidebarProps {
   agentLabel: string;
   /** 当前会话消息：仅用于「复制整段会话为 Markdown」。 */
   messages: ChatMessage[];
+  /** 会话列表工作区/会话操作（Vibe 内嵌列表与普通下拉共用）。 */
+  onNewSessionInWorkspace?: (workspaceId: string) => void;
+  onRenameWorkspace?: (workspaceId: string, name: string) => void;
+  onRemoveWorkspace?: (workspaceId: string) => void;
+  onOpenWorkspaceFolder?: (workspaceId: string) => void;
   sessions: SessionMeta[];
   currentSession: string | null;
   workspaces: WorkspaceRecord[];
@@ -64,7 +70,20 @@ export interface AgentSidebarProps {
   onSwitchSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onOpenWorkspacePanel: () => void;
+  /** 会话列表底部「添加工作区」（原生文件夹选择器 → 新工作区 + 新会话）。 */
+  onAddWorkspace?: () => void;
   onNotice: (text: string) => void;
+  /** 新标签页/整页会话处于 Vibecoding：会话按钮平滑变成「会话列表」按钮。 */
+  vibeMode?: boolean;
+  /** 收起态竖条：悬停足够久或点条目后，展开侧栏并打开会话列表。 */
+  onExpandFromRail?: () => void;
+  /**
+   * 宽度是否处于「拖拽/铺满」等实时跟随状态（true 时内容宽度立即跟手）。
+   * false（模式/模式切换的 320ms 过渡）时内容宽度冻结到过渡结束，避免文字在过渡中被挤到换行。
+   */
+  liveWidth?: boolean;
+  /** Agent 独立小窗口内嵌：隐藏「小窗化」这类只属于主窗口的入口。 */
+  embeddedInAgentWindow?: boolean;
   /** 消息列表 / 终端抽屉 / 输入区（保留在 App 装配）。 */
   children: React.ReactNode;
 }
@@ -104,10 +123,18 @@ export default function AgentSidebar({
   onToggleSession,
   onCloseSession,
   onNewSession,
+  onNewSessionInWorkspace,
+  onRenameWorkspace,
+  onRemoveWorkspace,
+  onOpenWorkspaceFolder,
   onSwitchSession,
   onDeleteSession,
-  onOpenWorkspacePanel,
+  onAddWorkspace,
   onNotice,
+  vibeMode = false,
+  onExpandFromRail,
+  liveWidth = false,
+  embeddedInAgentWindow = false,
   children,
 }: AgentSidebarProps): React.JSX.Element {
   const tr = useT();
@@ -116,6 +143,22 @@ export default function AgentSidebar({
   usePopover("app-session", sessionOpen, (next) => {
     if (!next) onCloseSession();
   });
+  /** 收起态竖条悬停展开：判定时间刻意放长（1000ms），避免鼠标路过就弹开。 */
+  const railTimerRef = React.useRef<number | null>(null);
+  const cancelRailExpand = React.useCallback((): void => {
+    if (railTimerRef.current !== null) {
+      window.clearTimeout(railTimerRef.current);
+      railTimerRef.current = null;
+    }
+  }, []);
+  const scheduleRailExpand = React.useCallback((): void => {
+    if (railTimerRef.current !== null) return;
+    railTimerRef.current = window.setTimeout(() => {
+      railTimerRef.current = null;
+      onExpandFromRail?.();
+    }, 1000);
+  }, [onExpandFromRail]);
+  React.useEffect(() => cancelRailExpand, [cancelRailExpand]);
   const isFloat = mode === "float";
 
   /**
@@ -162,7 +205,33 @@ export default function AgentSidebar({
     : localized("chat.sidebarFloat", "小窗化", "Float sidebar");
 
   const fill = width <= 0;
+  /**
+   * 内容宽度：与外层 wrapper 用同一条 320ms 过渡同步变化。
+   * 之前「冻结内容宽度」会让变宽的那几帧出现「宽栏里窄内容贴右」的挤压感（用户 m06058）；
+   * 现在 inner 与 wrapper 同曲线同帧收缩/展开，任何时候内容宽度都等于可见栏宽；拖拽/铺满时不过渡。
+   */
   const contentWidth = fill ? "100%" : width;
+  /**
+   * 模式（搜索 ↔ Vibecoding）切换时：内容先隐藏，外层宽度过渡完成后再淡入。
+   * 为什么需要它：即使 inner 与 wrapper 同曲线变宽，中途宽度仍会让标题/正文在「半宽」下重排一帧；
+   * 用户 m06108 仍能截到挤压换行。隐藏内容（而非冻结宽度）既不会出现宽栏窄内容，也不会出现换行帧。
+   */
+  const [modeSwitching, setModeSwitching] = React.useState(false);
+  /** 搜索↔Vibecoding 切换时先藏内容，动画结束再淡入（侧栏宽度动画恢复内容可见）。 */
+  const contentMasked = modeSwitching;
+  const prevVibeRef = React.useRef(vibeMode);
+  // useLayoutEffect：必须在浏览器绘制前把内容藏起来。若用 useEffect，effect 在首帧 paint 之后才执行，
+  // 某些调度时机下第一帧会带着「旧宽度内容 + 新宽度布局」被画出来（用户视频里概率出现的一帧挤压）。
+  React.useLayoutEffect(() => {
+    if (prevVibeRef.current === vibeMode) return;
+    prevVibeRef.current = vibeMode;
+    setModeSwitching(true);
+    const timer = window.setTimeout(
+      () => setModeSwitching(false),
+      Number.parseInt(MOTION.sidebarDuration, 10) + 20,
+    );
+    return () => window.clearTimeout(timer);
+  }, [vibeMode]);
   const rootClassName = `agent-sidebar${isFloat ? " is-float" : ""}${isCollapsed ? " is-collapsed" : ""}`;
   const innerClassName = isFloat ? "floatCard agent-sidebar-inner" : "agent-sidebar-inner";
 
@@ -186,7 +255,19 @@ export default function AgentSidebar({
           onClick={() => onModeChange(isCollapsed ? lastExpandedModeRef.current : "collapsed")}
         >
           <span style={styles.toggleStar} aria-hidden="true">
-            <Icon name="agent" size={16} />
+            <span style={{ ...styles.toggleIconLayer, opacity: vibeMode ? 0 : 1, transform: vibeMode ? "scale(0.78)" : "scale(1)" }}>
+              <Icon name="agent" size={16} />
+            </span>
+            <span
+              style={{
+                ...styles.toggleIconLayer,
+                ...styles.toggleIconLayerOverlay,
+                opacity: vibeMode ? 1 : 0,
+                transform: vibeMode ? "scale(1)" : "scale(0.78)",
+              }}
+            >
+              <Icon name="list-details" size={16} />
+            </span>
           </span>
           <span
             style={{
@@ -201,6 +282,48 @@ export default function AgentSidebar({
         </button>
       )}
 
+      {/* 收起态简易会话列表：占住原先右侧那条空白竖列；悬停 1s 自动展开侧栏并打开会话列表 */}
+      {isCollapsed && !fill ? (
+        <div
+          className="sidebar-collapsed-rail"
+          style={styles.collapsedRail}
+          onMouseEnter={scheduleRailExpand}
+          onMouseLeave={cancelRailExpand}
+          data-testid="sidebar-collapsed-rail"
+        >
+          <div style={styles.railSessions}>
+            {sessions.slice(0, 9).map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                style={{ ...styles.railItem, ...(session.id === currentSession ? styles.railItemActive : {}) }}
+                title={`${session.title}${session.preview ? ` · ${session.preview.slice(0, 32)}` : ""}`}
+                aria-label={session.title}
+                onClick={() => {
+                  onSwitchSession(session.id);
+                  onExpandFromRail?.();
+                }}
+                data-testid="rail-session"
+              >
+                <span style={styles.railAvatar}>{(session.title.trim().charAt(0) || "·").toUpperCase()}</span>
+              </button>
+            ))}
+          </div>
+          <div style={styles.railSpacer} />
+          <button
+            type="button"
+            className="icon-btn"
+            style={styles.railAdd}
+            title={tr("chat.newSession")}
+            aria-label={tr("chat.newSession")}
+            onClick={onNewSession}
+            data-testid="rail-new"
+          >
+            <Icon name="plus" size={13} />
+          </button>
+        </div>
+      ) : null}
+
       {/* float 态外包 floatCard；collapsed 态整体 opacity:0 + pointer-events:none（常驻 DOM 不卸载） */}
       <div
         className={innerClassName}
@@ -208,96 +331,205 @@ export default function AgentSidebar({
           ...styles.inner,
           ...(isFloat ? styles.floatCard : {}),
           width: contentWidth,
-          opacity: isCollapsed ? 0 : 1,
-          pointerEvents: isCollapsed ? "none" : "auto",
+          transition: contentMasked
+            ? `width ${MOTION.sidebarDuration} ${MOTION.ease}, opacity 0ms`
+            : `width ${MOTION.sidebarDuration} ${MOTION.ease}, opacity 160ms ease`,
+          opacity: isCollapsed || contentMasked ? 0 : 1,
+          pointerEvents: isCollapsed || contentMasked ? "none" : "auto",
         }}
       >
         <div className="agent-sidebar-content" style={styles.content} aria-hidden={isCollapsed || undefined}>
           <div className="agent-sidebar-header" style={styles.sidebarHeader}>
-            <span style={styles.sidebarTitle}>
-              <Icon name="agent" size={14} style={{ marginRight: 6 }} />
-              {tr("chat.sidebarTitle")}
-            </span>
-            <span style={styles.sidebarActions}>
-              <button type="button" className="icon-btn" title={tr("chat.copyConversationTitle")} onClick={copyConversation}>
-                <Icon name="copy" size={13} />
-              </button>
-              <span style={styles.sidebarAgent}>{agentLabel}</span>
-              <button
-                type="button"
-                className="icon-btn sidebar-mode-btn"
-                title={floatLabel}
-                aria-label={floatLabel}
-                aria-pressed={isFloat}
-                onClick={() => onModeChange(isFloat ? "docked" : "float")}
-              >
-                <Icon name={isFloat ? "maximize" : "restore"} size={13} />
-              </button>
-            </span>
-          </div>
-          <div className="agent-sidebar-workspace" style={styles.workspaceBar}>
-            <button
-              type="button"
-              className="chip"
-              style={{ ...styles.chip, ...styles.workspaceChip }}
-              title={tr("chat.workspaceTitle")}
-              onClick={onOpenWorkspacePanel}
-            >
-              <Icon name="folder" size={12} style={{ marginRight: 5 }} />
-              <span style={styles.workspaceChipName}>{workspaceName}</span>
-            </button>
-            <button type="button" className="icon-btn" title={tr("chat.manageWorkspace")} onClick={onOpenWorkspacePanel}>
-              <Icon name="plus" size={12} />
-            </button>
-          </div>
-          <div className="agent-sidebar-sessionbar" style={styles.sessionBar}>
-            <span ref={sessionAnchorRef} style={styles.anchor} data-popover-trigger>
-              <button
-                type="button"
-                className="chip"
-                style={{ ...styles.chip, maxWidth: 220, ...(compactUi ? styles.chipCompact : {}) }}
-                onClick={onToggleSession}
-                title={tr("chat.switchSessionTitle", {
-                  title: `${activeSession?.title ?? tr("chat.newSessionLabel")}${compactUi ? tr("chat.compactHint") : ""}`,
-                })}
-                aria-label={tr("chat.switchSessionAria")}
-              >
-                <Icon name="notes" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
-                {compactUi ? null : activeSession?.title ?? tr("chat.newSessionLabel")}
-              </button>
-            </span>
-            <button type="button" className="icon-btn" title={tr("chat.newSession")} onClick={onNewSession}>
-              <Icon name="plus" size={13} />
-            </button>
-            {/* 会话历史下拉：Portal + placePopover 定位（原 absolute 在窗口边缘会被裁切） */}
-            <Popover
-              anchorRef={sessionAnchorRef}
-              open={sessionOpen}
-              onClose={() => undefined}
-              width={300}
-            >
-              <div style={menuStyles.dropTitle}>{tr("chat.sessionHistory")}</div>
-              {sessions.length === 0 ? <div style={menuStyles.dropEmpty}>{tr("chat.noSessions")}</div> : null}
-              {sessions.map((x) => (
-                <div key={x.id} style={styles.sessionRow}>
-                  <button
-                    type="button"
-                    className="model-item"
-                    style={{ ...styles.sessionItem, ...(x.id === currentSession ? menuStyles.dropItemActive : {}) }}
-                    onClick={() => onSwitchSession(x.id)}
-                    title={x.preview}
+            {embeddedInAgentWindow ? (
+              <span data-popover-trigger style={{ display: "inline-flex" }}>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  style={styles.miniSessionToggle}
+                  title={tr("chat.sessionListTitle")}
+                  aria-label={tr("chat.sessionListTitle")}
+                  aria-pressed={sessionOpen}
+                  data-testid="agent-mini-session-toggle"
+                  onClick={onToggleSession}
+                >
+                  <Icon name="list-details" size={15} />
+                </button>
+              </span>
+            ) : (
+              <>
+                <span style={styles.headerLeft}>
+                  {vibeMode ? null : (
+                    <span data-popover-trigger style={{ display: "inline-flex" }}>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        style={styles.miniSessionToggle}
+                        title={tr("chat.sessionListTitle")}
+                        aria-label={tr("chat.sessionListTitle")}
+                        aria-pressed={sessionOpen}
+                        data-testid="agent-sidebar-session-toggle"
+                        onClick={onToggleSession}
+                      >
+                        <Icon name="list-details" size={15} />
+                      </button>
+                    </span>
+                  )}
+                <span style={styles.sidebarTitle}>
+                  <Icon name={vibeMode ? "list-details" : "agent"} size={14} style={{ marginRight: 6 }} />
+                  {vibeMode ? tr("chat.sessionListTitle") : tr("chat.sidebarTitle")}
+                </span>
+                </span>
+                <span style={styles.sidebarActions}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: vibeMode ? 0 : 24,
+                      opacity: vibeMode ? 0 : 1,
+                      overflow: "hidden",
+                      transition: "width 240ms ease, opacity 220ms ease",
+                      pointerEvents: vibeMode ? "none" : "auto",
+                    }}
+                    aria-hidden={vibeMode || undefined}
+                    data-testid="sidebar-copy-slot"
                   >
-                    <span style={styles.sessionTitle}>{x.title}</span>
-                    <span style={styles.sessionMeta}>{new Date(x.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                  </button>
-                  <button type="button" className="icon-btn" title={tr("chat.deleteSession")} onClick={() => onDeleteSession(x.id)}>
-                    <Icon name="close" size={11} />
-                  </button>
-                </div>
-              ))}
-            </Popover>
+                    <button type="button" className="icon-btn" title={tr("chat.copyConversationTitle")} onClick={copyConversation}>
+                      <Icon name="copy" size={13} />
+                    </button>
+                  </span>
+                  <span style={styles.sidebarAgent}>{agentLabel}</span>
+                  <span
+                    style={{
+                      display: embeddedInAgentWindow ? "none" : "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: vibeMode ? 0 : 26,
+                      opacity: vibeMode ? 0 : 1,
+                      overflow: "hidden",
+                      transition: "width 240ms ease, opacity 220ms ease",
+                      pointerEvents: vibeMode ? "none" : "auto",
+                    }}
+                    aria-hidden={vibeMode || embeddedInAgentWindow || undefined}
+                    data-testid="sidebar-float-slot"
+                  >
+                    <button
+                      type="button"
+                      className="icon-btn sidebar-mode-btn"
+                      title={floatLabel}
+                      aria-label={floatLabel}
+                      aria-pressed={isFloat}
+                      onClick={() => onModeChange(isFloat ? "docked" : "float")}
+                    >
+                      <Icon name={isFloat ? "float-exit" : "float"} size={13} />
+                    </button>
+                  </span>
+                </span>
+              </>
+            )}
           </div>
-          {children}
+          {embeddedInAgentWindow ? (
+            <div style={styles.miniBody}>
+              {children}
+              {sessionOpen ? (
+                <div
+                  className="agent-mini-session-overlay"
+                  style={styles.miniSessionOverlay}
+                  data-popover
+                  data-testid="agent-mini-session-list"
+                >
+                  <SessionListPanel
+                    sessions={sessions}
+                    workspaces={workspaces}
+                    currentSession={currentSession}
+                    onSwitchSession={(sessionId) => {
+                      onSwitchSession(sessionId);
+                      onCloseSession();
+                    }}
+                    onDeleteSession={onDeleteSession}
+                    onNewSession={() => {
+                      onNewSession();
+                      onCloseSession();
+                    }}
+                    onNewSessionInWorkspace={
+                      onNewSessionInWorkspace
+                        ? (workspaceId) => {
+                            onNewSessionInWorkspace(workspaceId);
+                            onCloseSession();
+                          }
+                        : undefined
+                    }
+                    onRenameWorkspace={onRenameWorkspace}
+                    onRemoveWorkspace={onRemoveWorkspace}
+                    onOpenWorkspaceFolder={onOpenWorkspaceFolder}
+                    onAddWorkspace={onAddWorkspace}
+                    onNotice={onNotice}
+                    inline
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : vibeMode ? (
+            /* 会话已移到左侧主页；Vibecoding 下右侧栏就是「会话列表」本身（不再重复显示对话） */
+            <div style={styles.vibeListWrap}>
+              <SessionListPanel
+                sessions={sessions}
+                workspaces={workspaces}
+                currentSession={currentSession}
+                onSwitchSession={onSwitchSession}
+                onDeleteSession={onDeleteSession}
+                onNewSession={onNewSession}
+                onNewSessionInWorkspace={onNewSessionInWorkspace}
+                onRenameWorkspace={onRenameWorkspace}
+                onRemoveWorkspace={onRemoveWorkspace}
+                onOpenWorkspaceFolder={onOpenWorkspaceFolder}
+                onAddWorkspace={onAddWorkspace}
+                onNotice={onNotice}
+                inline
+              />
+            </div>
+          ) : (
+            <>
+              {children}
+              {sessionOpen ? (
+                <div
+                  className="agent-mini-session-overlay"
+                  style={styles.sidebarSessionOverlay}
+                  data-popover
+                  data-testid="agent-sidebar-session-list"
+                >
+                  <SessionListPanel
+                    sessions={sessions}
+                    workspaces={workspaces}
+                    currentSession={currentSession}
+                    onSwitchSession={(sessionId) => {
+                      onSwitchSession(sessionId);
+                      onCloseSession();
+                    }}
+                    onDeleteSession={onDeleteSession}
+                    onNewSession={() => {
+                      onNewSession();
+                      onCloseSession();
+                    }}
+                    onNewSessionInWorkspace={
+                      onNewSessionInWorkspace
+                        ? (workspaceId) => {
+                            onNewSessionInWorkspace(workspaceId);
+                            onCloseSession();
+                          }
+                        : undefined
+                    }
+                    onRenameWorkspace={onRenameWorkspace}
+                    onRemoveWorkspace={onRemoveWorkspace}
+                    onOpenWorkspaceFolder={onOpenWorkspaceFolder}
+                    onAddWorkspace={onAddWorkspace}
+                    onNotice={onNotice}
+                    inline
+                  />
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     </aside>
@@ -353,6 +585,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     flex: 1,
     minHeight: 0,
+    position: "relative",
   },
   /**
    * 收起/展开开关：两态共用的绝对定位元素。右缘固定（right:8），宽度 32↔62 变化时
@@ -384,6 +617,25 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
   },
+  /** 星标/列表图标双层：同尺寸、同位置交叉淡入 + 轻微缩放（平滑衔接，不跳变）。 */
+  toggleIconLayer: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 16,
+    height: 32,
+    transition: "opacity 200ms ease, transform 200ms ease",
+  },
+  toggleIconLayerOverlay: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 16,
+    height: 32,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   toggleChevron: {
     position: "absolute",
     right: 8,
@@ -392,6 +644,63 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     transition: "opacity 160ms ease",
+  },
+  vibeListWrap: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: "2px 12px 12px" },
+  /** 小窗头部：只留一个会话列表图标（点击展开/收起浮层列表）。 */
+  miniSessionToggle: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 26,
+    height: 26,
+    borderRadius: RADIUS.sm,
+  },
+  /** 小窗内容区：对话常驻，会话列表以浮层覆盖（不转换界面）。 */
+  miniBody: {
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+    flex: 1,
+    minHeight: 0,
+  },
+  /** 小窗会话列表浮层：从头部下方展开，覆盖在对话之上；点外部/Esc/再点图标收起。 */
+  miniSessionOverlay: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    top: 0,
+    // 高度固定为小窗内容区（实时）的约 1/4；窄窗再压一个 120px 下限，避免搜索框都放不下。
+    height: "max(25%, 120px)",
+    zIndex: 40,
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0,
+    padding: 8,
+    background: BRAND.inkPanel,
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: RADIUS.lg,
+    boxShadow: SHADOW.float,
+    overflow: "hidden",
+  },
+  /** 头部左侧：会话列表图标 + 标题。 */
+  headerLeft: { display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 },
+  /** 搜索页侧栏的会话列表浮层：从头部下方展开，覆盖部分对话（与悬浮窗同一套列表）。 */
+  sidebarSessionOverlay: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    top: 0,
+    height: "min(420px, 55%)",
+    zIndex: 40,
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0,
+    padding: 8,
+    background: BRAND.inkPanel,
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: RADIUS.lg,
+    boxShadow: SHADOW.float,
+    overflow: "hidden",
   },
   sidebarHeader: {
     display: "flex",
@@ -442,6 +751,49 @@ const styles: Record<string, React.CSSProperties> = {
     // 减噪：会话条不再用边框分隔，靠留白区分
   },
   anchor: { position: "relative", display: "inline-flex" },
+
+  chipDual: { position: "relative", display: "inline-flex", alignItems: "center", minWidth: 90, minHeight: 16 },
+  chipLayer: { display: "inline-flex", alignItems: "center", transition: "opacity 180ms ease", pointerEvents: "none" },
+  chipLayerOverlay: { position: "absolute", left: 0, top: 0, bottom: 0, right: 0, justifyContent: "flex-start" },
+  collapsedRail: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: LAYOUT.SIDEBAR_COLLAPSED_WIDTH,
+    zIndex: 2,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    padding: "44px 0 8px",
+    boxSizing: "border-box",
+    gap: 4,
+  },
+  railSpacer: { flex: 1 },
+  railSessions: { display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minHeight: 0, overflow: "hidden" },
+  railItem: {
+    width: 30,
+    height: 30,
+    flex: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 9,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.inkRaised,
+    color: BRAND.linenMuted,
+    cursor: "pointer",
+    padding: 0,
+  },
+  railItemActive: { borderColor: "rgba(200,118,60,0.6)", background: "rgba(200,118,60,0.16)", color: BRAND.ochreHover },
+  railAvatar: { fontSize: 11.5, fontWeight: 700, lineHeight: 1 },
+  railAdd: {
+    width: 30,
+    height: 30,
+    flex: "none",
+    marginTop: 4,
+  },
+
   sessionRow: { display: "flex", alignItems: "center", gap: 2 },
   sessionItem: {
     flex: 1,

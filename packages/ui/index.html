@@ -81,8 +81,10 @@
          原则：不画线；用明度分层 + 圆角 + 柔和阴影 + 极轻的品牌光晕建立层次。
          classic 下全部不生效（html:not([data-theme="classic"]) 前缀）。
          ──────────────────────────────────────────────────────────────── */
-      /* 应用底：极轻的品牌色光晕，避免大面积纯黑发闷 */
-      html:not([data-theme="classic"]) #root > div {
+      /* 应用底：极轻的品牌色光晕，避免大面积纯黑发闷。
+         注意：排除独立浮层窗口（html[data-popover]）——它整页必须透明，否则光晕会从
+         卡片四周透出来，看起来像一圈「阴影/发光」（用户 m01845 截图）。 */
+      html:not([data-theme="classic"]):not([data-popover]) #root > div {
         background-image:
           radial-gradient(1100px 520px at 16% -14%, rgba(var(--ls-accent-rgb), 0.07), transparent 62%),
           radial-gradient(900px 520px at 100% -6%, rgba(var(--ls-teal-rgb), 0.045), transparent 58%);
@@ -152,11 +154,12 @@
         box-shadow: 0 0 8px rgba(var(--ls-teal-rgb), 0.55);
       }
       /* ── 真·小窗化：独立 Agent 窗口（?mini=1）──
-         该窗口只渲染会话栏，无浏览器工具条/状态栏；会话栏铺满整窗并保留主题。 */
+         该窗口只渲染会话栏，无浏览器工具条/状态栏；面板由 App 的 agentPanel 绘制，
+         窗口本身保持透明（Slime float 同款：圆角/阴影/裁切都交给面板）。 */
       html[data-mini],
       html[data-mini] body,
       html[data-mini] #root {
-        background: var(--ls-bg);
+        background: transparent;
       }
       html[data-mini] .agent-sidebar,
       html[data-mini] .agent-sidebar[data-mode="docked"] {
@@ -164,7 +167,7 @@
         height: 100%;
         margin: 0 !important;
         border: none !important;
-        border-radius: var(--ls-radius-md, 12px) !important;
+        border-radius: 14px !important;
         box-shadow: none !important;
         background: var(--ls-surface) !important;
       }
@@ -254,6 +257,8 @@
       .icon-btn {
         display: grid;
         place-items: center;
+        padding: 0;
+        line-height: 0;
         width: 28px;
         height: 28px;
         border: none;
@@ -349,6 +354,27 @@
         outline-offset: 2px;
       }
       /* chip 的内联 background:transparent 会压过普通 :hover 规则，这里用 !important 拿回反馈 */
+      /* 会话/工作区列表：右侧操作按钮默认隐藏，行 hover 时淡入（用户 m05281 要求） */
+      .session-item-row .session-row-actions,
+      .session-workspace-row .session-row-actions {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease;
+      }
+      /* 同一位置互斥：平时显示时间/数量，悬停时换成操作按钮 */
+      .session-item-row:hover .session-item-time,
+      .session-workspace-row:hover .session-group-count {
+        opacity: 0;
+      }
+      .session-item-row:hover {
+        background: rgba(255, 255, 255, 0.045);
+      }
+      .session-item-row:hover .session-row-actions,
+      .session-workspace-row:hover .session-row-actions {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
       .agent-sidebar .chip:hover {
         background: var(--ls-surface-hover) !important;
         color: var(--ls-text);
@@ -369,6 +395,62 @@
       }
       .spinner {
         animation: spin 1s linear infinite;
+      }
+
+      /* 浏览器加载页：logo 呼吸 + 不确定进度条（不用真实百分比：Chromium 不暴露可靠进度） */
+      @keyframes loopsBreathe {
+        0%,
+        100% {
+          opacity: 0.55;
+          transform: scale(0.96);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      @keyframes loopsIndeterminate {
+        0% {
+          transform: translateX(-120%);
+        }
+        100% {
+          transform: translateX(420%);
+        }
+      }
+      .browser-loading-logo {
+        animation: loopsBreathe 2.2s ease-in-out infinite;
+      }
+      .browser-loading-bar > span {
+        animation: loopsIndeterminate 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+
+      /* 新标签页 ↔ Vibecoding：模式内容淡入；发送后输入区从中间平滑下移到会话页底部 */
+      @keyframes vibePageIn {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      @keyframes vibeComposerDrop {
+        from {
+          opacity: 0;
+          transform: translateY(-38vh);
+        }
+        60% {
+          opacity: 1;
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .vibe-page-in {
+        animation: vibePageIn 240ms ease both;
+      }
+      .vibe-composer-drop {
+        animation: vibeComposerDrop 380ms cubic-bezier(0.2, 0, 0.2, 1) both;
       }
 
       /* 流式光标：闪烁块（blink 借鉴 slime 的思考/吐字光标） */
@@ -2514,6 +2596,14 @@
     html[data-popover] #root {
       height: auto;
       min-height: 100vh;
+    }
+    /* 浮层窗口整页透明：任何「应用底光晕/卡片投影」都不允许出现在浮层窗口内
+       （用户 m01845：菜单四周仍有阴影/发光）。只保留 .chrome-pop-card 自己的圆角卡片。 */
+    html[data-popover] #root,
+    html[data-popover] .chrome-pop-shell {
+      background: transparent !important;
+      background-image: none !important;
+      box-shadow: none !important;
     }
     .chrome-pop-shell {
       padding: 8px;

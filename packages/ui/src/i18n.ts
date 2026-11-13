@@ -35,6 +35,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     // 标题栏
     "titlebar.minimize": "最小化",
+    "titlebar.minimizeAgent": "最小化（收起为图标）",
     "titlebar.maximize": "最大化",
     "titlebar.restore": "还原",
     "titlebar.close": "关闭",
@@ -50,6 +51,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.stop": "停止生成",
     "composer.attach": "添加附件（把文件路径放进消息，Agent 可用工具读取）",
     "composer.attachLabel": "附件",
+    "composer.moreActions": "更多操作",
     "composer.modeTip": "模式：{detail}",
     "composer.modeBuildDetail": "Build 可执行工具",
     "composer.modePlanDetail": "Plan 只读规划",
@@ -72,6 +74,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.modelMenuEmpty": "还没有供应商，请先添加",
     "composer.modelMenuManage": "管理供应商 / 添加模型…",
     "composer.modelCurrent": "当前",
+    "composer.modelPlanGo": "Go 订阅",
+    "composer.modelPlanPayg": "按量付费",
     "composer.modelBadge.thinking": "推理",
     "composer.modelBadge.vision": "视觉",
     /** 输入模态含 image 时在模型菜单里的紧凑徽标（用户：图片输入能力要可见）。 */
@@ -232,6 +236,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     // Title bar
     "titlebar.minimize": "Minimize",
+    "titlebar.minimizeAgent": "Minimize (collapse to icon)",
     "titlebar.maximize": "Maximize",
     "titlebar.restore": "Restore",
     "titlebar.close": "Close",
@@ -247,6 +252,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.stop": "Stop generating",
     "composer.attach": "Add attachment (puts the file path into the message so the agent can read it)",
     "composer.attachLabel": "Attach",
+    "composer.moreActions": "More actions",
     "composer.modeTip": "Mode: {detail}",
     "composer.modeBuildDetail": "Build — tools enabled",
     "composer.modePlanDetail": "Plan — read-only planning",
@@ -269,6 +275,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.modelMenuEmpty": "No provider yet — add one first",
     "composer.modelMenuManage": "Manage providers / add models…",
     "composer.modelCurrent": "current",
+    "composer.modelPlanGo": "Go plan",
+    "composer.modelPlanPayg": "Pay-as-you-go",
     "composer.modelBadge.thinking": "reasoning",
     "composer.modelBadge.vision": "vision",
     "composer.modelBadge.image": "IMG",

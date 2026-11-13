@@ -33,7 +33,9 @@ describe("通用偏好", () => {
   it("searchUrlFor：三种引擎生成正确模板", () => {
     expect(searchUrlFor("bing", "loop soare")).toContain("bing.com/search?q=loop%20soare");
     expect(searchUrlFor("google", "x")).toContain("google.com/search?q=x");
-    expect(searchUrlFor("duckduckgo", "x")).toContain("duckduckgo.com/?q=x");
+    expect(searchUrlFor("baidu", "x")).toContain("baidu.com/s?wd=x");
+    // 旧版本 DuckDuckGo 配置在合并时迁移为 Bing，不应把整份偏好判非法
+    expect(mergePreferences({ searchEngine: "duckduckgo" }).searchEngine).toBe("bing");
   });
 });
 

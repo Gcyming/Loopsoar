@@ -21,12 +21,37 @@ export interface TitleBarProps {
   variant?: "main" | "agent";
   /** main 形态的标签页插槽（与窗口按钮同一行）；agent 形态忽略。 */
   tabs?: React.ReactNode;
+  /** 标签页最左侧的窗口级入口（工作区下拉）；位于 Loopsoar 左上角、标签条之前。 */
+  tabsLeading?: React.ReactNode;
 }
 
-export default function TitleBar({ maximized, variant = "main", tabs }: TitleBarProps): React.ReactElement {
+export default function TitleBar({ maximized, variant = "main", tabs, tabsLeading }: TitleBarProps): React.ReactElement {
   const api = useLoopsoarApi();
   const tr = useT();
   const isAgent = variant === "agent";
+  /** 普通态 Agent 窗口：自绘标题栏拖拽（显式 pointer 事件，不依赖 -webkit-app-region；固定起点尺寸避免 DPI 漂移）。 */
+  const beginAgentWindowDrag = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (!isAgent || event.button !== 0) return;
+    event.preventDefault();
+    void api?.ui.dragAgentWindow({ dx: 0, dy: 0, phase: "start" }).catch(() => undefined);
+    let last = { x: event.screenX, y: event.screenY };
+    const move = (ev: PointerEvent): void => {
+      const dx = ev.screenX - last.x;
+      const dy = ev.screenY - last.y;
+      if (dx === 0 && dy === 0) return;
+      last = { x: ev.screenX, y: ev.screenY };
+      void api?.ui.dragAgentWindow({ dx, dy, phase: "move" }).catch(() => undefined);
+    };
+    const finish = (): void => {
+      void api?.ui.dragAgentWindow({ dx: 0, dy: 0, phase: "end" }).catch(() => undefined);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  };
   // i18n key 由 Lead 统一补齐；暂缺时回退中文，避免把 key 直接显示给用户。
   const rawAgentTitle = tr("agentWindow.title");
   const agentTitle = rawAgentTitle === "agentWindow.title" ? "Agent 对话" : rawAgentTitle;
@@ -35,7 +60,9 @@ export default function TitleBar({ maximized, variant = "main", tabs }: TitleBar
     <div style={{ ...styles.titleBar, ...(isAgent ? styles.titleBarAgent : styles.titleBarMain) }}>
       {isAgent ? (
         <div
-          style={{ ...styles.titleDrag, ...DRAG_REGION }}
+          style={styles.titleDrag}
+          data-agent-title-drag="1"
+          onPointerDown={beginAgentWindowDrag}
           onDoubleClick={undefined}
         >
           <img src="./logo.png" alt="" width={18} height={18} style={styles.titleLogo} />
@@ -43,8 +70,12 @@ export default function TitleBar({ maximized, variant = "main", tabs }: TitleBar
         </div>
       ) : (
         <>
-          {/* 标签页与窗口按钮同列：整条标签区 no-drag，空白区才是拖动区 */}
-          <div style={styles.tabsSlot}>{tabs}</div>
+          {/* 标签页与窗口按钮同列：整条标签区 no-drag，空白区才是拖动区；
+              最左侧先放工作区入口（Loopsoar 左上角），之后才是标签页。 */}
+          <div style={styles.tabsSlot}>
+            {tabsLeading ? <div style={styles.tabsLeading}>{tabsLeading}</div> : null}
+            {tabs}
+          </div>
           <div
             style={{ ...styles.dragFiller, ...DRAG_REGION }}
             onDoubleClick={() => void api?.window.maximize()}
@@ -55,13 +86,13 @@ export default function TitleBar({ maximized, variant = "main", tabs }: TitleBar
       <div style={{ ...styles.windowControls, ...NO_DRAG_REGION }}>
         <button
           type="button"
-          aria-label={tr("titlebar.minimize")}
-          title={tr("titlebar.minimize")}
+          aria-label={isAgent ? tr("titlebar.minimizeAgent") : tr("titlebar.minimize")}
+          title={isAgent ? tr("titlebar.minimizeAgent") : tr("titlebar.minimize")}
           className="win-btn"
           style={styles.windowButton}
           onClick={() => void (isAgent ? api?.ui.minimizeAgentWindow() : api?.window.minimize())}
         >
-          <Icon name="minimize" size={12} />
+          <Icon name="minimize" size={isAgent ? 14 : 12} />
         </button>
         {isAgent ? null : (
           <button
@@ -82,20 +113,39 @@ export default function TitleBar({ maximized, variant = "main", tabs }: TitleBar
           className="win-btn win-close"
           style={styles.windowButton}
           onClick={() => {
-            // 关窗前先收起所有展开列表/浮层：避免关闭流程里残留浮层窗口/监听；
-            // 也保证「点多次关闭没反应」时每次都先把 UI 状态清干净（用户 m02115）。
-            dismissAllPopovers();
+            // 关窗前先收起所有展开列表/浮层：避免关闭流程里残留浮层窗口/监听。
+            // 浮层协调器是同步状态机，任何监听异常都不能阻断关窗（用户 m05586：退出键偶发失效）。
+            try {
+              dismissAllPopovers();
+            } catch {
+              // 忽略：继续保持关窗主流程
+            }
+            const fallbackClose = (): void => {
+              try {
+                window.close();
+              } catch {
+                // 渲染层无法关闭时放弃（主进程侧还有强制销毁兜底）
+              }
+            };
             if (isAgent) {
-              void api?.ui.closeAgentWindow();
-            } else if (api) {
-              void api.window.close();
+              void api?.ui.closeAgentWindow()?.catch?.(fallbackClose);
+              return;
+            }
+            if (api) {
+              void api.window
+                .close()
+                .then((result) => {
+                  // ok=false 说明主进程没有执行关闭（例如 IPC 被拒）：退回标准关闭兜底
+                  if (!result?.ok) fallbackClose();
+                })
+                .catch(fallbackClose);
             } else {
               // preload 未注入（极端降级环境）时退回浏览器标准关闭，避免按钮完全失效。
-              window.close();
+              fallbackClose();
             }
           }}
         >
-          <Icon name="close" size={12} />
+          <Icon name={isAgent ? "sidebar-collapse" : "close"} size={isAgent ? 14 : 12} />
         </button>
       </div>
     </div>
@@ -115,7 +165,8 @@ const styles: Record<string, React.CSSProperties> = {
   titleBarMain: { borderBottom: "none" },
   /** Agent 小窗：标题栏与下方会话区需要一层极轻分隔（软主题下 border 已透明）。 */
   titleBarAgent: { borderBottom: `1px solid ${BRAND.border}` },
-  tabsSlot: { display: "flex", alignItems: "stretch", minWidth: 0, maxWidth: "72%", overflow: "hidden" },
+  tabsSlot: { display: "flex", alignItems: "stretch", minWidth: 0, maxWidth: "76%", overflow: "hidden" },
+  tabsLeading: { display: "flex", alignItems: "stretch", flexShrink: 0, ...NO_DRAG_REGION },
   titleDrag: {
     display: "flex",
     alignItems: "center",

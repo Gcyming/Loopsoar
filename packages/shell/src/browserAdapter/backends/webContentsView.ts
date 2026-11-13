@@ -6,10 +6,12 @@
  * 选择器约定：click/type 的 target 支持「元素编号」（数字）或标准 CSS 选择器。
  * 元素编号由 markInteractive() 在每次导航后注入（可交互元素序号化，元素优先于坐标）。
  */
-import type { BrowserAdapter, BrowserSnapshot } from "../types.js";
+import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../types.js";
 
 /** WebContentsView 的最小形状（真实 Electron 对象结构兼容）。 */
 export interface WebContentsLike {
+  /** WebContents id（真实 Electron 必有；测试假实现可缺省）。 */
+  id?: number;
   loadURL(url: string): Promise<void>;
   getURL(): string;
   capturePage(): Promise<{ toPNG(): Buffer }>;
@@ -22,6 +24,10 @@ export interface WebContentsLike {
   setAudioMuted?(muted: boolean): void;
   /** 关闭并销毁 WebContents（Electron 30+ 支持；不实现时退回仅 detach）。 */
   close?(): void;
+  /** 开发者工具（WebContentsView 支持 detach 模式；测试假实现可不提供）。 */
+  openDevTools?(options?: { mode?: "detach" | "bottom" | "right" | "undocked" }): void;
+  closeDevTools?(): void;
+  isDevToolsOpened?(): boolean;
 }
 
 export interface WebContentsViewLike {
@@ -36,6 +42,18 @@ export interface WebContentsAdapterOptions {
   onNavigate?: (url: string) => void;
   /** 页面标题变化 → 标签标题同步。 */
   onTitle?: (title: string) => void;
+  /** 页面图标更新（已转成 data: URL：渲染层 CSP 只允许 self/data:）。 */
+  onFavicon?: (dataUrl: string) => void;
+  /** 把 page-favicon-updated 给出的 URL 抓成 data URL；缺省不抓取（测试不联网）。 */
+  fetchFavicon?: (url: string) => Promise<string | null>;
+  /** 页面内按 F12 / Ctrl+Shift+I：外壳切开发者工具（网页有独立焦点，主窗口收不到）。 */
+  onDevToolsRequest?: () => void;
+  /** 页面开始加载（主框架/子资源都会触发；外壳用 loading 状态显示加载页）。 */
+  onLoadStart?: () => void;
+  /** 页面加载结束（无论成功/失败；外壳据此收掉加载页）。 */
+  onLoadEnd?: () => void;
+  /** 页面加载失败（did-fail-load；-3 ERR_ABORTED 由后端过滤，不回调）。 */
+  onLoadFailure?: (failure: BrowserLoadFailure) => void;
 }
 
 /** DOM 侧注入脚本：给可交互元素打编号（data-loops-el），返回数量。 */
@@ -109,6 +127,28 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
     wc.on("did-navigate", (...args) => opts.onNavigate?.(String(args[1] ?? "")));
     wc.on("did-navigate-in-page", (...args) => opts.onNavigate?.(String(args[1] ?? "")));
   }
+  // 加载状态（加载页 / 失败页）：用主框架事件，不用 did-start-loading —— 子资源失败不该变成整页错误。
+  if (opts.onLoadStart) {
+    wc.on("did-start-navigation", (...args) => {
+      const details = args[0] as { isMainFrame?: boolean; isSameDocument?: boolean } | undefined;
+      if (details?.isMainFrame === false || details?.isSameDocument) return;
+      opts.onLoadStart?.();
+    });
+  }
+  if (opts.onLoadEnd) {
+    wc.on("did-stop-loading", () => opts.onLoadEnd?.());
+  }
+  if (opts.onLoadFailure) {
+    wc.on("did-fail-load", (...args) => {
+      const code = Number(args[1]);
+      const description = String(args[2] ?? "");
+      const url = String(args[3] ?? "");
+      const isMainFrame = args[4] !== false;
+      // -3 = ERR_ABORTED（重定向/用户取消/新导航打断旧导航）：不是真实失败，别闪错误页
+      if (code === -3 || !isMainFrame) return;
+      opts.onLoadFailure?.({ code, description, url, isMainFrame });
+    });
+  }
   // 页面缩放快捷键（Ctrl + =/-/0）：WebContentsView 有独立焦点，主窗口快捷键捕获不到，
   // 必须在每个标签自己的 webContents 上监听。
   let zoomFactor = 1;
@@ -126,10 +166,41 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
     zoomFactor = Math.max(0.5, Math.min(2, next));
     wc.setZoomFactor?.(zoomFactor);
   });
+  if (opts.onDevToolsRequest) {
+    wc.on("before-input-event", (...args) => {
+      const event = args[0] as { preventDefault?: () => void } | undefined;
+      const input = args[1] as { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean } | undefined;
+      if (!input || input.type !== "keyDown") return;
+      const key = input.key ?? "";
+      const inspect = (input.control || input.meta) && input.shift === true && key.toLowerCase() === "i";
+      if (key !== "F12" && !inspect) return;
+      event?.preventDefault?.();
+      opts.onDevToolsRequest?.();
+    });
+  }
 
   if (opts.onTitle) {
     // Electron 签名：(event, title, explicitSet) —— 取 args[1]，否则会把 event 渲染成 [object Object]
     wc.on("page-title-updated", (...args) => opts.onTitle?.(String(args[1] ?? "")));
+  }
+
+  if (opts.onFavicon) {
+    // Electron 签名：(event, favicons: string[]) —— 取第一个图标；data: 透传，http(s) 交给主进程抓取转 base64。
+    wc.on("page-favicon-updated", (...args) => {
+      const raw = args[1];
+      const urls = Array.isArray(raw) ? raw.map((item) => String(item ?? "")).filter(Boolean) : [];
+      const first = urls[0];
+      if (!first) return;
+      if (first.startsWith("data:image/")) {
+        opts.onFavicon?.(first);
+        return;
+      }
+      void opts.fetchFavicon?.(first)
+        .then((dataUrl) => {
+          if (dataUrl) opts.onFavicon?.(dataUrl);
+        })
+        .catch(() => undefined);
+    });
   }
 
   return {

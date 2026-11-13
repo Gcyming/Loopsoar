@@ -129,18 +129,30 @@ export function registerAgentWindowDomain(deps: AgentWindowDomainDeps, manager: 
   });
 
   // 最小化自己：只接受当前 Agent 窗口 webContents 的调用（主窗口无权替它最小化，避免误操作）。
-  // 最小化后窗口滑到任务栏，主窗口右侧必须把侧栏让回来（否则主窗口侧栏仍隐藏、没有可见的再次打开入口）。
-  // 复用 closed 事件语义「窗口已不在右缘」：主窗口据 agentWindowOpen=false 恢复侧栏；
-  // 用户再点「小窗化」时 manager.open() 对已存在窗口走 focus()，会 restore 最小化窗口，届时 UI 重新隐藏侧栏。
+  // 语义（用户 2026-11-10，Slime 同款）：最小化 = **缩成图标按钮**，不是缩到任务栏；
+  // 因此**不**推送 chrome:agentWindowClosed（主窗口侧栏保持让位，小窗仍在桌面以图标存在）。
+  // 只有「关闭」才恢复正常窗口：close 走 manager.onClosed → 主窗口侧栏展开。
   handleTrusted(withAgentSenderGuard(deps, manager), "ui:minimizeAgentWindow", (): { ok: boolean } => {
-    const ok = manager.minimize();
-    if (ok) {
-      try {
-        deps.push?.("chrome:agentWindowClosed", {});
-      } catch {
-        // 推送失败不影响窗口已最小化的事实
-      }
-    }
-    return { ok };
+    return { ok: manager.minimize() };
+  });
+
+  // 图标模式下点击图标还原小窗：只允许 Agent 窗口自身调用（带发送者校验）。
+  handleTrusted(withAgentSenderGuard(deps, manager), "ui:restoreAgentWindow", (): { ok: boolean } => {
+    return { ok: manager.restore() };
+  });
+
+
+  // 普通态自绘标题栏拖拽：渲染层按屏幕增量上报，主进程移动 Agent 窗口（不依赖 -webkit-app-region，透明窗更可靠）。
+  handleTrusted(withAgentSenderGuard(deps, manager), "ui:dragAgentWindow", (payload): { ok: boolean } => {
+    const input = (payload ?? {}) as { dx?: number; dy?: number; phase?: "start" | "move" | "end" };
+    if (input.phase === "start") return { ok: manager.beginAgentWindowDrag() };
+    if (input.phase === "end") return { ok: manager.endAgentWindowDrag() };
+    return { ok: manager.dragBy(Number(input.dx) || 0, Number(input.dy) || 0) };
+  });
+
+  // 图标模式下拖动图标（Slime 同款）：指针位移由渲染层按屏幕坐标增量上报，主进程负责夹取工作区。
+  handleTrusted(withAgentSenderGuard(deps, manager), "ui:moveAgentWindow", (payload): { ok: boolean } => {
+    const input = (payload ?? {}) as { dx?: number; dy?: number };
+    return { ok: manager.moveBy(Number(input.dx) || 0, Number(input.dy) || 0) };
   });
 }

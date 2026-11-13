@@ -890,6 +890,895 @@
 
 ---
 
+## ADR-0051 OpenCode Go / Zen 双计划端点、默认模型与错误提示修复（底部错误提示去重）
+
+- **背景**：用户（2026-11-09 14:18）反馈「opencode go/zen 都用不了了，无论是免费的还是订阅的，你给我修一下」，并附截图：opencode-go（模型 beam-free）连续两次 HTTP 403——「An active OpenCode Go subscription is required to use Go models.」与「This model is not available in your country」；同时要求删掉底部重复的错误提示（「会话内都有说明了，而且这个提示也挡信息了」）。上一轮会话做到一半（改了 providerStore/upstreamError/Settings/useChatStreamEvents 五个文件）被上游 502 中断，没有测试、没有验证，且把 Go 端点误迁移到了按量付费端点。
+- **排查结论（以官方文档 + 真实上游实测为准）**：
+  1. **两套计划、两套端点、两套 Key（官方文档 /docs/console/harnesses#base-urls）**：按量付费（Zen）base = https://opencode.ai/inference ，Go 订阅 base = https://opencode.ai/inference/go ，聊天路径均为 /openai/v1/chat/completions。**Go 的 Key 打按量付费端点会 403 Model access is disabled，按量付费 Key 打 Go 端点会 403 subscription required，不可互换**（2026-11-09 实测，见证据日志）。
+  2. **Go 端点必须带 x-opencode-session**（缺失 → 400 MissingSessionID，实测），Loopsoar 内置默认头原本已带；Go 模型（如 beam-free、gpt-6-luna）仍受地区限制（RegionError 403），免费模型另有免费额度（429 FreeUsageLimitError）。
+  3. **「订阅的也用不了」的真实原因在账号侧**：Loopsoar 里保存的 Key（oc_…7lyv）所在工作区没有有效 Go 订阅（403 实测）；本机 DSH 配置里的 OPENCODE_GO_API_KEY（oc_…DO2x）实测可正常调用 Go 端点。本次已把该可用 Key 同步进 Loopsoar 加密密钥库（只写 AES 密文，不落明文/不进日志），同步后 Loopsoar「测试连接」返回 200。
+  4. **默认模型停在免费模型上**：beam-free 是 Go 免费模型但有地区限制（中国 403 RegionError），不应作为第三方客户端默认模型。
+  5. **模型目录端点拼错**：OpenCode 的模型目录在推理根下（Go /inference/go/v1/models、按量付费 /inference/v1/models），旧实现拼成 /inference/go/openai/v1/models 会 404，导致设置面板「获取模型列表与能力」对 OpenCode 不可用；且该目录返回 limit/modalities/capabilities 富元数据，旧解析器完全不认识。
+  6. **底部提示重复**：done 事件把「已中断（error）：上游拒绝访问…」原文再弹到底部 notice（叠在会话红字报错之上、挡住输入区上方内容），error 事件另弹「回复失败」，都属于会话内已有说明的重复信息。
+- **决策**：
+  1. **端点按计划区分，撤销上一轮的错误迁移**（packages/shell/src/main/providerStore.ts）：新增 OPENCODE_GO_BASE / OPENCODE_INFERENCE_BASE 与 isOpenCodeGoBaseUrl；canonicalOpenCodeBaseUrl **只迁移历史 Zen 路径 /zen/v1 → /inference/openai/v1，/inference/go/openai/v1 原样保留**；不再统一改写。
+  2. **默认模型不停在免费模型**：加载与保存时，若 OpenCode 供应商的默认模型是免费模型（id 含 free），回退到首个「非免费且 selected!==false」的模型（用户配置里回退到 deepseek-v4.1-flash）；**不删除免费模型**（额度重置后仍可显式选择）。
+  3. **新增 OpenCode Zen 预设 + 修正 Go 预设**（packages/ui/src/Settings.tsx）：「OpenCode Go（订阅）」= /inference/go/openai/v1 + deepseek-v4.1-flash + x-opencode-session 头；「OpenCode Zen（按量付费）」= /inference/openai/v1 + glm-5.3。
+  4. **模型目录端点解析单一产地**（新增 packages/shell/src/main/providerModels.ts，resolveModelsUrl）：OpenCode 去推理协议段后拼 /v1/models；其他网关沿用原规则；settings:listModels 改用它。
+  5. **能力解析支持 OpenCode 目录形态**（packages/core/src/modelCapabilities.ts）：解析 limit.context/output、modalities.input（MIME 归一为 text/image/audio/video）、capabilities.tools.supported、capabilities.reasoning.effort、capabilities.structured_output，来源诊断随之上报（配合 ADR-0049 三态合并）。
+  6. **OpenCode 专项可行动错误提示**（packages/core/src/llm/upstreamError.ts）：Go 订阅未激活/Key 工作区不匹配、免费模型仅官方客户端、地区限制 RegionError、Go Key 打按量付费端点（Model access is disabled）、缺 x-opencode-session、免费额度用尽（含 opencode.ai/go 订阅引导）各自映射为中文可行动提示，并排在通用「订阅/地区」分类之前。
+  7. **底部错误提示去重**（packages/ui/src/useChatStreamEvents.ts）：done 为 interrupted（error/stopped/预算中断…）时不再 setNotice(statusText)——原因已在会话气泡里展示；chat:stream:error 不再弹「回复失败」；保留用户主动停止的「已停止」提示。
+  8. **数据侧一次性修复**：把可用 Go 订阅 Key（本机 DSH 的 OPENCODE_GO_API_KEY）写入 Loopsoar opencode-go 的加密密钥库（secrets.enc.json 的 cipherFallback，主密文置空按降级备份解密）；写前备份原文件，写后回读校验。
+- **理由**：OpenCode 的 Go 与按量付费是两个独立计费/鉴权体系，端点必须跟着 Key 的“计划”走；把两者统一到 /inference 会让订阅用户直接失效（上一轮的推断错误）。免费模型对第三方客户端有地区/额度限制，作为默认模型会稳定复现 403，必须默认回退但不剥夺用户选择。错误提示只有指到「Key 的工作区 / 计划 / 地区」才有行动价值——泛化的「订阅/地区」提示正是用户无法自救的原因。底部重复提示是纯噪声且挡内容，删除不影响信息完整性。
+- **替代方案**：①保持统一 /inference 端点（否：Go 订阅实测 403 Model access is disabled）；②删除所有免费模型（否：免费额度重置后可用，且 Go 免费模型是套餐权益）；③自动降级到其他供应商（否：违反 ADR-0043 不做静默降级）；④只在错误发生时才提示计划（否：默认模型已经决定首轮体验，应提前迁移）。
+- **后果**：OpenCode Go 用户按 Go 端点 + x-opencode-session 请求（实测 200）；按量付费用户使用 Zen 预设；老配置里 beam-free 默认模型会在启动时自动换成付费模型（一次性写回，幂等）；设置面板「获取模型列表与能力」对 OpenCode 返回 30 个 Go 模型并带上下文/输出/视觉/工具/结构化输出；错误发生时会话内红字与底部提示不再重复。
+- **验证方式**：typecheck 5/5 通过（直接调用 tsc）；全量 vitest **166 文件 / 1410 tests 全绿**（新增 opencodeProvider 7、providerModels 2、opencodeNotice 3、upstreamErrors 1、modelCapabilities 2）；真实上游验证（证据 e2e-evidence/opencode-live-probe.log、opencode-live-verify.log）：Go 端点 deepseek-v4.1-flash / glm-5.3 均 200，无 session 头 400 MissingSessionID，按量付费端点用 Go Key 403 Model access is disabled，免费模型 429/RegionError 403；Loopsoar core OpenAi 客户端真实流式回复成功（2 字回复，reasoning 10 chunks）；真机 E2E（数据副本，e2e-evidence/opencode-fix.log E2E_EVAL ok:true，截图 e2e-evidence/opencode-fix.png）：启动后 opencode-go 保持 /inference/go/openai/v1、默认模型 beam-free → deepseek-v4.1-flash、Key 提示 oc_…DO2x；「测试连接」deepseek 200/2315ms、glm-5.3 200/762ms；「获取模型列表」30 个模型、error=null、capabilityMeta 30 条，deepseek 行上下文 1M/输出 384K/视觉/工具/结构化输出全部解析。
+- **状态**：✅ 自动化 + 真实上游 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：OpenCode 官方端点策略再变（如取消 /go 段）→ 只改 canonical/预设与测试；免费模型回退策略影响免费用户 → 改为仅在请求失败后提示而不是迁移默认模型；底部提示去重导致用户看不到失败 → 恢复 done 的 notice（但保留 error 事件去重）。
+- **复核时间**：OpenCode 文档/端点变更、Go 套餐与按量付费合并、用户反馈默认模型被迁移时
+
+---
+
+## ADR-0052 去掉「默认模型 / 启用」概念：模型菜单列出全部模型，点哪个用哪个
+
+- **背景**：用户（2026-11-09 16:28）反馈「现在怎么模型只能在对应供应商的默认模型」，并明确要求「『默认』这个功能是 slime 那边的一个赘项，之前属于想删删不掉的情况，你给我去掉，没必要搞这个，用户想用哪个是哪个」。
+- **根因**：
+  1. 模型菜单（`buildModelGroups`）只展示 `selected !== false` 的模型，并额外把每个供应商的 `model` 当「默认模型」强制显示；而「获取模型列表」的合并逻辑（`mergeFetchedProviderModels`）只把 `defaultModelId` 标为启用、其余新模型默认停用 → 拉回 40 个模型的 Zen 供应商在菜单里只剩默认的那一个（外加历史手工勾选的少量模型），用户观感就是「只能用默认模型」。
+  2. 「默认模型」在设置里是三处赘项：供应商卡片「默认模型」行、编辑弹窗模型表「默认」单选列、「启用」勾选列；`provider.model` 同时承担「默认」与「当前使用」两种语义，切换模型时互相打架。
+  3. ADR-0051 为避免默认模型落在免费模型上加了自动回退（加载/保存时把 beam-free 自动换成 deepseek）——这与「用户想用哪个是哪个」直接冲突。
+- **决策**：
+  1. **模型菜单展示每个供应商的全部模型**（`packages/ui/src/modelGroups.ts`）：不再按 `selected` 过滤、不再有「默认模型必显示」特例；仅跳过空 id 并去重，供应商还没有模型清单时用当前模型兜底。活动供应商仍置顶。
+  2. **删除设置里的默认/启用 UI**（`packages/ui/src/Settings.tsx`）：供应商卡片不再显示「默认模型」行；编辑弹窗模型表删除「默认」单选列与「启用」勾选列（其余能力列保留）；`provider.model` 语义降级为「当前选用/最近使用」——聊天输入区「模型」chip 点哪个就写哪个，保存供应商时保留当前选择，新增供应商取清单第一个作为初始值。
+  3. **拉取合并不再自动启用/停用**（`mergeFetchedProviderModels` 去掉 `defaultModelId` 参数）：历史数据里的 `selected` 字段原样保留，但不再参与任何 UI 决策（菜单不再读它）。
+  4. **删除免费模型自动回退**（`packages/shell/src/main/providerStore.ts`）：加载/保存都不再改写用户选的模型（哪怕它是 beam-free 这类免费/地区受限模型），只保留历史 `/zen/v1` → 按量付费端点的 URL 迁移。
+  5. 配套文案：设置页「模型参数」说明与安全提示改为「全部模型可选、无需先设默认」；删除 `settings.providers.defaultModel` / `col.enable` / `col.default` 等 i18n 键。
+- **理由**：模型选择是「活动供应商 + 当前模型」的一次点击全局状态，不是每个供应商一份默认值；slime 的「默认模型/启用」是历史遗留的配置负担，会在拉取新模型列表后把可选范围缩成默认一个。去掉后新增供应商、拉取模型、切模型都是一条路径，符合「想用哪个用哪个」。
+- **替代方案**：保留「启用」但拉取时全部默认启用（否：仍有默认/启用两套概念，且用户要的是删掉「默认」）；保留默认模型但不在 UI 显示（否：切换模型仍会被默认语义覆盖，问题会在别处复现）；只在菜单里显示全部模型、设置里保留列（否：用户明确要求去掉这个功能）。
+- **后果**：模型菜单条目变多（OpenCode Zen 40 + Go 30 + 其他供应商，实测 72 项），按供应商分组展示仍可快速定位；`providers.json` 里旧的 `selected` 字段成为无害遗留；不再有「新模型要不要勾选/设默认」的步骤；用户若选到地区受限/免费额度耗尽的模型会直接收到上游错误（错误提示已可行动）。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest 166 文件 / 1412 tests 全绿（更新 modelGroups 4、opencodeProvider 6、providerCapabilities 18、opencodeNotice 5 等用例，新增长期守卫：设置页不再出现「默认模型」行/「默认」单选/「启用」列，模型菜单不按 selected 过滤）；真机 E2E（数据副本，`e2e-evidence/model-any.log` E2E_EVAL ok:true，截图 `e2e-evidence/model-any.png`）：模型菜单 72 项（Zen 40 + Go 30 + agnes/note 各 1），历史 `selected:false` 的 `claude-opus-5-5` 可见并点击成功 → 当前模型切到 `claude-opus-5-5`、活动供应商保持 opencode-zen；供应商页与编辑弹窗均无「默认模型」文本/「默认」单选/「启用」表头，Zen 编辑弹窗 40 行模型全部列出。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：菜单过长影响选择 → 增加搜索框/折叠（不改「全部可选」语义）；用户想隐藏个别模型 → 后续可加纯展示过滤（不恢复默认/启用语义）；旧数据 `selected` 引发其他模块误用 → 删除该字段并迁移。
+- **复核时间**：模型数量继续增长（>200）、用户反馈菜单过长时
+
+---
+
+## ADR-0053 OpenCode 计划边界可视化与账户纠正：Go 订阅额度 ≠ 按量付费余额（402 根因）
+
+- **背景**：用户（2026-11-09 17:05）发截图：`provider: opencode-zen · deepseek-v4.1-flash` 的对话报「上游账户余额不足（HTTP 402: Insufficient account funds）」，并质疑「我还有起码 40% 的额度啊，有问题，给我解决了」。
+- **根因（三层）**：
+  1. **账户侧**：`opencode-go` 供应商用 Go 订阅 Key（oc_…DO2x，实测 Go 端点 200，40% 是 Go 套餐额度）；`opencode-zen` 供应商用旧 Key（oc_…7lyv，无 Go 订阅、按量付费余额为 0）。同名模型 `deepseek-v4.1-flash` 同时存在于 Go 目录与按量付费目录，用户点到了 zen 组里的那个 → 402。Go 额度与按量付费余额是**两个独立账户**（2026-11-09 实测：Go Key 打按量付费端点 403 Model access is disabled / 402 Insufficient account funds；按量付费 Key 打 Go 端点 403 Go subscription required）。
+  2. **可见性**：模型菜单分组头只显示 provider 名（opencode-go / opencode-zen）与截断的 baseUrl，两者同属 opencode.ai、模型 id 大量重叠，UI 没有任何「这是哪种额度」的标记；错误提示也只是泛化的「余额不足」，用户无法判断 402 是因为走错了计划。
+  3. **数据侧**：活动供应商被切到 zen 用于试用，`opencode-go` 的当前模型还被改成 `iceman-contributor-free`（免费/地区受限模型），两者叠加使「有额度却用不了」。
+- **决策**：
+  1. **计划徽标单一产地**（`packages/ui/src/modelGroups.ts`）：新增 `openCodePlanLabel(baseUrl)` → `"go" | "payg" | null`（按 `/inference/go` 判定 Go 订阅、其余 opencode.ai 端点判按量付费，其他供应商 null），并写进 `ModelGroup.plan`；输入区模型菜单分组头显示「Go 订阅 / 按量付费」，设置·供应商卡片显示「Go 订阅额度 / 按量付费余额」。
+  2. **错误提示按账户区分**（`packages/core/src/llm/upstreamError.ts`）：`Insufficient account funds` → 明确「Go 订阅额度与按量付费余额是两个账户，有 Go 订阅请把活动供应商切到 opencode-go」；`Model access is disabled` → 明确「Go 订阅 Key 不能用于按量付费端点，请切到 opencode-go」。
+  3. **数据纠正**：活动供应商切回 `opencode-go`、当前模型设为 `deepseek-v4.1-flash`（Go 端点实测 200）；legacy `provider.json` 同步，避免旧单供应商回退路径指回错误配置。
+  4. **不合并两个供应商、不做跨端点自动切换**（遵守 ADR-0043 不做静默降级）：保留用户显式选择，只把「两个计划/两套额度」做成一眼可见的标记与可行动错误。
+- **理由**：这不是代码 bug 而是「计划边界不可见」的可用性问题——模型 id 在两个目录里重名，用户按名字选模型时无法知道自己在花哪份额度；把计划标注在菜单和卡片上、把 402/403 的解释写到具体端点，用户才能自己走对路。数据纠正让用户马上能用回 40% 的 Go 额度。
+- **替代方案**：合并成一个 OpenCode 供应商并自动按 Key 探测计划（否：探测需额外请求、自动切换跨账户有静默降级风险，改动面大）；把同名模型去重只留一个（否：无法区分计划，会随机丢额度）；只改数据不改 UI（否：同样的困惑下次还会出现）。
+- **后果**：两个 opencode 供应商在菜单/卡片上可区分（「Go 订阅」「按量付费」徽标）；按量付费需要 Console 充值，Go 套餐用户日常应使用 opencode-go；错误发生时会直接提示该切哪个端点，不再只有「余额不足」。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest 166 文件 / 1415 tests 全绿（新增 modelGroups 计划标记 2、upstreamErrors 账户区分 1）；真机 E2E（数据副本，`e2e-evidence/plan-badges.log` E2E_EVAL ok:true，截图 `e2e-evidence/plan-badges.png`）：活动供应商 `opencode-go`、模型 `deepseek-v4.1-flash`、Go 端点 `.../inference/go/openai/v1`、测试连接 **200/2759ms**；模型菜单 72 项且同时出现「Go 订阅」「按量付费」徽标、opencode-go/opencode-zen 两组并存；点击 opencode-go 组内 `glm-5.3` 成功切换（activeId 保持 opencode-go）；设置页两个供应商卡片分别显示「Go 订阅额度」「按量付费余额」。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：OpenCode 合并两种计费方式 → 删除 plan 徽标与专项错误分支；徽标对非 OpenCode 供应商误标 → 收窄 `openCodePlanLabel` 的域名判断；用户希望自动跨计划重试 → 需先评估是否违反 ADR-0043（应新增 ADR）。
+- **复核时间**：OpenCode 计费/端点策略变化、用户新增 OpenCode 供应商或换 Key 时
+
+---
+
+## ADR-0054 恢复「模型显示拨片」+ 推理强度选择上移（「默认模型」仍然不恢复）
+
+- **背景**：用户（2026-11-09 17:42，附模型菜单截图）反馈两点：①「为什么我的拨片式开关没了？直接全部开了？你给我优化一下供应商内模型的选择」；②「优化一下推理强度的选择渲染，现在每次我想要修改推理强度都要在这个模型列表里面翻到最下面，翻半天」。ADR-0052 在删除「默认模型」时把「启用」拨片也一并删掉了（语义误判：用户要删的是「默认」，不是「显示开关」）；同时推理等级区块原本在模型菜单底部，72 个模型时改推理强度必须先滚到底。
+- **决策**：
+  1. **恢复模型「显示」拨片**（设置 · 供应商 → 编辑弹窗模型表第一列，`Toggle` + `aria-pressed`）：语义 = 该模型是否出现在输入区「模型」菜单（关闭后仍保留参数与已选状态，只是不在菜单展示）；菜单重新按 `selected !== false` 过滤。**仍然没有「默认模型」**——没有默认行/默认单选列/自动回退，当前使用哪个模型仍由聊天「模型」chip 决定。
+  2. **新拉取的模型默认打开**（`mergeFetchedProviderModels`：`merged.selected = prev?.selected ?? incoming.selected ?? true`）：避免重蹈 0052 前「拉列表后只有默认模型可选」的覆辙；本地已有关闭状态保留，用户可自己关掉不想看的模型。
+  3. **推理强度区块移到模型菜单顶部**（`Composer.tsx`）：从「模型分组之后、菜单底部」移到「选择模型标题之后、模型分组之前」，打开菜单即可看到「推理等级」，不再需要翻到底。推理强度仍是每轮的全局设置（与模型无关的那一档仍保留「关」选项）。
+  4. **数据侧**：把两个 OpenCode 供应商（Go 30 / Zen 40）模型全部设为打开，菜单与开关状态一致（用户可按需关掉）。
+- **理由**：模型「是否显示」是列表整理工具，与「谁是默认」是两回事——删掉前者会让 40 个模型的菜单不可控；保留拨片 + 新模型默认打开，既满足「想用哪个用哪个」，又允许用户收起噪声。推理强度是高频操作，位置在长列表底部属于布局缺陷，移到顶部零成本解决。
+- **替代方案**：推理强度做成独立 chip/浮层（改动大、与模型菜单割裂，暂不做）；拨片默认全关（否：会回到「只有默认可选」的问题）；菜单加搜索框（可后续，当前 72 项尚可滚动）。
+- **后果**：设置里模型表第一列恢复拨片（40 行 = 40 个开关，全部默认打开）；模型菜单只列打开项（当前 72 项全部可见）；推理等级常驻菜单顶部；旧 providers.json 无需迁移（`selected` 字段一直保留）。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest 166 文件 / 1415 tests 全绿（更新 modelGroups「只展示打开项」、merge「新模型默认打开」、opencodeNotice「默认/拨片边界」等守卫）；真机 E2E（数据副本，`e2e-evidence/toggles-effort.log` E2E_EVAL ok:true，截图 `e2e-evidence/toggles-effort.png`）：模型菜单 72 项且「Go 订阅/按量付费」徽标正常；推理等级标题位于第一个模型项上方且开场可见（`effortAboveModels=true` / `effortVisible=true`）；Zen 编辑弹窗 40 行对应 40 个拨片、全部 `aria-pressed=true`，点第一行拨片可切成关闭；无「默认」单选/表头，「显示」表头存在。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：拨片导致「以为删了模型」的误解 → 关闭项加置灰/分组；菜单过长 → 加搜索/折叠；推理等级顶部挤压 → 收进二级浮层。
+- **复核时间**：模型菜单条目继续增长、用户反馈拨片语义不清时
+
+---
+
+## ADR-0055 模型「显示」开关支持全选 / 取消全选（表头主拨片）
+
+- **背景**：用户（2026-11-09 20:55）要求「加个全选跟取消全选的拨片」。模型表容量大（OpenCode Zen 40 / Go 30），逐个点「显示」拨片整理列表成本高。
+- **决策**：
+  1. 在设置 · 供应商编辑弹窗模型表表头「显示」列内嵌一个**主拨片**（`data-testid="model-toggle-all"`，复用 `Toggle` 组件并为其增加可选 `title`/`testId`）：`aria-pressed=true` 当且仅当全部模型都显示；hover/aria 文案为「全选 / 取消全选（当前 n/total）」。
+  2. 点击行为：全开时 → 全部关闭；否则 → 全部打开（部分开启时主拨片显示为关，点一下即全选）。
+  3. 只改 `selected`（是否出现在输入区「模型」菜单），**不改当前使用模型、不改模型参数**；与逐行拨片同一状态源，保存后才落盘。
+  4. 无新增持久化字段/契约：复用既有 `selected`；数据侧无需迁移。
+- **理由**：主拨片放在「显示」列头是最符合直觉的位置（列级操作对列）；复用逐行开关的状态与交互，零新概念；「部分开启」时点击即全选，避免用户要先判断当前是哪种混合状态。
+- **替代方案**：在模型区标题处加「全选/取消」两个文字按钮（可发现性略高但多占一行，且与拨片语义割裂）；三态复选框（原生 checkbox indeterminate，但项目统一用拨片交互，样式要另做）。
+- **后果**：40 个模型一键收起/展开；主拨片初始与逐行状态一致（全部打开 = 开）；改变仅存在于编辑草稿，点「保存并设为活跃」后生效。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest 166 文件 / 1416 tests 全绿（opencodeNotice 新增「表头全选拨片」守卫 1 例）；真机 E2E（数据副本，`e2e-evidence/toggle-all.log` E2E_EVAL ok:true，截图 `e2e-evidence/toggle-all.png`）：Zen 编辑弹窗 40 行，主拨片初始 `aria-pressed=true（40/40）`；点击 → 40 行全部关闭（0 开/40 关）；再点 → 40 行全部打开；单独关掉 1 行后主拨片变 `false（39/40）`，再点主拨片 → 恢复 40/40；title 含「全选 / 取消全选」。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：主拨片与逐行状态不同步 → 改由同一 reducer 派生（当前已是同一 state）；点击全关造成误操作 → 可加二次确认或改为「仅全开」单向按钮。
+- **复核时间**：模型表增加分组/筛选时
+
+---
+
+## ADR-0056 模型表工具条重构（全选移位 + 搜索栏）+ 应用图标身份修复
+
+- **背景**（用户 2026-11-09 21:03，附 slime「编辑供应商」弹窗截图）：①「这个位置很丑啊，你能不能优化一下，你看看，你借鉴一下slime吧，他还有搜索栏。」——指 ADR-0055 把「全选 / 取消全选」主拨片塞进模型表「显示」列表头，40 行表格头被开关+文字挤满，且 72 个模型没有搜索只能滚。②「为什么slime的图标被换成了loopsoar的图标，loopsoar图标直接没了，变成了electron的默认图标？你顺便修一下。」
+- **根因（两组）**：
+  1. **模型表布局**：`Settings.tsx` 的供应商弹窗只有两行——「模型参数」标题 + 草稿输入/添加；主拨片嵌在 `<th>` 内。slime 参考布局是「标题 → 主开关+摘要行 → 搜索栏 → 表格」。
+  2. **图标错位（两层）**：
+     a. **slime 仓库（`D:\pilot project`）** 工作树里有未提交的品牌替换，图标资产与 Loopsoar/Quilt 品牌（∞ 破环·化片）完全相同：`gui/build/icon.ico` 92797→35276、`gui/build/icon.png` 974547→72697、`gui/build/notify-icon.png` 60287→16831、`gui/src/renderer/assets/icon.ico` 被覆盖、`gui/src/renderer/assets/slime-icon.png` 被删除 → slime 应用显示 Loopsoar 的 ∞ 图标。
+     b. **Loopsoar 主进程**：`iconPath()` 只探测 `path.join(__dirname, "../../resources/icon.png")`。开发态跑的是 `packages/shell/dist/main.bundle.mjs`，`__dirname` = `packages/shell/dist` → 解析到不存在的 `packages/resources/icon.png` → `BrowserWindow.icon = undefined` → 窗口/任务栏显示 Electron 默认图标；资源实际在 `packages/shell/resources/`。且从未调用 `app.setAppUserModelId(APP_ID)`（`APP_ID = "com.loopsoar.app"` 已定义），Windows 任务栏身份落到 electron.exe 默认身份，任务栏图标/分组不受品牌控制；会进任务栏的会话栏独立窗口（`skipTaskbar: false`）也没有传 icon。
+- **决策**：
+  1. **模型表工具条**：新增 `S.modelToolbar` 行——主拨片（`data-testid="model-toggle-all"`，title 带 `（n/total）`）+「全选 / 取消全选」+ 摘要「共 {total} 个 · 聊天界面只显示已启用（{on} 个）」；表头恢复纯文本「显示」；`S.modelAddRow` 左侧新增模型 ID 搜索框（`data-testid="model-search"`，占满剩余宽度，placeholder 带总数）+ 右侧草稿输入/「添加」。搜索只过滤表格展示（`visibleModels`），用**原始 idx** 回写，保存数据不变；无匹配显示「没有匹配的模型 ID」。
+  2. **图标探测单一产地**：新增 `packages/shell/src/main/appIcon.ts` `resolveAppIconPath({dirname, resourcesPath, cwd, platform})`，按 dist bundle（`../resources`）→ src（`../../resources`）→ 打包 `process.resourcesPath`（`icons/`、根）→ dev cwd（`packages/shell/resources`、`resources`）顺序探测；Windows 优先多档 `.ico`、其他平台优先 `.png`。`index.ts` 改用该函数并在主窗口/会话栏窗口传 icon，启动打日志 `[Loopsoar] appIcon=…`。
+  3. **Windows 任务栏身份**：主进程启动时 `if (process.platform === "win32") app.setAppUserModelId(APP_ID)`（品牌单一产地 `packages/shell/src/shared/brand.ts` 的 `APP_ID`）。
+  4. **slime 图标恢复**：只 `git checkout --` slime 仓库那 5 个图标文件（恢复后 md5 与 HEAD 逐字节一致，`icon.png` = 蓝色史莱姆原图）；**不触碰** slime 其余 215 个未提交改动（那是该仓库自己的在途工作，不属于图标问题）。
+- **理由**：模型表是高频操作区，主开关属于「区块级操作」应独立成行，搜索是 72 模型规模的必需能力；图标问题分属两个仓库/两个层次（文件资产被覆盖、主进程路径与任务栏身份错误），必须分别修，否则只修一边仍会错位。
+- **替代方案**：把搜索放表头/浮动（否：表头已经很挤，slime 的搜索栏就是独立一行）；给全选做「仅对搜索结果生效」（否：本轮语义仍是全局开关，title 明确 n/total，避免误操作）；打包图标硬编码路径（否：一换运行形态就再坏，多候选纯函数可单测）；把 slime 整个工作树回滚（否：会毁掉该仓库 215 个在途改动）。
+- **后果**：模型表结构为「标题 → 工具条（拨片+摘要）→ 搜索/草稿行 → 表」，40 模型弹窗视觉负担明显下降；搜索实时过滤且编辑/删除仍落到正确行；Loopsoar 窗口/任务栏显示品牌图标（`appIcon=` 指向 `packages/shell/resources/icon.ico`），任务栏身份 `com.loopsoar.app` 与 slime 分离；slime 恢复原图标资产（`git status` 图标相关为空）。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **167 文件 / 1422 tests 全绿**（新增 `tests/shell/appIcon.spec.ts` 5 条：dist/src/打包/缺省四种路径探测 + 主进程接线守卫；更新 `tests/ui/opencodeNotice.spec.ts` 工具条/搜索守卫）；`pnpm build`/`pnpm gen`/`pnpm check` 通过；真机 E2E（数据副本，`e2e-evidence/model-toolbar.log` E2E_EVAL ok:true，截图 `e2e-evidence/model-toolbar.png`）：`model-toggle-all` 不在 `thead`、在工具条内，title `全选 / 取消全选（40/40）`，摘要「共 40 个 · 聊天界面只显示已启用（40 个）」；搜索「deepseek」40→3 行、清空恢复 40；主拨片 0/40↔40/40；无匹配提示「没有匹配的模型 ID」；启动日志 `[Loopsoar] appIcon=D:\...\packages\shell\resources\icon.ico`。slime 证据 `e2e-evidence/slime-icons-restored.log`：5 个图标文件 `git status` 为空、md5 与 HEAD 一致，其余 215 项未提交改动保持原样。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-09）
+- **回退条件**：模型表需要「按搜索结果全选」→ 改 setAllShown 作用域；icon 打包方式调整（extraResources 路径变化）→ 更新 `resolveAppIconPath` 候选；Windows 图标仍不对 → 检查 AUMID 与快捷方式/安装器图标（打包配置尚未建立）。
+- **复核时间**：开始 Electron 打包（安装器/快捷方式图标）时、模型数量再上一个量级（搜索加防抖/分组）时
+
+---
+
+## ADR-0057 密钥关联修复：供应商合并必须迁移密钥、测试连接必须用被测 Key、保存后立即验证
+
+- **背景**：用户（2026-11-10 11:19）强烈否认「某把 Key 无订阅」的判断：「我给的密钥都是有订阅的，不存在『无订阅的 oc_…7lyv』，你别给我滥竽充数。这绝对是密钥方面的大问题！！！」。核查后确认这是**应用侧密钥关联 bug**，不是用户记错 Key。
+- **根因（四条，叠加成「切换 Key 永远不生效 + 每次都误判」）**：
+  1. **去重合并丢密钥**：旧版切模型每次都会 `upsert` 出重复供应商（副本 id 如 `opencode-go-2`）。`ProviderStore.dedupe()` 合并副本时只保留首条 id，且原注释假设「密钥仍挂在首条 id 上」——但用户把新 Key 保存在**副本**上，副本被合并后密钥成了孤儿，聊天按保留 id 取到**旧 Key** → 上游 403「An active OpenCode Go subscription is required」→ 用户看到「我给的 Key 明明有订阅」却用不了。实测数据正是如此：`providers.json` 只剩 `opencode-go`，而 secrets 里 `opencode-go`=oc_…7lyv（旧）、`opencode-go-2`=oc_…DO2x（新且实测 200）。
+  2. **测试连接用错 Key**：`testProvider` 无论测哪条配置，都解析**活动供应商**的密钥。于是：测 B 供应商时把 A 的 Key 发给 B 的端点（全表 403）；用户切 Key 后点「测试连接」测的仍是旧 Key → 「误判新 Key 无效」，进而不敢保存/反复切换。
+  3. **副本 id 复活**：`upsert` 收到已不存在于文件里的副本 id（历史 UI 状态）时会新建该 id 的副本，继续制造孤儿 Key。
+  4. **保存后无真实验证**：UI 只提示「已保存」，用户无法区分「Key 本身无效」与「Key 根本没生效」。
+- **决策**：
+  1. **迁移单一产地**：`ProviderStore` 构造可注入 `onAliases` 回调；`load()` 去重合并时把 alias（被合并 id → 保留 id）交给装配层。`index.ts` 改为**先建 SecretStore 再建 ProviderStore**，`migrateAliasedSecrets` 用 `secrets.meta()` 的 `updatedAt` 取胜（用户新保存的 Key 优先）并 `secrets.set(to, key)`；启动时 `reconcileOrphanSecrets()` 按「保留 id」+ 数字后缀兜底迁移历史孤儿（如 `opencode-go-2`），同样只迁移更新的 Key。
+  2. **upsert 不复活副本**：显式 id 不存在、或新增时已有同 `provider + baseUrl` 记录 → 复用现存 id；绝不新建副本（否则新 Key 又会挂到孤儿 id 上）。
+  3. **testProvider 用被测 Key**：密钥解析顺序改为「表单刚输入的 `apiKey` → 被测供应商自己的 Key（`payload.id` / `provider+baseUrl` 唯一匹配）→ 环境变量」；删除「活动供应商 Key」回退。`SettingsProviderSchema` 增加 `id` / `apiKey`（只用于本次探测，不落盘）；卡片测试与编辑弹窗各自带上 id/typed key。
+  4. **保存即验证**：编辑弹窗「保存并设为活跃」与「保存密钥」在保存后立刻用**刚输入的那把 Key** 调 `testProvider`，成功/失败分别 toast（`keyVerified` / `keyVerifyFailed`），让「Key 无效」与「Key 没生效」一眼可分，不再误判。
+  5. `SecretStore` 增加 `ids()` / `meta()`（只给 providerId/hint/updatedAt，不泄露明文）。
+- **理由**：密钥是用户最敏感的配置，「保存了但不是聊天实际用的那把」会让用户完全失去信任；必须在**数据迁移（去重）**、**探测（testProvider）**、**写入后验证（UI）**三个环节闭环，否则任何一处仍会复现「切换 Key 不生效/误判」。
+- **替代方案**：直接删掉去重逻辑（否：旧数据里的副本会重新显示，且请求头/模型合并会丢）；只修 testProvider（否：聊天仍用孤儿旧 Key，403 依旧）；只修 dedupe 迁移（否：用户无法确认新 Key 是否生效，仍会被测试连接的假 403 误导）；在 UI 里按名称匹配密钥（否：id 才能唯一关联，名称可重复）。
+- **后果**：历史副本 Key 自动迁到保留供应商（新 Key 优先）；切换/新增 Key 不再产生副本、不再丢关联；测试连接结果只反映被测配置本身；保存 Key 立即得到真实上游验证结果。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **169 文件 / 1437 tests 全绿**（新增：ProviderStore alias 回调与 upsert 复用、SecretStore `ids/meta`、`tests/shell/secret-migration-guards.spec.ts` 5 条接线守卫、testProvider 被测 Key 回归）；真机 E2E（数据副本，`e2e-evidence/key-migration.log` E2E_EVAL ok:true）：先切活动供应商到 agnes-2 → 编辑 opencode-go 粘贴 Key → 测试连接 **200/连接成功**（旧实现用 agnes Key 必失败）→ 保存后供应商仍 3 条、active=opencode-go、keyHint=oc_…DO2x、二次保存仍无副本；启动日志出现 `secret reconciled`/`secret migrated` 迁移记录。
+- **数据修复**：真实数据把 `opencode-go` 的 Key 恢复为实测可用的那把（备份 `secrets.enc.json.bak-keyfix`）；另一把 Key 在 Go 端点实测仍返回 403（属上游账户/工作区订阅事实，应用现在会如实提示，不再静默换 Key）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-10）
+- **回退条件**：OpenCode 取消工作区级订阅校验 → 保留迁移逻辑不回退；SecretStore 元信息 API 被替换 → 同步替换 `migrateAliasedSecrets`/`reconcileOrphanSecrets`；未来允许同名多供应商共端点（产品需求）→ 需重新设计 key 归属键，不能只靠 provider+baseUrl。
+- **复核时间**：任何供应商存储结构/去重规则变更、或再次出现「Key 明明有效却 403」时
+
+---
+
+## ADR-0058 列表/浮层「点击按钮收起 + 点击外部收起」全局规则修复
+
+- **背景**（用户 2026-11-10 12:04，m02263）：「展开的列表，再次点击展开按钮依旧是闪烁一遍，而非关闭……所有这类列表，一个都没有做，随便遇到一个展开的列表，我点击列表外，都无法收起。」（阴影问题已确认修好，其余两条仍是硬需求）。
+- **根因（三层，互相掩盖）**：
+  1. **`<html data-popover>` 标记泄漏到主窗口**：`packages/ui/src/PopoverApp.tsx` 在**模块加载时无条件**执行 `document.documentElement.dataset.popover = "1"`。主窗口的 `main.tsx` 为选择渲染哪个根组件而静态 `import PopoverApp`，于是主窗口 `<html>` 也被打上 `data-popover`；而 `popover.ts` 的「点击外部」判定是 `target.closest("[data-popover],[data-popover-trigger]")` —— 任何点击都会命中 `<html>`，**全部被判为「点在浮层内部」**，于是所有内联菜单（模型/权限/会话历史）点击外面都收不起来。E2E 实测主窗口启动即有 `[data-popover]`，其 textContent 是整页内容，坐实此因。
+  2. **工具栏浮层 toggle 存在跨窗口竞态**：工具栏浮层是独立子窗口。点击触发按钮时主窗口获得焦点 → 子窗口先 `blur` → 管理器的 `win.on("blur")` 关闭浮层 → 渲染层 click 回调再执行时「已打开」状态已被清空 → 重新打开；观感就是「闪烁一遍，关不上」。上一版加的 `chrome:popoverClosed` 状态同步反而让清空发生在 click 之前，加剧了该竞态。
+  3. **点击原生网页面板时 DOM 收不到事件**：网页是 WebContentsView，点击它不会触发渲染层 pointerdown；旧实现只广播 `chrome:dismissPopovers` 收起内联浮层，没有关闭工具栏浮层。
+- **决策**：
+  1. **打标收窄**：`PopoverApp` 只有 URL 含 `?popover=`（真正的浮层窗口）时才给 `<html>` 打 `data-popover`；主窗口不再被污染。
+  2. **点击外判定加防**：`usePopover` 的 outside 检测忽略 `document.documentElement` / `document.body` 被误标的情况，并对 `pointerdown` 与 `mousedown` 双监听兜底（远程桌面/注入环境）。
+  3. **工具栏浮层原子 toggle**：契约新增 `ui:togglePopover`（`OpenChromePopoverSchema`），主进程按 `manager.isOpen()` 决定关闭或打开并返回 `{open}`；渲染层点击只调它，不再依赖渲染层记录的 open 状态。点击结果为 `open:false` 时设置 suppressHover，直到鼠标离开按钮才允许 hover 重开（避免收起瞬间又被 hover 打开）。
+  4. **主窗口内点击外部**：`App` 挂全局 `pointerdown` → `ui.closePopover()`，跳过 `[data-chrome-popover-trigger]`（触发按钮自身走原子 toggle，避免 pointerdown 先关、click 又开的连闪）；收藏星标按钮点击也会关闭预览。
+  5. **点击原生网页**：`onViewFocused` 同时 `chromePopover.close()` + 广播 `chrome:dismissPopovers`。
+  6. 该规则统一适用于：工具栏「更多/收藏」浮层、输入区模型菜单、权限菜单、会话历史下拉，其他新列表只要走 `usePopover` 即自动获得点击外收起。
+- **理由**：点击按钮→展开、再点→收起、点外面→收起，是同一套心智模型；必须在**标记（数据）**、**事件（pointerdown）**、**窗口（独立子窗口竞态）**三个层面同时正确，任何一层错误都会让用户觉得「一个都没做」。
+- **替代方案**：只修 inline 菜单（否：工具栏浮层仍连闪）；只修工具栏（否：所有 inline 菜单点外面依旧无效，因为 `<html>` 污染）；用 CSS `pointer-events` 兜底（否：无法覆盖原生子窗口与 WebContentsView）；把工具栏浮层改成 DOM 浮层（否：DOM 永远在原生网页视图之下，会被网页遮挡——ADR 既有结论）。
+- **后果**：所有列表菜单获得一致的「再点按钮收起 / 点外面收起」行为；工具栏浮层不再依赖跨窗口事件时序；原生网页区域点击也能收起。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **170 文件 / 1443 tests 全绿**（新增 `tests/ui/popover-global-dismiss.spec.ts` 6 条 + 更新工具栏守卫 + `ui:togglePopover` 域单测）；真机 E2E（数据副本，`e2e-evidence/popover-dismiss.log` / `popover-dismiss-outside.log` E2E_EVAL ok:true）：
+  - run1：模型菜单打开 → 再次点击 chip **收起**；打开 → 点击聊天区 **收起**；工具栏「更多」点击两次后 `E2E_WINDOWS` 仅剩主窗口（无重复打开=不连闪）。
+  - run2：工具栏「更多」打开 → 点击主窗口聊天区 → `E2E_WINDOWS` 仅剩主窗口（点击外部收起）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-10）
+- **回退条件**：浮层窗口需要与主窗口共用 `data-popover` 语义（不预期）→ 需同步改 `usePopover` 判定；Electron 子窗口失焦行为变化 → 原子 toggle 仍是主进程唯一判据，不受影响。
+- **复核时间**：新增任何按钮展开的列表/浮层时（必须走 `usePopover` 或 `ui:togglePopover`）
+
+---
+
+## ADR-0059 小窗「最小化 → 图标按钮」移植（Slime）+ 输入区左下角圆形「+」菜单
+
+- **背景**（用户 2026-11-10）：
+  1. 「对于小窗化……你去看看 slime 那边的小窗，点击最小化不是恢复窗口，而是变成一个图标按钮，只有点击关闭才是恢复正常窗口。直接去 `D:\pilot project` 查，给我搬过来。」
+  2. 「在输入框的左下角加一个加号图标，圆形框格就行。现在先把『附件』按钮放进去，其他的我以后再想。」
+- **Slime 参考实现（`D:/pilot project/gui/src/renderer/App.tsx`）**：
+  - 浮窗标题栏有两个按钮：「─ 最小化（缩小为图标）」→ `minimizeFloat()`：把浮窗几何缩到 `FLOAT_ICON_SIZE`（图标按钮），保留「图标原位置」`floatIconHomeRef`，整窗只显示品牌图标；点击图标 → `restoreFloat()` 还原原尺寸。
+  - 「▢ 收起悬浮窗（恢复普通布局：聊天回到中间）」→ `dismissFloat()`：关闭浮窗、恢复常规布局。即：**最小化 = 缩成图标；关闭 = 恢复正常窗口**。
+- **Loopsoar 现状**：`?mini=1` 的 Agent 独立窗口是全系统 BrowserWindow（非页内浮窗）。标题栏最小化按钮 `ui:minimizeAgentWindow` 走 `manager.minimize()` → Windows `win.minimize()` 缩到任务栏；域层同时 `push chrome:agentWindowClosed` 让主窗口恢复侧栏——即「最小化就恢复普通布局」，与 Slime 语义相反。
+- **决策**：
+  1. **窗口侧（`packages/shell/src/main/agentWindow.ts`）**：`minimize()` 改为「缩成图标窗口」——保存当前 bounds 到 `iconRestoreBounds`，窗口缩成 `AGENT_WINDOW_ICON_SIZE`（56px，新增纯函数 `computeAgentWindowIconBounds`：贴原窗口右上角并夹取工作区），`setResizable(false)` + `setAlwaysOnTop(true)`，**先降 minimumSize 再 setBounds**（Windows 会用旧 minimumSize 夹住 setBounds，实测会得到 343×483 的「伪图标」）。新增 `restore()` 还原 bounds/可缩放/最小尺寸/取消置顶。`focus()/open()` 在图标模式下自动走还原。`reposition()` 在图标模式跳过（主窗口移动不拽走图标）。
+  2. **语义（`domains/agentWindow.ts`）**：最小化**不再**推送 `chrome:agentWindowClosed`（小窗仍以图标存在，主窗口侧栏保持让位）；只有关闭（`ui:closeAgentWindow` → manager.onClosed）才恢复正常布局。新增 `ui:restoreAgentWindow`（只允许 Agent 窗口自身调用，带 webContents 发送者校验）。
+  3. **渲染侧（`App.tsx` / `TitleBar.tsx`）**：监听新事件 `chrome:agentWindowIconMode`；图标模式只渲染一个 56px 圆角窗体：品牌 ∞ 图标按钮（`data-agent-icon`，点击 `ui:restoreAgentWindow`），整窗可拖动（`-webkit-app-region: drag`，按钮 no-drag）；标题栏提示改为「最小化（收起为图标）」（i18n `titlebar.minimizeAgent`）。关闭按钮不变（恢复正常布局）。
+  4. **输入区「+」**：`Composer.tsx` 在 chipRow 最左新增 26px 圆形按钮（`button.composer-plus`，`border-radius:50%`），走 `usePopover("composer-plus")` 管理模式；菜单当前只有「附件」（复用 `onPickAttachment`，原「附件」chip 移除，入口收进 + 菜单）。与权限/模型菜单互斥；点击外部/Esc/再次点击按钮均收起（沿用 ADR-0058 的全局规则）。
+- **理由**：用户明确要 Slime 的「最小化=图标、关闭=恢复布局」心智；把最小化实现成独立系统窗口缩成图标而不是页内浮窗，是 Loopsoar「小窗=真 BrowserWindow」架构下的自然映射（不引入第二套浮层）。“+” 把低频入口收进一个圆钮，符合用户「以后都往这里放」的扩展意图。
+- **替代方案**：用页内浮窗重写 Slime 的 float 实现（否：Loopsoar 小窗是独立窗口，页内浮窗会与原生 WebContentsView 层级冲突）；最小化改为隐藏窗口 + 托盘图标（否：用户要「变成图标按钮」留在桌面，不是托盘）；标题栏最小化仍走系统最小化（否：用户明确否定）。
+- **后果**：小窗在桌面以 56px 图标存在，点击还原、关闭才恢复主窗口布局；输入区多一个圆形「+」入口（当前含附件）。图标模式与还原有主进程事件双向同步，状态不会丢。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **170 文件 / 1444 tests 全绿**（新增：`computeAgentWindowIconBounds` 纯函数与图标/还原单测、`ui:restoreAgentWindow` 域测试、最小化不再推 closed 断言；`agentWindow.spec` 43 条全过）；真机 E2E（数据副本，`e2e-evidence/agent-icon.log`）：
+  - 打开小窗（422×721）→ 点标题栏最小化 → 窗口 bounds 变 **57×57**（内容 56×56）、渲染层出现 `[data-agent-icon]` + logo → 点图标 → 还原到 424×723（≈原 bounds）。
+  - 输入区「+」：在 chipRow 最左、菜单含「附件」、点聊天区外收起；同时打开小窗成功。
+  - 图标窗截图：`e2e-evidence/agent-icon-icon.png`（56×56 圆角 ∞ 图标）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-10）
+- **回退条件**：若用户希望最小化回到任务栏（Windows 习惯）→ 保留动作入口、改回 `win.minimize()`；若 56px 图标被系统最小尺寸限制（旧数据）→ 启动时统一重设 minimumSize。
+- **复核时间**：小窗交互再调整（拖动/贴边/多显示器）时
+
+---
+
+## ADR-0060 图标窗单层化 + 可拖动 + 最小化/还原衔接动画（Slime 整段移植）
+
+- **背景**：用户 m02794（2026-11-10）：「你看，为什么这个悬浮按钮还有这么大个框？还有，为什么不能拖动，还有，衔接动画呢？你给我去 slime 那边直接搬运这一整段功能吧，你做得这个太差了。」（附图显示：窗口外框 + 内层带边框按钮的双层框；且图标无法拖动、最小化/还原是瞬间尺寸跳变。）
+- **根因**：① agent 窗口创建时 `transparent` 未开、`backgroundColor` 不透明、`roundedCorners:true`，渲染层图标视图又画了整窗 `BRAND.inkRaised` 圆角底 + 内层 44px button（`border: 1px solid borderStrong` + `background: ink`）→ 窗口一层框 + 按钮一层框；② 拖动只依赖 `-webkit-app-region: drag`，但 56px 图标窗中间几乎全被可点还原按钮占据（`NO_DRAG_REGION`），实际可拖面积≈边缘 6px；③ `minimize()`/`restoreFromIcon()` 直接 `applyBounds` 跳变，没有几何衔接动画。
+- **决策**：
+  1. **单层图标**：Agent 窗口创建参数改为 `transparent: true`、`roundedCorners: false`、`hasShadow: false`、`backgroundColor: "rgba(0,0,0,0)"`（`AgentWindowOptions` 增加 `transparent?`/`hasShadow?`）；`packages/ui/index.html` 增加 `html[data-mini-icon]`（含 body/#root）`background: transparent !important`；`App.tsx` 图标态渲染 `<img src="./logo.png">` 铺满 56×56（logo.png 自带圆角底板 = 唯一一层），删除内层 `button` 与整窗圆角底，`data-mini-icon` 由 `agentIconMode` 同步到 documentElement。
+  2. **拖动**：图标视图 `pointerdown` 记录 `screenX/Y`，`pointermove` 超过 4px 视为拖动，按屏幕坐标增量调用新 IPC `ui:moveAgentWindow {dx,dy}`（schema `MoveAgentWindowSchema` 限制 ±10000；契约 gen 重新生成；域层 `withAgentSenderGuard` 只允许 Agent 窗口自身）；主进程 `manager.moveBy(dx,dy)` 夹取工作区并固定 56×56；`pointerup` 未过阈值则视为单击 → `ui:restoreAgentWindow`。
+  3. **衔接动画**：新增 `AGENT_WINDOW_ICON_ANIM_MS = 180` 与 `animateToBounds`（复用 `runAnimation` + `easeCubicBezier`）；`minimize()` 先 `notifyIconMode(true)` 切图标视图、再收缩到图标 bounds，动画结束后才 `setResizable(false)/setAlwaysOnTop(true)`；`restoreFromIcon()` 先放大到 `iconRestoreBounds`，动画完成后才恢复 `minimumSize`/可缩放、取消置顶并 `notifyIconMode(false)`；动画期间 `moveBy` 忽略输入，避免几何打架。
+- **理由**：用户要的是 Slime 那种「点最小化变成一枚可拖动的小图标、点图标带回衔接动画」的手感。窗口层透明 + logo 全幅只留一层视觉；拖动必须在渲染层用 screen 增量驱动（CSS drag 会吞掉点击），动画复用主进程现有逐帧动画机制，跨两个窗口状态仍保持单实例/置顶/还原语义。
+- **替代方案**：用 CSS drag region + 双击还原（否：单层 56px 可拖区与点击冲突，体验差）；在渲染层用 transform 假动画（否：窗口是独立系统窗口，尺寸动画必须由主进程 setBounds）；把图标窗口改为无窗口的桌面浮层（否：Electron 实现成本高且失去任务栏/置顶语义）。
+- **后果**：图标态只剩一枚 56px 圆角 ∞ 图标（无窗框/无系统阴影/四角透明）；按住可拖、松手未动即还原；最小化/还原各 180ms 几何动画；拖动坐标被工作区夹取，不会拖出屏幕。
+- **验证方式**：typecheck 5/5；agentWindow 单测 44 个全过（假 scheduler 逐帧推进动画）；全量 vitest 170 文件 / 1445 tests 全绿；真机 E2E（`e2e-evidence/agent-icon-frame4.log`）：
+  · `E2E_AGENT_ICON`：`before=422×720`、`midBounds=259×424`（严格介于 422×720 与 56×56 之间 → 动画存在）、`iconBounds=56×56`；`iconDom.innerButton=false`、`html backgroundColor=rgba(0,0,0,0)`、整窗无边框（radius 0/透明）。
+  · `E2E_AGENT_ICON_DRAG`：合成 pointer 序列（screen 增量 75/55）后 bounds `(1020,104)→(1095,159)`、`stillIcon=true`（拖动不误触还原）。
+  · `E2E_AGENT_ICON_RESTORED`：单击后回到 `423×720`（≈原 422×720）。
+  · 截图 `e2e-evidence/agent-icon-frame4-icon.png`：单层圆角 ∞ 图标（无外框/内框）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-10）
+- **回退条件**：透明窗口在部分 Windows 驱动上出现黑底/闪烁 → 退回不透明窗口但保留单层 logo 渲染（去掉按钮层）；拖动被 DPI 缩放影响 → 以 `screen.getCursorScreenPoint()` 采样替代屏幕坐标增量；动画导致卡顿 → 降为直接 setBounds 但保留图标单层。
+- **复核时间**：用户反馈图标拖动/动画手感、或 Windows 透明窗口异常时
+
+---
+## ADR-0061 悬浮窗圆角恢复 + 衔接动画改 GPU transform（替代逐帧 setBounds）
+
+- **背景**：用户 m03038（2026-11-11）：「现在有两个问题，首先，怎么悬浮窗成方边了？给我修剪优化一下。其次，现在的收起展开掉帧非常严重，你给我好好优化一下。」
+- **根因**：
+  1. **方边**：ADR-0060 为做透明图标窗把窗口设为 `transparent:true`、`roundedCorners:false`，但小窗（?mini=1）页面 `html/body/#root` 仍铺 `var(--ls-bg)` 不透明底色、App 根节点是直角 → 窗口四角透出的是页面直角底色，看起来就是方形。透明无边框窗口在 Windows 上拿不到 DWM 原生圆角，必须由渲染层裁出圆角。
+  2. **掉帧**：`minimize()/restoreFromIcon()` 用主进程 `setInterval(16ms)` 逐帧 `setBounds` 缩/放**透明窗口**：每帧都要重排整页大 UI（消息列表/侧栏/输入区）并由 DWM 重新合成整窗，透明分层窗口的逐帧 resize 尤其昂贵；同时动画开始/结束切换视图会整树卸载/挂载（React 重渲染）→ 首帧卡顿 + 全程掉帧。E2E 采样虽能看到 ~60fps 的 bounds 序列，但每帧的内容重排/合成在用户侧就是可见卡顿。
+- **决策**：
+  1. **圆角**：小窗页面 `html[data-mini]`（含 body/#root）底色改为 `transparent`；App 根节点在小窗模式加 `borderRadius: 14` + `overflow: hidden`（`styles.appMiniShell`）；`AgentSidebar` 的 mini 圆角同步为 14。窗口仍是 `transparent:true / roundedCorners:false / hasShadow:false`，圆角由渲染层裁切、窗外为桌面。
+  2. **动画改为 GPU transform**：主进程在最小化时 `capturePage()` 抓当前界面快照（dataURL），通过新事件 `chrome:agentWindowTransition` 把 `{phase, shot, durationMs, from, to}` 发给渲染层；渲染层新组件 `AgentTransitionOverlay` 用 `<img>` 全窗铺底 + `transform-origin:0 0` + `translate/scale`（cubic-bezier(0.22,0.61,0.36,1)）做几何动画：
+     - **minimize**：窗口几何**保持不动**（不再逐帧 setBounds）；快照从整窗 scale 1 缩向右上角图标矩形；180ms 后主进程一次性 `setBounds(iconBounds)` 落位 + `notifyIconMode(true)`（图标视图 120ms 淡入）。
+     - **restore**：窗口**瞬间**跳到目标 bounds（透明、内容只有快照）；快照从图标矩形展开成整窗；180ms 后恢复最小尺寸/可缩放并 `notifyIconMode(false)` 挂回真实 UI。
+     - 动画期间 App 内容 `display:none`（`transitionActive`），页面只绘制这一张 `<img>`，不触发大 UI 重排；`html[data-mini-transition]` 底色透明。
+     - 截图失败自动退回 ADR-0060 的旧行为（切图标视图 + 逐帧 setBounds），保证功能可用。
+  3. **类型/契约**：`onTransition` payload 增加 `from/to` 窗口矩形；新增事件 `chrome:agentWindowTransition`（contracts/schemas + gen + types.d.ts 同步）。
+- **理由**：Windows 透明窗口逐帧 resize 是掉帧本质；把视觉运动交给合成器的 CSS transform（GPU）后，主线程只做一次截图 + 一次落位，动画不受页面重排/DWM 重合成影响；圆角在透明窗下本来就必须由渲染层负责，正好与 transform 过渡共用同一套页面。
+- **替代方案**：回到不透明窗口（否：拿不到透明圆角，图标窗又会出方角/双层底板）；缩短动画时间掩盖（否：治标不治本，且用户已明确「好好优化」）；把动画做进页面内（窗口尺寸仍要变，无法只靠页面 transform 完成窗口化最小化）。
+- **后果**：小窗四角恢复圆角（透明窗外露桌面）；最小化/还原变成 GPU 平滑缩放，动画期间视觉内容为界面快照（与真实 UI 同图，展开结束时无感切换）；窗口几何只在动画起止各跳一次（内容位置对齐，不可见）；图标出现 120ms 淡入消除硬切。
+- **验证方式**：
+  - `pnpm -r typecheck` 5/5；`pnpm gen`/`pnpm check`/`pnpm build` 通过；`agentWindow` 单测 44 个全过；全量 vitest **170 文件 / 1445 tests 全绿**。
+  - 真机 E2E（`e2e-evidence/agent-icon-gpu2.log`）：`midDom={overlay:true, setting:"1", appHidden:"none"}`；minimize 期间 bounds samples 恒为 `420×722`（逐帧 resize 已移除），约 277ms 时一次性落到 `56×58`；`mid.png` 显示快照缩到右上角、窗口其余透明；restore 中途 `overlay:true、iconView:true、bounds=420×723`；`restore-mid.png` 显示快照展开中；还原后 `420×724`。
+  - 圆角证据：`agent-icon-gpu2-agent-window.png` 四角 alpha=0（14px 圆角），PIL 合成浅色棋盘底后 `agent-icon-gpu2-corners.png` 可清楚看到圆角；图标态仍是单层 `∞` 图标（`agent-icon-gpu2-icon.png`）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）
+- **回退条件**：截图接口在某些 GPU/远程桌面下返回黑图 → 自动退回逐帧 setBounds（已有 fallback）；CSS transform 在极旧内核异常 → 同上；用户觉得快照过渡「不是实时 UI」→ 可把 durationMs 降到 120ms 或改回窗口 resize。
+- **复核时间**：用户再反馈悬浮窗口手感、或 Windows/Electron 升级改变透明窗合成行为时
+
+---
+## ADR-0062 收起/展开直接搬 Slime float：面板几何过渡 + 内容钉住裁切 + 图标淡入淡出（替代 ADR-0061 快照 transform）
+
+- **背景**：用户 m03326（2026-11-11，附 15s 录屏）：「如视频所示，你现在的展开与收起做得非常烂，实在不行你就去 slime 那边直接『抄作业』吧，现在你的问题在 slime 那边都有过，而且基本都被解决了，你直接去搬代码吧。」录屏显示旧实现：面板收起/展开有明显跳变、出现细条残影、过渡不连续（60fps 录屏里 1~2 帧完成）。此前 ADR-0061 已做「快照 + GPU transform」，但用户仍认为观感差。
+- **根因（与 Slime 对照）**：
+  1. ADR-0061 是**截图整体缩放**（transform scale），文字/控件跟着缩小变形；Slime 的 float 过渡是**窗口宽高裁切 + 内容尺寸钉死**（`body.slime-freezing .chat-scroll { width: var(--slime-freeze-w) !important; flex: 0 0 auto }`，祖先 `overflow:hidden`）——视觉上「窗口收起、内容被裁掉并淡出」，不是整张图缩小。
+  2. ADR-0061 依赖 `capturePage()`，点击最小化后要等截图（几十 ms）才开始动画 → 手感有延迟；Slime 是纯 DOM/CSS 过渡，点击即动。
+  3. ADR-0061 的 restore 先 `setBounds(target)` 再发事件，渲染层可能有一帧「整窗/大图标」闪烁；Slime 始终在同一页面里，不存在换窗闪烁问题。
+  4. 之前动画时长 180ms 明显快于 Slime 的 `FLOAT_TRANSITION_MS = 400` 与 `cubic-bezier(0,0,0.2,1)`；Slime 用户实测「过渡帧对了但优化不行、表现很卡顿」后，正是用「钉内容尺寸 + 裁切」修掉的。
+- **决策（按 Slime `minimizeFloat / restoreFloat / startFloatGeometryFade` 的结构移植）**：
+  1. **面板化**：`?mini=1` 内容包进 `[data-agent-panel]`（`position:absolute`、`borderRadius:14`、`overflow:hidden`、底色 `BRAND.ink`）；真实 UI 放内层 `div`，动画期间 `width/height` 钉死为**起始窗口像素尺寸**（`agentFloatFreeze`），只改面板的 `left/top/width/height` → 内容零重排，祖先裁切；普通状态内层 100% 自动布局。
+  2. **minimize**（窗口 bounds 不动）：主进程发 `chrome:agentWindowTransition { phase:"minimize", durationMs:400, from:{0,0,w,h}, to:图标相对矩形 }`；面板 `left/top/width/height` 400ms `cubic-bezier(0,0,0.2,1)` 过渡到图标位置；内容透明度由 rAF 按面板宽度进度驱动（Slime `startFloatGeometryFade`：宽度 >90% 区间全亮、90%→45% 区间 smoothstep 淡出），图标层 `opacity 180ms ease 120ms` 淡入（Slime 原参数）；过渡结束主进程一次性 `setBounds(iconBounds)` + `notifyIconMode(true)`，渲染层把面板重置为 56px 窗口铺满（内容仍钉住），视觉与动画终点完全重合。
+  3. **restore**：主进程先算「舞台」bounds = 图标 bounds ∪ 目标 bounds（处理图标被拖到远处），`setOpacity(0)` 防换窗闪烁 → 通知 `phase:"restore"` → `setBounds(stage)` → 40ms 后 `setOpacity(1)`；渲染层从图标相对矩形展开到目标矩形（同样 400ms/ease）；结束再 `setBounds(target)` + `notifyIconMode(false)`，渲染层弹回普通布局。图标层固定 56px logo（不随面板缩放），restore 时快速淡出。
+  4. 删除快照链路：`capturePage` / `iconTransitionShot` / `AgentTransitionOverlay` / 1500 行级的过渡截图逻辑全部移除；`AGENT_WINDOW_ICON_ANIM_MS = 400`；事件 payload 改为 `{phase,durationMs,from,to}`（不再有 shot）。`from/to` 是窗口内 CSS px 相对矩形。
+  5. 起点几何挂载那一帧 `transition:none`（否则浏览器会从上一状态插值出「先摊满再缩」的假动画），下一帧再启用 transition——与 Slime 先设起点样式再触发过渡一致。
+- **理由**：Slime 已经在同类问题上给出可复现的解法：过渡只动外框、内容尺寸钉死 + 裁切 → 每帧只有面板几何与合成，不触发大 UI 重排；400ms/ease 是 Slime 实机调过的手感；点击即开始动画（无截图延迟）。
+- **替代方案**：继续改进快照 transform（否：视觉是缩放而非裁切，与 Slime 观感不同，且仍需等待截图）；直接换回逐帧 setBounds（否：ADR-0061 已证明掉帧）；把 float 改成主窗口内页面浮层（否：产品形态是独立系统窗口，改动过大且会推翻既有 Agent 窗口语义）。
+- **后果**：收起 = 面板从整窗裁切收拢到右上角图标、内容淡出、图标淡入；展开 = 图标位置长回整窗、内容淡入；窗口只在动画起止各跳一次（内容位置对齐，肉眼不可见）；图标被拖远也能从图标位置展开回来。图标态点击/拖动保留。
+- **验证方式**：
+  - `pnpm -r typecheck` 5/5；`pnpm gen`/`pnpm check`/`pnpm build` 通过；`agentWindow` 单测 44 全过；全量 vitest **170 文件 / 1445 tests 全绿**。
+  - 真机 E2E（`e2e-evidence/agent-float-final.log`）：minimize 中途 `midDom.panel = 197×314`（起点 420×722、终点 56×56，`transition: 0.4s,0.4s,0.4s,0.4s`）、窗口 bounds 全程保持 `420×722`（无逐帧 resize）；结束后 `iconBounds = 56×58`；restore 中途 `panel = 279×464`（舞台 488×723，从图标相对位置展开）、结束后窗口回到 `420×724`；`agent-float-final-mid.png` / `-restore-mid.png` 可见「面板裁切 + 内容淡出/淡入 + 图标淡入/淡出」，`-icon.png` 为单层 56px ∞ 图标。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）
+- **回退条件**：低配机器上 400ms 仍掉帧 → 降 durationMs（200~300）或改为只做透明度淡入淡出；面板裁切在 DPI 缩放下出现缝隙 → 用 `getBoundingClientRect` 整像素取整；用户更喜欢快照缩放观感 → 保留 ADR-0061 的 `AgentTransitionOverlay` 作为可选分支（当前已删除，需要时从 git 历史取回）。
+- **复核时间**：用户再反馈收起/展开手感、或后续加入小窗缩放/贴边交互时
+
+---
+## ADR-0063 浏览器管理整页/搜索引擎/加载失败页的收口设计
+
+- **背景**：用户 2026-11-11 指出四组问题：① 历史页「清除历史」按钮不可用且颜色暗淡；需要「点击后行内平滑出现勾选框 + 列表下方同宽操作条（全选/取消/删除）」（图一）。② 历史/下载/收藏空态是虚线框、不应有；顶栏三个按钮（保存页面/设置/刷新）全部一样且多是无用入口（图一~三）。③ 设置·通用的「默认搜索引擎」分段只有 Bing 生效，要求删除并单开「搜索引擎」栏目（Chrome 式列表，只保留 Bing/Google/百度）；地址栏左侧放大镜换成引擎图标下拉，开始搜索后恢复无功能放大镜（图四/五/六/七/八）。④ 所有搜索加载/失败界面只有初始页或一条提示，要求补齐加载页与分类失败页（图九/十）。
+- **决策**：
+  1. **历史批量删除**：`browserHistoryStore.remove(urls)` + 契约 `browser:historyRemove`（urls 1..500，幂等，返回 removed）；历史页点「清除历史」进入选择模式：行首勾选框以 `width/opacity/margin` 140ms 过渡平滑出现，列表下方同宽 `selectionBar`（fadeUp 160ms）含「全选」checkbox（全选/取消全选）、已选计数、取消、删除；删除后重新拉取并退出选择模式。清除历史按钮改品牌赭石色实底（不再是 0.5 透明禁用态）。
+  2. **空态与顶栏**：`StateBox` 空态改为纯居中文字（去虚线框/底色），错误态保留淡红提示块；历史/下载/收藏顶栏删除「保存当前页面」「刷新」，改为页面互跳按钮（历史记录/下载内容/收藏夹/设置），设置页仍由返回退出。
+  3. **搜索引擎单一产地**：偏好枚举 `bing|google|baidu`（删除 DuckDuckGo；`mergePreferences` 对旧 `duckduckgo` 值静默迁移为 Bing，避免旧配置把整份偏好判非法）；`buildSearchUrl`/`searchUrlFor` 同步；设置新增「搜索引擎」分区（`settings.searchengine.*`），Chrome 式列表：图标 + 名称 + 域名 + 单选圆点，仅 Bing/Google/百度；通用页删除「默认搜索引擎」分段。
+  4. **地址栏引擎切换**：新建标签页（`currentUrl` 为空）时地址栏左侧显示当前引擎图标按钮，点开为引擎菜单（`usePopover("browser-engine")` 全局独占/点外收起），显示图标+名称，选中后立即写偏好；一旦有页面 URL（搜索/导航后）恢复为普通无功能放大镜，避免中途切换造成搜索目标不一致。新增 `engine-bing/google/baidu.svg` 品牌图标与 `browser.searchEngineChoose` 文案。
+  5. **加载页/失败页**：shell 侧 `WebContentsAdapter` 新增主框架加载事件（`did-start-navigation` 主框架、`did-stop-loading`、`did-fail-load`，过滤 -3 ERR_ABORTED 与非主框架），`BrowserHost.TabState` 增 `loading`/`loadFailure`，并在 `applyLayout` 中对 `loading || loadFailure` 的标签隐藏原生视图 —— 让 DOM 的 `BrowserSurface`（原 StartPage）接管：加载页 = logo 呼吸 + 不确定进度条（不伪造百分比）+ 目标 host + 提示；失败页 = 按 Chromium net error 分类（离线/域名/拒绝/超时/证书/拦截/未知）的图标、标题、一句话解释、错误码、重试/返回上一页。分类函数独立到 `packages/ui/src/browserFailure.ts` 以便单测。
+- **理由**：这些页面此前只有「列表 + 一条 toast」，操作入口缺失且空态用虚线框装点，是「能用但不像成品」的典型；加载/失败必须由宿主让出原生视图（WebContentsView 永远盖在 DOM 之上，无法用 DOM 覆盖），否则只能看到 Chromium 白屏/默认错误页。搜索引擎做成「新建页可切、已打开页不可切」正是为了避免用户搜索到一半换引擎导致结果页与预期不符。
+- **替代方案**：历史删除做成「一键清空全部」（否：用户明确要勾选式）；搜索引擎继续用设置里的分段（否：用户要求单开栏目 + Chrome 式列表）；地址栏始终可切换引擎（否：中途切换会让地址栏显示的引擎与结果页不符）；错误页用 toast/Chromium 默认页（否：无法分类、无法重试）。
+- **后果**：历史支持勾选批量删除；空页/管理页顶栏变成页面跳转；设置多出搜索引擎分区；地址栏有引擎图标切换；加载/失败有专门页面与重试。原生视图在加载期间隐藏，首次加载会有短暂「加载页」过渡（可接受；失败时不再露出 Chromium 默认错误页）。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1449 tests**（新增 browserSurface 分类 2 + history remove 2）；`pnpm gen/check/build` 通过；真机 E2E（数据副本，种子历史 3 条，`e2e-evidence/final-ui.log`）E2E_EVAL ok:true：历史行 3、清除按钮可用、勾选框可见宽 >10、全选后已选 3、删除后历史 0；下载/收藏空态文字存在且 `border-style: none`；顶栏有 下载内容/收藏夹/历史记录/打开设置、无 保存当前页面；设置·搜索引擎 3 行且点百度后偏好为 baidu；新建页引擎图标出现、菜单 3 项、切 Bing 后偏好为 bing（图标同步 engine-bing）；加载页（logo+进度条）出现；访问 `http://127.0.0.1:19444/` 出现 `data-browser-error="refused"` 错误页（错误码 -102）且含重试/错误码。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）
+- **回退条件**：历史数据量过大导致勾选卡顿（改为虚拟列表）；搜索引擎增删需求出现（把静态三引擎改为可配置 store）；Chromium 事件语义变化导致加载页不消失（退回 did-stop-loading 兜底 + 超时强制收）。
+- **复核时间**：浏览器加载事件/错误码变化、地址栏交互再调整时
+
+---
+## ADR-0064 浏览器管理三页：左侧索引栏（搜索 + 分类）+ 批量操作条上移/对齐修复
+
+- **背景**：用户 m04298 对 ADR-0063 的成品提两点：① 历史页「全选」那一行应放在列表**最上方**，且这一行「是凸出来的」——与上方/下方记录没有对齐；② 希望像 Edge 的下载/收藏/历史页那样，在三个管理页**左侧**做一个搜索索引 + 分类栏，利用每行左侧的大片空白。
+- **根因**：
+  1. **凸出/不齐**：`ChromePage` 的行用 `button`/`div` 且 `width: 100%`，但未设 `box-sizing`（content-box 下 100% + 左右 padding 20px + 边框 2px = 超出容器 22px）；操作条没有显式宽度（按容器宽），于是行比操作条宽 22px → 视觉上「凸出去」；同时操作条在列表下方，与行不同宽所以更明显。
+  2. **左侧空白**：列表直接满宽铺在内容区，标题/URL 只占左侧一小段、右侧只剩时间/徽标，中间大片留白；没有搜索与分类入口，只能整页滚动。
+- **决策**：
+  1. **布局改为三栏（Edge 式）**：`main` 非设置页用 `bodySplit` = 左 `aside`（固定 216px：顶部搜索框 + 分类列表）+ 右 `contentCol`（可滚动内容）。设置页保持整页 Settings 不变。
+  2. **搜索**：`searchQuery` 内存过滤（历史匹配 title/url；下载匹配 filename/savePath；收藏匹配 title/url），大小写不敏感；无匹配显示「没有匹配的内容」空态。
+  3. **分类**：历史=全部/今天/昨天/更早（按 `visitedAt` 与本地零点比较）；下载=全部/进行中/已完成/已取消/失败（按 state）；收藏=全部/最近 7 天/更早（按 createdAt）。分类在本地数组上过滤，不额外拉数据；切换页面时清空搜索/分类/批量选择。
+  4. **批量操作条**：移入 `listWrap` 顶部、位于列表行之前；`listWrap`/`list`/`selectionBar`/`row`/`dlRow` 全部 `box-sizing: border-box` 且宽度 100%，操作条与每一行严格同左缘/同右缘；全选只作用于**当前可见**（搜索/分类过滤后）的行，筛选/搜索变化时清空已选，避免误删被过滤掉的条目。
+- **理由**：搜索+分类是列表页的基本导航能力，且三栏布局天然把「行内右侧留白」变成左栏，不再需要横向撑满；对齐问题本质是盒模型少写 `box-sizing`，不修的话任何 `width:100%` + padding 的控件都会溢出容器。
+- **替代方案**：把操作条固定在页面顶栏下方（否：会与顶栏页面按钮混在一起，且搜索/分类切换后视觉断层）；用完整虚拟列表 + 多列（否：数据量 500 内，三栏足够）；分类走后端查询（否：数据已在内存，多一次 IPC 无收益）。
+- **后果**：三个管理页左栏可搜索/按类筛选；批量操作条在列表最上方并与行严格对齐；设置页不受影响。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1449 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（数据副本，`e2e-evidence/final-ui.log`）E2E_EVAL ok:true：历史页 aside 搜索框存在、分类 4 项；搜索 "zzz-not-found" → 无行 + 「没有匹配的内容」，搜索 "example" → 3 行，清空恢复 3 行；「更早」分类 → 0 行；批量操作条 `barAboveRows=true`、与首行左右缘偏差 ≤1.5px；后续删除 3 条历史仍 ok。截图 `e2e-evidence/final-ui-history.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）
+- **回退条件**：后续需要「按站点分组/按目录分类」等更强索引 → 换成可折叠分组或后端聚合接口；行数超过虚拟列表阈值 → 只虚拟化右侧内容列，左栏保持静态。
+- **复核时间**：浏览器管理页再增加新页面类型（扩展/权限等）时统一套用该三栏布局
+
+---
+## ADR-0065 新建标签页重做：搜索 / Vibecoding 拨片 + 模型胶囊 + 会话页平滑过渡
+
+- **背景**：用户 m04399 指出：① 启动应有「新建标签页」，且像正常浏览器一样，关闭最后一个标签页要关闭浏览器（当前无初始标签、关闭语义缺失）；② 新标签页要有搜索输入框，搜索引擎用设置里用户选的引擎（布局参考 Edge 新标签页）；③ 搜索框上方做左右拨片，切换「搜索 / 进入 Vibecoding」；进入 Vibecoding 后输入区变成发送栏、下方出现模型选择（参考图三）；发送后出现正常会话页（参考图四），发送栏平滑下移、整页渐入为会话页。
+- **决策**：
+  1. **初始标签页**：`App` 启动后一次性检查 `browser.listTabs()`，为空则 `newTab({})` 补一个空白标签；空 URL 标签在标签条统一显示 i18n「新建标签页」（`BrowserTabs` 以 `tab.url ? tab.title : tr(...)` 渲染）。
+  2. **关闭最后一个标签页 = 关闭浏览器**：`App.closeTab` 在 `tabs.length <= 1` 时调用 `api.window.close()`（主窗口关闭 → 应用退出），其余情况仍走 `browser.closeTab`。
+  3. **StartPage 重构为三态**：`loading`（加载页）、`error`（分类错误页，沿用 ADR-0063 的分类）、`ntp`（新建标签页，含 search/vibe 两个子模式）、`chat`（Vibecoding 会话页）。错误/加载态仍是原生视图隐藏时的 DOM 接管。
+  4. **搜索页**：品牌 logo + 「搜索 / Vibecoding」滑块式拨片（thumb `translateX` 过渡 220ms）+ 大标题 + 52px 搜索框（左侧显示偏好搜索引擎图标，回车/按钮提交；`App.navigate` 用偏好引擎解析 URL/搜索词）+ 「最近访问」快捷入口（`browser.history` 前 6 条，没有则隐藏）。
+  5. **Vibecoding 输入态**：自动增高的 textarea + 底部「模型胶囊」（预载 `modelGroups`，点开分组列出所有供应商模型，选择即 `chooseModel` 切活跃供应商/模型）+ Enter 发送 / Shift+Enter 换行提示 + 发送按钮。
+  6. **发送 → 会话页**：`App.startVibe(text)`：当前会话没有消息就直接用它，否则先 `chat.newSession()` 再向新会话发送（避免把新标签页的 vibe 混进旧对话）；`StartPage` 收到动作后立即切 `chat` 视图。会话页复用 `MessageList`（含思考/回滚/重新生成）渲染当前会话，底部发送栏支持继续发送与停止；CSS `vibeComposerDrop` 380ms（从上方 -38vh 滑入）+ `vibePageIn` 260ms 实现「发送栏下移、整页渐入」。发送栏再次发送走 `sendText`，会话由 App 统一流式管理。
+  7. **入口复用**：新标签页动作全部通过 App 注入（`onSubmitSearch/onOpenUrl/onStartVibe/onSendMessage/onStop/onChooseModel`），StartPage 不持有会话状态；模型清单在 App 启动后预载一次，胶囊点开不额外请求。
+- **理由**：新标签页是「无事可做」时最高频的界面，搜索与 Vibecoding 是两个明确意图，用拨片分流比在地址栏里塞模式更直观；会话页复用既有 `MessageList` 与 App 流式状态，避免在浏览器区重建一套聊天状态机。关闭最后标签=关窗是浏览器肌肉记忆，缺失会让人误以为关不掉。
+- **替代方案**：Vibecoding 直接跳到右侧会话栏（否：用户明确要「整页渐入为正常会话页」）；搜索框只做 URL 导航（否：用户要求用设置的搜索引擎）；模型选择复用侧栏 Composer 弹层（否：Composer 弹层锚点在侧栏，跨区复用会同时打开两个菜单）。
+- **后果**：启动即有「新建标签页」标签，关闭它即退出主窗口；新标签页可在搜索/编程两种意图间切换；Vibecoding 发送后进入整页会话（右侧栏仍同步显示同一会话）；模型可在此处直接切换。真实模型回复仍由既有 chat 流式链路驱动。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1449 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/ntp.log`，E2E_EVAL ok:true）：启动含「新建标签页」标签、拨片双按钮存在、搜索引擎图标 `engine-bing`；输入 `loopsoar agent` 提交后活动标签 URL 变为 `https://cn.bing.com/search?q=loopsoar%20agent`；切 Vibecoding 出现输入框与模型胶囊（菜单 8 项）；点击发送后出现 `data-browser-state="chat"`、底部输入 `vibe-composer-drop` 存在、用户消息「快速排序」可见。截图 `e2e-evidence/ntp-search.png`、`ntp-vibe.png`、`ntp-chat.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）；关闭最后标签→关窗为源码路径（E2E 不主动退出被测进程，未纳入自动断言）
+- **回退条件**：会话页在浏览器区与右侧栏双写造成状态分叉 → 收敛为单向（侧栏只读或隐藏）；搜索引擎需要更多家 → 与 ADR-0063 的搜索引擎设置共用枚举；关闭最后标签改为「保留空标签」产品决策 → 仅改 App.closeTab 一行。
+- **复核时间**：新标签页交互再调整、或浏览器管理页需要与 Vibecoding 互通时
+
+---
+## ADR-0066 Vibecoding 会话页卷轴只显示上半截/歪斜：MessageList 不能套额外滚动容器的修复
+
+- **背景**：用户 m04564 截图（Vibecoding 会话页）指出：右侧卷轴拖拽条「歪了、只有上半部分」。截图里卷轴（TopicRail 双股波浪线）只画在内容顶部约 1/3 高度，且不跟随整页高度。
+- **根因**：`VibeChatView` 把 `MessageList` 包进了一个自建的 `chatScroll` 容器（`overflowY:auto` + 自己滚到底），而 `MessageList` 内部结构是 `messageArea`（`position:relative; flex:1`）→ `chat-scroll`（自身滚动容器）。父级不是 flex 时 `flex:1` 不生效，`messageArea` 高度塌成内容高度；`TopicRail` 是 `position:absolute; top:6; bottom:6`，于是只在「内容高度」范围内绘制 → 看起来只画了上半截；外层再滚动，视觉上更歪。E2E 断言 `TopicRail` 高度 < 400px 即可复现。
+- **决策**：`chatScroll` 改成**纯布局容器**（`flex:1; minHeight:0; display:flex; flexDirection:column`，无 `overflow`、无自建 padding），让 `MessageList` 作为直接 flex 子项撑满整个会话区，由 `MessageList` 自己的 `chat-scroll` 负责滚动与卷轴定位；删除 `VibeChatView` 里「外层滚到底」的 effect（MessageList 已自带跟随逻辑）。新标签页/加载页/错误页不变。
+- **理由**：卷轴是「聊天滚动容器」的装饰层，必须挂在同一个滚动容器上；多套一层滚动会让「可视高度/内容高度」分裂成两份，任何按百分比/绝对定位的装饰都会错位。这是布局契约问题，不是 TopicRail 的 bug。
+- **替代方案**：给 MessageList 加 `hideRail` 选项并在外层自绘一个简化滚动条（否：丢失卷轴交互与既有 Parameters）；把 TopicRail 移到外层（否：它依赖内部 scroller 的 scrollHeight 计算锚点与拖动映射）。
+- **后果**：Vibecoding 会话页卷轴恢复贯穿整页高度、跟随内部滚动；`MessageList` 原有跟随/折叠/回滚等行为不变。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1449 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/ntp.log`）：会话页 `.topic-rail` 高度 > 400px、rail 底边与聊天区底边偏差 < 40px、发送栏下移类存在、用户消息可见；截图 `e2e-evidence/ntp-chat.png` 可见卷轴贯穿整页右侧。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）
+- **回退条件**：若后续要在会话页加「外层统一滚动」的产品需求，需要同步改造 TopicRail 以接受外部 scroller（而不是把 MessageList 塞进滚动容器）。
+- **复核时间**：会话页再调整滚动/高度结构时
+
+---
+## ADR-0067 新标签页模型菜单被拨片文字穿透：浮层改用 portal 脱离页内层叠上下文
+
+- **背景**：用户 m04624 截图：Vibecoding 输入态的模型胶囊展开供应商/模型菜单后，上方「搜索 / Vibecoding」拨片的文字和图标**穿透显示在菜单之上**（菜单被压在拨片下面），用户要求修复。
+- **根因**：菜单虽然 `position:absolute; z-index:60`，但它挂在 `.modelChipWrap → .vibeBar → .vibeBox → .modeBody` 内部；`.modeBody` 带 `animation: vibePageIn`（keyframes 含 `transform`），**动画/变换会创建新的层叠上下文**，把菜单的 z-index 封在内部；而拨片按钮 `position:relative; z-index:1` 在更外层上下文里，于是拨片内容能盖在菜单上。仅调大菜单 z-index 无效（逃不出祖先层叠上下文）。
+- **决策**：
+  1. 模型菜单改为 `createPortal(..., document.body)` + `position:fixed`：打开时读取胶囊按钮 `getBoundingClientRect()`，按视口计算 `left`（夹在 8..innerWidth-328）与 `bottom`（胶囊上方 8px），z-index 1000，彻底脱离页内层叠上下文与动画影响。
+  2. 保留 `usePopover("vibe-model-chip")`：点菜单外/Esc 收起、其它浮层打开时互斥；portal 菜单带 `data-popover`，外部点击检测按 DOM 归属判断，仍生效。
+  3. 菜单宽度固定 320、最大高度 320 滚动，与原先一致。
+- **理由**：页面内浮层只要祖先链上存在 transform/animation/filter/will-change 就可能被「降级」到局部层叠平面，z-index 不再是全局排名；portal 到 body 是唯一稳定解，也让菜单不受 `.ntpInner`/`overflow` 裁切影响。
+- **替代方案**：去掉 `.modeBody` 的入场动画（否：会损失体验且其它祖先仍可能变化）；把拨片 z-index 降到 0（否：治标不治本，换个动画又复现）；用原生窗口 Popover（否：轻量菜单不值得开独立窗口）。
+- **后果**：模型菜单始终浮在最上层（含覆盖拨片/标题），点击选择/外点收起行为不变；会话页下方的紧凑模型胶囊复用同一实现。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1449 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/ntp-menu.log`，E2E_EVAL ok:true）：打开菜单后取「菜单与拨片重叠点」的 `elementsFromPoint` 最顶层元素 → `closest("[data-vibe-model-menu]")` 为真；`menu.parentElement === document.body`；菜单 8 个可选项。截图 `e2e-evidence/ntp-menu.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-11）
+- **回退条件**：后续改用统一的全局浮层管理器（例如把所有菜单都走 portal）→ 删除本组件内联定位；窗口缩放/滚动时菜单需要跟随 → 增加 resize/scroll 重算锚点（当前打开期间不跟随，先关闭再开即可）。
+- **复核时间**：新标签页/会话页浮层再增加时，优先直接复用 portal 方案
+
+---
+## ADR-0068 Vibecoding 主页面：控制条（工作区/模型/推理/模式）+ 右侧会话列表（工作区树/搜索）+ 收起态会话竖条
+
+- **背景**：用户 m04698 指出：① 主页面直接会话目前只有模型选择，推理强度等控制缺失；② 会话工作区选择放进「+」里（点击展开列表，含已有工作区与「新加工作区」，后者弹原生文件夹选择器）；③ 不在会话列表里主动选会话而直接回话时，应自动新建会话；④ 会话选择放在右侧栏；⑤ 选择 Vibecoding 后侧栏会话按钮平滑变为「会话列表」按钮，展开后按工作区嵌套（工作区 → 会话，默认全展开）；⑥ 侧栏收起时在右侧空白列显示简易会话竖条：悬停显示标题、最下方加号新建会话、悬停约 1 秒自动展开会话列表，列表顶部有标题搜索（相关度排序、精确优先）。
+- **决策**：
+  1. **Vibe 控制条**（`StartPage.tsx`）：输入区底部统一为 `[+ 工作区] [模型胶囊] [推理 chip] [Build/Plan]`。模型胶囊仍是现有跨供应商分组菜单；推理 chip 使用模型声明的 `effortOptions`（为空则不显示），菜单用 portal 固定定位（ADR-0067 同款）；Build/Plan 一键切换。新标签页输入态与会话页底部输入栏复用同一 `VibeControls`。
+  2. **工作区选择**：`+` 打开 portal 菜单列出 `workspaces`（活动项打勾）+「新加工作区…」；新建调用 `api.workspace.create({})`（原生文件夹选择器）并设为活动工作区；选择调用 `api.workspace.select`。App 启动预载 `workspace.list()`，新建会话沿用 shell「活动工作区」绑定（`chat.newSession` 使用 `getActiveWorkspaceId`）。
+  3. **直接回话 = 新会话**：新增 `pickedSessionRef`，只在用户从会话列表主动 `switchSession` 时置 true；`startVibe` 仅在该标记为真时续接当前会话，否则**总是** `chat.newSession()` 再发送（发送后清标记）。会话页内继续发送仍走 `sendText` 保持同会话。
+  4. **会话列表面板**（`SessionListPanel.tsx`）：替换侧栏原扁平下拉；顶部搜索框；无搜索词时按工作区分组（默认展开、点组头折叠）；搜索用纯函数 `sessionSearch.ts` 打分（标题精确 1000 > 前缀 800 > 包含 600 > 预览 300 > 多 token 200），同分按更新时间倒序，精确命中自然排第一；底部「新建会话」。
+  5. **侧栏按钮两态**：`AgentSidebar` 接收 `vibeMode`；会话 chip 用双层交叉淡入（180ms）在「会话标题 / 会话列表」之间切换图标与文案。弹层宽度 300→340 以容纳工作区树。
+  6. **收起态会话竖条**：`mode === "collapsed"` 时在 48px 列渲染 `sidebar-collapsed-rail`（不卸载侧栏内容，保持宽度动画）：会话首字头像（`title` 原生悬停标题）、当前会话赭石高亮、最下方加号；整条悬停 1000ms 触发 `onExpandFromRail` → App 切回 docked 并在宽度过渡后（380ms）打开会话列表；点竖条条目 = 切会话 + 展开。
+- **理由**：工作区是会话归属的唯一上下文，放在发送栏 `+` 比藏在设置/侧栏更深的位置更贴近「开始写之前先选项目」的心智；直接回话默认新会话避免把新想法接进旧对话；工作区→会话树与收起竖条是文件式导航的自然延伸，也让 48px 列不再空白。
+- **替代方案**：工作区选择放顶栏下拉（否：用户明确要「+」）；搜索走后端索引（否：会话量级小，内存打分即可）；收起竖条点击才展开（否：用户要求悬停一段时间自动展开）；Vibecoding 按钮直接整体重绘（否：交叉淡入更平滑）。
+- **后果**：主页面可完整控制工作区/模型/推理/模式；直接发送默认开新会话；侧栏会话列表按工作区嵌套并支持相关性搜索；收起态出现可悬停展开的会话竖条。`pickedSessionRef` 是唯一「是否续接」的判据，后续若增加「从列表选中并回到新标签页」的显式状态，需同步维护该标记。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1451 tests 全绿**（新增 `tests/ui/sessionSearch.spec.ts` 2 条）；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/sidebar.log`，E2E_EVAL ok:true）：Vibe 控制条/工作区 + 菜单/模型/推理 chip/Build→Plan 切换均通过；工作区菜单含「新加工作区…」；直接发送后会话数 +1（before=1 → after=2）且当前会话变化；Vibecoding 下侧栏按钮显示「会话列表」；面板含搜索框、1 个工作区分组、2 条会话、新建按钮，精确标题搜索排第一；收起后竖条出现 2 个会话条目（含 title）+ 加号，悬停约 1.65s 后侧栏恢复 docked 且会话列表自动打开。截图 `e2e-evidence/vibe-controls.png`、`session-list.png`、`sidebar-collapsed.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）；「新加工作区…」打开的是原生文件夹选择器（受系统模态限制，E2E 只断言入口存在，不自动操作系统对话框）
+- **回退条件**：会话量级变大（>2000）后搜索需要后端索引；工作区树需要拖拽排序时改用手写树组件；收起态竖条若与悬浮小窗冲突，改为点击展开。
+- **复核时间**：会话列表/工作区模型再调整时
+
+---
+## ADR-0069 Vibecoding 输入区加号/胶囊统一、侧栏按钮图标平滑切换与会话列表面板版式
+
+- **背景**：用户 m04963（附 4 张对照图）指出：① 左侧 Vibecoding 输入区的「+ 工作区」不对，要和右侧会话输入区的「+」一样（点开是「更多操作 → 附件」），并在其上增加「工作区」项（点击弹原生文件资源管理器选文件夹作为工作区）；常态应像右侧一样只显示一个圆框包住的加号；② 其余胶囊按钮深/浅不一，末尾还有省略号，需要统一；③ Vibecoding 下右侧边栏的「展开会话」按钮应**平滑变成列表图标**（图二 → 图三），点击展开的会话列表按图四版式排好（工作区为标题、会话单行 + 右侧时间）。
+- **根因**：① `WorkspaceControl` 是「+ 工作区名」文本胶囊，样式与右侧 `Composer` 的圆形 `+`（`.composer-plus`）不同；且其菜单只有工作区，没有附件入口。② 模型胶囊自带深色底（`BRAND.ink`）+ 自己的 maxWidth/ellipsis，工作区/推理/模式胶囊依赖全局 `.chip` 的浅底；模型与推理胶囊末尾还有 `more`（三点）图标，被误认为省略号。③ Vibecoding 判断只让会话 chip 整块交叉淡入；用户期望的是**图标**（星标/会话图标 → 列表图标）单独平滑切换；同时会话面板的版式是两行 meta，与参考图四的「工作区标题 + 单行会话 + 右侧时间」不一致。
+- **决策**：
+  1. **圆形 + 菜单**（`StartPage.tsx`）：`WorkspaceControl` 改为 `PlusControl`：26×26 圆形按钮（与 `Composer` 的 `plusBtn` 同尺寸/边框）、常态无文字；菜单顺序 = 「工作区」标题 → 已有工作区（当前打勾）→「新加工作区…」（`workspace.create` 原生文件夹选择器）→ 分隔线 →「更多操作」→「附件」。附件选择与右侧输入区共用 App 的 `pickAttachmentPath()`（原生文件选择器），路径以 `composer.insertAttachment` 模板插入当前草稿。
+  2. **胶囊统一**：新增单一 `controlChip` 样式（height 24、padding 0 9、border-radius 999、同一边框与同一半透明白底、字号 11），模型/推理/模式全部使用它；删除末尾 `more` 图标；模型文案改为纯 `provider.model`（不再拼接 provider 前缀导致超长截断），推理文案保持「推理：x」。`compact` 会话页只改高度（22）。
+  3. **侧栏按钮图标平滑切换**：`.sidebar-toggle` 的星标改为双层图标（`agent` ↔ `list-details`），`vibeMode` 时交叉淡入 + scale 180ms；会话 chip 仍保留标题/「会话列表」文案交叉淡入。
+  4. **会话列表面板版式**（`SessionListPanel.tsx`）：工作区标题改为主标题（12px 加粗、不再大写化）；会话条目改为单行 flex（标题 flex1 + 右侧相对时间「刚刚/x 分钟前/x 小时前/x 天前/日期」），去掉第二行 meta；搜索命中项同样单行显示时间。
+- **理由**：圆的 `+` 是「新增/更多」的通用心智，把工作区选择放在 `+` 的第一项而不是做成一个占位胶囊，既统一视觉又省横向空间；胶囊深浅/省略号来自不同样式来源与多余三点图标，收敛到单一 `controlChip` 后不再漂移；图标 morph 比整块 chip 交叉淡入更符合用户对「按钮变图标」的预期；参考图四的版式（工作区标题 + 单行会话 + 时间）信息密度更高。
+- **替代方案**：把加号直接复用右侧 `Composer` 组件（否：右侧 Composer 绑定主会话输入/权限/模型菜单，嵌入 Vibecoding 会重复状态）；只改模型胶囊宽度不删三点（否：用户明确嫌省略号）；会话面板保持 popover 浮层（暂保留：点击右侧「会话列表」仍以浮层展开，宽度/内容按图四改版；若后续要求完全内嵌侧栏再改布局）。
+- **后果**：Vibecoding 输入区常态只有一个圆形加号；菜单含工作区（切换/新选文件夹）与附件；所有胶囊同底色/同高/无多余省略号；Vibecoding 下侧栏按钮图标平滑变列表图标，会话面板工作区→会话单行+时间。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1451 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/sidebar.log`，E2E_EVAL ok:true）：`vibe-workspace-plus` 为圆形、无文字；三个胶囊均为 24px 且同底色、无尾随省略号；菜单文本「工作区 默认工作区 新加工作区… 更多操作 附件」；Vibecoding 下 `.sidebar-toggle` 双层图标第二层（列表）可见；会话面板工作区标题 12px 非大写、会话行 flexDirection=row 且含相对时间；原有「直接发送自动新会话/收起竖条悬停展开」断言仍通过。截图 `e2e-evidence/vibe-controls.png`、`sidebar.png`、`sidebar-collapsed.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：附件菜单需要更多动作时扩为分组列表；若用户要求会话列表完全内嵌右侧栏（非浮层），需要重排 AgentSidebar 的 docked 布局（chat 与列表二选一或分栏）。
+- **复核时间**：Vibecoding 输入区/会话列表面板再改版时
+
+---
+## ADR-0070 Vibecoding 右栏改为会话列表（对话归左侧主页）+ 侧栏按钮图标对齐与过渡修复
+
+- **背景**：用户 m05149（附两张图）指出：① 侧栏展开按钮从星标切换到列表图标时**错位**，且**没有过渡衔接**（图一）；② Vibecoding 页面右侧边栏里**依旧是会话内容**（聊天记录 + 输入框），而期望「会话转移到左侧主页，右侧边栏在 Vibecoding 时变为会话列表」（图二）。
+- **根因**：
+  1. **图标错位/无过渡**：ADR-0069 的 `toggleIconLayer` / `toggleIconLayerOverlay` 两个样式键**没有真正写入** `styles` 对象（插入锚点与实际 `toggleChevron` 文本不符，替换静默未命中）。于是列表图标层只是普通文档流里的第二个 `inline-flex`，被排在星标右边 16px；同时没有 `position:absolute`、没有 `transition` → 两层图标横向偏移、切换瞬间跳变（E2E 实测 starLeft=1301 / listLeft=1316，dx=14px）。
+  2. **右栏重复聊天**：`AgentSidebar` 只把会话 chip 的文案/图标换成「会话列表」，但内容区仍渲染 `{children}`（`MessageList` + `Composer`）。Vibecoding 的对话本来已在左侧主页 `VibeChatView`，右栏继续显示同一会话 → 两处聊天、与「右栏=会话列表」不符。
+- **决策**：
+  1. **补全双层图标样式**：`toggleIconLayer` 固定 16×32、`display:inline-flex` 居中、`transition: opacity 200ms ease, transform 200ms ease`；`toggleIconLayerOverlay` 绝对定位到同一 16×32 槽位（left/top 0）。星标层与列表层共用同一槽位，`vibeMode` 时 opacity 交叉淡入 + scale(0.78↔1) 平滑切换，不再横向错位。
+  2. **Vibecoding 右栏 = 会话列表**：`AgentSidebar` 在 `vibeMode` 时：头部标题换为「会话列表」+ list 图标；隐藏「复制整段会话」按钮；跳过 workspaceBar / sessionBar / `children`（聊天与输入框不再渲染）；主体直接内嵌 `SessionListPanel`（新增 `inline` 变体：占满剩余高度、隐藏面板自带标题、搜索框不抢焦点），工作区→会话树、搜索、相对时间、新建会话全部保留。
+  3. **收起态联动**：Vibecoding 下从收起竖条悬停展开后不再额外弹旧的下拉浮层（右栏本身就是列表）；`expandSidebarWithSessions` 在 `vibeModeActive` 时跳过 `setSessionOpen(true)`。
+- **理由**：Vibecoding 的对话载体是左侧主页（发送后整页渐入），右栏继续放聊天会形成重复信息源与双输入框；右栏在 Vibe 下承担「在哪个会话/工作区里」的导航职责，直接把会话列表内嵌进侧栏比「点开浮层」更符合参考图四的形态。图标问题的教训是：样式键必须真正落在 `styles` 对象里（引擎/静态替换不能只看是否打印成功），并用 E2E 几何断言（两层 left 偏差 ≤2px、透明度=1）兜住「看起来没坏但实际没动画」的情况。
+- **替代方案**：保留右栏聊天，用上方 chip 切换为列表（否：用户明确右栏要变成列表）；会话列表仍用浮层（否：内嵌更贴近图四且避免浮层遮挡聊天）。
+- **后果**：Vibecoding 下左侧主页是唯一对话区（含发送栏），右侧栏固定为会话列表；侧栏收起时竖条按钮图标与列表层同槽位平滑切换。非 Vibecoding 模式下右栏仍保持原聊天 + 会话下拉行为不变。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **171 文件 / 1451 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/sidebar.log`，E2E_EVAL ok:true）：`toggleMorphLayers=true`、列表层 opacity=1，几何实测 starLeft=1301 / listLeft=1300（dx=-2px，scale 取样误差内）；Vibecoding 下 `.agent-sidebar` 头部含「会话列表」、`sidebarHasNoChat=true`（侧栏无 textarea）、内嵌 `session-list-panel` 直接可见（无需点击）；原有「加号圆形/胶囊统一/附件菜单/工作区/搜索/竖条悬停展开」断言全部仍通过。截图 `e2e-evidence/sidebar.png`、`vibe-controls.png`、`sidebar-collapsed.png`（Vibe 态收起竖条），日志 `e2e-evidence/sidebar.log`、`vibe-controls.log`、`sidebar-collapsed.log`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：若以后要求「右栏可切换聊天与列表」→ 增加显式 tab，不再依赖 vibeMode 单态；图标过渡若在低配机器掉帧，降级为仅 opacity 过渡。
+- **复核时间**：侧栏结构/图标资源再调整时
+
+---
+## ADR-0071 会话列表（工作区树）：标准箭头 + 悬浮操作（工作区 更多/添加会话、会话 更多/置顶/删除）
+
+- **背景**：用户 m05281 对右侧会话列表提交互要求：① 展开/收起箭头换成标准箭头（展开向下、收起向右、带旋转过渡）；② 工作区标题行与会话行右侧改为**鼠标悬浮才出现**的操作：工作区 = 更多（省略号）+ 添加会话；会话 = 更多（省略号）+ 删除（归档可选）+ 置顶；可参考 Edge / 常见会话面板；③ 其余细节自行按最佳实践处理。
+- **决策**：
+  1. **箭头**：新增 `chevron-down.svg`（1024 viewBox，经图标居中守卫校验）；工作区分组头用它，展开 `rotate(0deg)`、收起 `rotate(-90deg)`，`transition: transform 160ms ease`，不再用旋转的 guide-arrow。
+  2. **悬浮操作与时间/数量「同一位置互斥」**：会话行平时右侧显示时间、工作区行显示会话数；行 hover 时时间/数量 `opacity:0` 淡出，操作按钮（绝对定位到同一右缘）淡入，不额外预留空白列。操作容器默认 `opacity:0; pointer-events:none`，`:hover` 时 `opacity:1; pointer-events:auto`（120ms）；操作按钮不加单独深色底，直接显示在行底色上（用户 m05550 反馈）；高亮 `rowActive` 背景挂在整行 div（不是内部标题按钮），hover 也加整行底色，保证高亮覆盖整行。
+  3. **工作区标题行**：右侧 [省略号 more] [加号 add-session]。更多菜单（portal + fixed，`usePopover` 保证互斥/点外收起）：重命名工作区、在文件夹显示、删除工作区；加号 = 在该工作区新建会话。
+  4. **会话行**：右侧 [省略号 more] [pin] [close(删除)]。更多菜单：置顶/取消置顶、复制会话 ID、删除会话；pin 直接切换，删除直接调 `chat.deleteSession`。
+  5. **置顶持久化**：renderer `localStorage["loopsoar.pinned-sessions"]` 存 sessionId 数组（不新增主进程 schema）；组内排序「置顶优先，其余 updatedAt 倒序」，置顶行标题前显示 pin 图标；取消置顶从数组移除。
+  6. **工作区操作通道**（此前只有 list/create/select/remove）：新增主进程 `workspace:rename`（`WorkspaceStore.rename`，名称 trim 后 1..64 字符，只改显示名）与 `workspace:openFolder`（index 注入 `shell.openPath`，打开工作区根目录），生成 IPC 与 preload 白名单；App 新增 `renameWorkspace/removeWorkspace/openWorkspaceFolder/newSessionInWorkspace` 并注入 `AgentSidebar`→`SessionListPanel`。
+  7. **在工作区下新建会话**：App 先 `workspace.select(id)` 再 `chat.newSession()`（shell 的会话只绑定活动工作区），随后刷新 sessions/currentSession；不切换主视图。
+  8. **归档不做**：会话/工作区存储没有归档字段，用户也允许「不做或自研」；当前用删除 + 置顶覆盖需求，不引入半成品归档状态。
+- **理由**：悬浮才出现的操作能保持列表干净、同时不牺牲可发现性（更多菜单承载低频/破坏性动作）；每个工作区行自带「添加会话」符合「先选项目再开工」的心智；箭头旋转是最低成本的层级反馈；置顶走 localStorage 避免为一个小 UI 功能扩散主进程 schema，后续需要跨设备再迁移。
+- **替代方案**：hover 用 JS onMouseEnter 记录 state（否：CSS 即可，少一次渲染）；归档自研（否：无存储/检索链路，半成品更差）；重命名用 window.prompt（否：原生 modal 打断列表，改为标题行内联输入）。
+- **后果**：会话列表更接近 Edge 的交互密度；工作区可重命名/在文件夹显示/删除；会话可置顶/复制 ID/删除；在任意工作区下可直接新建会话。置顶是 renderer 本地状态，多窗口（Agent 独立窗）之间不共享（可接受；后续若需共享再上主进程）。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1455 tests 全绿**（新增 `tests/ui/sessionListActions.spec.ts` 4 条守卫）；`pnpm gen/check/build` 通过；真机 E2E `e2e-evidence/sidebar.log` E2E_EVAL ok:true：工作区/会话悬浮操作默认 `opacity=0`、按钮齐全；工作区更多菜单含 重命名/在文件夹显示/删除工作区；会话更多菜单含 置顶/复制会话 ID/删除会话；箭头展开角 0°、收起 -90°；工作区加号新建会话数 +1；活跃行背景非透明（高亮整行）、时间默认可见、时间与操作右缘差 ≤6px（同一位置互斥）。截图 `e2e-evidence/sidebar-actions.png`（模拟 hover 态 + 工作区菜单）、`sidebar.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）；归档未实现（见决策 8）
+- **回退条件**：悬浮操作在触屏/无 hover 设备不可达 → 补长按或右侧常驻按钮；置顶需要跨窗口同步 → 迁到会话元数据/主进程；工作区重命名需要改目录 → 另立持久化迁移方案。
+- **复核时间**：会话列表增加批量操作/多选时统一交互语言
+
+---
+## ADR-0072 侧栏宽度：全屏可调 + Vibecoding 独立窄区间 + 退出键兜底
+
+- **背景**：用户 m05586 提出三点：① 全屏时右侧边栏比例无法调整（拖 splitter 没反应）；② 切到 Vibecoding 时右侧栏占空间过大，最窄宽度应约为当前最小宽度的 1/2，并规定 vibe 模式最大宽度不超过（标准）当前最小宽度的 3/5；③ 搜索 → Vibecoding 切换时侧栏要平滑收缩到最窄宽度；④ 右上角退出键「老生常谈」总是失效。
+- **根因**：
+  1. 侧栏最小宽度 = `round(视口宽 × 0.35)` 并夹到 `[240, 720]`；全屏/超宽屏下 `视口宽 × 0.35` 已超过 720 → min=720；而 max = `min(720, 视口宽-320)` 也=720 ⇒ **min === max，拖拽区间为 0**。2048 窗口下区间也只有 [717,720]（3px），实际上等于拖不动。
+  2. Vibecoding 复用标准侧栏宽度（默认 360、下限 240、上限 720），会话列表不需要这么宽；且没有独立的最小/最大值与切换过渡。
+  3. 退出键链路：`dismissAllPopovers()` 同步执行，任一监听异常会中断后续 `api.window.close()`；主进程 `window:close` 只调用一次 `win.close()`，没有兜底（老 bug 用户 m02115 曾提过「点多次关闭没反应」）。
+- **决策**：
+  1. **全屏可调**：`computeSidebarMinWidth` 在比例下限与绝对上限之间强制预留 `SIDEBAR_MIN_DRAG_RANGE = 200px` 拖拽区间：`min = clamp(baseMin, FLOOR, maxForWindow - 200)`；max 保持 `min(720, 视口宽-320)`。这样全屏/超宽屏可拖区间 ≥200px，而窄窗口仍保留 ADR-0037 的比例下限语义。
+  2. **Vibecoding 独立区间**：新增 `computeVibeSidebarBounds(viewportWidth)`：`min = max(120, round(normalMin × 0.5))`，`max = max(min, round(normalMin × 0.6))`（3/5，用户要求），`normalMin` 是标准模式当前最小宽度。新增偏好 `vibeSidebarWidth`（100..720，可选）保存用户拖出的 vibe 宽度；标准模式仍用 `sidebarWidth`，两种宽度互不污染。
+  3. **平滑衔接**：进入 Vibecoding 的 effect 把 vibe 宽度设为区间最小值；侧栏 wrapper 宽度已有 320ms CSS 过渡，原生 WebContentsView 走 `browser:setSidebarWidth({animate:true})` 同曲线让位，因此是整列平滑收缩而不是瞬跳。退出 vibe 恢复标准宽度，同样走过渡。
+  4. **拖拽按模式分治**：splitter 的 mousedown 根据 `vibeModeActive` 选择区间与状态；松手时 vibe 模式持久化 `vibeSidebarWidth`，标准模式持久化 `sidebarWidth`；`AgentSidebar` 内容宽度不再硬夹 `Math.max(240, …)`。
+  5. **退出键兜底**：渲染层 `dismissAllPopovers()` 加 try/catch；`api.window.close()` 返回 `ok:false` 或 reject 时回退标准 `window.close()`；主进程 `window:close` 对 `win.close()` 加 try/catch，并在 800ms 后检查窗口是否仍存活、仍存活则 `win.destroy()` 强制销毁，确保「点了没反应」不再发生。
+- **理由**：比例下限的意义是「窗口较窄时侧栏别太窄」，不是「全屏时锁死」；用拖拽区间兜底既保留原语义又让全屏可用。vibe 模式是阅读会话列表而不是主聊天区，需要窄而稳定的第二套宽度；用独立偏好避免污染标准布局。退出键是高频破坏性操作，必须走「先清理 UI、再 IPC、失败回退、主进程强制」的多层兜底。
+- **替代方案**：全屏时直接取消比例下限（否：会丢失窄窗口语义）；vibe 宽度固定 260（否：不同屏幕/缩放不可移植）；退出键改为 `app.quit()` 直连（否：会跳过 BrowserWindow close 的清理与持久化钩子，且仍可能被窗口销毁流程卡住）。
+- **后果**：全屏侧栏可拖；vibe 进入时自动收窄到标准最小宽度的一半，最多可拖到 3/5，退出恢复；退出键有两层兜底与主进程强制销毁。
+- **验证方式**：`pnpm -r typecheck` 5/5；`tests/core/sidebar-width.spec.ts` 9 条契约测试（含全屏 1920/2560/3840 区间 ≥200、vibe 260~312、小窗 120 下限）；全量 vitest **173 文件 / 1457 tests** 全绿；真机 E2E：普通窗口拖拽 717→477→720（区间 243px，innerWidth 1362；全屏路径由 1920/2560/3840 契约单测覆盖，本机 Electron 全屏 E2E 在沙箱下崩溃，未作门禁）；Vibecoding 切换 E2E：`正常 717 → vibe 239（收缩）→ 拖宽 286 → 再拖窄 239 → 偏好 vibeSidebarWidth=239 → 切回 717`；退出键 E2E：点击 `.win-close` 后 renderer disposed / 应用退出（无 hang）。
+- **状态**：✅ 契约单测 + 真机 E2E（普通窗口拖拽 / vibe 收缩 / 关闭键）已验证（2026-11-12）
+- **回退条件**：全屏区间影响窄窗口拖拽手感 → 把 `SIDEBAR_MIN_DRAG_RANGE` 只在 `视口宽 > 1800` 时启用；vibe 宽度需要跨窗口同步 → 迁到主进程偏好广播；退出键强制销毁造成数据丢失 → 回退 try/catch 兜底并排查渲染层卸载钩子。
+- **复核时间**：侧栏布局/窗口模式（小窗化、工作区）再调整时
+
+---
+## ADR-0073 会话小窗化/恢复/置顶/删除图标替换（用户提供资产）
+
+- **背景**：用户 2026-11-12（m05830）提供 4 个 SVG（`D:\下载\小窗化.svg`、`退出小窗.svg`、`置顶.svg`、`删除.svg`），要求替换会话相关操作的图标：会话的小窗化与恢复、会话置顶、会话删除。
+- **决策**：
+  1. **资产归一**：用户 SVG 为 iconfont 导出（1024 viewBox、路径填充黑色），直接作为 `public/icons` 的 mask 图标使用；重命名为 ASCII kebab-case：`float.svg`（小窗化，覆盖 `小窗化.svg`）、`float-exit.svg`（退出小窗）、`pin.svg`（覆盖原手绘 pin）、`delete.svg`（删除）。`delete.svg` 的可见图形中心偏右 3.3%，按图标居中守卫加 `<g transform="translate(-33.8 0)">` 修正，不改路径本身。
+  2. **会话行/菜单**：`SessionListPanel` 的置顶按钮、置顶菜单项继续用 `pin`（内容已换成用户图标）；会话行删除、会话菜单删除、工作区菜单删除工作区统一改用 `delete`（垃圾桶），不再用 × close 图标。
+  3. **小窗化/恢复**：
+     - `AgentSidebar` 头部的「小窗化 / 退出小窗」按钮：`isFloat ? float-exit : float`，文案 `chat.sidebarDock` 从「恢复常驻」改为「退出小窗」（英文 Exit mini window），与图标语义一致；
+     - Agent 独立小窗的 `TitleBar`：最小化（收起成图标）使用 `float`（小窗化），关闭（退出小窗回到主窗口）使用 `float-exit`（退出小窗），即用户所说的「小窗化 / 恢复」两个动作。
+- **理由**：用户提供的是成套视觉资产，保留原路径几何比手绘更符合预期；统一用 mask（`currentColor`）保证主题/禁用态自动换色；删除图标语义比 × 更清晰（破坏性操作）。
+- **替代方案**：继续用手绘 pin/close（否：用户明确要求替换）；把新图标直接放进组件 public 目录而不进图标库（否：破坏 1024/居中/引用守卫）；改图标颜色（否：mask 由 CSS 着色，不改填充）。
+- **后果**：会话列表置顶/删除、侧栏小窗化/退出小窗、Agent 小窗标题栏都使用用户提供的 4 个图标；图标守卫（1024 viewBox、居中、引用存在）通过。
+- **验证方式**：`tests/ui/icons.spec.ts` + `tests/ui/iconCenter.spec.ts` 全过（含新 `delete.svg` 居中）；`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1457 tests** 全绿；`gen/check/build` 通过；真机截图 `e2e-evidence/icons-rows.png`（hover 置顶/删除图标）、`icons-actions.png`（侧栏小窗化图标 + 菜单删除图标）。
+- **状态**：✅ 图标守卫 + 全量测试 + 真机截图已验证（2026-11-12）
+- **回退条件**：图标在小尺寸（11~13px）下辨识度差 → 单独出一套 16px 简化版；用户后续更新 SVG → 覆盖同名资产并重跑守卫（居中偏移可能需要重新补偿）。
+- **复核时间**：图标库批量更新/主题换色时
+
+---
+## ADR-0074 图标与列表细节：行内左上微调、Vibecoding 隐藏小窗化、Agent 小窗标题栏图标
+
+- **背景**：用户 m05915 反馈三点：① 图一里会话行内容略偏、右侧时间几乎贴到高亮框边缘，希望整体往左上挪几个像素（不要多）；② 图二 Vibecoding 内不应出现「小窗化」按钮，小窗化是搜索侧专属，从搜索切到 Vibecoding 时要让小窗化图标慢慢淡出消失；③ 图三 Agent 小窗标题栏图标太小看不清——「最小化为图标」改用常规横杠最小化图标，「退出窗口化」改用新提供的 `收起侧边栏.svg`。
+- **决策**：
+  1. **会话行对齐**：`SessionListPanel` 行容器 `padding: "0 8px 2px 0"`（右侧留 8px 给时间/操作，底部 2px 让内容上移约 1px），会话按钮内边距 `4px 6px 6px`（左/上各收 1~2px），悬浮操作容器从 `right:2` 调到 `right:6` 与时间右缘对齐；工作区标题同样左/上各收 1px，会话数右边距 8→10。E2E 实测时间右缘距行右缘 8px（原约 2~3px），不再贴边。
+  2. **小窗化只属于搜索侧**：`AgentSidebar` 头部的小窗化按钮包一层 `sidebar-float-slot`，`vibeMode` 时 `width: 0 / opacity: 0 / pointer-events: none`，离开 vibe 恢复 `width: 26 / opacity: 1`；过渡 `width 240ms + opacity 220ms`，即「慢慢淡去 + 收窄」。该状态与 Vibe 会话列表切换同一帧生效。
+  3. **Agent 小窗标题栏**：最小化按钮改回标准横杠（`minimize`，isAgent 时 14px）；关闭按钮（退出窗口化、回到主窗口）改用用户新提供的 `收起侧边栏.svg`（图标库 `sidebar-collapse.svg`，1024 viewBox，居中守卫通过），isAgent 时 14px，解决「图标太小看不清」。
+  4. 新增资产 `sidebar-collapse.svg`；`float-exit.svg` 保留给侧栏 `isFloat` 态的「退出小窗」按钮（主窗口默认不会进入该态，但组件契约保持完整）。
+- **理由**：行内容微调是最小侵入（只改 padding，不改行高/字号）；小窗化是搜索模式的特有能力，Vibe 模式列表不需要它，淡出比瞬间消失更连贯；Agent 小窗空间小，图标必须优先可辨识，横杠最小化与「收起侧边栏」都比自定义小图标清晰。
+- **替代方案**：整行 `transform: translate(-2px,-1px)`（否：会影响高亮/点击区域）；Vibe 直接不渲染小窗化按钮（否：没有过渡）；退出窗口化继续用 float-exit（否：用户明确要求换收起侧边栏图标）。
+- **后果**：会话行内容整体左上移 1~2px、时间离右缘 8px；Vibecoding 下小窗化图标淡出并收宽；Agent 小窗标题栏两个按钮更大更易辨认。
+- **验证方式**：`pnpm -r typecheck` 5/5；图标守卫（1024 viewBox/居中/引用存在）通过；全量 vitest **173 文件 / 1457 tests** 全绿；`gen/check/build` 通过；真机 E2E `e2e-evidence/icons-tuning.log` E2E_EVAL ok:true：搜索态小窗化 slot 26px/opacity1 → vibe 0px/opacity0 → 切回 26px/1；会话行时间右缘距行右缘 8px；Agent 小窗成功打开（桌面截图 `icons-tuned-desktop.png` 可见标题栏横杠 + 收起侧边栏图标）。截图 `e2e-evidence/icons-tuned.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：14px 图标在 Agent 小窗标题栏仍偏挤 → 改 13px 或只保留一个按钮；悬浮操作 right 偏移与时间对不齐 → 统一用 CSS 变量同一右缘。
+- **复核时间**：会话行高/密度调整、Agent 小窗布局再改时
+
+---
+## ADR-0075 侧栏过渡收口：小窗内去小窗化按钮、内容宽度冻结、头部按钮槽位化淡出
+
+- **背景**：用户 m05992（附截图 + 录屏）反馈三个衔接问题：① 小窗化后 Agent 独立窗口里仍然显示「小窗化」按钮（图一），表达冗余；② 非全屏、窗口变小时，搜索 ↔ Vibecoding 切换的 320ms 收窄/变宽过程中有几帧文字被挤压换行；③ 变宽还原时，下方会话文本从右侧被「拉出来」，上方变化不大的按钮也从右侧「飞出来」；希望按钮只是在原位淡入/滑出消失（图三/图四两模式那一行实际变化很小）。
+- **根因**：
+  1. `AgentSidebar` 不区分「主窗口」与「Agent 独立小窗」；小窗内也渲染小窗化按钮（点了还会再开小窗，语义重复）。
+  2. 外层 wrapper 用 320ms 宽度过渡，但内层 `.agent-sidebar-inner` 的 `width` 直接取新值：收缩瞬间内容宽度就变窄，在还没收完的宽 wrapper 里提前换行；窗口越小越明显。
+  3. 头部按钮是条件渲染（`vibeMode ? null : <button/>`），模式切换时元素被移除/插入，整行重新排布，视觉上按钮像从右侧飞入/飞出。
+- **决策**：
+  1. **小窗内隐藏小窗化**：`AgentSidebar` 新增 `embeddedInAgentWindow` prop（App 传 `miniWindow`）；为真时小窗化槽位 `display:none`，其他入口（复制、会话列表）保留。主窗口行为不变。
+  2. **内容宽度冻结**：新增 `liveWidth` prop（App 传 `sidebarDragging || miniWindow`）。非 live 时 `frozenContentWidth` 保持过渡前的宽度，等 `MOTION.sidebarDuration + 20ms`（≈340ms）后再切到新宽度；过渡期间内容由 wrapper `overflow:hidden` 裁切，不再提前换行。拖拽/铺满（liveWidth=true）仍逐帧跟手。
+  3. **头部按钮槽位化**：复制按钮与小窗化按钮都包进固定槽位，`vibeMode` 时 `width: 0 / opacity: 0 / pointer-events: none`，过渡 `width 240ms + opacity 220ms`；两模式共用同一 DOM 顺序（复制 → Agent 名 → Loopsoar → 小窗化 → 收起），按钮在原位收缩淡出/展开淡入，不再整行重排。
+- **理由**：小窗化只对主窗口侧栏有意义；冻结内容宽度是 Slime float 同款做法（过渡期间内容不重排，只被裁切）；槽位化让「变化很小的同一行」保持布局稳定，符合用户「只需淡入滑出消失按钮图标」的表达。
+- **替代方案**：内容宽度也加 320ms 过渡（否：仍会逐帧换行）；Vibe 模式直接隐藏整行头部（否：Loopsoar/收起按钮仍需保留）；Agent 小窗内重做一个精简 header（否：当前隐藏一个按钮已足够，避免双实现）。
+- **后果**：Agent 小窗不再出现小窗化；模式切换时侧栏宽度平滑过渡且文字不会中途换行；头部复制/小窗化按钮在原位淡出/淡入。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1457 tests** 全绿；`gen/check/build` 通过；真机 E2E `e2e-evidence/sidebar-freeze.log` E2E_EVAL ok:true：收缩中（110ms）`inner=717` 而 `wrapper=503`（内容冻结、只有 wrapper 收缩）、过渡后 `inner=239`；变宽中 `inner=239` 而 `wrapper=525`、结束后 `inner=717`；复制/小窗化槽位 `24/26 → 10/11 → 0` 再恢复 `24/26`，无瞬时消失；打开 Agent 小窗成功，桌面截图 `agent-window` 内头部不再有小窗化图标。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：冻结导致变宽后内容「瞬切」明显 → 在切换点加 80ms 交叉淡入；小窗内还需要其他主窗口操作 → 按 `embeddedInAgentWindow` 逐个裁剪。
+- **复核时间**：侧栏模式/窗口形态（小窗化、工作区）再调整时
+
+---
+## ADR-0076 侧栏过渡再修正：内容宽度与 wrapper 同曲线同步（替代 ADR-0075 的「内容冻结」）
+
+- **背景**：用户 m06058 截图指出侧栏在模式切换的「几帧」里严重变形：`Agent 对话` 标题被压成两行、右侧聊天正文变成一条窄竖列、左侧大片空白，「越调越烂」。这是 ADR-0075「内容宽度冻结」方案的副作用。
+- **根因**：ADR-0075 为了让文字不在过渡中重新换行，让 `.agent-sidebar-inner` 在 320ms 内保持**旧宽度**，只让外层 wrapper 过渡。于是：
+  - 收缩中：inner 仍是 717px，wrapper 已缩到 503px，内容被裁切；
+  - 变宽中（截图场景）：inner 仍是 239px，wrapper 已涨到 ~570px，inner 因 `marginLeft:auto` 钉在右侧 → 右侧一条 239px 窄内容、左侧空白，标题/正文被挤成竖列。
+  这是「过度优化」：为了避免换行帧引入了更明显的错位帧。
+- **决策**：撤销行内内容冻结，改为 **inner 与 wrapper 用同一条 320ms 曲线同步过渡**：
+  1. `contentWidth = fill ? "100%" : width`（不再有 frozenContentWidth 状态/定时器）；
+  2. `.agent-sidebar-inner` 的 style 增加 `transition: width 320ms ease, opacity 320ms ease`；拖拽/铺满（`liveWidth`）时只保留 opacity 过渡，避免跟手延迟；
+  3. 外层 wrapper 本来就用同一 `MOTION.sidebarDuration/MOTION.ease` 过渡，因此任意一帧 `inner ≈ wrapper`，内容宽度始终等于可见栏宽；文字只在「该宽度下正常换行」，不会出现宽栏里的窄内容。
+- **理由**：两种约束（不换行 vs 不错位）在纯 CSS 宽高动画下不可同时满足；用户明确不接受错位（截图），而同步过渡只会在过渡过程中按当前真实宽度自然重排，没有「几帧假状态」。这是更接近 Slime/浏览器侧栏的常规做法，也让复制/小窗化槽位的淡出与宽度过渡保持同拍。
+- **替代方案**：恢复内容冻结 + 把右侧空白用背景填充（否：治标不治本，文字仍窄）；用 transform scale 缩放内容（否：文字拉伸、更差）；直接不做宽度动画（否：用户要求平滑衔接）。
+- **后果**：搜索 ↔ Vibecoding 的 320ms 收缩/展开过程中，内层内容宽度逐帧等于 wrapper 宽度；无挤压竖列、无右侧拉出；模式切换后布局正常。头部按钮槽位化淡出（ADR-0075 的另两项：小窗内去小窗化、槽位淡入）保留不变。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1457 tests** 全绿；`gen/check/build` 通过；真机 E2E `e2e-evidence/sidebar-sync.log` E2E_EVAL ok:true：收缩中（110ms）`inner=519 / wrapper=519`，过渡后 `239/239`；变宽中 `inner=525 / wrapper=525`，结束 `717/717`（此前冻结方案为 717 vs 503、239 vs 525 的错位）；槽位仍按 24/26 → 11/12 → 0 过渡；Agent 小窗打开正常。截图 `e2e-evidence/sidebar-sync.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：同步过渡在小窗口下仍有换行抖动 → 改用 `will-change: width` 或减少过渡时长到 220ms；若未来必须冻结内容，需同时把 inner 右缘换成左缘（`marginRight:auto`）并用背景遮罩，不能只冻结宽度。
+- **复核时间**：侧栏过渡/头部布局再调整时；ADR-0075 的内容冻结部分已被本 ADR 替代
+
+---
+## ADR-0077 模式切换的最后挤压帧：切换期间内容遮罩（先隐后现）
+
+- **背景**：用户 m06108 又截到「最后一帧」挤压换行：侧栏标题被压成两行、聊天正文变成窄竖列。ADR-0076 已让 inner 与 wrapper 同曲线同步变宽，但动画中途总存在某个中间宽度，内容在该宽度下会真实重排——只要内容在过渡期间可见，就必然有一帧窄排版。
+- **根因**：宽度是连续动画，而文字布局是按当前宽度即时计算的；「内容可见 + 宽度连续变化」两者同时成立时，中间宽度的换行帧无法从 CSS 层面消除。
+- **决策**：在**模式切换**（搜索 ↔ Vibecoding，即 `vibeMode` 变化）期间给内容加遮罩：
+  1. `AgentSidebar` 监听 `vibeMode` 变化，设置 `modeSwitching=true`；
+  2. 切换瞬间 inner 的 `opacity` 置 0（`transition: opacity 0ms`，立即隐藏、不可点），宽度仍按 320ms 过渡（宽度变化对用户表现为「栏在收/展」）；
+  3. `MOTION.sidebarDuration + 20ms`（≈340ms）后 `modeSwitching=false`，内容以 160ms 淡入，此时宽度已落定，排版是最终正确状态；
+  4. 拖拽调宽/窗口缩放不触发遮罩（只与模式切换绑定），避免日常拖拽时内容闪烁。
+- **理由**：与其在过渡中展示「被挤扁的文字」（用户明确反感，且截图说明任何中间排版都会被看到），不如让内容在切换的 320ms 内不参与视觉——只有侧栏外壳在动，结束后干净地淡入新布局。这是 Chrome/Edge 侧栏切换的常见处理方式，也保留 ADR-0076 的宽度同步（避免宽栏窄内容的错位）。
+- **替代方案**：保留内容可见（否：任何中间宽度都会产生换行帧）；冻结内容宽度（否：ADR-0076 已证明会产生宽栏窄内容错位）；截图快照过渡（否：为 320ms 引入 capturePage 成本与异步复杂度，收益低）。
+- **后果**：搜索 ↔ Vibecoding 切换的 320ms 内侧栏内容不可见（外壳宽度动画正常），随后 160ms 淡入最终内容；不再出现挤压换行帧。拖拽/缩放窗口时内容始终可见且宽度跟手。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1457 tests** 全绿；`gen/check/build` 通过；真机 E2E `e2e-evidence/sidebar-mask.log` E2E_EVAL ok:true：收缩中（110ms）`inner=554 / wrapper=554 / opacity=0`，收缩结束 `239/239/opacity=1`；变宽中 `inner=512 / wrapper=512 / opacity=0`，结束 `717/717/opacity=1`；槽位与 Agent 小窗检查保持通过。截图 `e2e-evidence/sidebar-mask.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：用户觉得 320ms 空白观感差 → 把遮挡改成快速淡出 80ms + 缩短宽度过渡到 220ms，或只遮住正文、保留头部（需接受头部仍可能换行）。
+- **复核时间**：侧栏过渡体验再调整时；ADR-0076 的宽度同步与 ADR-0075 的小窗化/槽位改动仍然有效
+
+---
+## ADR-0078 模式切换「概率性一帧」的确定性修复：paint 前遮罩 + NTP 内容块等高
+
+- **背景**：ADR-0077 用 `modeSwitching` 遮罩后，用户 m06158 仍反馈「还是有一帧问题」「现在好多了，但还是有概率发生」。逐帧分析其录屏（30.5s/1080p/30fps）发现两处独立问题：① 侧栏内容在切换瞬间偶尔仍露出一帧旧宽度排版（概率性，取决于 React 调度时机）；② 新标签页的「搜索 / Vibecoding」拨片在切换时整体上下跳 42px、横向滑 235px，录屏相邻帧叠加后呈现重影/错位。
+- **根因**：
+  1. `AgentSidebar` 的 `modeSwitching` 由 `React.useEffect` 设置——effect 在浏览器 paint **之后**执行，某些帧调度下第一帧已经用「新宽度 + 旧内容」绘制出来，形成概率性挤压帧。
+  2. `StartPage` 的 `onVibeModeChange` 也在 `React.useEffect` 里上报 → App 的 `vibeModeActive` 晚一帧才更新，侧栏宽度动画与遮罩整体比 NTP 模式切换晚一帧，放大时序不确定性。
+  3. NTP 内容在 `ntp` 容器里垂直居中，而搜索态与 Vibecoding 态的 `.modeBody` 高度不同（实测 114px vs 199px）→ 居中位置重算，拨片整体上跳 42px（实测 `toggleTop` 407→365）；同时 `.vibe-page-in` 的 `translateY(10px)` 又叠加了额外位移。
+- **修改**：
+  1. `AgentSidebar`：`modeSwitching` 的设置/清除改 `React.useLayoutEffect`（paint 前同步 setState，首帧即 opacity 0）。
+  2. `StartPage`：Vibecoding 模式上报改 `React.useLayoutEffect`，App 状态与侧栏宽度/遮罩在同一帧内提交。
+  3. `StartPage`：`.modeBody` 增加 `minHeight: 204`（两种模式内容块等高，拨片位置不再随内容高度变化）；`.vibe-page-in` 关键帧去掉 `translateY(10px)`，只保留透明度渐入，避免额外的纵向位移进入录屏帧。
+- **理由**：遮罩必须发生在 paint 之前才是确定性的；高度差异导致的居中重排是真实布局跳动（不是动画），必须靠等高容器消除，不能用动画掩盖。横向 235px 的位移来自侧栏宽度 320ms 的平滑过渡（NTP 在可变宽的浏览器面板内居中），属于有意的连续动画，本 ADR 不改变它。
+- **替代方案**：把遮罩改成 1 秒的延迟隐藏（否：会让侧栏空白时间变长）；去掉 NTP 横向居中、改为左对齐（否：观感偏斜，且与「平滑收缩」的既有要求冲突）；把侧栏宽度切换改为瞬时（否：回退 ADR-0072/0075/0076 的平滑过渡）。
+- **后果**：切换不再有概率性的一帧挤压；NTP 拨片垂直位置稳定（实测切换前后 top 均为 362）。录屏中仍可能看到 NTP 内容随侧栏宽度变化做平滑横移，这是动画本身，不是错位帧。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1457 tests 全绿**；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/sidebar-firstframe.log`，E2E_EVAL ok:true）：
+  - NTP 拨片 `toggleTop` 切换前/后均为 362（修复前 407→365，Δ-42）；
+  - 连续 6 次搜索↔Vibecoding 切换，每次点击后的**第一帧** `.agent-sidebar-inner` opacity 均为 0、inner 宽度与 wrapper 宽度相等（477/477、239/239）；
+  - 修复前同一断言曾出现一帧 opacity=1（概率性漏遮），现全部为 0。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：若未来把 NTP 内容改为非居中布局，可移除 `minHeight` 约束；若改为共享布局动画库，需确认遮罩仍在 paint 前生效。
+- **复核时间**：模式切换/侧栏宽度过渡再调整时
+
+---
+## ADR-0079 悬浮小窗/图标最终方案：独立 56px 图标窗口（不再 resize / setShape）
+
+- **背景**：用户 m06420（录屏）反馈：最小化后只有图标局部可点、图标↔小窗闪烁、恢复侧栏拖尾；m06958 进一步反馈「仍闪烁，且时常变成黑色像素方块」，并附逐帧录屏。
+- **根因（逐轮排查结论）**：
+  1. **命中区被窗口拖拽区吃掉**：图标态内容仍以 420×722 钉在窗口里，其 TitleBar 的 `-webkit-app-region: drag` 是窗口级区域，不受 opacity/pointer-events 影响，抢走图标点击；Windows thick frame 再吃边缘。
+  2. **窗口 resize 与渲染层布局的跨进程竞态**：minimize 先 `setBounds(56)` 再通知渲染层，面板旧偏移会让图标错位一帧；restore 固定 40ms 后显示同样有概率闪。
+  3. **`win.setShape` 在 Windows 透明窗口上会触发合成黑块/闪烁**：把大窗口裁成 56px 的方案虽然消除了 resize 竞态，但 DWM 在 shape 变化/透明区域重绘时出现整块黑色像素与抽搐（m06958 视频逐帧确认）。
+  4. **关闭逐帧移动透明窗口**：160ms 逐帧 `setBounds` 滑动重 UI 透明窗，每帧重排/重合成 → 拖尾掉帧。
+- **最终修改**：
+  1. **独立 56px 图标窗口**：新增静态页 `packages/ui/public/icon.html`（不加载整个 App），透明无边框、skipTaskbar；Agent 窗口打开时预创建并隐藏。
+  2. **minimize**：Agent 大窗口内面板照旧做 400ms 几何过渡（窗口 bounds 不变）；结束时把图标窗口 `show()` 到图标屏幕位置，并在同一帧 `hide()` Agent 大窗口——两个窗口在同一位置画同一个 56px 图标，切换无视觉差。**全程没有 resize / setShape。**
+  3. **restore**：把隐藏的 Agent 窗口原点对齐到「图标窗口屏幕位置 − 图标相对偏移」，`show()` Agent 窗口、`hide()` 图标窗口，然后让面板从图标矩形反向展开；窗口显示与动画起点在同一帧对齐。
+  4. **拖动**：`icon.html` 用 pointer 事件按屏幕增量调用 `ui:moveAgentWindow`，主进程直接移动 56px 图标窗口并夹取工作区（不再放大窗口）。点击（位移 <4px）→ `ui:restoreAgentWindow`。
+  5. **关闭**：普通态 Agent 窗口改为原地 160ms 透明度淡出（DWM 合成，零几何动画）；图标态直接销毁两个窗口并通知主窗口恢复侧栏。
+  6. 保底：图标窗口创建/显示失败时保持 Agent 大窗口可见（面板已收成图标，仍可点击还原），不会出现「侧栏消失、小窗不可见」。
+- **理由**：透明窗口的 resize/shape 在 Windows 上都有合成副作用；把「图标」交给一个天然小尺寸的独立窗口，两个窗口切换时像素完全一致，就同时消掉了闪烁、黑块与跨进程竞态；关闭不再移动窗口，拖尾来源消失。
+- **替代方案**：继续用 setShape（否：黑块/抽搐，已回退）；缩回 56px 单窗口 + ack（否：仍会有一帧窗口 resize 的闪烁）；把图标做成主窗口内 DOM（否：主窗口最小化/被遮挡时图标要独立悬浮）。
+- **后果**：图标悬浮、拖动、点击还原均稳定；图标态任务栏不出现空窗；主 Agent 窗口在图标态隐藏（skipTaskbar）。代价：图标是本应用的第二个窗口，Alt-Tab/任务栏行为按「隐藏主窗 + 图标窗」处理。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **173 文件 / 1457 tests 全绿**（minimize/restore 单测改为断言「Agent 窗口隐藏 + 图标窗口显示/移动 + 还原后原点对齐」）；`pnpm gen/check/build` 通过；真机 E2E（`e2e-evidence/agent-iconwin.log`）：最小化后图标窗口 bounds=(1632,225,56×57)、visible=true、URL=`loopsoar://app/icon.html`；注入 pointer 拖动后图标窗口移到 (1712,285)（+80,+60）；点击后 `isIconMode=false`、Agent 窗口 visible、图标窗口 hidden，恢复后的 Agent 窗口原点 (1356,277) = 图标位置 − 图标相对偏移（356,8）精确对齐。打开 Agent 窗口后 `getFocusedWindow()` 为 Agent 窗口（不再藏主窗口后面）。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）；黑块/闪烁来源（透明窗 resize/setShape）已从架构上移除
+- **回退条件**：若未来 Electron/Windows 修复透明窗 shape 合成问题，可回到单窗口方案；若图标需要承载更多信息（未读数等）再把 icon.html 换成 React 小页。
+- **复核时间**：悬浮小窗/图标交互再调整时
+
+## ADR-0080 普通态 Agent 小窗拖动：拖动会话固定起点尺寸（修复「越拖越大」）
+
+- **背景**：用户 m07288：「悬浮窗口怎么会随着拖动越变越大？有bug」——拖动普通态 Agent 小窗时，窗口高度持续增长。
+- **根因**：
+  1. 拖动每帧 `safeBounds(current)` 读 `getBounds()` 再 `setBounds` 写回；Windows 125% DPI 下 DIP↔物理像素取整误差逐帧累积（E2E 连续写固定 722 高，bounds 仍从 722 爬到 728；拖动约 60 帧/秒，肉眼即「越拖越大」）。
+  2. 原生 `-webkit-app-region: drag` 在该透明无边框 Agent 窗口上不生效（真机鼠标验证：主窗口标题栏可拖、Agent 标题栏拖不动），此前只能改走显式 pointer + IPC 移动，于是取整误差直接暴露给用户。
+  3. 另测 `setPosition` 在 125% DPI 下会隐式重算尺寸（每帧 +4~8px），比 setBounds 更糟，弃用。
+- **决策**：
+  1. 新增拖动会话：`ui:dragAgentWindow` payload 增加 `phase: "start" | "move" | "end"`；渲染层在 pointerdown/move/up 分别上报；主进程 `beginAgentWindowDrag()` 捕获起点位置，宽高取最近一次写入的目标尺寸（不取 getBounds 回报值，避免 722 被报成 724 后每轮 +2px），`dragBy(dx,dy)` 用「起点 + 累计屏幕增量」计算位置，宽高始终取起点值；`endAgentWindowDrag()` 清会话。
+  2. 无显式 begin 时首个 `dragBy` 自动捕获起点（兼容旧调用）。
+  3. 工作区夹取保留（x 至少留 120px、y 不越过顶部/底部 80px）；图标态忽略拖动会话（图标窗口自己 `moveBy`）。
+  4. Agent 窗口 `thickFrame: true`（图标态已由独立 56px 图标窗口承担，不再需要 thickFrame:false 的图标边缘命中）；拖动用 setBounds 写固定 base 宽高，不用 setPosition。
+- **理由**：尺寸只取一次起点值，单次拖动最多一次 ±2px DPI 取整误差、后续帧不再累积；显式 pointer 拖拽不依赖 app-region，透明窗同样可用。
+- **验证**：真机 E2E `e2e-evidence/agent-window-drag.log`：连续 5 次拖动 (1276,217)→(1476,367)，高度在 721～722 之间 ±1 取整波动、无累积增长；真实鼠标拖动 (1276,217)→(1358,267)、尺寸 420×721→421×723。新增单测 4 条（累计位移/自动捕获起点/工作区夹取/图标态拒绝）；typecheck 5/5、全量 vitest 173 文件 / 1461 tests、gen/check/build 全绿。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-12）
+- **回退条件**：Electron/Windows 修复 DPI 下 setBounds 取整问题后可简化回直接 setBounds。
+- **复核时间**：Agent 窗口拖动交互再调整时。
+
+## ADR-0081 悬浮小窗头部收敛：只留会话列表图标，点开 Vibecoding 同款会话列表
+
+- **背景**：用户 m07603（三张截图）：悬浮小窗上方「会话切换 + 工作区切换」排布很乱；点工作区会打开为宽栏设计的 WorkspacePanel，在 420px 小窗里被挤成变形的两栏（右侧出现竖排溢出的工作区说明）；要求整理成 Vibecoding 的常规列表，悬浮窗左上角只保留一个会话列表图标，点击展开列表。
+- **根因**：Agent 小窗直接复用了主侧栏的完整头部 + workspaceBar + sessionBar；WorkspacePanel 是双栏宽布局，窄窗下无法自适应，于是出现「变形界面」。
+- **决策**：
+  1. `AgentSidebar` 在 `embeddedInAgentWindow` 时进入 mini 分支：头部只渲染一个 `list-details` 会话列表图标按钮（`data-testid="agent-mini-session-toggle"`，`aria-pressed` 表示列表开合），隐藏标题/复制/agentLabel/小窗化槽位。
+  2. mini 分支移除 workspaceBar 与 sessionBar，不再有「点工作区 → 打开 WorkspacePanel」的变形路径；会话/工作区切换统一走列表。
+  3. 列表打开时用 `SessionListPanel inline` 以**浮动下拉层**覆盖在对话之上（不替换界面；从头部下方展开，高度 = 小窗内容区实时高度的约 1/4（最小 120px），下方仍可见对话与输入区），与 Vibecoding 右栏完全同款（搜索框、工作区分组、悬浮更多/置顶/删除、新建会话）；再次点图标、点击外部、按 Esc、选择会话或新建会话都会收起。
+  4. 主窗口侧栏保持原布局不变；WorkspacePanel 仍可从主窗口进入。
+- **理由**：小窗只有 420px 宽，双栏工作区面板与双行切换栏天然放不下；直接复用已在 Vibecoding 验证过的单栏会话列表，交互一致且不需要新组件。
+- **验证**：typecheck 5/5；全量 vitest 173 文件 / 1461 tests 全绿；gen/check/build 通过；真机 E2E `e2e-evidence/agent-session-list.log`：点击小窗左上角图标后 `aria-pressed` false→true，列表浮层与 `session-search` 出现，工作区条文案消失，列表含 3 条会话，对话/输入框仍在 DOM 中（浮层覆盖而非替换）；再点一次 `aria-pressed` 回到 false、浮层关闭、输入框恢复；Esc 同样可关闭；截图 `e2e-evidence/agent-session-list-session-list.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若小窗后续需要更多入口（工作区管理/设置等），以图标 + 弹出菜单补充，不恢复宽栏 WorkspacePanel。
+- **复核时间**：悬浮小窗/侧栏头部再调整时。
+## ADR-0082 Vibecoding 侧栏切换判定：不再要求 currentUrl 为空
+
+- **背景**：用户 m07821（截图）：地址栏仍是 `https://www.douyin.com/jingxuan`，左侧页面显示新建标签页的 Vibecoding（搜索/Vibecoding 拨片停在 Vibecoding、显示「今天想聊点什么？」），右侧栏却仍是聊天会话（Agent 对话 + 工作区条 + 会话条），没有变成会话列表。
+- **根因**：`StartPage` 上报 Vibecoding 状态时用了 `!currentUrl && (mode === "chat" || tabMode === "vibe")`。当 NTP 在「地址栏仍有 URL、原生网页视图暂时隐藏」的状态下显示（用户截图场景）时 `currentUrl` 非空，判定恒为 false → App 的 `vibeModeActive` 一直是 false，侧栏不切换、宽度也不收窄。
+- **决策**：上报条件改为 `mode === "chat" || tabMode === "vibe"`，不再依赖 `currentUrl`；导航发生时已有的 `currentUrl` 变化 effect 会把 `mode` 复位为 `ntp`、`tabMode` 复位为 `search`，因此正常浏览网页时不会误保持会话列表。
+- **理由**：侧栏形态应当跟随用户当前看到的界面，而不是地址栏是否有值；URL 与可见页面可能短暂不一致（原生视图隐藏/切换中），以 StartPage 内部模式为准更可靠。
+- **验证**：真机 E2E `e2e-evidence/vibe-sidebar-mode.log`：空白 NTP 点 Vibecoding → 侧栏 header 变为「会话列表」且 `session-list-panel` 出现；随后 `browser.newTab(https://example.com)` 导航 → 侧栏 header 恢复「Agent 对话」、列表消失。typecheck 5/5、全量 vitest 173 文件 / 1461 tests、gen/check/build 通过。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若未来 NTP 与网页视图可能长期并存，需要改为由主进程上报当前可见页面类型，而不是继续在渲染层加条件。
+- **复核时间**：Vibecoding / NTP 切换逻辑再调整时。
+
+---
+## ADR-0083 Vibecoding 主页面承载会话正文：切到 Vibecoding 或从右栏选会话时自动进入会话页
+
+- **背景**：用户 m07865（两张截图）：搜索页切到 Vibecoding 后，左侧主页面仍是「今天想聊点什么？」初始页，原来右侧栏里的会话内容没有移到主页面；再点右栏列表里对应会话依然是初始页。
+- **根因**：切拨片只把 `tabMode` 设为 `vibe`（右栏变会话列表），StartPage 的 `mode` 仍是 `ntp`；只有发送消息（`submitVibe`）才 `setMode("chat")`。从右栏选择会话时 App 只更新 `messages/currentSession`，StartPage 的 `mode` 不变，因此即使有消息也继续显示初始页。
+- **决策**：StartPage 增加 `useLayoutEffect`：当 `tabMode === "vibe"` 且当前会话 `props.messages.length > 0` 时 `setMode("chat")`。切拨片和从右栏选择已有会话都会触发；没有消息的新会话仍停留在初始页（Vibe 输入区），不强行显示空会话页。发送消息时已有的 `setMode("chat")` 保留。
+- **理由**：Vibecoding 的设计是「对话只留左侧主页、右栏是会话列表」；主页面是否显示会话应由当前会话是否有内容决定，而不是要求用户先发一条消息。
+- **验证**：真机 E2E（种子数据两个会话，标题「你好」「hi」）：搜索→Vibecoding 后主页面出现「你好」正文、右栏为会话列表（页面文本 `hasHello=true, hasHi=false`）；点击右栏「hi」会话后主页面切换到 hi 正文（`hasHi=true, hasHello=false`），右栏列表保持；截图 `e2e-evidence/vibe-main-chat.png`、日志 `e2e-evidence/vibe-main-chat.log`。typecheck 5/5、全量 vitest 173 文件 / 1461 tests、gen/check/build 通过。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若未来 Vibecoding 增加「多会话并行标签」，需要把当前会话来源从 messages 改为显式 active session 路由。
+- **复核时间**：Vibecoding 主页面/侧栏会话列表再调整时。
+
+---
+## ADR-0084 会话绑定标签页、标签页绑定工作区：新标签/启动 = 新会话，修复「Vibecoding 回不到搜索」
+
+- **背景**：用户 m07920：上轮只是「左右两边内容同步」，真正的痛点是切到 Vibecoding 后**回不到搜索**。用户规定：每次进入 Loopsoar、新建标签页都是**一个新会话**（除非主动进入某个会话）；**会话绑定标签页，标签页绑定工作区**；因此从 Vibecoding 回到搜索可以直接新建标签页或新建工作区。
+- **根因**：① `StartPage` 的 `mode`（ntp/chat）与 `tabMode`（search/vibe）是单实例状态，新建标签不会重置，在聊天态点「+」仍显示会话页；② `newTab` 有「当前已是空白页就只聚焦地址栏」的守卫，而 Vibecoding 聊天页 URL 为空，正好被守卫拦下，无法新建标签；③ shell 的标签组本就按会话隔离（`BrowserHost` session→tabs），但新标签只是加进当前会话组，没有「新标签=新会话」的语义。
+- **决策**：
+  1. App 新增 `createFreshSessionAndTab()`：先切到目标工作区（可选）→ `chat.newSession()`（会话绑定当前活动工作区，shell 同步切到该会话标签组）→ 若标签组为空补一个空白标签（标签页绑定会话）→ 清空消息/待发队列/输入/URL → `freshSessionToken++`。
+  2. `newTab` / `newSession` / `newSessionInWorkspace` 全部改走该函数；App 启动在 bootstrap 的 `boot` 状态就绪后也调用一次，实现「每次进入 Loopsoar = 新会话」。
+  3. `StartPage` 新增 `resetToken`：令牌变化时 `mode=ntp`、`tabMode=search`、清空 draft，确保新标签一定回到搜索初始页（修复回不到搜索）。
+  4. 标签页继承会话的工作区；「新加工作区」成功后自动新建该工作区下的「会话 + 标签页」（新建工作区 = 新的搜索会话）。旧会话保留各自标签组，从会话列表主动进入仍切回该会话及其标签。
+- **理由**：把「会话」作为标签页的唯一业务实体，新建标签就新建会话；StartPage 只跟随当前标签/会话，不再需要「从聊天态硬切回搜索」的特殊路径——新标签天然就是新的搜索页。
+- **验证**：真机 E2E（`e2e-evidence/session-tab-binding.log`）：启动后 `currentId` 为新会话、1 个空白标签、搜索 NTP 可见；点「+」→ 会话 ID 变化且仍 1 个空白标签 + 搜索 NTP；在会话列表主动选「你好」→ 切到该会话（URL 仍空、主页保持搜索 NTP）；切 Vibecoding → 主页显示「你好」正文；再点「+」→ 新会话 ID、1 个空白标签、回到搜索 NTP。typecheck 5/5、全量 vitest 173 文件 / 1461 tests、gen/check/build 通过；截图 `e2e-evidence/session-tab-binding.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若用户希望恢复「同一会话多标签」，需要把「标签→会话」改为显式映射并允许一个会话绑定多个标签，不能只在 App 层建会话。
+- **复核时间**：标签页/会话/工作区模型再调整时。
+
+---
+## ADR-0085 侧栏/列表/工作区 UI 收口：新建会话不跳搜索、统一会话列表、输入框下工作区选择 + 默认工作区自动认领
+
+- **背景**：用户 m08041（四张截图 + `新增文件夹.svg`）：① 点「新建会话」总是跳回搜索页，没必要；② 搜索页侧栏的工作区/会话两行改成悬浮窗那样的单图标展开列表；③ 统一各处会话列表表示（搜索页侧栏浮层、悬浮窗浮层），并在搜索框下加「添加工作区」按钮（用新 SVG）；④ 新规则：新建标签页/会话暂不认领工作区，用户也没设置时，首次对话自动落「默认工作区」；⑤ 输入框下方加可展开的工作区选择按钮，列表最下面显示添加工作区。
+- **决策**：
+  1. `createFreshSessionAndTab()` 增加 `reset: "search" | "keep"`：新标签页/启动用 `search`（重置回搜索页）；`newSession`/`newSessionInWorkspace` 用 `keep`——只通过 `sessionResetToken` 把主页面切回初始页，保留搜索/Vibecoding 模式（Vibecoding 下右栏列表不消失，不再跳搜索）。
+  2. 搜索页侧栏去掉 workspaceBar/sessionBar：header 左侧只保留一个会话列表图标（`data-testid="agent-sidebar-session-toggle"`，`aria-pressed` 表示浮层开合），点击展开与悬浮窗同一套 `SessionListPanel` 浮层；对话仍常驻在下面。
+  3. `SessionListPanel` 统一：搜索框下新增「添加工作区」按钮（`workspace-add.svg`、`data-testid="workspace-add"`），搜索页侧栏、悬浮窗、Vibecoding 右栏三处使用同一组件与同一按钮。
+  4. 侧栏 Composer 与 Vibecoding 输入框下方新增工作区选择 chip（可展开已有工作区列表 + 最下面「添加工作区」）；显示的是**当前会话实际绑定**的工作区，未认领时显示「选择工作区」。
+  5. 新规则：新标签页/新会话 `workspaceId = null`；`workspace:bindSession` 支持用户主动绑定；首次发送时 shell 在 `chat:send` 前把未认领会话自动写入「默认工作区」（由 `getDefaultWorkspaceId` 注入，取名为「默认工作区」的工作区，回退活动工作区）。
+- **理由**：新建会话是「在当前界面里换一个会话」，不应改变用户正在看的界面；工作区选择从两行常驻 chip 收进输入框下方的按需按钮，减少常驻噪声；默认工作区保证「用户什么都没设置」时也会有稳定归属，避免空工作区会话。
+- **验证**：真机 E2E（`e2e-evidence/ui-list-overhaul.log`）：搜索页侧栏单图标存在、旧 workspaceBar/sessionBar 消失、浮层列表与「添加工作区」出现；侧栏 Composer 与 Vibecoding 输入框下工作区选择器存在且菜单含「添加工作区」；Vibecoding 下点「新建会话」→ 右栏列表保留、左页初始页、不出现搜索 NTP；新会话发送前 workspaceId=null、发送后自动等于「默认工作区」id。typecheck 5/5、全量 vitest 173 文件 / 1461 tests、gen/check/build 通过。截图 `e2e-evidence/ui-list-overhaul3.png`。
+- **补充（2026-11-13，用户 m08251/m08310/m08323）**：工作区选择 chip 必须在输入框**外**且**左对齐**。`StartPage.tsx` 的 `VibeComposer` 原把 `styles.vibeWorkspaceRow` 放在 `styles.vibeBox` 内，改为 `vibeBox` 的同级兄弟（Fragment 根，row 位于输入卡片下方、`width:100%` 左对齐），并给 `vibeBox` 加 `data-testid="vibe-composer-box"` 供几何断言；侧栏 Composer 的 `composer-workspace` 本就在 `composerBox` 外。工作区菜单在「添加工作区」下方新增「更多」(`data-testid="vibe-workspace-picker-more"`)，点击打开原详细工作区面板 `WorkspacePanel`（App 注入 `onOpenWorkspacePanel` → `dismissAllPopovers()+setWorkspacePanelOpen(true)`）。E2E `e2e-evidence/workspace-more.log`：`box.left=202`、`picker.left=202`、`outside=true`、`leftAligned=true`，「添加工作区」下方紧接「更多」，点击后 `workspacePanelOpen=true`、菜单关闭；截图 `e2e-evidence/workspace-more-menu.png`、`workspace-more.png`。
+- **补充 2（2026-11-13，用户 m08395）**：工作区选择按钮太暗淡 → 改为品牌强调色（`BRAND.ochreSoft` 底、`rgba(200,118,60,0.55)` 描边、文字 `BRAND.ochreHover`、height 26、fontWeight 600、细微投影；去掉 `.chip` class 以避开 soft 主题的 `border-color: transparent !important`）；菜单原向上展开 → 改为**向下展开**：`useFloatingMenu(width, "up"|"down")` 支持 top 锚点，`FloatingMenu` 对向下锚点加 `maxHeight = innerHeight - top - 12` + `overflowY:auto`，避免小窗口溢出。E2E `e2e-evidence/workspace-down.log`：chip background=`rgba(217,138,79,0.14)`、border=`rgba(200,118,60,0.55)`、color 品牌色、fontWeight 600；menu.top=611 ≥ picker.bottom=603（downward=true）；截图 `e2e-evidence/workspace-down.png`。
+- **补充 4（2026-11-13，用户 m08473）**：工作区设置面板只作为详情查看器：点击工作区只切换右侧详情，不再调用 `workspace:select`、不更新 `lastUsedAt`、不改变活跃工作区（因此列表不再重排，也不影响输入框下方的工作区选择）；选中样式只保留背景高亮，移除 `wsRowActive` 的描边。聊天输入区（Composer）的工作区按钮同步改为与 Vibecoding 选择器一致的品牌色胶囊（ochreSoft 底 + 0.55 描边 + 品牌文字色、height 26、字重 600、radius 999；去掉 `.chip` class 以避开 soft 主题透明边框强规则）。E2E `e2e-evidence/workspace-panel.log`：点击非活跃工作区后 `orderUnchanged=true`、`activeUnchanged=true`、选中行 border 透明、背景高亮、右侧详情=被点工作区；`composer-workspace` 背景/描边/圆角/字重生效。截图 `e2e-evidence/workspace-panel.png`。
+- **补充 3（2026-11-13，用户 m08444/m08446）**：按钮去掉 `.chip` 后失去圆角变方框 → `styles.workspacePickChip` 加 `borderRadius:999`（保留胶囊形）；删除 Vibecoding 初始页输入框下方提示行「Vibecoding 会在当前会话里继续，发送后输入区平滑下移为对话页。」（移除 `styles.vibeFoot` 的渲染）。E2E `e2e-evidence/workspace-pill.log`：picker 107×26、`border-radius:999px`、提示文案不存在、菜单仍向下；截图 `e2e-evidence/workspace-pill.png`。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若工作区需要在多个会话间共享更复杂关系，需要把「会话→工作区」从单值改为显式多对多模型；本轮仍保持单绑定。
+- **复核时间**：侧栏/列表/工作区选择交互再调整时。
+
+
+## ADR-0086 站点图标（favicon）抓取与展示：标签页 / 历史记录 / 新标签快捷入口
+
+- **背景**：用户 m08518 指出默认主页的标签、历史浏览记录头部的网址 logo 截取不到，而竞品（slime）已有。
+- **根因**：浏览器只监听导航/标题，没有监听 Electron `page-favicon-updated`；TabState/HistoryEntry 没有 favicon 字段；渲染层 CSP 为 `img-src 'self' data:`，也不能直接引用外网图标 URL。
+- **决策**：
+  1. `packages/shell/src/browserAdapter/backends/webContentsView.ts` 监听 `page-favicon-updated`，取第一个图标；`data:image/*` 直接透传，http(s) 交给主进程 `fetchFaviconDataUrl` 用 `session.fetch` 抓取并转 base64 data URL（限 96KB、6h 缓存、失败缓存空结果）。
+  2. `BrowserHost` 的 TabState/TabEntry 增加 `favicon`；图标到达时 emitTabs + `onFaviconChanged`；历史存储 `GlobalHistoryEntry` 增加 favicon，新增 `updateFavicon(url, dataUrl)`，读取时净化（只接受 `data:image/`、≤96KB）。
+  3. UI：`BrowserTabs` 在标题左侧显示 14px favicon（缺失时用首字母 tile / globe）；`ChromePage` 历史行显示 15px favicon（缺失首字母）；`StartPage` 新标签快捷入口显示 22px favicon（缺失保持首字母）。
+- **理由**：主进程统一转换 data URL 同时满足 CSP 与离线历史显示；抓取放主进程避免网页环境限制；历史图标用「迟到更新」不改变排序/访问次数。
+- **验证**：`e2e-evidence/browser-tab-favicon.png`（标签页橙色图标）、`e2e-evidence/history-favicon.png`（历史行图标 + 首字母回退）；E2E `browser-favicon.log`：tabFaviconOk/historyFaviconOk/domTabFaviconImgs=true；单测 `tests/shell/faviconHistory.spec.ts`（净化/合并/重启恢复）。
+- **状态**：✅ 已验证（2026-11-13）
+- **回退条件**：若图标抓取造成明显网络开销，可加「仅本地缓存/关闭」偏好。
+
+## ADR-0087 浏览器开发者工具（F12）：每标签 detach 调试 + 请求守卫放行 devtools 协议
+
+- **背景**：用户 m08518 要求补齐 F12 调试能力并跟上最新调试面板。Electron 的 DevTools 前端本身来自 Chromium（devtools:// 协议）。
+- **根因**：① 浏览器没有暴露任何 DevTools 入口；② `browserRequestGuard` 把 devtools:// 与 chrome-extension:// 当作非安全协议拦截，DevTools 前端加载报 `ERR_BLOCKED_BY_CLIENT`（E2E 实测）；③ 网页有独立焦点，主窗口收不到 F12，需在 webContents 上监听。
+- **决策**：
+  1. 契约新增 `browser:toggleDevTools`（`BrowserTabRefSchema`，缺省当前活动标签）；`BrowserHost.toggleDevTools` 用 `webContents.openDevTools({ mode: "detach" })` / `closeDevTools`，返回 `{ok, open}`（WebContentsView 用独立窗口，避免和视图抢布局）。
+  2. `WebContentsAdapter` 在每个标签的 `before-input-event` 里识别 F12 / Ctrl(⌘)+Shift+I；主窗口 `BrowserChrome` 增加工具栏按钮 `data-testid="browser-devtools"` 和 window keydown 快捷键。
+  3. 请求守卫同步策略放行 `devtools:`/`chrome-extension:`/`chrome:`；异步 DNS 层对非 http(s)/ws(s) 协议直接放行（否则会拿 hostname=devtools 去解析并误杀）。
+- **理由**：DevTools 属于 Chromium 内部信任面，不是网页可控的 SSRF 入口；放行这两种协议也修复扩展资源加载。
+- **验证**：E2E `browser-favicon.log`/主进程日志：open=true → 再切 open=false（状态机），主进程无 ERR_BLOCKED_BY_CLIENT；`tests/shell/browserRequestGuard.spec.ts` 新增 devtools/chrome-extension 放行 + 不触发 DNS 的用例。
+- **状态**：✅ 已验证（2026-11-13）
+- **回退条件**：若未来改为 dock 式调试器，需同步浏览器视图几何（applyLayout）。
+
+## ADR-0088 浏览器扩展适配（Chrome/Edge 系）：本地未打包安装 + Chrome 应用商店 CRX 安装 + 持久化
+
+- **背景**：用户 m08518 要求 Loopsoar 能适配市面上流通的浏览器插件市场（Chrome、Edge 等）。Electron 官方只支持未打包扩展与 Chrome API 子集（https://www.electronjs.org/docs/latest/api/extensions），且 `.crx` 不能直接 loadExtension。
+- **决策**：
+  1. 新增 `packages/shell/src/main/browserExtensions.ts`：`BrowserExtensionHost` 管理安装目录 `<dataDir>/browser-extensions/<id>` + `state.json`；开机 `loadAll()` 逐个 `session.extensions.loadExtension`（persist:loopsoar-browser 分区）。
+  2. 两种安装：**本地未打包目录**（校验 manifest、复制到管理目录）；**Chrome 应用商店链接/32 位扩展 ID**（官方 update2 端点下载 CRX → 解析 CRX2/CRX3 头 → 内置极简 ZIP 解包（stored/deflate，拒绝路径穿越）→ loadExtension）。
+  3. IPC：`browser:listExtensions` / `browser:installExtension` / `browser:removeExtension`；设置新增「浏览器扩展」分区（商店链接输入、安装文件夹、列表、错误原因、卸载）。
+  4. 兼容性说明落在设置页：Electron 支持 content_scripts/background/storage/scripting/webRequest/devtools 等子集；打包扩展/不支持的 API 会显示失败原因。
+- **理由**：不引入第三方扩展桥依赖，保持主进程可测（纯逻辑 + 假 API 单测）；CRX 解包用 node:zlib 自研避免新增依赖。
+- **验证**：单测 `tests/shell/browserExtensions.spec.ts`（8 条：商店 ID/CRX 头/ZIP 解包+穿越拒绝/folder 安装重启恢复/卸载/坏 manifest）；真机 E2E `browser-favicon.log`：安装测试扩展 → 重新导航 → 内容脚本把 `loopsoar-extension-ok` 注入页面（`contentScriptOk=true`）→ 列表 enabled → 卸载；设置截图 `e2e-evidence/settings-browser-extensions.png`。
+- **状态**：✅ 已验证（2026-11-13，Electron 子集；商店下载依赖网络）
+- **回退条件**：若商店安装体验/兼容性不足，可切到 electron-chrome-extensions 之类的桥接方案重新评估。
+
+## ADR-0089 终端系统收口：环境自检面板 + CLI 依赖探测 + Windows .cmd 解析
+
+- **背景**：用户 m08518 要求彻底完善终端、整合 Loopsoar 专用 terminal、检查下方终端是否正常，并在设置中加入系统终端依赖检测。
+- **现状**：持久终端已有（cmd / PowerShell / Git Bash / Python / Node / C++ 六种配置档、profiles 探测、ANSI 渲染、回放、空闲回收、并发上限）；缺的是面向用户的「依赖是否可用」自检与设置入口。
+- **决策**：
+  1. 新增 `packages/shell/src/main/terminalDiagnostics.ts`：复用 `detectTerminalProfiles`，并探测 git/node/npm/pnpm/python/rg/curl 的版本；命令白名单硬编码、5s 超时、环境走 `buildTerminalEnv` 白名单；Windows 上 npm/pnpm 用 `.cmd` 候选并 `shell:true` 执行（CreateProcess 不解析 .cmd），python 依次尝试 `py -3`/`python`/`python3`。
+  2. 契约新增 `terminal:diagnose`（null → 诊断对象）；设置新增「终端环境」分区：平台/默认 shell/终端可用徽标、Shell 配置档表、解释器/工具链表、常见 CLI 表、安装提示、重新检测。
+- **验证**：真机 E2E `terminal-panel-live.log`：终端面板打开、6 个配置档、点「新建终端」创建 cmd 会话、输出 `D:\试验场>`、state=就绪；E2E `browser-favicon.log`：`api.terminal.diagnose()` ready=true、npm/pnpm/python/git/node/curl 可用（rg 缺失有安装提示）、API 持久会话 echo 回放 `LOOP_TERM_OK`；设置截图 `e2e-evidence/settings-terminal-env.png`、面板截图 `terminal-panel-live.png`。
+- **状态**：✅ 已验证（2026-11-13）
+- **回退条件**：若新增诊断项导致启动变慢，可改为按需触发（当前已是设置页按需）。
+
+
+## ADR-0090 浏览器交互收口：底部 DevTools 面板、状态栏调试入口、商店安装点击拦截、图标替换
+
+- **背景**：用户 m09003/m09029/m09137/m09249 连续反馈：① 调试面板是独立窗口，应该像终端一样停靠在 Loopsoar 底部、点击向上展开；② 调试按钮要移到状态栏「终端」按钮左侧并用「操作-调试」图标；③ harness 扩展图标、浏览器插件图标要换成指定 SVG；④ 在浏览器里点应用商店的「添加至 Chrome / 获取」按钮毫无反应；⑤ 状态栏「调试/终端」两按钮间距过大。
+- **实现**：
+  1. **底部 DevTools 面板**：新增 `BrowserDevToolsPanel`（electronBrowser.ts）。用 `WebContentsView` 作为 DevTools 前端画布：主窗口 contentView 挂载 → `inspected.setDevToolsWebContents(view.webContents)` → `openDevTools({mode:"detach"})`，面板从窗口底部向上占 `panelHeight`（默认 360，120–1200 夹取），窗口 resize 自动重算；`devtools-closed` 自动清理并通知渲染层。契约新增 `browser:setDevToolsPanel`（open/height）与事件 `chrome:devToolsPanel`。
+  2. **状态栏布局**：DOM 顺序改为「内容 → StatusBar → 调试面板占位」，占位高度从 0→360 的 240ms 过渡会把状态栏平滑顶上去，成为展开面板的顶栏（用户要求）；`browser.setBottomInset` 同步让网页视图让位。调试按钮移到「终端」左侧并加「调试」文字，两个按钮包进 gap 6px 的 `bottomActions` 组，取消原来 18px 间距。
+  3. **商店安装点击拦截**：新增浏览器 preload `packages/shell/src/preload/browser.cjs`（仅 Chrome/Edge 官方商店域名生效），捕获「Add to Chrome / 添加至 Chrome / 获取」按钮点击 → `preventDefault/stopPropagation` → 通过专用 IPC `loopsoar-browser:install-extension` 交给主进程；主进程用 `BrowserHost.hasWebContents(event.sender.id)` 校验来源必须是 Loopsoar 浏览器标签，再走 `BrowserExtensionHost.installFromStore`（Chrome update2 / Edge crx 端点），页面内显示「正在安装/已安装/失败」toast。设置页增加「打开 Chrome 商店 / 打开 Edge 商店」按钮。
+  4. **图标**：`D:/下载/操作-调试.svg` → `icons/devtools.svg`（状态栏调试按钮）；`D:/下载/扩展功能.svg` → `icons/extension-feature.svg`（设置·扩展）；`D:/下载/组件、插件.svg` → `icons/browser-plugin.svg`（设置·浏览器扩展）。
+- **验证**：真机 E2E `e2e-evidence/devtools-panel3-window.png`：DevTools 停靠底部（窗口数仍只有 Loopsoar 主窗口，无独立调试窗）、状态栏 `footer.bottom=502 = slot.top`、占位 360；`E2E_WINDOWS` 仅主窗口。商店链路：`E2E_STORE_INSTALL` 用真实 Chrome 商店成功安装 Dark Reader 4.9.135（`kkldpplicfanelpckfpkcgmhdiiggjdk`）；模拟商店页（host-resolver 映射 chromewebstore.google.com → 本地页）点击「Add to Chrome」→ preload 拦截生效（页面自身点击计数 0，页面出现「Loopsoar 正在安装扩展…」toast）。单测 `tests/shell/browserPreload.spec.ts`（3 条：商店 URL/ID/按钮文案）与 `browserExtensions.spec.ts` Edge 用例。
+- **已知边界**：① DevTools 前端自身语言仍为英文（用户 m09223 同意本轮先不处理）；② Edge 商店 CRX 端点在测试环境返回 500（页面可正常访问，安装通道已实现，待用户网络验证）；③ Electron 扩展 API 仍是子集（见 ADR-0088）。
+- **ADR-0090 验证补记**：全量 vitest **176 文件 / 1476 tests 全绿**；typecheck 5/5、gen/check/build 通过。
+- **状态**：✅ 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若底部 DevTools 在低分屏/小窗口不可用，可恢复 `openDevTools({mode:"detach"})` 独立窗口作为降级。
+
+
+## ADR-0091 会话按需创建 + 标签/工作区语义收口 + favicon 回抓 + 图标居中
+
+- **背景**：用户 m09384：① 设置里「从商店安装」和「打开商店」按钮语义重复；② 新建页会自动跳转/新建会话，不对——「我与 Agent 对话之前都不算新建会话」，只有对话才算创建；③ 网页左侧要有工作区箭头下拉，选择后新建页/会话都在该工作区活动；④ 会话/网页在工作区内活动，新建网页不等于新建会话；右侧在对话前只是无工作区归属的会话栏；只有完全没绑定工作区的新用户直接对话才落「未归属工作区」；⑤ 明显域名（bing/bilibili/douyin/baidu/Microsoft）的 favicon 仍抓不到；⑥ 标签页关闭按钮图标不居中，需全程序排查。
+- **决策/实现**：
+  1. **会话按需创建**：`createFreshSessionAndTab` 重写为「草稿态」（清空 currentSession/messages，必要时补空白标签），不再调用 `chat:newSession`；启动、新建标签页、显式「新建会话」都只进入草稿。新增 `ensureSessionForSend()`：首次发送时才 `chat:newSession({ workspaceId: activeWorkspaceId ?? null })`，并记录 `tabSessionRef`（标签页 ↔ 会话绑定）；`send()` / `startVibe()` 都先 ensure。切标签时按 `tabSessionRef` 恢复该页会话；未对话的新页保持草稿。
+  2. **工作区语义**：`BrowserChrome` 最左侧新增工作区下拉（`data-testid="browser-workspace-toggle"`，folder+chevron，向下展开 workspaces + 添加工作区）；选择只改「后续活动工作区」，已有会话不迁移；草稿态 `bindWorkspaceToCurrentSession` 只 `workspace.select`，有会话才 `bindSession`。`sessionWorkspaceId` 在草稿态显示 `activeWorkspaceId`。shell `domains/chat.ts` 移除 startStream 时自动绑定「默认工作区」：只有完全没选工作区时 `workspaceId=null` → 未归属工作区。
+  3. **favicon 回抓**：新增 `resolveFaviconForPage(pageUrl)`（主进程）：抓页面 HTML 的 `<link rel=icon>`，否则退回 `/favicon.ico`、`/favicon.png`，复用 `fetchFaviconDataUrl` 转 data URL；契约 `browser:resolveFavicon`，成功后 `history.updateFavicon`。`StartPage` 快捷入口与 `ChromePage` 历史页对缺图标条目按 URL 回抓（每 URL 一次）并原地刷新，旧历史/在线抓取失败也能显示图标。
+  4. **设置扩展安装区**：主行改为「打开 Chrome 商店 / 打开 Edge 商店 / 安装本地文件夹…」，次行「或粘贴商店链接 / 扩展 ID 在线安装：输入框 + 从商店安装」，消除语义重复。
+  5. **图标居中**：根因 `.icon-btn` 未重置浏览器默认 `padding`；全局 `.icon-btn { padding:0; line-height:0; }`。E2E 实测标签关闭按钮 close 中心与 icon 中心一致（110,25）。
+- **验证**：真机 E2E `e2e-evidence/turn51.png` / `turn51.log`：bing 标签 + 历史 favicon 均为 data URL；点「新建标签页」后 session 数不变（`noSessionOnNewTab=true`）；工作区菜单「试验场/默认工作区」；选「默认工作区」后首次发送创建会话且 `workspaceId=ws-mvxwl64p-h1jt`；草稿态右侧无会话项、输入框可用。设置截图 `settings-browser-extensions3.png`。全量 vitest 176 文件 / 1476 tests 全绿。
+- **状态**：✅ 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若「切标签恢复会话」需要跨重启持久化标签↔会话映射，需把映射落到会话 store；当前仅运行期内存映射。
+
+
+## ADR-0092 工作区入口归位标题栏左上角 + 设置内跳转直接生效
+
+- **背景**：用户 m09567（两图）：① 工作区下拉被放在第二行浏览器工具条最左侧，和标签页/地址栏挤在一起「乱七八糟，一坨」，位置也错——应该在顶部导航栏、标签页最左侧，也就是 Loopsoar 左上角；② 设置（浏览器整页设置）里点「打开 Chrome/Edge 商店」后只是背后新建标签，必须退出设置界面才能看到，要求直接跳转。
+- **决策/实现**：
+  1. 新增 `packages/ui/src/WorkspaceSwitcher.tsx`：34×40 的标题栏入口，**只显示一个 chevron 箭头**（用户 m09840：左上角不要文件夹图标，参考图只留箭头；菜单项内仍用 folder/check 区分）；菜单用 `createPortal` 挂到 `document.body`、`position:fixed`（按触发按钮 `getBoundingClientRect()` 锚定在标题栏正下方，`usePopover("titlebar-workspace")` 负责外部点击/Esc/互斥收起），列出工作区（当前项高亮勾选）+「添加工作区」。
+  2. `TitleBar` 增加 `tabsLeading` 插槽，渲染在 `tabsSlot` 内、标签页之前（整条标签区 no-drag，按钮可点）；`App` 传入 `<WorkspaceSwitcher workspaces activeWorkspaceId onSelectWorkspace=bindWorkspaceToCurrentSession onAddWorkspace=addWorkspaceForChat />`。
+  3. 删除 `BrowserChrome` 里的工作区状态/菜单/按钮与 4 个 props（工具条恢复「后退/前进/刷新 + 地址栏 + 快照/更多」），工作区概念只保留在标题栏与设置界面。
+  4. 设置跳转：`Settings` 增加 `onOpenUrl?`，`BrowserExtensionsSection` 的「打开 Chrome 商店 / 打开 Edge 商店」优先走它；`ChromePage` 增加 `onOpenUrl` 并透传给整页 Settings。`App` 的处理器：先 `dismissAllPopovers()`、关闭设置/整页遮罩，再 **延迟 90ms**（等遮罩关闭、原生视图恢复布局后）调用 `browser.newTab({url})`，避免同一 tick 建标签被仍在遮罩状态的主进程布局隐藏。
+- **验证**：真机 E2E `e2e-evidence/titlebar-workspace.png` + `titlebar-workspace.log`：入口 rect `(0,0,34,40)`（窗口左上角，chevron-only，无文件夹图标），第一个标签 left=40（紧接其后）；点开后菜单 rect `(4,44,212,149)`，含「试验场/默认工作区/添加工作区」，选中后 title 变为「工作区：默认工作区」且菜单收起。设置跳转（ChromePage 整页设置 → 浏览器扩展 → 打开 Edge 商店）：点击后设置整页消失、标签页新增/切到「Microsoft Edge 加载项」并 active；窗口级截图 `settings-chromepage-jump4-window.png` 显示直接落在商店页（本机网络返回 Chromium 连接错误页，属预期），无需再手动退出设置。typecheck 5/5；全量 vitest 见 PROGRESS 四十五；gen/check/build 通过。
+
+### 追加修订（m09840 / m09866 / m09937 / m10007）
+
+- **只留箭头**（m09840）：触发按钮不再显示 folder 图标，只保留 chevron。
+- **尺寸与标签页齐高**（m09866）：30×30 圆角（8px）方块，`marginTop:10px` 与标签页上下沿对齐；箭头放大到 18px；实测按钮 rect `(6,10,30,30)` 与标签页 `(42,10,193,30)` 同高同顶底，展开菜单 rect `(6,44,212,149)`。
+- **高光替代边框**（m09937）：常态无 border、无底色；悬停/展开仅用橙色半透明高光（`rgba(200,118,60,0.18)`），不再出现一圈边框。
+- **再次点击必须收起**（m09937）：`usePopover` 的「点外部收起」在 pointerdown 阶段触发；若触发按钮没有 `data-popover-trigger`，会先被收起、click 再 toggle 成展开（每次都重新打开）。修复：按钮外层加 `data-popover-trigger`，pointerdown 视为浮层内部，click 正常 toggle。E2E：连点两次后 `aria-expanded` true→false，`E2E_WINDOWS` 始终只有主窗口。
+- **展开菜单不被网页遮挡、且不引入掉帧**（m10007）：曾尝试「独立透明置顶浮层窗口」（复用工具栏 popover 子窗口）让菜单浮在 WebContentsView 之上，实机在带视频/轮播的网页上出现严重卡顿掉帧，已回退。最终方案：菜单仍是主窗口 DOM + `createPortal`，展开期间 App 通过 `browser.setOverlay({open:true})` 临时隐藏原生网页视图（关闭即恢复），并把 `workspaceMenuOpen` 合并进现有 overlay 计算；不再创建任何副窗口，避免透明置顶窗的 DWM 合成开销。副作用是菜单打开期间网页让位（DOM 背景），换取菜单可见与帧率。
+- **验证证据**：`e2e-evidence/ws-toggle-twice.log`（二次点击收起、0 副窗口）、`ws-menu-open.log`（菜单 rect/文案、展开态高光）、`ws-menu-outside.log`（点页面外收起、`aria-expanded=false`）；截图 `ws-menu-open.png`。
+
+
+### 追加修订 2（m10071）——回退「展开菜单时隐藏网页」
+
+- 上一版为了让 DOM 菜单浮在网页上，在菜单展开期间调用 `browser.setOverlay({open:true})` 临时隐藏原生 WebContentsView；用户实测「一点击左上角展开，网页界面就没了」，明确否掉（而且对卡顿没有实际帮助）。
+- 最终：工作区菜单改回**独立浮层子窗口**（`PopoverApp` 的 `workspaces` 类型），网页全程保持可见、菜单天然浮在网页之上；不创建 DOM 菜单、不隐藏原生视图、无阴影（浮层窗口 `hasShadow:false` + 卡片 `box-shadow:none`）。
+- **再次点击收起的根因与修复**：点回主窗口时浮层窗口先 `blur`，主进程若立即 `close()`，渲染层 click 的 `togglePopover` 会看到「已关闭」→ 又打开。修复：`chromePopover.ts` 的 blur 处理增加判断——若主窗口此刻已获得焦点则不立即关，交给 hover 轮询（指针移出菜单/锚点才关）与 click 的原子 toggle；点其它应用时主窗口未聚焦，仍立即关闭。
+- E2E：打开时 `E2E_WINDOWS`=2（主窗口 + 浮层），浮层 URL `loopsoar://app/index.html?popover=workspaces&lang=zh-CN`，菜单 3 项（试验场/默认工作区/添加工作区）220×160、卡片 `box-shadow:none`；连点两次后 `aria-expanded` true→false、`E2E_WINDOWS` 回到 1。证据 `e2e-evidence/ws-popover-open.log`、`ws-popover-toggle.log`。
+
+- **状态**：✅ 真机 E2E 已验证（2026-11-13）
+- **回退条件**：若后续需要「在设置里打开链接但保留设置页」，可让 `onOpenUrl` 不关闭遮罩；当前按用户要求选择直接离开设置。
+
+
+## ADR-0093 有网页时侧栏展开/收起的掉帧修复（初版：不再逐帧 resize → 后经 m10244 恢复同拍，保留性能缓存）
+
+- **背景**：用户 m10071 反馈「卡顿仅限于有网页的时候，各个栏目的展开、收起掉帧严重到了极点」。此前侧栏宽度动画（320ms）由主进程 `setInterval` 逐帧插值，每一帧 `applyLayout()` → 对所有会话/标签的原生 WebContentsView 调 `setBounds`；有网页时每帧触发 Chromium 表面重排与 DWM 合成，造成严重掉帧（无网页时不明显）。
+- **决策/实现**：
+  1. **停止逐帧 resize 原生视图**：`App.tsx` 不再调用 `browser.setSidebarWidth({animate:true})`。侧栏宽度变化时：
+     - **侧栏变宽（展开）**：原生网页视图一次性缩到目标宽度（否则网页在 DOM 之上会盖住正在滑入的侧栏），DOM 侧栏随后用 CSS 过渡滑入空出的区域。
+     - **侧栏变窄（收起）**：原生视图先保持当前窄宽等 DOM 动画结束（网页不会盖住收起动画），340ms 后再一次性让网页铺满。
+     - 拖拽/启动水合仍为瞬时 `animate:false`，保持跟手与不误播。
+  2. **动画期间隐藏侧栏内容**：`App` 增加 `sidebarWidthAnimating`（约 360ms），`AgentSidebar` 新增 `widthTransitioning` prop；宽度过渡期间 inner `opacity:0`、`pointer-events:none`，结束再 160ms 淡入。避免 320ms 内文字逐帧重排（与 ADR-0077 的模式切换遮罩同思路）。
+  3. **主进程动画帧只更新活动标签**：`browserHost.ts` 的 `applyLayout(activeOnly)`，在侧栏 `setInterval` 插值帧中只处理当前会话的当前标签（其余标签视图本就隐藏），把每帧 N 个 `setBounds/setVisible` 降到 1 个；动画结束再全量 `applyLayout()` 对齐所有标签。保留逐帧插值接口给未来需要原生跟随的场景。
+- **验证**：E2E `e2e-evidence/sidebar-anim.log`：collapsed 48 → 点击展开，120ms 时 wrapper=315、inner `opacity:0`，结束 477、`opacity:1`；再点击收起，120ms 时 wrapper=210、inner 淡出，结束 48、`opacity:0`。`e2e-evidence/rail-hover.log`：竖条悬停 1.5s 后侧栏 48→477，但会话/工作区列表不再自动打开（`session-list-panel` 与任何 `data-popover` 均不存在）。typecheck 5/5、gen/check/build 通过、全量 vitest 见 PROGRESS。
+
+### 追加修订（m10183）：杜绝「缝隙漏初始页」
+
+- 现象：有网页时收起/展开侧栏，原生网页视图与 DOM 页列宽度在动画期间不一致，缝隙里会漏出新建标签页（NTP）的搜索框/快捷入口残影；极端情况下延迟对齐定时器被取消，会让原生视图一直停在窄宽，残影变成常驻。
+- 修复：
+  1. **动画期间隐藏 DOM 起始页**：`StartPage` 新增 `hidden` prop；当侧栏宽度动画进行中且当前标签是已加载的真实网页（`currentUrl` 非空、非 loading、无 loadFailure）时，DOM 层 `visibility:hidden`，缝隙只露出统一背景，不再漏 NTP 内容。空白页/加载页/错误页/Vibecoding 页不受影响。
+  2. **延迟对齐不再可被取消**：收起侧栏后「延迟铺满网页」的定时器改为 ref 持有，新的宽度变化先清理再重排，组件卸载时兜底清理；不再挂在 effect cleanup 上被无关重渲染取消。
+  3. **动画结束兜底同步**：360ms 遮罩结束时再强制对齐一次原生视图目标宽度（幂等），即使延迟定时器意外错过也不会留下错位。
+- 验证：E2E `e2e-evidence/ntp-leak.log`：真实网页加载后展开侧栏（110ms 时 `StartPage visibility=hidden`、wrapper 305；结束 477、visible），再收起（110ms hidden、232；结束 48、visible）；窗口级合成截图 `ntp-leak2-window.png` 收起后网页铺满、右侧只剩 44px 收起点，无 NTP 残影。
+
+
+### 追加修订（m10244）：恢复左右同拍动画，同时保留性能优化
+
+- 用户反馈更偏好之前的观感：「左右栏目跟进一起平滑变化」。因此恢复「原生网页视图与 DOM 侧栏同曲线逐帧同步」的方案（ADR-0093 最初的逐帧动画），但把上一轮排查出的性能问题逐项消除后再启用：
+  1. **动画帧只处理活动标签**：`applyLayout(activeOnly)` 仍然生效，逐帧插值只对当前会话的当前标签 `setBounds`，隐藏标签/其他会话完全不参与（这是当初「有网页时掉帧」的最大头）。
+  2. **几何/可见性缓存**：`TabEntry` 增加 `lastBounds`/`lastVisible`，`setBounds` 仅在矩形真正改变时调用，`setVisible` 仅在可见性改变时调用；动画帧不再重复调用这两个昂贵原语。
+  3. **DOM 起始页动画期间隐藏**：保留 `StartPage hidden` 守卫，原生视图与 DOM 列在动画中间不一致的瞬间不再漏出 NTP 内容（详见前一节修订）。
+  4. **侧栏内容恢复可见**：取消 `widthTransitioning` 内容遮罩（上一版为降负载加的），侧栏与网页一起滑动的观感与之前一致；仅保留搜索↔Vibecoding 切换遮罩。
+- 实现：`App.tsx` 宽度 effect 恢复 `browser.setSidebarWidth({width, animate:true})`（启动水合/拖拽仍为 `animate:false`），`sidebarWidthAnimating` 仅用于动画期间隐藏 DOM 起始页。
+- 验证：E2E 动画 110ms 时 `sidebarW=293`、侧栏 inner 可见；窗口级合成截图 `e2e-evidence/sync-mid-window.png` 显示网页与侧栏处于同一中间态（网页右缘随之收缩、侧栏内容可见），证明两边同拍。
+
+
+### 最终修订（m10584/m10603）：渲染层 rAF 驱动 + 原生同拍，帧率提升到 ~60fps
+
+- **背景**：快照跟随方案在收起/展开时出现「默认页 ↔ 网页」闪帧（截图/遮罩时序无法完全消除）、拉伸或缩放闪回，用户明确否掉；改为纯原生同拍后又出现「约 30fps」的掉帧观感。
+- **排查结论（含公开资料）**：
+  - 主进程 `setInterval(16ms)` 在 Windows 上实测实际间隔约 20–25ms（约 40fps），这是掉帧的直接原因；主进程计时器会被系统合并/延迟。
+  - Electron/Chromium 在 Windows 上通过 DirectComposition + swapchain 呈现网页；窗口/视图 resize 涉及 compositor 输出表面与 clip/viewport 的异步提交，逐帧 resize 本身就难以稳定 60fps（参考 Electron 官方文章 [Tech Talk: Improving Window Resize Behavior](https://www.electronjs.org/blog/tech-talk-window-resize-behavior)：Windows 上 resize 会出现旧帧/黑边，Electron 39.2.6 才修复 stale pixels；相关实现见 Chromium `direct_renderer.cc` / `root_compositor_frame_sink_impl.cc`）。
+  - 评估过但不可行：`app.disableHardwareAcceleration()`（整体性能大幅下降）、ANGLE 后端切换（驱动兼容/性能不可接受）、对 WebContentsView 做 CSS transform（Electron 不支持）、逐帧截图快照（闪烁/拉伸）。
+- **最终方案**：
+  1. **渲染层 `requestAnimationFrame` 驱动**：`App.tsx` 在侧栏宽度变化时启动 rAF 循环，按 `performance.now()` 做 320ms 时间插值（cubic-bezier(0.2,0,0.2,1)），每帧调用 `browser.setSidebarWidth({width, animate:false})`；渲染层 rAF 跟随合成器刷新（60/120Hz），实测 DOM 宽度按 ~16ms 一档平滑推进（`e2e-evidence/raf-anim.log`）。
+  2. **主进程只做即时落位**：`setSidebarWidth(false)` 直接更新活动标签 view bounds；保留 `applyLayout(activeOnly)` 与 `lastBounds/lastVisible` 缓存，避免动画帧对隐藏标签/未变化几何重复调用昂贵原语。
+  3. **不再使用快照/遮罩**：网页全程真实渲染，默认页不会闪现；已加载网页时 `StartPage` DOM 保持隐藏（防止任何缝隙漏出新建页）。
+  4. 主进程的 `setInterval` 动画路径保留为兼容接口，但改为按真实时间插值（避免被合并后动画变长）。
+- **验证**：E2E `e2e-evidence/raf-anim.log`：收起动画 477→48，320ms 内每 ~16ms 一档平滑下降（476/461/413/…/48），无跳变；页面全程可见。typecheck 5/5、gen/check/build 通过、全量 vitest 见 PROGRESS。
+- **状态**：✅ 真机行为验证（2026-11-13）；这是在不引入闪帧前提下的最优方案（原生视图逐帧 resize 的物理上限受 Windows 合成器约束）。
+
+- **状态**：✅ 真机行为验证（2026-11-13）；帧率为主观体验项，已消除每帧原生视图 resize 这一主要来源。
+- **回退条件**：若未来需要在动画中让网页与侧栏严格同拍，需要把网页视图改为 DOM 渲染层（如 WebContentsView 画面流）或接受掉帧；当前优先流畅度。
+
+
+## ADR-0094 工作区 > 会话 > 网页：关系与关闭语义
+
+- **背景**：用户 m10643 明确层级：**工作区 > 会话 > 网页**；网页与会话高度绑定但**不是一对一**——一个会话可以拥有多张网页；关网页不删会话；删会话可关网页；工作区是它们的「母、源」，记忆也应挂在工作区（下一阶段）。
+- **关系定义（实现口径）**：
+  1. **工作区是根**：会话属于工作区（`session.workspaceId`）；网页（标签页）挂在会话下（`BrowserHost` 每个会话一个 tab group）。
+  2. **一个会话可有多张网页**：会话内的链接/新标签页在同一 group 内；关掉其中一张只影响该网页。
+  3. **网页需要会话**：页面在会话的 group 中活动；新建页可以是草稿，首次对话才创建会话（ADR-0091），但一旦页面对话，它就归属该会话。
+  4. **关网页 ≠ 删会话**：关闭标签只移除该 tab；会话列表保留，之后仍可在该会话下继续开网页。
+  5. **删会话 ⇒ 关网页**：删除会话时先关闭该会话 group 下全部网页，再删除会话数据（避免留下无主网页与恢复状态）。
+  6. **关掉最后一个网页 = 退出程序**（浏览器惯例）；退出前必须先真正关闭标签并等待标签状态落盘，否则下次启动会恢复刚关掉的网页——修复后下次启动显示空白新建页。
+  7. **记忆**：下一阶段按工作区维度延伸（当前记忆仍为全局/会话注入，作为工作区记忆的前置）。
+- **实现**：
+  - 新增契约 `browser:closeSessionTabs`（`BrowserSessionIdSchema`）+ `BrowserHost.closeSessionTabs(sessionId)`：关闭该会话名下的全部标签并移除 group，返回关闭数量；`domains/browserAdapter.ts` 接线。
+  - `App.closeTab` 在只剩最后一个标签时：不再直接 `window.close()`，而是 `browser.closeTab(tabId)` → 等待 **560ms**（主进程标签状态保存有 400ms 防抖）→ `window.close()`；此时会话持久化的 `browser.tabs` 为空，下次启动恢复为空白新标签页。
+  - `App.deleteSession`：先 `browser.closeSessionTabs({sessionId})`，再 `chat.deleteSession`（顺序保证会话文件删除前网页已关闭，持久化不会把旧网页写回）。
+- **验证**：
+  - 单测（`tests/shell/browserHost.spec.ts` 新增 2 条）：同一会话两张网页 → `closeSessionTabs` 关闭 2 张并销毁 WebContents；关闭会话最后一张网页后会话组仍可新建网页（关网页不删会话）。
+  - 真机 E2E：关闭最后一个标签后程序退出、会话文件 `browser` 变为 `undefined`；同一数据目录重启后 `listTabs` 只有 `{url:"", title:"新标签页"}` 一张空白页，NTP 可见（`e2e-evidence/close-last.log`、`relaunch-blank.log`）。
+  - 全量 vitest **176 文件 / 1478 tests 全绿**；typecheck 5/5；gen/check/build 通过。
+- **状态**：✅ 真机 E2E 已验证（2026-11-13）。
+- **后续（下一阶段）**：工作区级记忆（召回/写入按 workspace 隔离）、会话删除时的工作区统计与记忆保留策略。
+
+---
+---
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -944,3 +1833,47 @@
 | ADR-0048 | 供应商模型能力补全：上下文/输出/视觉/模态/工具/结构化输出（slime 表 + NIM 官方文档） | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0049 | 设置面板「获取模型列表与能力」：拉列表同时拉上游能力 + 三态合并（显式 > 上游 > 推断）+ 结果反馈 | ✅ 自动化 + 真机 E2E 已验证 |
 | ADR-0050 | 供应商编辑改大弹窗：不跳页 + 右上角反馈 + 文本不挤压（Portal/滚动复位/表格横向滚动） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0051 | OpenCode Go/Zen 双计划端点与错误提示修复（撤销错误迁移/默认模型去免费/模型目录/提示去重） | ✅ 自动化 + 真实上游 + 真机 E2E 已验证 |
+| ADR-0052 | 去掉「默认模型/启用」概念：模型菜单列出全部模型、点哪个用哪个（删默认行/单选列/勾选列/自动回退） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0053 | OpenCode 计划边界可视化：Go 订阅额度 ≠ 按量付费余额（计划徽标 + 402/403 账户提示 + 活动供应商纠正） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0054 | 恢复模型「显示」拨片（新模型默认打开，无默认模型）+ 推理强度选择移到模型菜单顶部 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0055 | 模型「显示」开关支持全选/取消全选（表头主拨片，部分开启点一下即全选） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0056 | 模型表工具条重构（全选移位 + 搜索栏）+ 应用图标身份修复（多候选路径 / AUMID / slime 图标恢复） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0057 | 密钥关联修复：供应商去重必须迁移密钥 / 测试连接用被测 Key / 保存后立即真实验证 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0058 | 列表/浮层全局收起规则：html data-popover 泄漏修复 + 工具栏浮层原子 toggle + 全局点击外部收起 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0059 | 小窗「最小化→图标按钮」移植（Slime 同款）+ 输入区左下角圆形「+」菜单（附件） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0060 | 图标窗单层化/可拖动/衔接动画（Slime 移植：透明窗口 + logo 单层 + screen 增量拖动 + 180ms 几何动画） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0061 | 悬浮窗圆角恢复 + 衔接动画改快照 transform | ⚠️ 动画机制已被 ADR-0062 替代（圆角/单层图标结论保留） |
+| ADR-0062 | 收起/展开按 Slime float 重做：面板几何过渡 + 内容钉住裁切 + 图标淡入淡出（替代 ADR-0061 快照 transform） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0063 | 浏览器管理整页/搜索引擎/加载失败页：历史勾选批量删除、空态与顶栏互跳、引擎图标下拉（仅 Bing/Google/百度）、加载页 + 分类错误页 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0064 | 管理三页左侧索引栏（搜索 + 分类，Edge 式三栏）+ 批量操作条上移且与行严格对齐（box-sizing 修复） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0065 | 新建标签页重做：搜索/Vibecoding 拨片 + 模型胶囊 + 发送后平滑过渡到整页会话；初始标签 + 关闭最后标签=关窗 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0066 | Vibecoding 会话页卷轴只画上半截：MessageList 不可再套滚动容器（改纯 flex 布局，卷轴由内部 scroller 驱动） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0067 | 模型菜单被拨片文字穿透：浮层改 createPortal 到 body + fixed 锚点 + z-index 1000，脱离页内层叠上下文 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0068 | Vibecoding 主页面：工作区/模型/推理/Build·Plan 控制条 + 工作区→会话树 + 标题相关度搜索 + 收起态会话竖条（悬停 1s 展开） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0069 | Vibecoding 圆形加号（工作区/附件菜单）+ 胶囊统一 + 侧栏按钮图标平滑切换 + 会话面板「工作区标题+单行+相对时间」版式 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0070 | Vibecoding 右栏改为内嵌会话列表（对话只留左侧主页）+ 侧栏图标双层同槽位交叉淡入（修复错位/无过渡） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0071 | 会话列表：标准 chevron 箭头 + 工作区/会话悬浮操作（更多/添加会话/置顶/删除）+ 工作区重命名/打开文件夹 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0072 | 侧栏宽度：全屏可调（最小拖拽区间 200px）+ Vibecoding 独立窄区间（min=标准最小×0.5、max×0.6，进入平滑收缩）+ 退出键多层兜底 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0073 | 会话小窗化/恢复/置顶/删除图标替换（用户提供 4 个 SVG；delete 居中补偿 + float/float-exit 接线） | ✅ 图标守卫 + 全量测试已验证 |
+| ADR-0074 | 会话行左上微调 + Vibecoding 隐藏小窗化（淡出收宽）+ Agent 小窗标题栏横杠最小化/收起侧边栏图标 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0075 | 侧栏过渡收口：小窗内去小窗化 + 内容宽度冻结（防中途换行）+ 头部按钮槽位淡入淡出 | ⚠️ 内容冻结已被 ADR-0076 替代（其余两项保留） |
+| ADR-0076 | 撤销侧栏内容冻结：inner 与 wrapper 用同一条 320ms 曲线同步变宽/收窄（内容宽度逐帧等于可见栏宽） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0077 | 模式切换内容遮罩：搜索↔Vibecoding 期间先隐藏内容、宽度落定后淡入，彻底消除中间宽度换行帧 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0078 | 模式切换「概率性一帧」确定性修复：遮罩改 useLayoutEffect（paint 前生效）+ App 状态同帧上报 + NTP 两模式内容块等高（拨片不再上下跳 42px） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0079 | 悬浮小窗/图标最终方案：独立 56px 图标窗口（静态 icon.html）顶替大窗口，彻底移除 resize/setShape → 无闪烁无黑块；拖动移动图标窗、点击对齐还原；关闭改原地淡出 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0080 | 普通态 Agent 小窗拖动会话：起点尺寸冻结 + 显式 pointer 拖拽（修复 Windows 125% DPI 下越拖越大） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0081 | 悬浮小窗头部收敛：只留会话列表图标，点开 Vibecoding 同款 SessionListPanel（去掉 workspaceBar/sessionBar 与窄窗变形的 WorkspacePanel） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0082 | Vibecoding 侧栏切换判定：去掉 currentUrl 前置条件，NTP 在地址栏有 URL 时也能切到会话列表（导航后自动复位） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0083 | Vibecoding 主页面承载会话正文：切到 Vibecoding 或从右栏选会话时自动进入会话页（messages 非空 → mode=chat） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0084 | 会话绑定标签页、标签页绑定工作区：启动/新建标签 = 新会话 + 空白 tab + 搜索页，修复 Vibecoding 回不到搜索 | ⚠️ 新建会话保留当前界面（ADR-0085 修正） |
+| ADR-0085 | 侧栏/列表/工作区 UI 收口：新建会话不跳搜索 + 统一会话列表 + 输入框下工作区选择 + 首次对话自动落默认工作区 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0086 | 站点图标（favicon）：标签页/历史/新标签快捷入口；主进程转 data URL + 历史迟到更新 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0087 | 开发者工具（F12）：每标签 detach 调试 + 请求守卫放行 devtools/chrome-extension 协议 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0088 | 浏览器扩展适配：本地未打包安装 + Chrome 商店 CRX 下载解包 + 持久化 + 设置管理（Electron 子集） | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0089 | 终端环境自检：设置页依赖探测（profiles + git/node/npm/pnpm/python/rg/curl）+ Windows .cmd 解析 | ✅ 自动化 + 真机 E2E 已验证 |
+| ADR-0090 | 浏览器交互收口：底部 DevTools 面板 + 状态栏调试入口 + 商店安装点击拦截（Chrome/Edge）+ 图标替换 | ✅ 真机 E2E 已验证 |
+| ADR-0091 | 会话按需创建 + 标签/工作区语义 + favicon 回抓 + 图标居中 + 扩展设置层级 | ✅ 真机 E2E 已验证 |
+| ADR-0092 | 工作区入口归位标题栏左上角 + 设置内跳转直接生效 | ✅ 真机 E2E 已验证 |
+| ADR-0093 | 有网页时侧栏展开/收起不再逐帧 resize 原生视图（掉帧修复） | ✅ 行为验证 |
+| ADR-0094 | 工作区 > 会话 > 网页：关系与关闭语义（关最后网页不恢复、删会话关网页） | ✅ 真机 E2E 已验证 |

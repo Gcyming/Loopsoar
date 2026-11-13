@@ -411,3 +411,28 @@ describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
     expect(host.getSidebarWidth()).toBe(360);
   });
 });
+
+describe("BrowserHost（工作区 > 会话 > 网页）", () => {
+  it("删除会话时关闭该会话名下的全部网页（一个会话可以有多张网页）", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://a.example");
+    await host.newTab("https://b.example");
+    expect(host.listTabs().length).toBe(2);
+    const closed = await host.closeSessionTabs("default");
+    expect(closed).toBe(2);
+    expect(host.listTabs().length).toBe(0);
+    expect(created.filter((view) => view.wcClosed).length).toBe(2);
+  });
+
+  it("关闭网页不会删除会话：关完最后一张网页后会话组仍可继续新建网页", async () => {
+    const { host } = makeHost();
+    await host.navigate("https://a.example");
+    const tabId = host.listTabs()[0].id;
+    expect(await host.closeTab(tabId)).toBe(true);
+    expect(host.listTabs().length).toBe(0);
+    // 会话（组）还在：同一会话下还能新建网页
+    const again = await host.newTab("https://c.example");
+    expect(again.ok).toBe(true);
+    expect(host.listTabs().length).toBe(1);
+  });
+});

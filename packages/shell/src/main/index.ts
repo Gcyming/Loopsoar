@@ -5,7 +5,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,7 +22,7 @@ import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
 import { loadPreferences, loadPermissions } from "./domains/settings.js";
 import { resolveDataDir } from "./dataDir.js";
-import { APP_NAME, PROTOCOL } from "../shared/brand.js";
+import { APP_ID, APP_NAME, PROTOCOL } from "../shared/brand.js";
 import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import {
   createBootTrace,
@@ -31,7 +31,9 @@ import {
   makeUiProtocolHandler,
 } from "./boot.js";
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
-import { createElectronBrowserHost, DownloadsBridge } from "./electronBrowser.js";
+import { BrowserDevToolsPanel, createElectronBrowserHost, DownloadsBridge, resolveFaviconForPage } from "./electronBrowser.js";
+import { BrowserExtensionHost, type ExtensionApiLike } from "./browserExtensions.js";
+import { SESSION_PARTITION } from "../shared/brand.js";
 import { withProviderDefaults } from "./providerDefaults.js";
 import { createDebouncedRunner, type BrowserHost } from "./browserHost.js";
 import { BrowserHistoryStore } from "./browserHistoryStore.js";
@@ -78,6 +80,7 @@ import { registerExtensionsDomain } from "./domains/extensions.js";
 import { createChromePopoverManager } from "./chromePopover.js";
 import { registerChromePopoverDomain } from "./domains/chromePopover.js";
 import { createAgentWindowManager, type AgentWindowManager } from "./agentWindow.js";
+import { resolveAppIconPath } from "./appIcon.js";
 import { registerAgentWindowDomain } from "./domains/agentWindow.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { registerSkillsDomain } from "./domains/skills.js";
@@ -107,6 +110,9 @@ protocol.registerSchemesAsPrivileged([
 // 覆盖值必须归一为绝对路径：Electron 的 app.setPath 只接受绝对路径，
 // 脚本里传相对目录（如 LOOPSOAR_DATA_DIR=.loopsoar-data）会在启动时报 “Path must be absolute”。
 app.setName(APP_NAME);
+// Windows 任务栏/通知身份必须与品牌 appId 一致：缺省会落到 electron.exe 的默认身份，
+// 任务栏显示 Electron 默认图标，还可能被合并进别的 Electron 开发应用分组（用户报障：图标错位）。
+if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 app.setPath("userData", resolveDataDir(process.env.LOOPSOAR_DATA_DIR, app.getPath("appData")));
 // 模块顶层工作到此结束（import 图求值 + 协议声明 + userData 落位）；@Xms 即「进程启动→JS 入口就绪」。
 bootTrace.mark("module-eval");
@@ -142,6 +148,10 @@ function pushToRenderer(event: string, payload: unknown): void {
 
 let mainWindow: BrowserWindow | null = null;
 let browserHost: BrowserHost | null = null;
+/** 浏览器扩展宿主（浏览器 preload 的「商店安装」IPC 需要模块级访问）。 */
+let browserExtensionsHost: BrowserExtensionHost | null = null;
+/** 底部开发者工具面板（main() 内创建；主窗口 closed 时释放）。 */
+let devToolsPanel: BrowserDevToolsPanel | null = null;
 // 首帧后启动的非关键任务（main() 内装配；createMainWindow 的 ready-to-show 回调里触发）
 let deferredBootTasks: (() => void) | null = null;
 // Agent 会话栏独立窗口管理器（main() 内创建；createMainWindow 的 closed 回调需在模块作用域访问）
@@ -164,9 +174,14 @@ app.on("before-quit", (event) => {
     });
 });
 
+/** 应用图标路径：dist/src/打包三种目录深度都探测，Windows 优先多档 .ico（详见 appIcon.ts）。 */
 function iconPath(): string | undefined {
-  const candidate = path.join(__dirname, "../../resources/icon.png");
-  return fs.existsSync(candidate) ? candidate : undefined;
+  return resolveAppIconPath({
+    dirname: __dirname,
+    resourcesPath: process.resourcesPath,
+    cwd: process.cwd(),
+    platform: process.platform,
+  });
 }
 
 /** preload 路径按运行形态探测（bundle/dist 运行与 src 运行目录深度不同）。 */
@@ -194,6 +209,22 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             const outcome = await browserHost?.navigate(navUrl);
             console.log("E2E_NAV", JSON.stringify(outcome));
             await new Promise((r) => setTimeout(r, Number(process.env.LOOPSOAR_E2E_NAV_WAIT_MS ?? 2500))); // 等真实页面渲染完成
+            if (process.env.LOOPSOAR_E2E_BROWSER_EVAL) {
+              try {
+                const result = await browserHost?.executeInActiveTab(process.env.LOOPSOAR_E2E_BROWSER_EVAL);
+                console.log("E2E_BROWSER_EVAL", JSON.stringify(result ?? null));
+              } catch (err) {
+                console.log("E2E_BROWSER_EVAL", JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+              }
+            }
+            if (process.env.LOOPSOAR_E2E_STORE_INSTALL) {
+              try {
+                const extension = await browserExtensionsHost?.installFromStore(process.env.LOOPSOAR_E2E_STORE_INSTALL);
+                console.log("E2E_STORE_INSTALL", JSON.stringify({ ok: true, id: extension?.id, name: extension?.name, version: extension?.version }));
+              } catch (err) {
+                console.log("E2E_STORE_INSTALL", JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+              }
+            }
           }
           // 验收辅助：按可见文案点击一次（如设置页「编辑」），用于截图前展开表单
           // E2E：动画轨迹采样（LOOPSOAR_E2E_AGENT_TRACE=1）——点击前开始每 16ms 记录
@@ -359,6 +390,32 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
               .executeJavaScript(process.env.LOOPSOAR_E2E_EVAL, true)
               .catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
             console.log("E2E_EVAL", JSON.stringify(result));
+          }
+
+          // E2E：浮层窗口清单（验证「点击已展开的按钮收起到 0 个子窗口」等交互）
+          if (process.env.LOOPSOAR_E2E_WINDOWS) {
+            console.log(
+              "E2E_WINDOWS",
+              JSON.stringify(
+                BrowserWindow.getAllWindows().map((w) => ({
+                  title: w.getTitle(),
+                  visible: typeof w.isVisible === "function" ? w.isVisible() : null,
+                })),
+              ),
+            );
+          }
+
+          // E2E：捕获工具栏浮层窗口自身（验证阴影是否在页面内容里 vs 窗口 DWM 阴影）
+          if (process.env.LOOPSOAR_E2E_POPOVER_SHOT) {
+            await new Promise((r) => setTimeout(r, Number(process.env.LOOPSOAR_E2E_POPOVER_HOLD_MS ?? 1200)));
+            const popWin = BrowserWindow.getAllWindows().find((w) => w !== win);
+            if (popWin) {
+              const png = (await popWin.capturePage()).toPNG();
+              fs.writeFileSync(process.env.LOOPSOAR_E2E_POPOVER_SHOT, png);
+              console.log("E2E_POPOVER_SHOT", process.env.LOOPSOAR_E2E_POPOVER_SHOT, png.length);
+            } else {
+              console.log("E2E_POPOVER_SHOT_NO_WINDOW");
+            }
           }
 
           // E2E：悬停预览（LOOPSOAR_E2E_HOVER_TITLE=更多）——真实 mouseMove 触发 250ms hover 打开浮层
@@ -527,8 +584,10 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
               "E2E_AGENT_WINDOW_MAIN",
               JSON.stringify({ contentSize: win.getContentSize(), browser: browserHost ? browserHost.debugBounds() : null }),
             );
-            if (others[0]) {
-              const agentWin = others[0];
+            const agentWinCandidate = others.find((w) => { try { return w.webContents.getURL().includes("mini=1") && !w.webContents.getURL().includes("icon.html"); } catch { return false; } }) ?? others[0];
+            if (agentWinCandidate) {
+              const agentWin = agentWinCandidate;
+              console.log("E2E_AGENT_FOCUSED", JSON.stringify({ focused: BrowserWindow.getFocusedWindow() === agentWin, visible: agentWin.isVisible() }));
               try {
                 console.log("E2E_AGENT_WINDOW_URL", agentWin.webContents.getURL());
                 const dom = await agentWin.webContents.executeJavaScript(
@@ -543,6 +602,285 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
                   true,
                 );
                 console.log("E2E_AGENT_WINDOW_DOM", dom);
+
+                // 小窗内「会话列表」单图标展开列表验证（Vibecoding 同款 SessionListPanel）。
+                if (process.env.LOOPSOAR_E2E_AGENT_SESSION_LIST === "1") {
+                  const opened = await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => { const b = document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]"); if (!b) return { found: false }; b.click(); return { found: true, pressed: b.getAttribute("aria-pressed") }; })()`,
+                      true,
+                    )
+                    .catch((err) => ({ error: String(err) }));
+                  await new Promise((r) => setTimeout(r, 400));
+                  const dom = await agentWin.webContents
+                    .executeJavaScript(
+                      `JSON.stringify({
+                        toggle: !!document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]"),
+                        pressed: document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]")?.getAttribute("aria-pressed") ?? null,
+                        panel: !!document.querySelector("[data-testid=\\\"session-list-panel\\\"]"),
+                        search: !!document.querySelector("[data-testid=\\\"session-search\\\"]"),
+                        workspaceChip: document.body.innerText.includes("挂载项目文件夹"),
+                        toggleStyle: (() => { const b = document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]"); if (!b) return null; const cs = getComputedStyle(b); const icon = b.querySelector(".icon"); const ics = icon ? getComputedStyle(icon) : null; return { color: cs.color, bg: cs.backgroundColor, border: cs.borderColor, iconBg: ics ? ics.backgroundImage : null, iconW: icon ? icon.getBoundingClientRect().width : null, iconH: icon ? icon.getBoundingClientRect().height : null }; })(),
+                        sessionRows: document.querySelectorAll("[data-testid=\\\"session-item-row\\\"]").length,
+                      })`,
+                      true,
+                    )
+                    .catch((err) => JSON.stringify({ error: String(err) }));
+                  try {
+                    fs.writeFileSync(shotPath.replace(/\.png$/, "-session-list.png"), (await agentWin.capturePage()).toPNG());
+                  } catch { /* ignore */ }
+                  // 再点一次应收起列表、恢复对话与输入区
+                  await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => { const b = document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]"); if (!b) return false; b.click(); return true; })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  await new Promise((r) => setTimeout(r, 350));
+                  const closedDom = await agentWin.webContents
+                    .executeJavaScript(
+                      `JSON.stringify({
+                        panel: !!document.querySelector("[data-testid=\\\"session-list-panel\\\"]"),
+                        toggle: !!document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]"),
+                        pressed: document.querySelector("[data-testid=\\\"agent-mini-session-toggle\\\"]")?.getAttribute("aria-pressed") ?? null,
+                        composer: !!document.querySelector("textarea"),
+                        workspaceChip: document.body.innerText.includes("挂载项目文件夹"),
+                      })`,
+                      true,
+                    )
+                    .catch((err) => JSON.stringify({ error: String(err) }));
+                  // 再次打开 → Esc 应收起（全局浮层协调）
+                  await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => { const b = document.querySelector("[data-testid=\\"agent-mini-session-toggle\\"]"); if (!b) return false; b.click(); return true; })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  await new Promise((r) => setTimeout(r, 250));
+                  await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); return true; })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  await new Promise((r) => setTimeout(r, 250));
+                  const escDom = await agentWin.webContents
+                    .executeJavaScript(
+                      `JSON.stringify({ panel: !!document.querySelector("[data-testid=\\"agent-mini-session-list\\"]"), pressed: document.querySelector("[data-testid=\\"agent-mini-session-toggle\\"]")?.getAttribute("aria-pressed") ?? null, composer: !!document.querySelector("textarea") })`,
+                      true,
+                    )
+                    .catch((err) => JSON.stringify({ error: String(err) }));
+                  console.log("E2E_AGENT_SESSION_LIST_ESC", JSON.stringify({ escDom }));
+                  console.log("E2E_AGENT_SESSION_LIST_CLOSED", JSON.stringify({ closedDom }));
+                  console.log("E2E_AGENT_SESSION_LIST", JSON.stringify({ opened, dom }));
+                }
+                // 普通态 Agent 窗口标题栏显式拖拽验证：连续 5 次 start/move/move/end，记录尺寸是否漂移。
+                if (process.env.LOOPSOAR_E2E_AGENT_WINDOW_DRAG === "1") {
+                  const steps: Array<{ x: number; y: number; w: number; h: number }> = [];
+                  const pushBounds = (): void => { const b = agentWin.getBounds(); steps.push({ x: b.x, y: b.y, w: b.width, h: b.height }); };
+                  pushBounds();
+                  for (let i = 0; i < 5; i += 1) {
+                    await agentWin.webContents
+                      .executeJavaScript(
+                        `(() => {
+                          const el = document.querySelector("[data-agent-title-drag]");
+                          if (!el) return false;
+                          const base = 500 + ${i} * 100;
+                          el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 21 + ${i}, screenX: base, screenY: 400 }));
+                          window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 21 + ${i}, screenX: base + 20, screenY: 415 }));
+                          window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 21 + ${i}, screenX: base + 40, screenY: 430 }));
+                          window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 21 + ${i}, screenX: base + 40, screenY: 430 }));
+                          return true;
+                        })()`,
+                        true,
+                      )
+                      .catch(() => false);
+                    await new Promise((r) => setTimeout(r, 260));
+                    pushBounds();
+                  }
+                  console.log("E2E_AGENT_WINDOW_DRAG", JSON.stringify({ steps }));
+                }
+                // 小窗「最小化 = 缩成图标按钮」交互验证：点标题栏最小化 → 变图标 → 点图标还原
+                if (process.env.LOOPSOAR_E2E_AGENT_ICON_CYCLE) {
+                  await new Promise((r) => setTimeout(r, 900));
+                  const before = agentWin.getBounds();
+                  // 动画帧率探针：图标窗内 rAF 计数 + 主进程 bounds 采样（诊断掉帧来源）。
+                  await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => {
+                        window.__e2eFPS = { n: 0, t0: performance.now(), stamps: [] };
+                        const tick = (ts) => {
+                          window.__e2eFPS.n += 1;
+                          window.__e2eFPS.stamps.push(Math.round(ts));
+                          if (performance.now() - window.__e2eFPS.t0 < 900) requestAnimationFrame(tick);
+                        };
+                        requestAnimationFrame(tick);
+                        return true;
+                      })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  const clicked = await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => { const b = Array.from(document.querySelectorAll('.win-btn')).find((x) => (x.getAttribute('aria-label') || '').includes('最小化')); if (!b) return false; b.click(); return true; })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  // 衔接动画证据：逐帧采样 bounds（应严格介于原尺寸与 56 之间）。
+                  const samples: Array<{ t: number; w: number; h: number }> = [];
+                  const sampleStart = Date.now();
+                  let midShotSaved = false;
+                  let midDom: string | null = null;
+                  while (Date.now() - sampleStart < 320) {
+                    const b = agentWin.getBounds();
+                    samples.push({ t: Date.now() - sampleStart, w: b.width, h: b.height });
+                    const elapsed = Date.now() - sampleStart;
+                    if (!midShotSaved && elapsed >= 80) {
+                      midShotSaved = true;
+                      try {
+                        fs.writeFileSync(
+                          shotPath.replace(/\.png$/, "-mid.png"),
+                          (await agentWin.capturePage()).toPNG(),
+                        );
+                        midDom = await agentWin.webContents
+                          .executeJavaScript(
+                            `JSON.stringify({
+                              panel: (() => { const el = document.querySelector('[data-agent-panel]'); if (!el) return null; const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), transition: cs.transitionDuration }; })(),
+                              icon: (() => { const el = document.querySelector('[data-agent-icon]'); return el ? { opacity: getComputedStyle(el).opacity } : null; })(),
+                              content: (() => { const el = document.querySelector('[data-agent-panel] > div'); return el ? getComputedStyle(el).opacity : null; })(),
+                              win: [innerWidth, innerHeight],
+                            })`,
+                            true,
+                          )
+                          .catch(() => null);
+                      } catch {
+                        midShotSaved = false;
+                      }
+                    }
+                    await new Promise((r) => setTimeout(r, 16));
+                  }
+                  const midBounds = samples[Math.floor(samples.length / 2)]
+                    ? { x: agentWin.getBounds().x, y: agentWin.getBounds().y, width: samples[Math.floor(samples.length / 2)].w, height: samples[Math.floor(samples.length / 2)].h }
+                    : agentWin.getBounds();
+                  const fpsInfo = await agentWin.webContents
+                    .executeJavaScript(
+                      `({ frames: window.__e2eFPS ? window.__e2eFPS.n : null, span: window.__e2eFPS ? Math.round(performance.now() - window.__e2eFPS.t0) : null })`,
+                      true,
+                    )
+                    .catch(() => null);
+                  await new Promise((r) => setTimeout(r, 180));
+                  // 面板过渡 400ms；截图可能阻塞主进程定时器，多等一会儿再取终态。
+                  await new Promise((r) => setTimeout(r, 700));
+                  const iconBounds = agentWin.getBounds();
+                  const iconWindow = BrowserWindow.getAllWindows().find((w) => { try { return w !== win && w !== agentWin && w.webContents.getURL().includes("icon.html"); } catch { return false; } }) ?? null;
+                  console.log("E2E_AGENT_ICONWIN", JSON.stringify({ bounds: iconWindow?.getBounds() ?? null, visible: iconWindow?.isVisible() ?? null, url: iconWindow?.webContents.getURL() ?? null }));
+                  if (process.env.LOOPSOAR_E2E_AGENT_ICON_WINDOW_DRAG === "1" && iconWindow) {
+                    const dragBefore = iconWindow.getBounds();
+                    await iconWindow.webContents.executeJavaScript(`(() => {
+                      const el = document.getElementById("icon");
+                      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 7, screenX: 600, screenY: 400 }));
+                      window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 7, screenX: 640, screenY: 430 }));
+                      window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 7, screenX: 680, screenY: 460 }));
+                      window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 7, screenX: 680, screenY: 460 }));
+                      return true;
+                    })()`, true).catch(() => false);
+                    await new Promise((r) => setTimeout(r, 350));
+                    console.log("E2E_AGENT_ICONWIN_DRAG", JSON.stringify({ before: dragBefore, after: iconWindow.getBounds(), visible: iconWindow.isVisible() }));
+                  }
+                  if (process.env.LOOPSOAR_E2E_AGENT_ICON_WINDOW_CLICK === "1" && iconWindow) {
+                    iconWindow.webContents.sendInputEvent({ type: "mouseDown", x: 28, y: 28, button: "left", clickCount: 1 });
+                    iconWindow.webContents.sendInputEvent({ type: "mouseUp", x: 28, y: 28, button: "left", clickCount: 1 });
+                    await new Promise((r) => setTimeout(r, 900));
+                    console.log("E2E_AGENT_ICONWIN_CLICK", JSON.stringify({ iconMode: agentWindow?.isIconMode() ?? null, agentVisible: agentWin.isVisible(), iconVisible: iconWindow.isVisible() }));
+                  }
+                  const iconDom = await agentWin.webContents
+                    .executeJavaScript(
+                      `JSON.stringify({ icon: !!document.querySelector('[data-agent-icon]'), logo: !!document.querySelector('[data-agent-icon] img'), innerButton: !!document.querySelector('[data-agent-icon] button'), transparent: getComputedStyle(document.documentElement).backgroundColor, radius: (() => { const el = document.querySelector('[data-agent-icon]'); if (!el) return null; const cs = getComputedStyle(el); return { r: cs.borderRadius, bg: cs.backgroundColor, border: cs.borderWidth }; })(), w: innerWidth, h: innerHeight })`,
+                      true,
+                    )
+                    .catch(() => null);
+                  console.log("E2E_AGENT_ICON", JSON.stringify({ clicked, before, midBounds, iconBounds, fpsInfo, midDom, samples, iconDom }));
+                  if (process.env.LOOPSOAR_E2E_AGENT_DESKTOP === "1") {
+                    try {
+                      const { desktopCapturer } = await import("electron");
+                      const display = screen.getDisplayMatching(agentWin.getBounds());
+                      const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: Math.round(display.bounds.width * display.scaleFactor), height: Math.round(display.bounds.height * display.scaleFactor) } });
+                      const src = sources.find((x) => x.display_id === String(display.id)) ?? sources[0];
+                      if (src?.thumbnail && !src.thumbnail.isEmpty()) {
+                        const deskPath = shotPath.replace(/\.png$/, "-agent-desktop.png");
+                        fs.writeFileSync(deskPath, src.thumbnail.toPNG());
+                        console.log("AGENT_DESKTOP_SHOT", deskPath);
+                      }
+                    } catch (err) { console.warn("AGENT_DESKTOP_SHOT_FAILED", err instanceof Error ? err.message : String(err)); }
+                  }
+                  try {
+                    const iconShot = shotPath.replace(/\.png$/, "-icon.png");
+                    fs.writeFileSync(iconShot, (await agentWin.capturePage()).toPNG());
+                    console.log("E2E_AGENT_ICON_SHOT", iconShot);
+                  } catch (err) {
+                    console.warn("E2E_AGENT_ICON_SHOT_FAILED", err instanceof Error ? err.message : String(err));
+                  }
+                  // 拖动验证：合成 pointer 序列（screen 坐标增量 30/30）→ 窗口应移位且图标仍在
+                  const dragDone = await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => {
+                        const el = document.querySelector('[data-agent-icon]');
+                        if (!el) return false;
+                        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 1, screenX: 600, screenY: 400 }));
+                        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, screenX: 640, screenY: 430 }));
+                        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, screenX: 675, screenY: 455 }));
+                        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, screenX: 675, screenY: 455 }));
+                        return true;
+                      })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  await new Promise((r) => setTimeout(r, 350));
+                  const draggedBounds = agentWin.getBounds();
+                  const stillIcon = await agentWin.webContents
+                    .executeJavaScript(`!!document.querySelector('[data-agent-icon]')`, true)
+                    .catch(() => false);
+                  console.log("E2E_AGENT_ICON_DRAG", JSON.stringify({ dragDone, iconBounds, draggedBounds, stillIcon }));
+                  // 单击还原：pointerdown + pointerup（无位移）→ 触发 restore 动画
+                  const restoreClicked = await agentWin.webContents
+                    .executeJavaScript(
+                      `(() => {
+                        const el = document.querySelector('[data-agent-icon]');
+                        if (!el) return false;
+                        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 2, screenX: 700, screenY: 500 }));
+                        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 2, screenX: 700, screenY: 500 }));
+                        return true;
+                      })()`,
+                      true,
+                    )
+                    .catch(() => false);
+                  await new Promise((r) => setTimeout(r, 90));
+                  try {
+                    fs.writeFileSync(
+                      shotPath.replace(/\.png$/, "-restore-mid.png"),
+                      (await agentWin.capturePage()).toPNG(),
+                    );
+                    const restoreDom = await agentWin.webContents
+                      .executeJavaScript(
+                        `JSON.stringify({
+                          panel: (() => { const el = document.querySelector('[data-agent-panel]'); if (!el) return null; const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), transition: cs.transitionDuration }; })(),
+                          icon: (() => { const el = document.querySelector('[data-agent-icon]'); return el ? { opacity: getComputedStyle(el).opacity } : null; })(),
+                          content: (() => { const el = document.querySelector('[data-agent-panel] > div'); return el ? getComputedStyle(el).opacity : null; })(),
+                          win: [innerWidth, innerHeight],
+                        })`,
+                        true,
+                      )
+                      .catch(() => null);
+                    console.log("E2E_AGENT_ICON_RESTORE_MID", restoreDom);
+                  } catch {
+                    // 还原中途截图失败不影响断言
+                  }
+                  await new Promise((r) => setTimeout(r, 420));
+                  await new Promise((r) => setTimeout(r, 700));
+                  console.log(
+                    "E2E_AGENT_ICON_RESTORED",
+                    JSON.stringify({ clicked: restoreClicked, bounds: agentWin.getBounds() }),
+                  );                }
                 const img = await agentWin.capturePage();
                 const agentPath = shotPath.replace(/\.png$/, "-agent-window.png");
                 fs.writeFileSync(agentPath, img.toPNG());
@@ -825,13 +1163,16 @@ function scheduleE2ESearchDemo(win: BrowserWindow): void {
 }
 
 function createMainWindow(): void {
+  const appIcon = iconPath();
+  if (appIcon) console.log(`[Loopsoar] appIcon=${appIcon}`);
+  else console.warn("[Loopsoar] appIcon not found — Electron 默认图标兜底");
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 960,
     minHeight: 600,
     title: APP_NAME,
-    icon: iconPath(),
+    icon: appIcon,
     backgroundColor: "#111318",
     show: false,
     // 自定义标题栏：隐藏原生标题栏（保留系统缩放/贴边），菜单栏在 ready 时整体移除
@@ -891,6 +1232,7 @@ function createMainWindow(): void {
     // 独立 Agent 窗口若常驻，主窗口关掉后 window-all-closed 不会触发，进程会残留成“只有小窗”
     // 主窗口销毁场景不需要滑出动画（目标屏幕/工作区可能已不可用），立即关闭。
     agentWindow?.close({ animate: false });
+    devToolsPanel?.dispose();
     mainWindow = null;
   });
 
@@ -961,6 +1303,16 @@ function ensureWritableDataDirs(): ReturnType<typeof ensureLoopsoarDirs> {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+// Chromium 原生 UI（DevTools / 右键菜单 / 部分系统对话框）的语言跟随 Loopsoar 设置；
+// --lang 必须在 app ready 之前设置，运行时切换语言会在下次启动生效。
+try {
+  const preDirs = ensureWritableDataDirs();
+  const language = loadPreferences(preDirs.configDir).language;
+  app.commandLine.appendSwitch("lang", language);
+} catch (err) {
+  console.warn("[Loopsoar] 设置 Chromium 语言失败", err instanceof Error ? err.message : String(err));
+}
+
 app.whenReady().then(async () => {
   bootTrace.mark("whenReady");
   try {
@@ -992,14 +1344,8 @@ app.whenReady().then(async () => {
   let workspaceRoot = initialPrefs.workspaceRoot?.trim() || process.cwd();
   sandbox.setWorkspaceRoot(workspaceRoot);
 
-  // 多供应商：providers.json（兼容旧 provider.json 自动迁移）
-  const providers = new ProviderStore(dirs.configDir);
-  const legacyProvider = await loadProviderConfig(platform, dirs.configDir);
-  if (providers.list().length === 0 && legacyProvider) {
-    const item = providers.upsert(legacyProvider);
-    providers.setActive(item.id);
-  }
-  // 加密密钥库：OS 密钥库优先；不可用时降级 AES（.secret.key 0600）
+  // 加密密钥库：OS 密钥库优先；不可用时降级 AES（.secret.key 0600）。
+  // 注意：必须在 ProviderStore 之前创建 —— 供应商去重合并时要靠它迁移密钥（见下方 callback）。
   const secrets = new SecretStore(dirs.configDir, {
     available: safeStorage.isEncryptionAvailable(),
     encrypt: (plain: string) => safeStorage.encryptString(plain),
@@ -1012,6 +1358,55 @@ app.whenReady().then(async () => {
   if (!safeStorage.isEncryptionAvailable() || secretFileMode === "degraded") {
     secrets.useDegradedBackend(path.join(dirs.configDir, ".secret.key"));
   }
+  /**
+   * 供应商去重合并时迁移密钥（2026-11-10 用户报障「切换 Key 不生效/上游说无订阅」根因）：
+   * dedupe 只保留首条 id，副本 id 上的新 Key 若不迁移就会成孤儿，聊天继续用旧 Key。
+   * 规则：副本 Key 比保留 id 的更新（updatedAt 更晚）才覆盖，避免把用户刚选的 Key 换回旧值。
+   */
+  const migrateAliasedSecrets = (aliases: Map<string, string>): void => {
+    for (const [from, to] of aliases) {
+      if (from === to) continue;
+      const incoming = secrets.meta(from);
+      if (!incoming) continue;
+      const current = secrets.meta(to);
+      if (current && current.updatedAt >= incoming.updatedAt) continue;
+      const key = secrets.get(from);
+      if (!key) continue;
+      secrets.set(to, key);
+      console.log(`[Loopsoar] secret migrated ${from} → ${to} (${incoming.hint})`);
+    }
+  };
+  // 多供应商：providers.json（兼容旧 provider.json 自动迁移）
+  const providers = new ProviderStore(dirs.configDir, { onAliases: migrateAliasedSecrets });
+  const legacyProvider = await loadProviderConfig(platform, dirs.configDir);
+  if (providers.list().length === 0 && legacyProvider) {
+    const item = providers.upsert(legacyProvider);
+    providers.setActive(item.id);
+  }
+  /**
+   * 兜底修复「历史已被合并掉的副本密钥」（如 opencode-go-2，文件里已无 alias 可依）：
+   * 按「保留 id-数字」后缀归并；同样只在副本 Key 更新时迁移。
+   */
+  const reconcileOrphanSecrets = (): void => {
+    const items = providers.list();
+    const known = new Set(items.map((i) => i.id));
+    for (const orphanId of secrets.ids()) {
+      if (known.has(orphanId)) continue;
+      const match = items.find(
+        (item) => orphanId.startsWith(`${item.id}-`) && /^\d+$/.test(orphanId.slice(item.id.length + 1)),
+      );
+      if (!match) continue;
+      const incoming = secrets.meta(orphanId);
+      if (!incoming) continue;
+      const current = secrets.meta(match.id);
+      if (current && current.updatedAt >= incoming.updatedAt) continue;
+      const key = secrets.get(orphanId);
+      if (!key) continue;
+      secrets.set(match.id, key);
+      console.log(`[Loopsoar] secret reconciled ${orphanId} → ${match.id} (${incoming.hint})`);
+    }
+  };
+  reconcileOrphanSecrets();
   console.log(
     `[Loopsoar] dataDir=${dirs.dataDir} secrets=${secrets.storageMode()} fileMode=${secretFileMode ?? "none"} osAvailable=${safeStorage.isEncryptionAvailable()}`,
   );
@@ -1305,12 +1700,21 @@ app.whenReady().then(async () => {
   // 全局浏览器历史（跨标签/跨会话共享）：持久化 <dataDir>/browser-history.json；
   // 上限 500、按 URL 去重合并；每次成功访问即原子落盘（退出前无需额外 flush）。
   const browserHistory = new BrowserHistoryStore(path.join(dirs.dataDir, "browser-history.json"));
+  // 浏览器扩展（Chrome/Edge 系）：安装目录 <dataDir>/browser-extensions；开机异步加载。
+  const browserExtensions = new BrowserExtensionHost({
+    rootDir: path.join(dirs.dataDir, "browser-extensions"),
+    api: session.fromPartition(SESSION_PARTITION).extensions as unknown as ExtensionApiLike,
+  });
+  browserExtensionsHost = browserExtensions;
+  void browserExtensions.loadAll().catch(() => undefined);
   // 浏览器工具栏浮层：独立子窗口渲染（天然浮在原生网页视图之上，不再需要隐藏网页）
   const chromePopover = createChromePopoverManager({
     getMainWindow: () => mainWindow,
     loadUrlFor: (kind, lang) =>
       `${PROTOCOL}://app/index.html?popover=${kind}${lang ? `&lang=${encodeURIComponent(lang)}` : ""}`,
     preloadPath: preloadPath(),
+    // 浮层关闭（Esc/失焦/hover 离开/切 kind）→ 通知渲染层同步状态，支持「已展开时点击一次即收起」
+    onClosed: () => pushToRenderer("chrome:popoverClosed", {}),
     additionalArguments: [
       `--loopsoar-bindings=${JSON.stringify(buildBindings())}`,
       `--loopsoar-events=${JSON.stringify(EVENTS)}`,
@@ -1319,9 +1723,16 @@ app.whenReady().then(async () => {
   // Agent 会话栏「独立窗口」（真·窗口化）：无 parent 的顶层系统窗口，可拖动/缩放/最小化/贴边，
   // 主窗口隐藏侧栏、网页铺满；与 chromePopover（悬停浮层子窗口）刻意区分，不要合并。
   const agentWindowManager = createAgentWindowManager({
+    // 独立 56px 图标窗口：静态页，只画 logo + 拖动/还原，不加载整个 App（避免多余订阅/初始化）。
+    iconUrlFor: () => `${PROTOCOL}://app/icon.html`,
     loadUrlFor: (sessionId) =>
       `${PROTOCOL}://app/index.html?mini=1${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ""}`,
     preloadPath: preloadPath(),
+    icon: iconPath(),
+    // 最小化=缩成图标按钮（Slime 同款）；图标模式切换通知渲染层切换「图标视图/会话视图」
+    onIconModeChange: (icon) => pushToRenderer("chrome:agentWindowIconMode", { icon }),
+    // 最小化/还原衔接：窗口截图交给渲染层做「内容连续」的过渡（避免大 UI 逐帧重排掉帧）。
+    onTransition: (payload) => pushToRenderer("chrome:agentWindowTransition", payload),
     additionalArguments: [
       `--loopsoar-bindings=${JSON.stringify(buildBindings())}`,
       `--loopsoar-events=${JSON.stringify(EVENTS)}`,
@@ -1337,6 +1748,10 @@ app.whenReady().then(async () => {
     },
   });
   agentWindow = agentWindowManager;
+  devToolsPanel = new BrowserDevToolsPanel({
+    getWindow: () => mainWindow,
+    onOpenChange: (open) => pushToRenderer("chrome:devToolsPanel", { open }),
+  });
   browserHost = createElectronBrowserHost(
     () => mainWindow,
     (url) => {
@@ -1346,6 +1761,7 @@ app.whenReady().then(async () => {
     },
     {
       initialSessionId,
+      devToolsPanel: devToolsPanel ?? undefined,
       onSessionStateChanged: queueBrowserStateSave,
       // 成功访问（应用内导航/网页内跳转/新标签首屏）→ 追加全局历史
       onVisited: (visit) => {
@@ -1355,8 +1771,17 @@ app.whenReady().then(async () => {
       onTitleChanged: (url, title) => {
         browserHistory.updateTitle(url, title);
       },
+      // 图标迟到 → 刷新同 URL 条目图标（不新增访问）
+      onFaviconChanged: (url, favicon) => {
+        browserHistory.updateFavicon(url, favicon);
+      },
       // 广告/追踪拦截开关跟随偏好（默认开；设置里改动即时生效）
       isAdBlockEnabled: () => loadPreferences(dirs.configDir).adBlockEnabled ?? true,
+      // 点原生网页 = 点了「列表外」：通知渲染层收起按钮展开的浮层（DOM 收不到该区域 pointerdown）
+      onViewFocused: () => {
+        chromePopover.close();
+        pushToRenderer("chrome:dismissPopovers", {});
+      },
     },
   );
   // 启动即恢复当前会话上次的网页（标题/URL/活动标签）
@@ -1408,6 +1833,7 @@ app.whenReady().then(async () => {
   registerWorkspaceDomain({
     ...deps,
     platform,
+    openPath: (target: string) => shell.openPath(target),
     workspaces,
     sessions,
     worktreesRoot,
@@ -1431,18 +1857,27 @@ app.whenReady().then(async () => {
     sessions,
     shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
     getActiveWorkspaceId: () => workspaces.activeId(),
+    getDefaultWorkspaceId: () => {
+      const items = workspaces.list();
+      return items.find((item) => item.name === "默认工作区")?.id ?? workspaces.activeId();
+    },
     // 本轮回复模型快照（会话持久化用，历史悬停显示真实模型）
     getModelInfo: () => {
       const active = providers.active();
       return active ? { provider: active.provider, model: active.model } : undefined;
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
-    onSessionOpened: async (sessionId) => {
-      // 旧会话补绑工作区：首次打开时归属当前活动工作区
+    onSessionOpened: async (sessionId, requestedWorkspaceId) => {
       const sessionData = sessions.get(sessionId);
-      if (!sessionData?.workspaceId && workspaces.activeId()) {
-        sessions.setWorkspaceId(sessionId, workspaces.activeId());
-      }
+      if (requestedWorkspaceId === undefined) {
+        // 旧会话补绑工作区：首次打开时归属当前活动工作区
+        if (!sessionData?.workspaceId && workspaces.activeId()) {
+          sessions.setWorkspaceId(sessionId, workspaces.activeId());
+        }
+      } else if (requestedWorkspaceId) {
+        // 明确指定工作区的新会话：绑定并在后续切换时成为活动工作区
+        sessions.setWorkspaceId(sessionId, requestedWorkspaceId);
+      } // null = 暂不归属，等首次对话自动落默认工作区
       // 当前会话的工作区成为活动工作区：新会话默认落在同一"文件夹"
       const boundWorkspaceId = sessions.get(sessionId)?.workspaceId;
       if (boundWorkspaceId && workspaces.activeId() !== boundWorkspaceId) {
@@ -1478,7 +1913,31 @@ app.whenReady().then(async () => {
     },
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
-  registerBrowserDomain({ ...deps, browser: browserHost, downloads, history: browserHistory });
+  registerBrowserDomain({
+    ...deps,
+    browser: browserHost,
+    downloads,
+    history: browserHistory,
+    browserExtensions,
+    devtoolsPanel: devToolsPanel ?? undefined,
+    resolveFavicon: resolveFaviconForPage,
+  });
+  // 浏览器页 preload 的「应用商店安装」通道：不进入受信 IPC 契约（发送者不是 loopsoar://），
+  // 先校验发送者必须是本应用的浏览器标签页，再走 BrowserExtensionHost（含 Chrome/Edge 商店下载）。
+  ipcMain.handle("loopsoar-browser:install-extension", async (event, payload) => {
+    if (!browserHost?.hasWebContents(event.sender.id)) {
+      return { ok: false, error: "来源不是 Loopsoar 浏览器标签页" };
+    }
+    const raw = (payload ?? {}) as { id?: unknown };
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    if (!/^[a-p]{32}$/.test(id)) return { ok: false, error: "扩展 ID 非法" };
+    try {
+      const extension = await browserExtensions.installFromStore(id);
+      return { ok: true, id: extension.id, name: extension.name, version: extension.version };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
   registerTerminalDomain(deps, terminals);
   registerLoopDomain(deps, loopRuntime);
   registerAskDomain(deps, askBus);
@@ -1562,7 +2021,25 @@ app.whenReady().then(async () => {
         if (mainWindow.isMaximized()) mainWindow.unmaximize();
         else mainWindow.maximize();
       },
-      close: () => mainWindow?.close(),
+      close: () => {
+        const win = mainWindow;
+        if (!win || win.isDestroyed()) return;
+        try {
+          win.close();
+        } catch (err) {
+          console.warn("[Loopsoar] 关闭主窗口失败，改为强制销毁：", err instanceof Error ? err.message : err);
+          win.destroy();
+          return;
+        }
+        // 兜底：若某次 close 被渲染层卸载钩子/浮层窗口拖住而未真正销毁，800ms 后强制销毁，
+        // 保证右上角退出键不会「点了没反应」（用户 m05586 反馈的老问题）。
+        setTimeout(() => {
+          if (!win.isDestroyed()) {
+            console.warn("[Loopsoar] 主窗口关闭未生效，强制销毁");
+            win.destroy();
+          }
+        }, 800).unref?.();
+      },
       isMaximized: () => mainWindow?.isMaximized() ?? false,
       isFocused: () => mainWindow?.isFocused() ?? false,
     },

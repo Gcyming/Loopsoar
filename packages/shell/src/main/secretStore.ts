@@ -165,6 +165,18 @@ export class SecretStore {
     return this.read().items[providerId]?.hint ?? null;
   }
 
+  /** 已保存密钥的 providerId 清单（仅 id，不返回明文；迁移/诊断用）。 */
+  ids(): string[] {
+    return Object.keys(this.read().items);
+  }
+
+  /** 密钥记录元信息（updatedAt/hint，不含明文；供应商去重合并时比较新旧用）。 */
+  meta(providerId: string): { updatedAt: number; hint: string } | null {
+    const item = this.read().items[providerId];
+    if (!item) return null;
+    return { updatedAt: Number(item.updatedAt) || 0, hint: item.hint };
+  }
+
   /** 取明文密钥（仅 shell 内使用；未配置返回 null）。主后端失败时自动尝试降级备份。 */
   get(providerId: string): string | null {
     const cached = this.cache.get(providerId);

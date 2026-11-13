@@ -92,6 +92,67 @@ describe("上游错误归一（纯函数）", () => {
     ).toBeNull();
   });
 
+  it("OpenCode 计划/账户区分：402 按量付费余额不足、403 Model access is disabled → 指向正确端点", () => {
+    const funds = classifyFatalUpstreamError(
+      parseUpstreamError(402, JSON.stringify({ error: { type: "invalid_request_error", message: "Insufficient account funds" } })),
+    );
+    expect(funds).toContain("按量付费");
+    expect(funds).toContain("opencode-go");
+
+    const disabled = classifyFatalUpstreamError(
+      parseUpstreamError(403, JSON.stringify({ error: { type: "permission_error", message: "Model access is disabled" } })),
+    );
+    expect(disabled).toContain("opencode-go");
+    expect(disabled).toContain("按量付费");
+  });
+
+  it("OpenCode 专项：Go 订阅/地区/缺会话头/端点不匹配/免费额度 → 各自可行动提示", () => {
+    const go = classifyFatalUpstreamError(
+      parseUpstreamError(
+        403,
+        JSON.stringify({ error: { type: "permission_error", message: "An active OpenCode Go subscription is required to use Go models." } }),
+      ),
+    );
+    expect(go).toContain("Go 订阅");
+    expect(go).toContain("/inference/go/openai/v1");
+
+    const region = classifyFatalUpstreamError(
+      parseUpstreamError(403, JSON.stringify({ type: "error", error: { type: "RegionError", message: "This model is not available in your country" } })),
+    );
+    expect(region).toContain("地区");
+
+    const session = classifyFatalUpstreamError(
+      parseUpstreamError(
+        400,
+        JSON.stringify({
+          type: "error",
+          error: { type: "MissingSessionID", message: "Request is missing x-opencode-session and cannot be routed efficiently." },
+        }),
+      ),
+    );
+    expect(session).toContain("x-opencode-session");
+
+    const mismatch = classifyFatalUpstreamError(
+      parseUpstreamError(403, JSON.stringify({ error: { type: "permission_error", message: "Model access is disabled" } })),
+    );
+    expect(mismatch).toContain("端点");
+
+    const freeLimit = classifyFatalUpstreamError(
+      parseUpstreamError(
+        429,
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "FreeUsageLimitError",
+            message: "Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go",
+          },
+        }),
+      ),
+    );
+    expect(freeLimit).toContain("免费额度");
+    expect(freeLimit).toContain("opencode.ai/go");
+  });
+
   it("retry-after 解析与人类可读时长", () => {
     const header = (value: string | null) => ({ get: (name: string) => (name === "retry-after" ? value : null) });
     expect(parseRetryAfterMs(header("62231"))).toBe(62_231_000);

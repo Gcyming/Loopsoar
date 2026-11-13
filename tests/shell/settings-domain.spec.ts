@@ -318,6 +318,63 @@ describe("settings 域：诊断 / 关于 / 供应商", () => {
     expect(provider.configured).toBe(false);
   });
 
+  it("testProvider：用被测供应商自己的 Key / 表单刚输入的 Key（不回退活动供应商的 Key）", async () => {
+    const { SecretStore } = await import("../../packages/shell/src/main/secretStore.ts");
+    const secrets = new SecretStore(path.join(root, "data", "config"), {
+      available: true,
+      encrypt: (plain: string) => Buffer.from(plain, "utf8"),
+      decrypt: (buf: Buffer) => buf.toString("utf8"),
+    });
+    // 活动供应商 active 的旧 Key 与目标供应商 target 的 Key 不同：测 target 时必须用 target 的
+    secrets.set("active", "sk-active-old");
+    secrets.set("target", "sk-target-key");
+    const providers = {
+      list: () => [
+        { id: "active", provider: "a", baseUrl: "https://a.example.com/v1", model: "m" },
+        { id: "target", provider: "t", baseUrl: "https://t.example.com/v1", model: "m" },
+      ],
+      active: () => ({ id: "active", provider: "a", baseUrl: "https://a.example.com/v1", model: "m" }),
+      upsert: () => ({ id: "target", provider: "t", baseUrl: "", model: "" }),
+      remove: () => true,
+      setActive: () => true,
+    } as never;
+    const { handlers } = makeEnv(root, {}, { providers, secrets });
+    const realFetch = globalThis.fetch;
+    const seen: string[] = [];
+    try {
+      globalThis.fetch = (async (_url: string, init?: { headers?: Record<string, string> }) => {
+        seen.push(init?.headers?.Authorization ?? "");
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch;
+      // ① 指定 id：用该供应商自己的已保存 Key
+      await invoke(handlers, "settings:testProvider", {
+        id: "target",
+        provider: "t",
+        baseUrl: "https://t.example.com/v1",
+        model: "m",
+      });
+      expect(seen.at(-1)).toBe("Bearer sk-target-key");
+      // ② 表单刚输入、尚未保存的 Key 优先（用户切 Key 后点「测试连接」测的就是新 Key）
+      await invoke(handlers, "settings:testProvider", {
+        id: "target",
+        provider: "t",
+        baseUrl: "https://t.example.com/v1",
+        model: "m",
+        apiKey: "sk-typed-just-now",
+      });
+      expect(seen.at(-1)).toBe("Bearer sk-typed-just-now");
+      // ③ 没传 id：按 provider + baseUrl 唯一匹配，同样不回退活动供应商
+      await invoke(handlers, "settings:testProvider", {
+        provider: "t",
+        baseUrl: "https://t.example.com/v1",
+        model: "m",
+      });
+      expect(seen.at(-1)).toBe("Bearer sk-target-key");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("testProvider：成功/失败返回可读结果（不回传密钥）", async () => {
     const { handlers } = makeEnv(root, { LOOPSOAR_API_KEY: "sk-secret" });
     const realFetch = globalThis.fetch;

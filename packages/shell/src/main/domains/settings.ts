@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { withProviderDefaults } from "../providerDefaults.js";
+import { resolveModelsUrl } from "../providerModels.js";
 import { describeCapabilitySources, enrichModelSpec, type ModelSpec } from "loopsoar-core/modelCapabilities";
 import { isSameProviderTarget } from "../providerStore.js";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
@@ -336,14 +337,28 @@ async function testProvider(
   cfg: ProviderConfig,
   headerTemplates?: Record<string, string>,
   apiFormat?: "auto" | "openai" | "anthropic",
+  probeKey?: { id?: string; apiKey?: string },
 ): Promise<{ ok: boolean; status?: number; latencyMs?: number; message: string }> {
   // 第一道门：探测目标本身不许指向内网（回环本地模型除外）
   const target = await validateProbeTarget(deps.platform, cfg.baseUrl);
   if (!target.ok) return { ok: false, message: target.message };
 
-  // 密钥解析：加密库（活跃供应商）优先，环境变量兜底；测试任意配置时复用该密钥
-  const activeId = deps.providers?.active()?.id;
-  const apiKey = (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
+  /*
+   * 密钥解析（2026-11-09 修复「切密钥后测试全部 403 误判」）：
+   *   ① 表单里刚输入的密钥（未保存）优先——用户点「测试连接」时测的必须是他刚填的那把；
+   *   ② 被测供应商自己的已保存密钥（payload.id / provider+baseUrl 唯一匹配）；
+   *   ③ 环境变量兜底。
+   * 绝不能再回退「活动供应商」的密钥：那会把 A 的 Key 发给 B 的端点，
+   * 测试必然 403/401，用户误以为新 Key 无效（本次报障根因）。
+   */
+  const explicitKey = probeKey?.apiKey?.trim() ?? "";
+  const matched =
+    deps.providers?.list().find((item) => {
+      if (probeKey?.id) return item.id === probeKey.id;
+      return item.provider === cfg.provider && item.baseUrl === cfg.baseUrl;
+    }) ?? null;
+  const storedKey = matched ? (deps.secrets?.get(matched.id) ?? "") : "";
+  const apiKey = explicitKey || storedKey || resolveApiKeyFromEnv(deps.env);
   const effectiveHeaders = withProviderDefaults(cfg.provider, cfg.baseUrl, headerTemplates);
   // 与 index.ts 装配的真实客户端同一端点规则：显式 apiFormat 优先，auto 按 baseUrl 推断
   const format = !apiFormat || apiFormat === "auto" ? inferApiFormat(cfg.baseUrl) : apiFormat;
@@ -559,9 +574,14 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   });
 
   handleTrusted(deps, "settings:testProvider", async (payload) => {
-    const raw = payload as { headers?: Record<string, string>; apiFormat?: "auto" | "openai" | "anthropic" };
+    const raw = payload as {
+      headers?: Record<string, string>;
+      apiFormat?: "auto" | "openai" | "anthropic";
+      id?: string;
+      apiKey?: string;
+    };
     const cfg = validateProviderConfig(payload);
-    return testProvider(deps, cfg, raw.headers, raw.apiFormat);
+    return testProvider(deps, cfg, raw.headers, raw.apiFormat, { id: raw.id, apiKey: raw.apiKey });
   });
 
   // ── 通用偏好 / 存储位置 ──
@@ -713,12 +733,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     const apiKey = typedKey || (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
     const isAnthropic =
       raw.apiFormat === "anthropic" || (raw.apiFormat !== "openai" && /anthropic|claude/i.test(cfg.baseUrl));
-    const modelsBase = cfg.baseUrl.replace(/\/+$/, "");
-    const modelsUrl = isAnthropic
-      ? `${modelsBase.replace(/\/v1$/, "")}/v1/models`
-      : /\/v1$/.test(modelsBase)
-        ? `${modelsBase}/models`
-        : `${modelsBase}/v1/models`;
+    const modelsUrl = resolveModelsUrl(cfg.baseUrl, isAnthropic);
     const headers: Record<string, string> = {
       "User-Agent": "Loopsoar/1.0",
       ...(apiKey

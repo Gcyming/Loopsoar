@@ -126,3 +126,49 @@ describe("供应商重复合并与请求设置保留", () => {
     }
   });
 });
+
+describe("去重合并的密钥迁移回调（2026-11-10 密钥问题）", () => {
+  it("重复供应商合并时把 alias（副本 id → 保留 id）交给装配层", () => {
+    const dir = tempDir();
+    try {
+      const file = {
+        activeId: "opencode-go",
+        items: [
+          { id: "opencode-go", provider: "opencode-go", baseUrl: "https://opencode.ai/inference/go/openai/v1", model: "deepseek-v4.1-flash" },
+          { id: "opencode-go-2", provider: "opencode-go", baseUrl: "https://opencode.ai/inference/go/openai/v1/", model: "glm-5.3" },
+        ],
+      };
+      fs.writeFileSync(path.join(dir, "providers.json"), JSON.stringify(file));
+      const seen: Map<string, string>[] = [];
+      const store = new ProviderStore(dir, { onAliases: (alias) => seen.push(alias) });
+      store.list();
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen[0].get("opencode-go-2")).toBe("opencode-go");
+      expect(store.list().map((i) => i.id)).toEqual(["opencode-go"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("upsert 传已不存在的副本 id 时复用同端点现存记录，绝不复活副本", () => {
+    const dir = tempDir();
+    try {
+      const store = new ProviderStore(dir);
+      const first = store.upsert({ provider: "opencode-go", baseUrl: "https://opencode.ai/inference/go/openai/v1", model: "deepseek-v4.1-flash" });
+      const second = store.upsert({
+        id: `${first.id}-2`,
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/inference/go/openai/v1",
+        model: "glm-5.3",
+      });
+      expect(second.id).toBe(first.id);
+      expect(store.list()).toHaveLength(1);
+      // 新增同 provider + 同端点：同样复用，不产生副本（否则新 Key 又会挂到孤儿 id 上）
+      const third = store.upsert({ provider: "opencode-go", baseUrl: "https://opencode.ai/inference/go/openai/v1/", model: "x" });
+      expect(third.id).toBe(first.id);
+      expect(store.list()).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

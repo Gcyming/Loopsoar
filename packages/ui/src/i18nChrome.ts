@@ -16,6 +16,9 @@ export const CHROME_PAGE_I18N: Record<string, { zh: string; en: string }> = {
   "chromePage.count": { zh: "共 {count} 条", en: "{count} items" },
   "chromePage.open": { zh: "打开", en: "Open" },
   "chromePage.openSettings": { zh: "打开设置", en: "Open settings" },
+  "chromePage.openHistory": { zh: "历史记录", en: "History" },
+  "chromePage.openDownloads": { zh: "下载内容", en: "Downloads" },
+  "chromePage.openBookmarks": { zh: "收藏夹", en: "Bookmarks" },
   "chromePage.savePage": { zh: "保存当前页面", en: "Save current page" },
   "chromePage.unknownTime": { zh: "时间未知", en: "unknown time" },
 
@@ -38,6 +41,22 @@ export const CHROME_PAGE_I18N: Record<string, { zh: string; en: string }> = {
   "chromePage.history.visits": { zh: "访问 {count} 次", en: "{count} visits" },
   "chromePage.history.visitedAt": { zh: "最近访问", en: "Last visited" },
   "chromePage.history.untitled": { zh: "（无标题）", en: "(untitled)" },
+  "chromePage.history.selectAll": { zh: "全选", en: "Select all" },
+  "chromePage.history.selected": { zh: "已选 {count} 项", en: "{count} selected" },
+  "chromePage.history.cancel": { zh: "取消", en: "Cancel" },
+  "chromePage.history.delete": { zh: "删除（{count}）", en: "Delete ({count})" },
+  "chromePage.history.deleted": { zh: "已删除 {count} 条历史", en: "Deleted {count} history items" },
+
+  /* ── 左侧索引栏（搜索 + 分类） ── */
+  "chromePage.filter.all": { zh: "全部", en: "All" },
+  "chromePage.filter.today": { zh: "今天", en: "Today" },
+  "chromePage.filter.yesterday": { zh: "昨天", en: "Yesterday" },
+  "chromePage.filter.earlier": { zh: "更早", en: "Earlier" },
+  "chromePage.filter.recentWeek": { zh: "最近 7 天", en: "Last 7 days" },
+  "chromePage.filter.noMatch": { zh: "没有匹配的内容", en: "No matching items" },
+  "chromePage.search.history": { zh: "搜索历史记录", en: "Search history" },
+  "chromePage.search.downloads": { zh: "搜索下载内容", en: "Search downloads" },
+  "chromePage.search.bookmarks": { zh: "搜索收藏夹", en: "Search bookmarks" },
 
   /* ── 下载 ── */
   "chromePage.downloads.empty": { zh: "暂无下载内容。", en: "No downloads yet." },

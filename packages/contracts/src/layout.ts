@@ -37,6 +37,18 @@ export const LAYOUT = {
   SIDEBAR_MIN_WIDTH_FLOOR: 240,
   /** 侧栏最大宽度（与偏好 schema 上限 720 一致；宽屏下比例下限由该上限截住）。 */
   SIDEBAR_MAX_WIDTH: 720,
+  /**
+   * 侧栏最小/最大宽度之间至少保留的可拖拽像素（用户 m05586：全屏时比例下限把宽度锁死）。
+   * 超宽屏/全屏下 ratioMin 会顶到 SIDEBAR_MAX_WIDTH，导致 min === max 完全拖不动；
+   * 这里强制把 min 压到 max 之下至少这么多像素。
+   */
+  SIDEBAR_MIN_DRAG_RANGE: 200,
+  /** Vibecoding 模式侧栏最小宽度 = 标准模式最小宽度 × 该比例（用户要求约一半）。 */
+  SIDEBAR_VIBE_MIN_RATIO: 0.5,
+  /** Vibecoding 模式侧栏最大宽度 = 标准模式最小宽度 × 该比例（用户要求 3/5）。 */
+  SIDEBAR_VIBE_MAX_RATIO: 0.6,
+  /** Vibecoding 模式宽度绝对下限（极窄窗口兜底，避免会话列表无法阅读）。 */
+  SIDEBAR_VIBE_MIN_WIDTH_FLOOR: 120,
   /** 浏览器列至少保留的宽度（侧栏上限不能把网页区挤没）。 */
   BROWSER_COLUMN_MIN_WIDTH: 320,
   /** 侧栏收起态宽度（只剩图标/展开按钮）。 */
@@ -124,7 +136,26 @@ export function computeSidebarMinWidth(
 ): number {
   const width = Number.isFinite(viewportWidth) ? Math.max(0, viewportWidth) : 0;
   const ratioMin = Math.round(width * layout.SIDEBAR_MIN_WIDTH_RATIO);
-  return Math.min(layout.SIDEBAR_MAX_WIDTH, Math.max(layout.SIDEBAR_MIN_WIDTH_FLOOR, ratioMin));
+  const base = Math.min(layout.SIDEBAR_MAX_WIDTH, Math.max(layout.SIDEBAR_MIN_WIDTH_FLOOR, ratioMin));
+  // 全屏/超宽屏：ratioMin 可能顶到 SIDEBAR_MAX_WIDTH，使 min === max（用户 m05586 反馈全屏无法调整）。
+  // 保证「至少还能拖动 SIDEBAR_MIN_DRAG_RANGE 像素」，但绝不低于绝对下限。
+  const maxForWindow = Math.min(layout.SIDEBAR_MAX_WIDTH, Math.max(0, width - layout.BROWSER_COLUMN_MIN_WIDTH));
+  const adjustable = Math.max(layout.SIDEBAR_MIN_WIDTH_FLOOR, maxForWindow - layout.SIDEBAR_MIN_DRAG_RANGE);
+  return Math.max(layout.SIDEBAR_MIN_WIDTH_FLOOR, Math.min(base, adjustable));
+}
+
+/** Vibecoding 模式的侧栏宽度区间（用户 m05586：约为标准最小宽度的一半，最大不超过 3/5）。 */
+export function computeVibeSidebarBounds(
+  viewportWidth: number,
+  layout: typeof LAYOUT = LAYOUT,
+): { min: number; max: number; normalMin: number } {
+  const normalMin = computeSidebarMinWidth(viewportWidth, layout);
+  const min = Math.max(
+    layout.SIDEBAR_VIBE_MIN_WIDTH_FLOOR,
+    Math.round(normalMin * layout.SIDEBAR_VIBE_MIN_RATIO),
+  );
+  const max = Math.max(min, Math.min(layout.SIDEBAR_MAX_WIDTH, Math.round(normalMin * layout.SIDEBAR_VIBE_MAX_RATIO)));
+  return { min, max, normalMin };
 }
 
 /**

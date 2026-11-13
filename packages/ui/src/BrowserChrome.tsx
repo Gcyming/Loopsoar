@@ -14,8 +14,10 @@
  */
 import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
+import type { SearchEngine } from "loopsoar-contracts/omnibox";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { usePopover } from "./popover.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { getLanguage, useT } from "./i18n.js";
 import type { BookmarkItem, ChromePopoverKind, TabState } from "./types.js";
@@ -25,6 +27,10 @@ export interface BrowserChromeProps {
   address: string;
   currentUrl: string;
   omniboxRef?: React.RefObject<HTMLInputElement | null>;
+  /** 当前默认搜索引擎（新建标签页 / 地址栏左侧切换按钮显示它的图标）。 */
+  searchEngine: SearchEngine;
+  /** 用户在地址栏下拉里切换搜索引擎。 */
+  onSearchEngineChange: (engine: SearchEngine) => void;
   onAddressChange: (value: string) => void;
   onNavigate: () => void;
   onBack: () => void;
@@ -36,9 +42,20 @@ export interface BrowserChromeProps {
   onNotice: (text: string) => void;
 }
 
+/** 地址栏引擎下拉可选项（与 Preferences.searchEngine 枚举一致）。 */
+const ENGINE_OPTIONS: { id: SearchEngine; name: string }[] = [
+  { id: "bing", name: "Bing" },
+  { id: "google", name: "Google" },
+  { id: "baidu", name: "百度" },
+];
 
-/** 悬停触发延迟：太快误触、太慢像没反应（用户要求「悬停即弹出」）。 */
-const HOVER_DELAY_MS = 250;
+function engineName(engine: SearchEngine): string {
+  return ENGINE_OPTIONS.find((item) => item.id === engine)?.name ?? engine;
+}
+
+
+/** 悬停触发延迟：太快误触、太慢像没反应。用户要求放慢（m01845：放上去就展开太急）→ 600ms。 */
+const HOVER_DELAY_MS = 600;
 
 /** 书签同一性判据：忽略 URL hash 与末尾斜杠（同页锚点不产生第二条书签）。 */
 function pageKey(url: string): string {
@@ -51,6 +68,8 @@ export default function BrowserChrome({
   address,
   currentUrl,
   omniboxRef,
+  searchEngine,
+  onSearchEngineChange,
   onAddressChange,
   onNavigate,
   onBack,
@@ -65,9 +84,13 @@ export default function BrowserChrome({
   const starButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const moreButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const hoverTimerRef = React.useRef<number | null>(null);
+  /** 点击收起后指针仍停在按钮上：抑制 hover 立刻重开（否则会「关→开」连闪）。 */
+  const suppressHoverRef = React.useRef(false);
+  /** 地址栏左侧搜索引擎下拉（只在新建标签页显示；页面打开后恢复普通放大镜）。 */
+  const [engineMenuOpen, setEngineMenuOpen] = React.useState(false);
+  usePopover("browser-engine", engineMenuOpen, setEngineMenuOpen);
 
   const [bookmarks, setBookmarks] = React.useState<BookmarkItem[]>([]);
-
   const refreshBookmarks = React.useCallback(async (): Promise<void> => {
     if (!api?.bookmarks) {
       setBookmarks([]);
@@ -85,6 +108,11 @@ export default function BrowserChrome({
   React.useEffect(() => {
     void refreshBookmarks();
   }, [refreshBookmarks, currentUrl]);
+
+  // 开始搜索/打开页面后，地址栏左侧恢复为「无功能放大镜」：收起引擎下拉，避免中途切引擎。
+  React.useEffect(() => {
+    setEngineMenuOpen(false);
+  }, [currentUrl]);
 
   // 卸载清理悬停定时器
   React.useEffect(() => {
@@ -127,6 +155,13 @@ export default function BrowserChrome({
 
   /* ------------------------- 独立浮层窗口（主进程） ------------------------- */
 
+  const cancelHover = React.useCallback((): void => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
   /** 调主进程弹出独立浮层窗口；anchor 用按钮在内容区的 CSS px 矩形（主进程换算屏幕坐标）。 */
   const openPopover = React.useCallback(
     (kind: ChromePopoverKind, element: HTMLElement | null): void => {
@@ -146,16 +181,40 @@ export default function BrowserChrome({
     [api],
   );
 
-  const cancelHover = React.useCallback((): void => {
-    if (hoverTimerRef.current !== null) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-  }, []);
+  /**
+   * 点击触发按钮：**原子 toggle**（主进程判断当前是否已打开）。
+   * 不能依赖渲染层记录的 open 状态：浮层是独立子窗口，点击按钮时子窗口先失焦关闭，
+   * 等 click 回调再判断会变成「关→开」连闪（用户 m02263 实测）。
+   */
+  const togglePopover = React.useCallback(
+    (kind: ChromePopoverKind, element: HTMLElement | null): void => {
+      const ui = api?.ui;
+      if (!ui?.togglePopover || !element) return;
+      cancelHover();
+      const rect = element.getBoundingClientRect();
+      // 点击后先抑制 hover 重开，直到鼠标离开按钮（否则收起瞬间 hover 又把它打开）
+      suppressHoverRef.current = true;
+      void ui
+        .togglePopover({
+          kind,
+          anchor: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+          lang: getLanguage(),
+        })
+        .then((result) => {
+          // 仍处于打开状态（例如把另一个列表切换成这个）→ 允许后续 hover 行为
+          if (result?.open) suppressHoverRef.current = false;
+        })
+        .catch(() => {
+          suppressHoverRef.current = false;
+        });
+    },
+    [api, cancelHover],
+  );
 
-  /** 悬停 250ms 后打开预览；离开按钮即取消（鼠标进入浮层由主进程命中测试处理）。 */
+  /** 悬停 600ms 后打开预览；离开按钮即取消（鼠标进入浮层由主进程命中测试处理）。 */
   const scheduleHover = React.useCallback(
     (kind: ChromePopoverKind, element: HTMLElement | null): void => {
+      if (suppressHoverRef.current) return; // 刚点击收起：等鼠标离开按钮后才允许 hover 再开
       cancelHover();
       hoverTimerRef.current = window.setTimeout(() => {
         hoverTimerRef.current = null;
@@ -181,7 +240,63 @@ export default function BrowserChrome({
         </div>
 
         <div className="browser-omnibox" style={styles.omniboxWrap}>
-          <Icon name="search" size={14} style={styles.omniboxIcon} />
+          {currentUrl ? (
+            <Icon name="search" size={14} style={styles.omniboxIcon} />
+          ) : (
+            <span style={styles.engineWrap} data-popover-trigger>
+              <button
+                type="button"
+                className="icon-btn"
+                style={styles.engineButton}
+                title={tr("browser.searchEngineChoose", { engine: engineName(searchEngine) })}
+                aria-label={tr("browser.searchEngineChoose", { engine: engineName(searchEngine) })}
+                aria-haspopup="menu"
+                aria-expanded={engineMenuOpen}
+                onClick={() => setEngineMenuOpen((open) => !open)}
+              >
+                <img
+                  src={`./icons/engine-${searchEngine}.svg`}
+                  width={15}
+                  height={15}
+                  alt=""
+                  draggable={false}
+                  style={styles.engineIcon}
+                />
+              </button>
+              {engineMenuOpen ? (
+                <div className="engine-menu" data-popover role="menu" style={styles.engineMenu}>
+                  {ENGINE_OPTIONS.map((engine) => {
+                    const activeEngine = engine.id === searchEngine;
+                    return (
+                      <button
+                        key={engine.id}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={activeEngine}
+                        style={{ ...styles.engineItem, ...(activeEngine ? styles.engineItemActive : {}) }}
+                        onClick={() => {
+                          onSearchEngineChange(engine.id);
+                          setEngineMenuOpen(false);
+                          omniboxRef?.current?.focus();
+                        }}
+                      >
+                        <img
+                          src={`./icons/engine-${engine.id}.svg`}
+                          width={16}
+                          height={16}
+                          alt=""
+                          draggable={false}
+                          style={styles.engineIcon}
+                        />
+                        <span style={styles.engineItemName}>{engine.name}</span>
+                        {activeEngine ? <Icon name="check" size={12} style={styles.engineItemCheck} /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </span>
+          )}
           <input
             value={address}
             onChange={(event) => onAddressChange(event.target.value)}
@@ -197,6 +312,7 @@ export default function BrowserChrome({
             <button
               ref={starButtonRef}
               type="button"
+              data-chrome-popover-trigger
               className={`icon-btn${currentBookmark ? " is-bookmarked" : ""}`}
               style={styles.omniboxStar}
               title={
@@ -213,8 +329,15 @@ export default function BrowserChrome({
                 if (!canBookmark) return;
                 scheduleHover("bookmarks", starButtonRef.current);
               }}
-              onMouseLeave={cancelHover}
-              onClick={() => void toggleBookmark()}
+              onMouseLeave={() => {
+                suppressHoverRef.current = false;
+                cancelHover();
+              }}
+              onClick={() => {
+                void toggleBookmark();
+                // 预览已展开时点击星标 = 收起（与「再次点击对应按钮收起」规则一致）
+                void api?.ui?.closePopover?.().catch(() => undefined);
+              }}
             >
               <Icon name={currentBookmark ? "star-filled" : "star"} size={15} />
             </button>
@@ -235,16 +358,17 @@ export default function BrowserChrome({
           <button
             ref={moreButtonRef}
             type="button"
+            data-chrome-popover-trigger
             className="icon-btn"
             title={tr("browser.more")}
             aria-label={tr("browser.more")}
             aria-haspopup="menu"
             onMouseEnter={() => scheduleHover("more", moreButtonRef.current)}
-            onMouseLeave={cancelHover}
-            onClick={() => {
+            onMouseLeave={() => {
+              suppressHoverRef.current = false;
               cancelHover();
-              openPopover("more", moreButtonRef.current);
             }}
+            onClick={() => togglePopover("more", moreButtonRef.current)}
           >
             <Icon name="more" size={17} />
           </button>
@@ -269,6 +393,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     // 地址栏占满网页列（工具条本身只被 pageColumn 裁切，不会再伸进会话栏）。
     // 不再设 maxWidth：侧栏收起时网页列变宽，地址栏会自然跟着向右延伸。
+    position: "relative",
     display: "flex",
     alignItems: "center",
     gap: 8,
@@ -281,6 +406,42 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   omniboxIcon: { color: BRAND.linenFaint, flex: "none" },
+  // 地址栏左侧搜索源切换：新建标签页时显示当前引擎图标，点开是引擎列表。
+  engineWrap: { position: "relative", display: "inline-flex", alignItems: "center", flex: "none" },
+  engineButton: { width: 24, height: 24, padding: 0, borderRadius: 7, flex: "none" },
+  engineIcon: { display: "block", borderRadius: 4 },
+  engineMenu: {
+    position: "absolute",
+    top: 32,
+    left: -6,
+    zIndex: 60,
+    minWidth: 168,
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    padding: 5,
+    borderRadius: 10,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+    animation: "fadeUp 120ms ease both",
+  },
+  engineItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 9,
+    padding: "7px 9px",
+    borderRadius: 7,
+    border: "none",
+    background: "transparent",
+    color: BRAND.linen,
+    fontSize: 12.5,
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  engineItemActive: { background: "rgba(200,118,60,0.14)", color: BRAND.ochreHover },
+  engineItemName: { flex: 1 },
+  engineItemCheck: { color: BRAND.ochreHover },
   omnibox: {
     flex: 1,
     height: "100%",

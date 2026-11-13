@@ -103,6 +103,23 @@ export function registerChromePopoverDomain(
     return manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang });
   });
 
+  handleTrusted(withMainSenderGuard(deps), "ui:togglePopover", (payload) => {
+    if (manager.isOpen()) {
+      manager.close();
+      return { ok: true, open: false };
+    }
+    const input = (payload ?? {}) as Partial<ChromePopoverOpenPayload> & Record<string, unknown>;
+    if (!CHROME_POPOVER_KINDS.includes(input.kind as ChromePopoverKind)) {
+      return { ok: false, error: "未知浮层类型", open: false };
+    }
+    if (!isFiniteRect(input.anchor)) {
+      return { ok: false, error: "浮层锚点参数无效", open: false };
+    }
+    const lang = input.lang === "zh-CN" || input.lang === "en-US" ? input.lang : undefined;
+    const result = manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang });
+    return { ...result, open: result.ok };
+  });
+
   handleTrusted(deps, "ui:closePopover", () => {
     manager.close();
     return { ok: true };

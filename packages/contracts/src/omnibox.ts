@@ -10,7 +10,7 @@
  */
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 
-export type SearchEngine = "bing" | "google" | "duckduckgo";
+export type SearchEngine = "bing" | "google" | "baidu";
 
 export type OmniboxResult =
   | { kind: "url"; url: string }
@@ -22,8 +22,8 @@ export function buildSearchUrl(query: string, engine: SearchEngine = "bing"): st
   switch (engine) {
     case "google":
       return `https://www.google.com/search?q=${q}`;
-    case "duckduckgo":
-      return `https://duckduckgo.com/?q=${q}`;
+    case "baidu":
+      return `https://www.baidu.com/s?wd=${q}`;
     case "bing":
     default:
       return `https://www.bing.com/search?q=${q}`;

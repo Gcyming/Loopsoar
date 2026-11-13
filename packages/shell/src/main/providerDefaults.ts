@@ -6,9 +6,9 @@
  * 只放"必需且通用"的头；供应商专属业务参数仍走用户模板，避免把特例写死到 LLM 核心。
  */
 
-/** 判断是否 OpenCode Go（官方推理网关路径）。 */
+/** 判断是否 OpenCode 官方推理网关（Go 订阅 /inference/go 与按量付费 /inference 都算）。 */
 export function isOpenCodeGo(provider: string, baseUrl: string): boolean {
-  return /(^|\/\/)opencode\.ai\/inference\/go/i.test(baseUrl) || /^opencode-?go$/i.test(provider.trim());
+  return /(^|\/\/)opencode\.ai\/inference\//i.test(baseUrl) || /^opencode-?(go|zen)$/i.test(provider.trim());
 }
 
 /**

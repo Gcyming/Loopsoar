@@ -20,6 +20,41 @@ import { MODEL_CAPABILITIES_META } from "../../packages/core/src/modelCapabiliti
 
 const NIM = { provider: "nvidia", baseUrl: "https://integrate.api.nvidia.com/v1" } as const;
 
+describe("OpenCode Console /models 能力解析", () => {
+  // 2026-11 实测行（/inference/go/v1/models）：能力数据在 limit/modalities/capabilities 三个对象里。
+  const row = {
+    id: "deepseek-v4.1-flash",
+    limit: { context: 1_000_000, output: 384_000 },
+    modalities: { input: ["text", "image/jpeg", "image/png", "video/mp4"] },
+    capabilities: {
+      tools: { supported: true },
+      reasoning: { supported: true, effort: ["low", "high", "max"] },
+      structured_output: true,
+    },
+  };
+
+  it("解析 limit.context / limit.output / MIME 模态 / tools / reasoning.effort", () => {
+    const caps = parseUpstreamCapabilities(row);
+    expect(caps.contextWindow).toBe(1_000_000);
+    expect(caps.maxOutput).toBe(384_000);
+    expect(caps.inputModalities).toEqual(["text", "image", "video"]);
+    expect(caps.vision).toBe(true);
+    expect(caps.functionCalling).toBe(true);
+    expect(caps.structuredOutput).toBe(true);
+    expect(caps.thinking).toBe(true);
+    expect(caps.thinkingEfforts).toEqual(["low", "high", "max"]);
+  });
+
+  it("能力来源诊断把这些字段标为上游提供（刷新列表能覆盖内置推断）", () => {
+    const meta = describeCapabilitySources(row);
+    expect(meta.upstreamFields).toContain("contextWindow");
+    expect(meta.upstreamFields).toContain("maxOutput");
+    expect(meta.upstreamFields).toContain("vision");
+    expect(meta.upstreamFields).toContain("functionCalling");
+    expect(meta.upstreamFields).toContain("structuredOutput");
+  });
+});
+
 describe("NIM 端点识别与官方模型池", () => {
   it("识别 NVIDIA NIM 端点（provider / baseUrl 两种来源）", () => {
     expect(isNimEndpoint({ provider: "nvidia" })).toBe(true);

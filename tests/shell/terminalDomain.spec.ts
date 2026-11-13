@@ -1,7 +1,7 @@
 /**
- * terminal 域装配：8 个受信通道的注册 / 参数校验 / 返回直通。
+ * terminal 域装配：9 个受信通道的注册 / 参数校验 / 返回直通。
  *
- * 为什么单独测域层：终端面板与 Agent 工具都依赖这 8 个通道的「名字 + 返回结构」，
+ * 为什么单独测域层：终端面板与 Agent 工具都依赖这 9 个通道的「名字 + 返回结构」，
  * 契约 manifest 里新增通道后如果域层漏注册，守卫测试会红、UI 表现为「点了没反应」；
  * 这里用假 manager 验证转发与 fail-closed 参数校验，不启动任何真实终端进程。
  */
@@ -23,6 +23,7 @@ const CHANNELS = [
   "terminal:interrupt",
   "terminal:close",
   "terminal:history",
+  "terminal:diagnose",
 ] as const;
 
 const TRUSTED_EVENT = { senderFrame: { url: "loopsoar://app/index.html" } };
@@ -107,7 +108,7 @@ describe("terminal 域装配（受信 IPC）", () => {
     __resetHandlerRegistryForTests();
   });
 
-  it("注册全部 8 个 terminal 通道（无遗漏、无死码）", () => {
+  it("注册全部 9 个 terminal 通道（无遗漏、无死码）", () => {
     assemble();
     const registry = getHandlerRegistry();
     for (const channel of CHANNELS) {

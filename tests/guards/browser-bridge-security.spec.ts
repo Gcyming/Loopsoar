@@ -46,9 +46,14 @@ describe("守卫：浏览器桥隔离（发布门 2 四攻击路径）", () => {
     expect(src).toContain("IPC_CHANNELS");
     expect(src).toContain("IPC_VALIDATORS");
 
-    // shell 内除 trustedIpc.ts 自身外，不得直接调用 ipcMain.handle/on/once
+    // shell 内除 trustedIpc.ts 自身外，原则上不得直接调用 ipcMain.handle/on/once；
+    // 唯一例外：浏览器页 preload 的商店安装通道（发送者是 https 页面，不属于 loopsoar:// 受信帧），
+    // 必须显式校验 sender 是本应用浏览器标签（BrowserHost.hasWebContents），且只接受 id 一个字段。
     const shellIndex = read(INDEX);
-    expect(shellIndex).not.toMatch(/ipcMain\.(handle|on|once)\s*\(/);
+    const bareHandlers = [...shellIndex.matchAll(/ipcMain\.(handle|on|once)\s*\(\s*"([^"]+)"/g)].map((m) => m[2]);
+    expect(bareHandlers).toEqual(["loopsoar-browser:install-extension"]);
+    expect(shellIndex).toContain("hasWebContents(event.sender.id)");
+    expect(shellIndex).toContain("/^[a-p]{32}$/");
     // 域文件统一走 handleTrusted
     expect(shellIndex).toContain("handleTrusted");
   });

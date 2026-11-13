@@ -56,7 +56,9 @@ await run(process.execPath, [path.join(ROOT, "scripts/bundle-shell.mjs")]);
 if (!existsSync(BUNDLE)) throw new Error(`主进程 bundle 不存在：${BUNDLE}`);
 
 const electron = resolveElectron();
-const args = isWin ? ["--no-sandbox", BUNDLE] : [BUNDLE];
+// 追加启动参数：一行一个（支持含空格的 Chromium switch，如 --host-resolver-rules=MAP host ip）。
+const extraArgs = (process.env.LOOPSOAR_ELECTRON_ARGS || "").split("\n").map((line) => line.trim()).filter(Boolean);
+const args = isWin ? ["--no-sandbox", ...extraArgs, BUNDLE] : [...extraArgs, BUNDLE];
 console.log(`启动 Electron：${electron} ${args.join(" ")}`);
 
 const env = { ...process.env };

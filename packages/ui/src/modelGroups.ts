@@ -2,7 +2,8 @@
  * 模型选择列表的数据整备（纯逻辑）：把"多供应商配置"整理成按供应商分组的可选模型。
  *
  * 背景：输入区的模型菜单只展示当前供应商，用户无法直接切到另一个供应商的模型。
- * 这里以 providers 列表为唯一输入：默认模型必须在、被停用的模型不展示、活动供应商置顶。
+ * 这里以 providers 列表为唯一输入：展示每个供应商里**开关打开（selected !== false）**的全部模型，
+ * 提供商内模型开关（拨片）控制"是否出现在菜单"；没有「默认模型」概念，点哪个用哪个；活动供应商置顶。
  */
 import type { ProviderItem, ProviderModel } from "./types.js";
 
@@ -86,14 +87,26 @@ export interface ModelGroup {
   provider: string;
   baseUrl: string;
   active: boolean;
+  /** OpenCode 计划标记：go = Go 订阅额度（/inference/go），payg = 按量付费钱包；其他供应商为 null。 */
+  plan: "go" | "payg" | null;
   models: ModelChoice[];
+}
+
+/**
+ * 识别 OpenCode 供应商的计划（两套端点、两套额度/Key，不可混用）：
+ *   · https://opencode.ai/inference/go/... → "go"（Go 订阅额度）
+ *   · https://opencode.ai/inference/...     → "payg"（按量付费余额）
+ * 菜单/供应商卡片据此显示「Go 订阅 / 按量付费」，避免同名模型选错计划（402 余额不足的常见原因）。
+ */
+export function openCodePlanLabel(baseUrl: string): "go" | "payg" | null {
+  if (!/opencode\.ai/i.test(baseUrl)) return null;
+  return /\/inference\/go(\/|$)/i.test(baseUrl) ? "go" : "payg";
 }
 
 /** 生成模型菜单分组；activeId 缺省时按列表顺序。 */
 export function buildModelGroups(items: ProviderItem[], activeId: string | null): ModelGroup[] {
   const groups: ModelGroup[] = [];
   for (const item of items) {
-    const enabled = (item.models ?? []).filter((model) => typeof model.id === "string" && model.id.trim() && model.selected !== false);
     const models: ModelChoice[] = [];
     const push = (model: {
       id: string;
@@ -103,25 +116,30 @@ export function buildModelGroups(items: ProviderItem[], activeId: string | null)
       thinkingEfforts?: string[];
       inputModalities?: Array<"text" | "image" | "audio" | "video">;
     }): void => {
-      if (!model.id || models.some((existing) => existing.id === model.id)) return;
-      const source = enabled.find((candidate) => candidate.id === model.id);
+      const id = typeof model.id === "string" ? model.id.trim() : "";
+      if (!id || models.some((existing) => existing.id === id)) return;
       models.push({
-        id: model.id,
-        thinking: model.thinking ?? source?.thinking,
-        vision: model.vision ?? source?.vision,
-        contextWindow: model.contextWindow ?? source?.contextWindow,
-        thinkingEfforts: model.thinkingEfforts ?? source?.thinkingEfforts,
-        inputModalities: model.inputModalities ?? source?.inputModalities,
+        id,
+        thinking: model.thinking,
+        vision: model.vision,
+        contextWindow: model.contextWindow,
+        thinkingEfforts: model.thinkingEfforts,
+        inputModalities: model.inputModalities,
       });
     };
-    // 默认模型始终显示（即使设置里未勾选），其余只展示启用项
-    push({ id: item.model });
-    for (const model of enabled) push(model);
+    // 只展示开关打开的模型；旧数据没有 selected 字段时视为打开（默认全部可用）。
+    // 没有「默认模型」特例：菜单里点哪个就是哪个。
+    for (const model of item.models ?? []) {
+      if (model.selected === false) continue;
+      push(model);
+    }
+    if (models.length === 0 && item.model) push({ id: item.model });
     groups.push({
       providerId: item.id,
       provider: item.provider,
       baseUrl: item.baseUrl,
       active: item.id === activeId,
+      plan: openCodePlanLabel(item.baseUrl),
       models: models.slice(0, 200),
     });
   }
@@ -167,12 +185,12 @@ const capabilityValueEqual = (a: unknown, b: unknown): boolean => {
  *
  * 判定「显式手填」：本地已有值且与内置表推断值不同（推断值由后端随 capabilityMeta 回传）。
  * 这样再次点「获取模型列表」时，上游新值能刷新掉旧的自动填充，但不会覆盖用户手填的字段。
+ * 不再有「默认模型/启用勾选」：拉到的模型全部进入清单，菜单里全部可选。
  */
 export function mergeFetchedProviderModels(
   fetched: ProviderModel[],
   existing: ProviderModel[],
   capabilityMeta: Record<string, ProviderCapabilityMeta> | undefined,
-  defaultModelId: string,
 ): MergeFetchedModelsResult {
   const existingById = new Map(
     existing.filter((model) => typeof model.id === "string" && model.id.trim()).map((model) => [model.id, model]),
@@ -202,8 +220,9 @@ export function mergeFetchedProviderModels(
         (merged as unknown as Record<string, unknown>)[key] = incomingValue;
       }
     }
-    // 勾选状态沿用本地；新模型默认只启用当前默认模型，其余停用（用户可手动勾选）。
-    merged.selected = prev?.selected ?? incoming.selected ?? id === defaultModelId;
+    // 历史数据里的启用标记原样保留（仅兼容旧 providers.json；菜单已不再按它过滤）。
+    // 历史勾选标记沿用本地；新拉到的模型默认打开（用户可在供应商里用拨片关掉不想看的）。
+    merged.selected = prev?.selected ?? incoming.selected ?? true;
     models.push(merged);
   }
   const enrichedModels = models.filter((model) =>

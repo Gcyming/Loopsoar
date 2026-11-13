@@ -26,6 +26,8 @@ export interface GlobalHistoryEntry {
   visitedAt: number;
   /** 同 URL 累计访问次数（去重合并时累加）。 */
   visitCount: number;
+  /** 站点图标（data: URL，≤96KB；来自 page-favicon-updated）。 */
+  favicon?: string;
 }
 
 /** 全局历史上限：超过后丢弃最旧（列表末尾）。 */
@@ -36,6 +38,16 @@ const HISTORY_FILE_VERSION = 1;
 
 /** 标题上限（与标签标题渲染保持一致，避免被超长 <title> 撑坏 UI）。 */
 const MAX_TITLE_CHARS = 120;
+
+/** favicon 上限：data URL 只接受图片、限制体积（避免把历史文件吹大）。 */
+const MAX_FAVICON_CHARS = 96 * 1024;
+
+function normalizeFavicon(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("data:image/") || trimmed.length > MAX_FAVICON_CHARS) return undefined;
+  return trimmed;
+}
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -94,7 +106,7 @@ export class BrowserHistoryStore {
    * 记录一次成功访问：同 URL 合并（移到最前、刷新时间、次数 +1），否则插到最前；超上限截断。
    * 非 http(s) / 空 URL 返回 null（不记录），调用方无须再判协议。
    */
-  record(visit: { url?: unknown; title?: unknown; visitedAt?: unknown }): GlobalHistoryEntry | null {
+  record(visit: { url?: unknown; title?: unknown; visitedAt?: unknown; favicon?: unknown }): GlobalHistoryEntry | null {
     const url = typeof visit?.url === "string" ? visit.url.trim() : "";
     if (!url || !isHttpUrl(url)) return null;
     const visitedAt =
@@ -102,19 +114,33 @@ export class BrowserHistoryStore {
         ? Math.floor(visit.visitedAt)
         : Date.now();
     const title = normalizeTitle(visit?.title);
+    const favicon = normalizeFavicon(visit?.favicon);
     const existing = this.entries.find((entry) => entry.url === url);
     const merged: GlobalHistoryEntry = existing
       ? {
           url,
           ...(title ?? existing.title ? { title: title ?? existing.title } : {}),
+          ...(favicon ?? existing.favicon ? { favicon: favicon ?? existing.favicon } : {}),
           visitedAt,
           visitCount: existing.visitCount + 1,
         }
-      : { url, ...(title ? { title } : {}), visitedAt, visitCount: 1 };
+      : { url, ...(title ? { title } : {}), ...(favicon ? { favicon } : {}), visitedAt, visitCount: 1 };
     // 去重：同 URL 只保留合并后的一条，并回到最前（"最近访问"语义）
     this.entries = [merged, ...this.entries.filter((entry) => entry.url !== url)].slice(0, MAX_GLOBAL_HISTORY);
     this.save();
     return { ...merged };
+  }
+
+  /** 页面图标迟到/变化时，更新同 URL 条目的图标（不改变排序、不增加访问次数）。 */
+  updateFavicon(url: string, favicon: unknown): boolean {
+    const normalizedUrl = typeof url === "string" ? url.trim() : "";
+    const normalizedFavicon = normalizeFavicon(favicon);
+    if (!normalizedUrl || !normalizedFavicon) return false;
+    const entry = this.entries.find((item) => item.url === normalizedUrl);
+    if (!entry || entry.favicon === normalizedFavicon) return false;
+    entry.favicon = normalizedFavicon;
+    this.save();
+    return true;
   }
 
   /** 页面标题迟到/变化时，更新同 URL 条目的标题（不改变排序、不增加访问次数）。 */
@@ -185,6 +211,22 @@ export class BrowserHistoryStore {
     this.save();
   }
 
+  /** 批量删除指定 URL 的历史（历史页勾选删除用；返回实际删除条数，幂等）。 */
+  remove(urls: readonly string[]): number {
+    const targets = new Set(
+      urls
+        .filter((url): url is string => typeof url === "string")
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0 && isHttpUrl(url)),
+    );
+    if (targets.size === 0 || this.entries.length === 0) return 0;
+    const before = this.entries.length;
+    this.entries = this.entries.filter((entry) => !targets.has(entry.url));
+    const removed = before - this.entries.length;
+    if (removed > 0) this.save();
+    return removed;
+  }
+
   /* ─────────────────────────────── 持久化 ─────────────────────────────── */
 
   /** 读取并净化：坏文件改名留证后以空历史启动；结构不合法（含手改）逐条丢弃而不是整体拒绝。 */
@@ -218,7 +260,7 @@ export class BrowserHistoryStore {
     const out: GlobalHistoryEntry[] = [];
     for (const row of rows) {
       if (!row || typeof row !== "object") continue;
-      const item = row as { url?: unknown; title?: unknown; visitedAt?: unknown; visitCount?: unknown };
+      const item = row as { url?: unknown; title?: unknown; visitedAt?: unknown; visitCount?: unknown; favicon?: unknown };
       const url = typeof item.url === "string" ? item.url.trim() : "";
       if (!url || !isHttpUrl(url) || seen.has(url)) continue;
       seen.add(url);
@@ -230,7 +272,8 @@ export class BrowserHistoryStore {
         ? Math.floor(item.visitCount)
         : 1;
       const title = normalizeTitle(item.title);
-      out.push({ url, ...(title ? { title } : {}), visitedAt, visitCount: count });
+      const favicon = normalizeFavicon(item.favicon);
+      out.push({ url, ...(title ? { title } : {}), ...(favicon ? { favicon } : {}), visitedAt, visitCount: count });
     }
     out.sort((a, b) => b.visitedAt - a.visitedAt);
     return out.slice(0, MAX_GLOBAL_HISTORY);

@@ -11,6 +11,15 @@ export interface BrowserSnapshot {
   text: string;
 }
 
+/** 页面加载失败（WebContents did-fail-load 的净化形状；用于渲染层分类错误页）。 */
+export interface BrowserLoadFailure {
+  code: number;
+  description: string;
+  /** 失败的目标 URL（Electron validatedURL）。 */
+  url: string;
+  isMainFrame: boolean;
+}
+
 export interface BrowserAdapter {
   /** 导航到 URL（等待 domcontentloaded） */
   navigate(url: string): Promise<{ url: string }>;

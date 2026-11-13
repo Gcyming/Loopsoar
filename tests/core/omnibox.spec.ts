@@ -8,7 +8,7 @@ describe("buildSearchUrl", () => {
   it("按搜索引擎构造并正确编码", () => {
     expect(buildSearchUrl("天气 北京", "bing")).toBe("https://www.bing.com/search?q=%E5%A4%A9%E6%B0%94%20%E5%8C%97%E4%BA%AC");
     expect(buildSearchUrl("hello world", "google")).toBe("https://www.google.com/search?q=hello%20world");
-    expect(buildSearchUrl("hello world", "duckduckgo")).toBe("https://duckduckgo.com/?q=hello%20world");
+    expect(buildSearchUrl("hello world", "baidu")).toBe("https://www.baidu.com/s?wd=hello%20world");
   });
 });
 

@@ -147,19 +147,9 @@ export default function WorkspacePanel({
   };
 
   const selectWorkspace = (id: string): void => {
+    // 设置面板只切换右侧详情，不再把该工作区设为活跃，也不更新 lastUsedAt —— 避免列表因此重排、
+    // 以及把「外面工作区选择」的当前项一起改掉（用户 m08473）。活跃工作区由输入框下方的选择器决定。
     setSelectedId(id);
-    void run("select", async () => {
-      if (!api) return;
-      const result = await api.workspace.select({ id });
-      if (!result.ok) {
-        onNotice(result.error ?? tr("workspace.switchFailed"));
-        return;
-      }
-      setWorkspaces(result.workspaces);
-      setActiveId(result.activeId);
-      onChanged();
-      onNotice(tr("workspace.setActive"));
-    });
   };
 
   const removeWorkspace = (workspace: WorkspaceRecord): void => {
@@ -254,6 +244,7 @@ export default function WorkspacePanel({
                 return (
                   <div
                     key={workspace.id}
+                    data-testid={`workspace-row-${workspace.id}`}
                     style={{ ...styles.wsRow, ...(isSelected ? styles.wsRowActive : {}) }}
                     onClick={() => selectWorkspace(workspace.id)}
                   >
@@ -286,7 +277,7 @@ export default function WorkspacePanel({
           <div style={styles.detailPane}>
             {selected ? (
               <>
-                <div style={styles.detailTitle}>{selected.name}</div>
+                <div style={styles.detailTitle} data-testid="workspace-detail-title">{selected.name}</div>
                 <div style={styles.rootPath} title={selected.root}>{selected.root}</div>
                 <div style={styles.statusRow}>
                   {loading || !status ? (
@@ -468,7 +459,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     border: "1px solid transparent",
   },
-  wsRowActive: { background: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.12)", borderColor: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.35)" },
+  wsRowActive: { background: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.12)" },
   wsIcon: { color: BRAND.ochre, display: "inline-flex", flexShrink: 0 },
   wsMain: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 1 },
   wsName: { fontSize: 12, fontWeight: 600, color: BRAND.linen, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },

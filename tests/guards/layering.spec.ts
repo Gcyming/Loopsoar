@@ -126,7 +126,9 @@ describe("守卫：分层依赖（contracts ← core ← services ← shell ← 
           // Agent 会话栏「真·窗口化」：创建独立顶层 BrowserWindow（惰性 require，可注入假窗口测试）
           file.rel === "src/main/agentWindow.ts" ||
           // preload 本身运行在 Electron 预加载环境，只允许用它做 contextBridge 白名单暴露
-          file.rel === "src/preload/index.cjs");
+          file.rel === "src/preload/index.cjs" ||
+          // 浏览器页 preload：商店安装按钮拦截（不暴露 contextBridge，只发一个受限 IPC）
+          file.rel === "src/preload/browser.cjs");
       if (!allowed) offenders.push(`${file.pkg}/${file.rel}`);
     }
     expect(offenders).toEqual([]);

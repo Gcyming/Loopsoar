@@ -24,7 +24,9 @@ describe("浏览器请求策略 · 协议与主机名", () => {
     ["file:///C:/Windows/win.ini", "block"],
     ["data:text/html,<script>", "block"],
     ["javascript:alert(1)", "block"],
-    ["devtools://devtools/bundled/inspector.html", "block"],
+    // DevTools 前端 / 扩展内部资源：放行（否则 F12 与扩展资源会被误杀）
+    ["devtools://devtools/bundled/inspector.html", "allow"],
+    ["chrome-extension://abcdefghijklmnop/page.html", "allow"],
     // 拦截：内部主机名
     ["http://localhost/", "allow"], // 默认放行回环（E2E/本地页面）
     ["http://metadata.google.internal/", "block"],

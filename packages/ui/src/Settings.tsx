@@ -8,8 +8,10 @@ import {
 } from "loopsoar-contracts/headerTemplate";
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
-import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
+import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
+import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
+import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
 import type {
   AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
@@ -31,6 +33,7 @@ type TFunc = (key: string, params?: Record<string, string | number>) => string;
 
 type SectionId =
   | "general"
+  | "searchengine"
   | "appearance"
   | "permissions"
   | "providers"
@@ -38,7 +41,9 @@ type SectionId =
   | "skills"
   | "memory"
   | "extensions"
+  | "browser-extensions"
   | "mcp"
+  | "terminal-env"
   | "storage"
   | "advanced"
   | "about";
@@ -46,17 +51,27 @@ type SectionId =
 /** 侧栏分区：group 为分组 key（渲染时再翻译，避免语言切换后仍是旧语言）。 */
 const SECTIONS: { id: SectionId; icon: string; group: "basic" | "capability" | "data" | "other" }[] = [
   { id: "general", group: "basic", icon: "settings" },
+  { id: "searchengine", group: "basic", icon: "search" },
   { id: "appearance", group: "basic", icon: "capture" },
   { id: "permissions", group: "basic", icon: "check" },
   { id: "providers", group: "capability", icon: "cloud-upload" },
   { id: "rules", group: "capability", icon: "file" },
   { id: "skills", group: "capability", icon: "bulb" },
   { id: "memory", group: "capability", icon: "notes" },
-  { id: "extensions", group: "capability", icon: "puzzle" },
+  { id: "extensions", group: "capability", icon: "extension-feature" },
+  { id: "browser-extensions", group: "capability", icon: "browser-plugin" },
   { id: "mcp", group: "capability", icon: "terminal" },
+  { id: "terminal-env", group: "data", icon: "terminal" },
   { id: "storage", group: "data", icon: "folders" },
   { id: "advanced", group: "data", icon: "terminal" },
   { id: "about", group: "other", icon: "bulb" },
+];
+
+/** 可选搜索引擎（与 Preferences.searchEngine 枚举一致；只保留三家，DuckDuckGo 已下线）。 */
+const SEARCH_ENGINE_OPTIONS: { id: Preferences["searchEngine"]; name: string; host: string }[] = [
+  { id: "bing", name: "Bing", host: "bing.com" },
+  { id: "google", name: "Google", host: "google.com" },
+  { id: "baidu", name: "百度", host: "baidu.com" },
 ];
 
 interface DraftRule {
@@ -81,10 +96,12 @@ function loopKindOf(loop: LoopInfo): "builtin" | "declarative" | "script" | "cus
   return "custom";
 }
 
-export default function Settings({ api, onClose, onPreferencesSaved, initialSection, onOpenOnboarding, fullPage = false }: {
+export default function Settings({ api, onClose, onPreferencesSaved, initialSection, onOpenOnboarding, onOpenUrl, fullPage = false }: {
   api: LoopsoarAPI | null; onClose: () => void; onPreferencesSaved?: (p: Preferences) => void; initialSection?: SectionId;
   /** 「关于」分区重新打开新手引导（由 App 接线；缺省则不显示入口）。 */
   onOpenOnboarding?: () => void;
+  /** 设置内打开外链（如扩展商店）：由 App 负责离开设置并真实打开页面。 */
+  onOpenUrl?: (url: string) => void;
   /**
    * 整页模式（ChromePage「设置」页）：去掉居中模态外壳与自身标题栏并铺满父容器，
    * 分区导航与全部功能保持不变（标题与返回按钮由 ChromePage 顶栏提供）。
@@ -120,6 +137,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [pFormat, setPFormat] = useState<"auto" | "openai" | "anthropic">("auto");
   const [pRpm, setPRpm] = useState("");
   const [pModelDraft, setPModelDraft] = useState("");
+  /** 模型表搜索词：只过滤表格展示（按模型 ID 模糊匹配），不改动保存的数据。 */
+  const [pModelQuery, setPModelQuery] = useState("");
   const [rail, setRail] = useState<RailParams>(() => (typeof window === "undefined" ? DEFAULT_CHAT_RAIL : loadRailParams()));
   const [extensionsDir, setExtensionsDir] = useState("");
   const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
@@ -524,6 +543,37 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         );
       }
 
+      case "searchengine":
+        return prefs ? (
+          <div>
+            <Head t={tr("settings.searchengine.head")} h={tr("settings.searchengine.headHint")} />
+            <div style={S.engineList}>
+              {SEARCH_ENGINE_OPTIONS.map((engine) => {
+                const active = prefs.searchEngine === engine.id;
+                return (
+                  <button
+                    key={engine.id}
+                    type="button"
+                    style={{ ...S.engineRow, ...(active ? S.engineRowActive : {}) }}
+                    onClick={() => setPrefs({ ...prefs, searchEngine: engine.id })}
+                    aria-pressed={active}
+                  >
+                    <img src={`./icons/engine-${engine.id}.svg`} width={22} height={22} alt="" style={S.engineLogo} />
+                    <span style={S.engineText}>
+                      <span style={S.engineName}>{engine.name}</span>
+                      <span style={S.engineHost}>{engine.host}</span>
+                    </span>
+                    <span style={{ ...S.engineRadio, ...(active ? S.engineRadioActive : {}) }}>
+                      {active ? <Icon name="check" size={11} /> : null}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={S.note}>{tr("settings.searchengine.note")}</div>
+          </div>
+        ) : null;
+
       case "general":
         return prefs ? (<div>
           <Head t={tr("settings.general.head")} h={tr("settings.general.headHint")} />
@@ -551,9 +601,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               ]}
               on={(x) => setPrefs({ ...prefs, animations: x as Preferences["animations"] })}
             />
-          </Field>
-          <Field l={tr("settings.general.searchEngine")}>
-            <Seg v={prefs.searchEngine} opts={[["bing", "Bing"], ["google", "Google"], ["duckduckgo", "DuckDuckGo"]]} on={(x) => setPrefs({ ...prefs, searchEngine: x as Preferences["searchEngine"] })} />
           </Field>
           <Field l={tr("settings.general.adBlock")} h={tr("settings.general.adBlockHint")}>
             <Toggle v={prefs.adBlockEnabled ?? true} on={(x) => setPrefs({ ...prefs, adBlockEnabled: x })} />
@@ -683,13 +730,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setPModelDraft("");
         };
         const startEdit = (item?: ProviderItem): void => {
+          setPModelQuery("");
           if (item) {
             setEditingProviderId(item.id);
             setPForm({ provider: item.provider, baseUrl: item.baseUrl, model: item.model });
             setPHeaders(formatHeaderLines(item.headers));
             setPFormat(item.apiFormat ?? "auto");
             setPRpm(item.rpm ? String(item.rpm) : "");
-            setPModels(item.models ?? [{ id: item.model, selected: true }]);
+            setPModels(item.models ?? (item.model ? [{ id: item.model }] : []));
           } else {
             setEditingProviderId("new");
             setPForm({ provider: "", baseUrl: "", model: "" });
@@ -718,7 +766,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               r.models as ProviderModel[],
               existing,
               (r as { capabilityMeta?: Record<string, ProviderCapabilityMeta> }).capabilityMeta,
-              pForm.model,
             );
             const merged = merge.models;
             if (merged.length > 0) setPModels(merged);
@@ -733,7 +780,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               );
             }
             if (!merged.some((m) => m.id === pForm.model)) {
-              const first = merged.find((m) => m.selected !== false)?.id ?? merged[0]?.id ?? "";
+              const first = merged[0]?.id ?? "";
               if (first) setPForm({ ...pForm, model: first });
             }
           } catch (e) {
@@ -760,31 +807,62 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         const removeModel = (idx: number): void => {
           setPModels((prev) => prev.filter((_, i) => i !== idx));
         };
+        /** 全选/取消全选：一键切换模型「显示」开关（不影响当前使用模型与参数）。 */
+        const shownCount = pModels.filter((m) => m.selected !== false).length;
+        const allShown = pModels.length > 0 && shownCount === pModels.length;
+        const setAllShown = (next: boolean): void => {
+          setPModels((prev) => prev.map((m) => ({ ...m, selected: next })));
+        };
+        /** 搜索过滤：只影响表格展示；用原始下标回写，保证编辑/删除不会落到错误的行。 */
+        const modelQuery = pModelQuery.trim().toLowerCase();
+        const visibleModels = pModels
+          .map((m, idx) => ({ m, idx }))
+          .filter(({ m }) => !modelQuery || m.id.toLowerCase().includes(modelQuery));
         const commit = async (): Promise<void> => {
           try {
             const models = pModels.filter((m) => m.id.trim());
-            const defaultModel = pForm.model.trim() || models.find((m) => m.selected !== false)?.id || models[0]?.id || "";
-            if (!defaultModel) throw new Error(tr("settings.providers.needModel"));
+            // 没有"默认模型"概念：provider.model 只是"当前选用/最近使用"的模型（聊天 chip 可随时切换），
+            // 保存时保留它；新增供应商还没有选择时取清单第一个作为初始值。
+            const currentModel = pForm.model.trim() || models[0]?.id || "";
+            if (!currentModel) throw new Error(tr("settings.providers.needModel"));
             const r = await api.settings.upsertProvider({
               ...(editingProviderId && editingProviderId !== "new" ? { id: editingProviderId } : {}),
               provider: pForm.provider,
               baseUrl: pForm.baseUrl,
-              model: defaultModel,
+              model: currentModel,
               apiFormat: pFormat,
               rpm: pRpm.trim() ? Number(pRpm) : undefined,
               headers: parseHeaderLines(pHeaders, tr) ?? undefined,
               models,
             });
             await api.settings.setActiveProvider({ id: r.item.id });
-            if (keyInput.trim()) {
-              await api.settings.setApiKey({ providerId: r.item.id, apiKey: keyInput.trim() });
+            const typedKey = keyInput.trim();
+            if (typedKey) {
+              await api.settings.setApiKey({ providerId: r.item.id, apiKey: typedKey });
               setKeyInput("");
             }
             await refreshProviders();
             setEditingProviderId(null);
             await api.settings.getProvider().then(setProvider).catch(() => {});
             notifyProviders();
-            providerOk(tr("settings.providers.saved"));
+            // 刚保存的 Key 立刻用「用户输入的那把」真实验证一次：
+            // 旧逻辑测试连接用的是活动供应商的 Key，切 Key 后会误判成「新 Key 无效」。
+            if (typedKey) {
+              const probe = await api.settings
+                .testProvider({
+                  id: r.item.id,
+                  provider: pForm.provider,
+                  baseUrl: pForm.baseUrl,
+                  model: currentModel,
+                  apiKey: typedKey,
+                  headers: parseHeaderLines(pHeaders, tr) ?? undefined,
+                })
+                .catch(() => null);
+              if (probe?.ok) providerOk(tr("settings.providers.keyVerified", { message: probe.message }));
+              else providerBad(tr("settings.providers.keyVerifyFailed", { message: probe?.message ?? "" }));
+            } else {
+              providerOk(tr("settings.providers.saved"));
+            }
           } catch (e) {
             providerBad(e);
           }
@@ -798,18 +876,27 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           { name: "Agnes", provider: "agnes", baseUrl: "https://api.agnes-ai.cn/v1", model: "agnes-3.0-flash" },
           { name: tr("settings.providers.localPreset"), provider: "local", baseUrl: "http://127.0.0.1:8080/v1", model: "local-model" },
           {
-            name: "OpenCode Go",
+            name: "OpenCode Go（订阅）",
             provider: "opencode-go",
+            // 2026-11 官方文档 /docs/console/harnesses#base-urls：Go 订阅与按量付费是两套端点、两套 Key。
+            // Go 的 Key 必须走 /inference/go 段（打按量付费端点会 403 Model access is disabled）。
             baseUrl: "https://opencode.ai/inference/go/openai/v1",
-            model: "glm-5.3",
+            model: "deepseek-v4.1-flash",
             headers: { "x-opencode-session": "{{sessionId}}", "User-Agent": "Loopsoar/1.0" },
+          },
+          {
+            name: "OpenCode Zen（按量付费）",
+            provider: "opencode-zen",
+            // 按量付费（Console 余额）端点：需在 Console 充值；免费模型仅官方客户端/免费额度内可用。
+            baseUrl: "https://opencode.ai/inference/openai/v1",
+            model: "glm-5.3",
+            headers: { "User-Agent": "Loopsoar/1.0" },
           },
         ];
         return (
           <div>
             <Head t={tr("settings.providers.head")} h={tr("settings.providers.headHint")} />
             {providerItems.map((item) => {
-              const spec = item.models?.find((m) => m.id === item.model);
               return (
                 <div key={item.id} className="panel-card" style={S.card}>
                   <div style={S.rowBetween}>
@@ -826,11 +913,20 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       <span style={S.metaTitle}>{item.provider}</span>
                       <span style={item.id === activeProviderId ? BADGE.ok : BADGE.neutral}>{item.id === activeProviderId ? tr("settings.providers.active") : tr("settings.providers.backup")}</span>
                       <span style={BADGE.neutral}>{protoLabel(item.apiFormat)}</span>
+                      {(() => {
+                        const plan = openCodePlanLabel(item.baseUrl);
+                        if (!plan) return null;
+                        return (
+                          <span style={BADGE.neutral}>
+                            {tr(plan === "go" ? "settings.providers.planGo" : "settings.providers.planPayg")}
+                          </span>
+                        );
+                      })()}
                       <span style={S.tag}>{tr("settings.providers.modelCount", { count: item.models?.length ?? 1 })}</span>
                       {item.rpm ? <span style={S.tag}>RPM {item.rpm}</span> : null}
                     </span>
                     <span style={S.icons}>
-                      <Btn label={tr("settings.test")} small onClick={() => void api.settings.testProvider({ provider: item.provider, baseUrl: item.baseUrl, model: item.model, headers: item.headers }).then(setTestRes).catch(providerBad)} />
+                      <Btn label={tr("settings.test")} small onClick={() => void api.settings.testProvider({ id: item.id, provider: item.provider, baseUrl: item.baseUrl, model: item.model, headers: item.headers }).then(setTestRes).catch(providerBad)} />
                       <Btn label={tr("settings.edit")} small onClick={() => startEdit(item)} />
                       <Btn label={tr("settings.delete")} small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); }).catch(providerBad)} />
                     </span>
@@ -840,18 +936,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     {item.headers && Object.keys(item.headers).length > 0 ? (
                       <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.providers.headers")}</span><span style={S.providerVal}>{tr("settings.providers.headerCount", { count: Object.keys(item.headers).length })}</span></div>
                     ) : null}
-                    <div style={S.providerRow}>
-                      <span style={S.providerKey}>{tr("settings.providers.defaultModel")}</span>
-                      <span style={S.providerVal}>
-                        {item.model}
-                        {spec ? tr("settings.providers.specLine", {
-                          context: spec.contextWindow ? `${Math.round(spec.contextWindow / 1000)}K` : "—",
-                          output: spec.maxOutput ? `${Math.round(spec.maxOutput / 1000)}K` : "—",
-                          vision: spec.vision ? tr("settings.providers.specVision") : "",
-                          thinking: spec.thinking ? tr("settings.providers.specThinking") : "",
-                        }) : ""}
-                      </span>
-                    </div>
                     <div style={S.providerRow}>
                       <span style={S.providerKey}>{tr("settings.providers.key")}</span>
                       <span style={S.providerVal}>
@@ -955,6 +1039,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                         void api.settings
                           .setApiKey({ providerId: saved.id, apiKey: keyInput.trim() })
                           .then(async (r) => {
+                            const typed = keyInput.trim();
                             setKeyInput("");
                             await refreshProviders();
                             await api.settings.getProvider().then(setProvider).catch(() => {});
@@ -962,6 +1047,19 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                             providerOk(tr("settings.providers.keySavedOk", {
                               mode: r.storageMode === "os" ? tr("settings.providers.storageOs") : tr("settings.providers.storageDegraded"),
                             }));
+                            // 保存后立刻用刚输入的 Key 真实验证（避免「已保存但实际用的不是它」的误判）
+                            const probe = await api.settings
+                              .testProvider({
+                                id: saved.id,
+                                provider: saved.provider,
+                                baseUrl: saved.baseUrl,
+                                model: saved.model,
+                                apiKey: typed,
+                                headers: saved.headers,
+                              })
+                              .catch(() => null);
+                            if (probe?.ok) providerOk(tr("settings.providers.keyVerified", { message: probe.message }));
+                            else providerBad(tr("settings.providers.keyVerifyFailed", { message: probe?.message ?? "" }));
                           })
                           .catch(providerBad);
                       }}
@@ -983,7 +1081,30 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   <div style={S.modelSectionHead}>
                     {tr("settings.providers.modelDebug")}
                   </div>
+                  {/* 全选/取消全选 + 计数摘要：单独一行放在表格上方（不再塞进表头，避免挤压「显示」列） */}
+                  <div style={S.modelToolbar}>
+                    <span style={S.modelToolLabel}>
+                      <Toggle
+                        v={allShown}
+                        on={setAllShown}
+                        title={`${tr("settings.providers.toggleAll")}（${shownCount}/${pModels.length}）`}
+                        testId="model-toggle-all"
+                      />
+                      <span>{tr("settings.providers.toggleAll")}</span>
+                    </span>
+                    <span style={S.modelToolHint}>
+                      {tr("settings.providers.modelSummary", { total: pModels.length, on: shownCount })}
+                    </span>
+                  </div>
                   <div style={S.modelAddRow}>
+                    <input
+                      style={S.modelSearch}
+                      value={pModelQuery}
+                      onChange={(e) => setPModelQuery(e.target.value)}
+                      placeholder={tr("settings.providers.searchModels", { count: pModels.length })}
+                      aria-label={tr("settings.providers.searchModels", { count: pModels.length })}
+                      data-testid="model-search"
+                    />
                     <In v={pModelDraft} ph={tr("settings.providers.modelDraftPlaceholder")} on={setPModelDraft} />
                     <Btn label={tr("settings.add")} small onClick={addModelsFromDraft} />
                   </div>
@@ -1004,14 +1125,19 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                             <th style={S.th} data-testid="col-input-modalities">{tr("settings.providers.col.modalities")}</th>
                             <th style={S.thState} data-testid="col-function-calling">{tr("settings.providers.col.functionCalling")}</th>
                             <th style={S.thState} data-testid="col-structured-output">{tr("settings.providers.col.structuredOutput")}</th>
-                            <th style={S.thTiny}>{tr("settings.providers.col.default")}</th>
                             <th style={S.thTiny}></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {pModels.map((m, idx) => (
+                          {visibleModels.length === 0 ? (
+                            <tr>
+                              <td style={S.muted} colSpan={11}>{tr("settings.providers.noMatchingModels")}</td>
+                            </tr>
+                          ) : null}
+                          {visibleModels.map(({ m, idx }) => (
                             <tr key={m.id + idx}>
                               <td style={S.td}>
+                                {/* 拨片开关：控制该模型是否出现在输入区「模型」菜单（关闭=不在菜单展示，仍保留参数） */}
                                 <Toggle v={m.selected !== false} on={(next) => updateModel(idx, { selected: next })} />
                               </td>
                               <td style={S.td}>
@@ -1099,14 +1225,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                                 </select>
                               </td>
                               <td style={S.tdCenter}>
-                                <input
-                                  type="radio"
-                                  name="default-model"
-                                  checked={pForm.model === m.id}
-                                  onChange={() => setPForm({ ...pForm, model: m.id })}
-                                />
-                              </td>
-                              <td style={S.tdCenter}>
                                 <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} title={tr("settings.providers.removeModel")} onClick={() => removeModel(idx)}>
                                   <Icon name="close" size={11} />
                                 </button>
@@ -1133,7 +1251,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       )}
                     </div>
                     <div style={S.btns}>
-                      <Btn label={tr("settings.providers.testConnection")} onClick={() => void api.settings.testProvider({ provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default", headers: parseHeaderLines(pHeaders, tr) }).then(setTestRes).catch(providerBad)} />
+                      <Btn label={tr("settings.providers.testConnection")} onClick={() => void api.settings.testProvider({ id: editingProviderId && editingProviderId !== "new" ? editingProviderId : undefined, provider: pForm.provider, baseUrl: pForm.baseUrl, model: pForm.model || "default", apiKey: keyInput.trim() || undefined, headers: parseHeaderLines(pHeaders, tr) }).then(setTestRes).catch(providerBad)} />
                       <Btn label={tr("settings.providers.saveEnable")} primary onClick={() => void commit()} />
                       <Btn label={tr("settings.cancel")} onClick={() => setEditingProviderId(null)} />
                     </div>
@@ -1400,6 +1518,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           </div>
         );
 
+      case "browser-extensions":
+        return <BrowserExtensionsSection onOpenUrl={onOpenUrl} />;
+
+      case "terminal-env":
+        return <TerminalDiagnosticsSection />;
+
       case "mcp":
         return (
           <div>
@@ -1544,7 +1668,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       default:
         return null;
     }
-  }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
+  }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, pModelQuery, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
 
   return (
     <div
@@ -1640,8 +1764,21 @@ function Seg({ v, opts, on }: { v: string; opts: [string, string][]; on: (x: str
     <button key={val} type="button" className={`settings-seg${v === val ? " is-active" : ""}`} style={{ ...S.segItem, ...(v === val ? S.segOn : {}) }} onClick={() => on(val)}>{label}</button>
   ))}</div>;
 }
-function Toggle({ v, on }: { v: boolean; on: (x: boolean) => void }) {
-  return <button type="button" className="settings-toggle" style={{ ...S.toggle, ...(v ? S.toggleOn : {}) }} onClick={() => on(!v)} aria-pressed={v}><span style={{ ...S.knob, ...(v ? S.knobOn : {}) }} /></button>;
+function Toggle({ v, on, title, testId }: { v: boolean; on: (x: boolean) => void; title?: string; testId?: string }) {
+  return (
+    <button
+      type="button"
+      className="settings-toggle"
+      style={{ ...S.toggle, ...(v ? S.toggleOn : {}) }}
+      onClick={() => on(!v)}
+      aria-pressed={v}
+      title={title}
+      aria-label={title}
+      data-testid={testId}
+    >
+      <span style={{ ...S.knob, ...(v ? S.knobOn : {}) }} />
+    </button>
+  );
 }
 function In({ v, ph, on, type }: { v: string; ph?: string; on: (x: string) => void; type?: string }) {
   return <input style={S.input} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
@@ -1731,7 +1868,24 @@ const S: Record<string, React.CSSProperties> = {
   checkRow: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: BRAND.linenMuted, marginTop: 4 },
   modelSection: { borderTop: `1px solid ${BRAND.border}`, paddingTop: 10, marginTop: 6 },
   modelSectionHead: { fontSize: 12.5, fontWeight: 700, marginBottom: 8 },
-  modelAddRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8, justifyContent: "flex-end" },
+  /** 模型工具条：全选拨片 + 计数摘要（借鉴 slime：主开关独立一行，不再挤在表头里）。 */
+  modelToolbar: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" },
+  modelToolLabel: { display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: BRAND.linenMuted },
+  modelToolHint: { fontSize: 11.5, color: BRAND.linenFaint },
+  /** 模型 ID 搜索框：占满剩余宽度，贴左；草稿输入与「添加」仍靠右。 */
+  modelSearch: {
+    flex: 1,
+    minWidth: 180,
+    height: 30,
+    padding: "0 10px",
+    borderRadius: 7,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.ink,
+    color: BRAND.linen,
+    fontSize: 12.5,
+    outline: "none",
+  },
+  modelAddRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8, justifyContent: "space-between" },
   tableWrap: { maxHeight: 380, overflow: "auto", border: `1px solid ${BRAND.border}`, borderRadius: 8 },
   table: { width: "100%", minWidth: 1080, borderCollapse: "collapse", fontSize: 11.5 },
   th: { textAlign: "left", padding: "6px 6px", color: BRAND.linenFaint, fontWeight: 600, borderBottom: `1px solid ${BRAND.border}`, whiteSpace: "nowrap" },
@@ -1857,6 +2011,39 @@ const S: Record<string, React.CSSProperties> = {
   dashed: { border: `1px dashed ${BRAND.borderStrong}`, borderRadius: 10, padding: 16, marginBottom: 12, fontSize: 12, color: BRAND.linenFaint, lineHeight: 1.7 },
   muted: { fontSize: 12, color: BRAND.linenFaint, padding: 20 },
   note: { marginTop: 10, fontSize: 11, color: BRAND.linenFaint, lineHeight: 1.7 },
+  // 搜索引擎（设置 · 搜索引擎）：Chrome 式「一行一个引擎 + 左侧单选圆点」的列表。
+  engineList: { display: "flex", flexDirection: "column", gap: 8, maxWidth: 640 },
+  engineRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.inkRaised,
+    color: BRAND.linen,
+    cursor: "pointer",
+    textAlign: "left",
+    transition: "border-color 120ms, background 120ms",
+  },
+  engineRowActive: { borderColor: BRAND.ochre, background: "rgba(200,118,60,0.10)" },
+  engineLogo: { flex: "none", display: "block", borderRadius: 5 },
+  engineText: { display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 },
+  engineName: { fontSize: 13, fontWeight: 700 },
+  engineHost: { fontSize: 11, color: BRAND.linenFaint, fontFamily: "ui-monospace, Consolas, monospace" },
+  engineRadio: {
+    width: 18,
+    height: 18,
+    flex: "none",
+    borderRadius: "50%",
+    border: `1.5px solid ${BRAND.borderStrong}`,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: BRAND.ink,
+  },
+  engineRadioActive: { background: BRAND.ochre, borderColor: BRAND.ochre, color: BRAND.ink },
   code: { fontFamily: "ui-monospace, Consolas, monospace", fontSize: 10.5, background: BRAND.ink, padding: "1px 5px", borderRadius: 4, color: BRAND.linenMuted, wordBreak: "break-all" },
   okText: { fontSize: 11.5, color: "#5eead4" },
   errText: { fontSize: 11.5, color: "#f87171" },

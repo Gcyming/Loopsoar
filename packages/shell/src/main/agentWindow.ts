@@ -37,6 +37,8 @@ export const AGENT_WINDOW_SLIDE_IN_MS = 200;
 export const AGENT_WINDOW_SLIDE_OUT_MS = 160;
 /** 动画帧间隔（约 60fps）。 */
 export const AGENT_WINDOW_ANIMATION_TICK_MS = 16;
+/** 最小化 ↔ 还原的面板几何过渡时长（Slime float 同款 400ms）。 */
+export const AGENT_WINDOW_ICON_ANIM_MS = 400;
 /** 滑入起点：目标位置右侧多出的距离（看起来像从主窗口右缘「推出来」）。 */
 export const AGENT_WINDOW_SLIDE_OFFSET = 24;
 /** 距离屏幕工作区右/下边缘的留白。 */
@@ -117,6 +119,34 @@ export function computeAgentWindowBounds(
   };
 }
 
+/** 小窗「最小化」后的图标尺寸：不缩到任务栏，而是缩成一个图标按钮（Slime 同款交互）。 */
+export const AGENT_WINDOW_ICON_SIZE = 56;
+/** 图标按钮贴当前窗口右上角的内缩（再夹到工作区内）。 */
+export const AGENT_WINDOW_ICON_GAP = 8;
+
+/**
+ * 计算「最小化为图标」时的窗口 bounds：缩成 AGENT_WINDOW_ICON_SIZE 的正方形，
+ * 贴原窗口右上角，并夹取到工作区内。纯函数，便于单测。
+ */
+export function computeAgentWindowIconBounds(
+  bounds: AgentWindowRect,
+  workArea: AgentWindowRect,
+  size: number = AGENT_WINDOW_ICON_SIZE,
+  gap: number = AGENT_WINDOW_ICON_GAP,
+): AgentWindowRect {
+  const side = Math.max(1, Math.min(size, Math.max(1, workArea.width), Math.max(1, workArea.height)));
+  const maxX = Math.max(workArea.x, workArea.x + workArea.width - side);
+  const maxY = Math.max(workArea.y, workArea.y + workArea.height - side);
+  const preferredX = bounds.x + bounds.width - side - gap;
+  const preferredY = bounds.y + gap;
+  return {
+    x: Math.round(clamp(preferredX, workArea.x, maxX)),
+    y: Math.round(clamp(preferredY, workArea.y, maxY)),
+    width: Math.round(side),
+    height: Math.round(side),
+  };
+}
+
 /* ────────────────────────── Electron 原语的最小结构类型 ────────────────────────── */
 
 /** Agent 窗口 webContents 最小接口（只用于可选事件接线与 id）。 */
@@ -129,6 +159,8 @@ export interface AgentWindowWebContentsLike {
 export interface AgentWindowLike {
   loadURL(url: string): Promise<void> | void;
   show(): void;
+  hide?(): void;
+  isVisible?(): boolean;
   focus(): void;
   close(): void;
   isDestroyed(): boolean;
@@ -136,11 +168,21 @@ export interface AgentWindowLike {
   restore?(): void;
   /** 动画需要：改窗口位置/尺寸（缺省时退化为只显示/关闭）。 */
   setBounds?(bounds: AgentWindowRect): void;
+  /** 只移动窗口位置、不改尺寸（拖动时首选，避免 setBounds 反复写宽高在 Windows 透明窗上产生尺寸漂移）。 */
+  setPosition?(x: number, y: number): void;
   getBounds?(): AgentWindowRect;
   /** 滑入/滑出透明度（Windows/macOS 支持；异常时忽略）。 */
   setOpacity?(opacity: number): void;
   /** 最小化（标题栏自绘按钮 → ui:minimizeAgentWindow）。 */
   minimize?(): void;
+  /** 图标模式切换需要的窗口装饰（真实 Electron 都有；测试假窗口可选实现）。 */
+  setResizable?(value: boolean): void;
+  setAlwaysOnTop?(value: boolean): void;
+  setMinimumSize?(width: number, height: number): void;
+  /** 图标态隐藏任务栏条目（窗口仍是原尺寸，任务栏预览会出现一块空窗）。 */
+  setSkipTaskbar?(skip: boolean): void;
+  /** 置顶窗口（打开滑入期间临时置顶，避免被主窗口盖住）。 */
+  moveTop?(): void;
   /** 动画结束后销毁（不触发用户关闭事件）。 */
   destroy?(): void;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
@@ -154,6 +196,8 @@ export interface AgentWindowOptions {
   height: number;
   minWidth: number;
   minHeight: number;
+  /** 窗口图标（任务栏/Alt-Tab 用；不传则 Electron 显示默认图标）。 */
+  icon?: string;
   /** 初始位置（隐藏创建时先落在目标位置，避免显示时跳一下）。 */
   x?: number;
   y?: number;
@@ -161,8 +205,14 @@ export interface AgentWindowOptions {
   frame: boolean;
   /** 无边框窗口的标题栏样式（macOS 生效；Windows/Linux 忽略）。 */
   titleBarStyle?: "hidden";
+  /** Windows：去掉不可见的 thick frame（默认 resizable 会带 1–4px 系统边框，图标边缘点击会被 resize 边框吃掉）。 */
+  thickFrame?: boolean;
   /** Windows 11 圆角（无边框窗口也保留圆角，视觉上不割裂）。 */
   roundedCorners?: boolean;
+  /** 透明窗口：图标态只画圆角图标（无窗框），普通态由页面 CSS 铺底。 */
+  transparent?: boolean;
+  /** 系统阴影（透明小图标窗要关掉，否则窗外多一圈暗边）。 */
+  hasShadow?: boolean;
   show: boolean;
   resizable: boolean;
   maximizable: boolean;
@@ -225,6 +275,8 @@ export interface AgentWindowManagerDeps {
   loadUrlFor: (sessionId?: string) => string;
   /** preload 路径（与主窗口同一个 CJS preload）。 */
   preloadPath: string;
+  /** 独立 56px 图标窗口的 URL（通常是 `${PROTOCOL}://app/icon.html`；缺省回退 loadUrlFor + &icon=1）。 */
+  iconUrlFor?: () => string;
   /** preload additionalArguments（必须带 --loopsoar-bindings/--loopsoar-events，否则窗口里 loopsoarAPI 为空）。 */
   additionalArguments?: string[];
   /**
@@ -243,9 +295,23 @@ export interface AgentWindowManagerDeps {
   onLoadFailed?: (message: string) => void;
   /** 测试注入：窗口工厂（缺省惰性 require electron.BrowserWindow）。 */
   createWindow?: AgentWindowFactory;
+  /** 图标模式变化（最小化成图标 / 点击图标还原）→ 通知渲染层切换视图。 */
+  onIconModeChange?: (icon: boolean) => void;
+  /**
+   * 最小化/还原的衔接过渡（视觉快照）：把当前窗口截图交给渲染层，
+   * 由渲染层在窗口几何动画期间铺一张截图（内容连续、避免大 UI 逐帧重排）。
+   */
+  onTransition?: (payload: {
+    phase: "minimize" | "restore";
+    durationMs: number;
+    from: AgentWindowRect;
+    to: AgentWindowRect;
+  }) => void;
   /** 覆盖默认标题/底色/尺寸（一般不用传）。 */
   title?: string;
   backgroundColor?: string;
+  /** 窗口图标（任务栏/Alt-Tab 用；缺省 Electron 默认图标）。 */
+  icon?: string;
   width?: number;
   height?: number;
   minWidth?: number;
@@ -267,8 +333,18 @@ export interface AgentWindowManager {
   isOpen(): boolean;
   /** 聚焦已有窗口（若最小化先还原）；无窗口时返回 false。 */
   focus(): boolean;
-  /** 最小化（自绘标题栏的最小化按钮）。无窗口/最小化失败返回 false。 */
+  /** 最小化（自绘标题栏的最小化按钮）：缩成图标按钮（Slime 同款）。无窗口/失败返回 false。 */
   minimize(): boolean;
+  /** 图标模式下还原小窗（点击图标 → ui:restoreAgentWindow）。 */
+  restore(): boolean;
+  /** 普通态拖动窗口（自绘标题栏 pointer 拖拽；dx/dy 为屏幕 CSS px）。图标态忽略（图标走 moveBy）。 */
+  beginAgentWindowDrag(): boolean;
+  dragBy(dx: number, dy: number): boolean;
+  endAgentWindowDrag(): boolean;
+  /** 图标模式下按屏幕坐标增量拖动图标（dx/dy 为 CSS px；夹取工作区边界，非图标模式忽略）。 */
+  moveBy(dx: number, dy: number): boolean;
+  /** 当前是否处于图标模式（诊断/测试用）。 */
+  isIconMode(): boolean;
   /**
    * 主窗口移动/缩放后重新贴回其右缘（无动画，跟随应与主窗口拖拽同帧）。
    * 无窗口/正在关闭/已最小化时返回 false（最小化窗口不抢位置，用户从任务栏还原时保持原处）。
@@ -304,7 +380,8 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
   const minWidth = deps.minWidth ?? AGENT_WINDOW_MIN_WIDTH;
   const minHeight = deps.minHeight ?? AGENT_WINDOW_MIN_HEIGHT;
   const title = deps.title ?? AGENT_WINDOW_TITLE;
-  const backgroundColor = deps.backgroundColor ?? AGENT_WINDOW_BACKGROUND;
+  // 透明窗口：图标态只画一个圆角小图标（无窗框），普通态由页面 CSS 自行铺满底色。
+  const backgroundColor = deps.backgroundColor ?? "rgba(0,0,0,0)";
 
   let win: AgentWindowLike | null = null;
   /** 程序性关闭的窗口引用：其 "closed" 事件不视为用户关闭。 */
@@ -321,6 +398,36 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
   let workArea: AgentWindowRect = DEFAULT_WORK_AREA;
   let lastBounds: AgentWindowRect = { x: 0, y: 0, width, height };
   let lastOpacity = 1;
+  /** 图标模式：窗口缩成图标按钮（Slime 同款），点击图标还原。 */
+  let iconMode = false;
+  /** 图标模式前的窗口 bounds（还原用）。 */
+  let iconRestoreBounds: AgentWindowRect | null = null;
+  /** 图标相对 Agent 窗口左上角的偏移（还原时把 Agent 窗口原点对齐到图标位置）。 */
+  let iconOffset: { x: number; y: number } | null = null;
+  /** 独立 56px 图标窗口：图标态显示它、隐藏 Agent 大窗口；避免窗口 resize/shape 的合成闪烁。 */
+  let iconWin: AgentWindowLike | null = null;
+  /** 图标窗口最近一次屏幕位置。 */
+  let iconScreen: AgentWindowRect | null = null;
+
+  const notifyIconMode = (icon: boolean): void => {
+    try {
+      deps.onIconModeChange?.(icon);
+    } catch {
+      // 渲染层通知失败不影响窗口状态
+    }
+  };
+
+  const notifyTransition = (
+    phase: "minimize" | "restore",
+    from: AgentWindowRect,
+    to: AgentWindowRect,
+  ): void => {
+    try {
+      deps.onTransition?.({ phase, durationMs: AGENT_WINDOW_ICON_ANIM_MS, from, to });
+    } catch {
+      // 过渡只是视觉增强：通知失败时窗口几何动画照常播放
+    }
+  };
 
   const setIntervalImpl =
     deps.setIntervalFn ?? ((callback: () => void, ms: number): unknown => setInterval(callback, ms));
@@ -457,6 +564,152 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
     }
   }
 
+  /** 普通态拖动会话：起点 bounds 固定，按累计位移移动；避免每帧读取 getBounds 造成 DPI 缩放下的尺寸累积漂移。 */
+  let dragSession: { base: AgentWindowRect; offsetX: number; offsetY: number } | null = null;
+
+  function beginAgentWindowDrag(): boolean {
+    const current = currentWindow();
+    if (!current || iconMode) return false;
+    const bounds = safeBounds(current) ?? lastBounds;
+    if (!bounds) return false;
+    // 宽高取最近一次「我们写入的」目标尺寸（lastBounds），而不是 getBounds 的回报值：
+    // Windows 125% DPI 下 getBounds 会把 722 报成 724，拿回报值当新起点会让每次拖动都 +2px。
+    const size = lastBounds ?? bounds;
+    dragSession = { base: { x: bounds.x, y: bounds.y, width: size.width, height: size.height }, offsetX: 0, offsetY: 0 };
+    return true;
+  }
+
+  function endAgentWindowDrag(): boolean {
+    dragSession = null;
+    return true;
+  }
+
+  /** 普通态拖动：按拖动起点 + 累计屏幕增量移动窗口；图标态下不处理（图标窗口自己拖）。 */
+  function dragBy(dx: number, dy: number): boolean {
+    const current = currentWindow();
+    if (!current || iconMode || animationHandle !== null) return false;
+    if (!dragSession) {
+      if (!beginAgentWindowDrag()) return false;
+    }
+    if (!dragSession) return false;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
+    dragSession.offsetX += dx;
+    dragSession.offsetY += dy;
+    const base = dragSession.base;
+    const area = workArea ?? resolveWorkArea();
+    const next: AgentWindowRect = {
+      x: Math.round(base.x + dragSession.offsetX),
+      y: Math.round(base.y + dragSession.offsetY),
+      width: base.width,
+      height: base.height,
+    };
+    next.x = Math.min(Math.max(next.x, area.x - next.width + 120), area.x + area.width - 120);
+    next.y = Math.min(Math.max(next.y, area.y), area.y + area.height - 80);
+    // 注意：不要用 setPosition —— Windows 125% DPI 下 Electron 的 setPosition 会隐式重算窗口尺寸，
+    // 实测每帧 +4~8px 增长；写成 setBounds(固定 base 宽高) 反而最多只有首次 ±2px 取整误差。
+    applyBounds(current, next);
+    lastBounds = next;
+    targetBounds = { ...next };
+    return true;
+  }
+  /** 拖图标：直接移动独立的 56px 图标窗口并夹取工作区（屏幕坐标增量）。 */
+  function moveBy(dx: number, dy: number): boolean {
+    if (!iconMode || animationHandle !== null) return false;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return false;
+    const target = iconWin;
+    if (!target || (target.isDestroyed?.() ?? false)) return false;
+    const bounds = safeBounds(target) ?? iconScreen;
+    if (!bounds) return false;
+    const area = workArea ?? resolveWorkArea();
+    const next: AgentWindowRect = {
+      x: Math.round(Math.min(Math.max(bounds.x + dx, area.x), area.x + area.width - AGENT_WINDOW_ICON_SIZE)),
+      y: Math.round(Math.min(Math.max(bounds.y + dy, area.y), area.y + area.height - AGENT_WINDOW_ICON_SIZE)),
+      width: AGENT_WINDOW_ICON_SIZE,
+      height: AGENT_WINDOW_ICON_SIZE,
+    };
+    applyBounds(target, next);
+    iconScreen = { ...next };
+    return true;
+  }
+
+  /** 创建（或复用）独立 56px 图标窗口；隐藏状态创建，显示前调用 show。 */
+  function ensureIconWindow(bounds?: AgentWindowRect): AgentWindowLike | null {
+    if (iconWin) {
+      try {
+        if (!iconWin.isDestroyed()) {
+          if (bounds) iconWin.setBounds?.(bounds);
+          return iconWin;
+        }
+      } catch {
+        // 已销毁：继续重建
+      }
+      iconWin = null;
+    }
+    try {
+      const createWindow: AgentWindowFactory =
+        deps.createWindow ??
+        ((options: AgentWindowOptions) => new (loadElectronRuntime().BrowserWindow)(options));
+      const created = createWindow({
+        x: bounds?.x ?? 0,
+        y: bounds?.y ?? 0,
+        width: AGENT_WINDOW_ICON_SIZE,
+        height: AGENT_WINDOW_ICON_SIZE,
+        minWidth: AGENT_WINDOW_ICON_SIZE,
+        minHeight: AGENT_WINDOW_ICON_SIZE,
+        frame: false,
+        thickFrame: false,
+        transparent: true,
+        roundedCorners: false,
+        hasShadow: false,
+        show: false,
+        resizable: false,
+        maximizable: false,
+        skipTaskbar: true,
+        title,
+        autoHideMenuBar: true,
+        ...(deps.icon ? { icon: deps.icon } : {}),
+        backgroundColor: "rgba(0,0,0,0)",
+        webPreferences: {
+          preload: deps.preloadPath,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          ...(deps.additionalArguments ? { additionalArguments: deps.additionalArguments } : {}),
+          devTools: false,
+        },
+      });
+      iconWin = created;
+      created.on("closed", () => {
+        if (iconWin === created) iconWin = null;
+      });
+      try {
+        const loading = created.loadURL(deps.iconUrlFor?.() ?? `${deps.loadUrlFor(undefined)}&icon=1`);
+        if (loading && typeof (loading as Promise<void>).catch === "function") {
+          void (loading as Promise<void>).catch(() => undefined);
+        }
+      } catch {
+        // 图标窗口加载失败：保留引用，显示时最多是空白小窗（不影响主流程）
+      }
+      return created;
+    } catch {
+      iconWin = null;
+      return null;
+    }
+  }
+
+  /** 隐藏并清理图标窗口（还原/关闭时）。 */
+  function destroyIconWindow(): void {
+    const target = iconWin;
+    iconWin = null;
+    if (!target) return;
+    try {
+      if (target.isDestroyed()) return;
+      target.destroy?.();
+      if (!target.destroy) target.close();
+    } catch {
+      // 已销毁：忽略
+    }
+  }
   function safeBounds(target: AgentWindowLike): AgentWindowRect | null {
     try {
       const bounds = target.getBounds?.() ?? null;
@@ -497,6 +750,8 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
   function focus(): boolean {
     const current = currentWindow();
     if (!current) return false;
+    // 图标模式下「聚焦」= 还原小窗（否则用户点任务栏/图标只会看到一个 56px 方块）
+    if (iconMode) return restoreFromIcon();
     try {
       // 最小化状态下 focus 不会还原窗口 → 先 restore（Electron/Windows 行为）
       if (current.isMinimized?.()) current.restore?.();
@@ -507,11 +762,134 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
     }
   }
 
+  /**
+   * 最小化：**缩成图标按钮**（Slime 同款）。
+   * 实现：Agent 大窗口内先做 400ms 面板几何过渡；结束时创建/显示独立 56px 图标窗口盖在同一位置，
+   * 再隐藏 Agent 大窗口。全程没有窗口 resize / setShape，避免透明窗口的合成闪烁与黑块。
+   */
   function minimize(): boolean {
     const current = currentWindow();
     if (!current) return false;
+    if (iconMode) return true;
     try {
-      current.minimize?.();
+      const bounds = safeBounds(current) ?? lastBounds;
+      if (!bounds) return false;
+      stopAnimation();
+      workArea = resolveWorkArea();
+      iconRestoreBounds = { ...bounds };
+      const iconBounds = computeAgentWindowIconBounds(bounds, workArea);
+      const to: AgentWindowRect = {
+        x: iconBounds.x - bounds.x,
+        y: iconBounds.y - bounds.y,
+        width: iconBounds.width,
+        height: iconBounds.height,
+      };
+      iconOffset = { x: to.x, y: to.y };
+      iconScreen = { ...iconBounds };
+      iconMode = true;
+      const from: AgentWindowRect = { x: 0, y: 0, width: bounds.width, height: bounds.height };
+      notifyTransition("minimize", from, to);
+      runAnimation(
+        AGENT_WINDOW_ICON_ANIM_MS,
+        () => {
+          // 窗口几何保持不动：视觉运动全部交给渲染层 CSS 过渡
+        },
+        () => {
+          if (win !== current) return;
+          const created = ensureIconWindow(iconBounds);
+          if (created) {
+            try {
+              // 图标窗口（打开时已预加载、隐藏）先显示，再立刻隐藏 Agent 大窗口；
+              // 两者在同一屏幕位置画同一个 56px 图标，切换在同一帧内完成，无黑块/闪烁。
+              created.show();
+              created.setAlwaysOnTop?.(true);
+              created.moveTop?.();
+              current.hide?.();
+              current.setSkipTaskbar?.(true);
+            } catch {
+              // 图标窗口显示失败：保持大窗口可见（面板已收成图标，仍可点击还原）
+            }
+          }
+          targetBounds = { ...bounds };
+          lastBounds = { ...bounds };
+          lastOpacity = 1;
+          notifyIconMode(true);
+        },
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 点击图标还原小窗：对齐并显示 Agent 大窗口、隐藏图标窗口，再让渲染层面板从图标矩形反向展开。 */
+  function restoreFromIcon(): boolean {
+    const current = currentWindow();
+    if (!current) return false;
+    if (!iconMode) {
+      try {
+        current.focus();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (animationHandle !== null) return true;
+    try {
+      const bounds = safeBounds(current) ?? iconRestoreBounds ?? lastBounds;
+      iconRestoreBounds = null;
+      const offset = iconOffset ?? { x: 0, y: 0 };
+      const screenRect = iconWin?.getBounds?.() ?? iconScreen;
+      // Agent 窗口原点对齐到「图标屏幕位置 - 图标相对偏移」，保证显示出来时面板图标正好在图标窗口原位。
+      const target: AgentWindowRect = screenRect
+        ? { x: screenRect.x - offset.x, y: screenRect.y - offset.y, width: bounds.width, height: bounds.height }
+        : { ...bounds };
+      applyBounds(current, target);
+      lastBounds = { ...target };
+      targetBounds = { ...target };
+      try {
+        current.setSkipTaskbar?.(false);
+        current.show();
+        current.focus();
+        current.moveTop?.();
+      } catch {
+        // 显示失败不影响面板过渡（窗口可能仍隐藏）
+      }
+      try {
+        iconWin?.hide?.();
+      } catch {
+        // 图标窗口已销毁：忽略
+      }
+      const to: AgentWindowRect = { x: 0, y: 0, width: target.width, height: target.height };
+      const from: AgentWindowRect = { x: offset.x, y: offset.y, width: AGENT_WINDOW_ICON_SIZE, height: AGENT_WINDOW_ICON_SIZE };
+      notifyTransition("restore", from, to);
+      runAnimation(
+        AGENT_WINDOW_ICON_ANIM_MS,
+        () => {
+          // 视觉运动由渲染层面板 CSS 过渡承担
+        },
+        () => {
+          if (win !== current) return;
+          iconMode = false;
+          iconOffset = null;
+          try {
+            current.setResizable?.(true);
+            current.setMinimumSize?.(minWidth, minHeight);
+            current.setAlwaysOnTop?.(false);
+          } catch {
+            // 窗口已销毁：忽略
+          }
+          targetBounds = { ...target };
+          lastBounds = { ...target };
+          notifyIconMode(false);
+          try {
+            current.focus();
+            current.moveTop?.();
+          } catch {
+            // 聚焦失败不影响还原
+          }
+        },
+      );
       return true;
     } catch {
       return false;
@@ -551,14 +929,21 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
         minHeight,
         // 无系统边框、自绘标题栏（用户要求）；保留缩放/最小化/圆角
         frame: false,
+        // 图标态已由独立 56px 静态图标窗口承担；Agent 窗口保留系统 thick frame，
+        // 否则 Windows 下每次 setPosition/setBounds 都会因无边框窗口的非客户区重算而漂移尺寸（用户反馈拖动时窗口越拖越大）。
+        thickFrame: true,
         titleBarStyle: "hidden",
-        roundedCorners: true,
+        // 透明 + 无系统圆角/阴影：图标态无窗框，圆角由渲染层 CSS（页面背景）决定。
+        transparent: true,
+        roundedCorners: false,
+        hasShadow: false,
         show: false,
         resizable: true,
         maximizable: true,
         skipTaskbar: false,
         title,
         autoHideMenuBar: true,
+        ...(deps.icon ? { icon: deps.icon } : {}),
         backgroundColor,
         webPreferences: {
           preload: deps.preloadPath,
@@ -572,6 +957,8 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
 
       win = created;
       expectedClose = null;
+      // 生产环境提前创建/预加载图标窗口（隐藏），首次最小化时 show 即可，避免空白窗口闪一下。
+      if (!deps.createWindow) ensureIconWindow();
 
       created.on("ready-to-show", () => {
         if (win !== created) return;
@@ -581,7 +968,11 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
         applyBounds(created, startBounds);
         applyOpacity(created, 0);
         try {
+          // 打开滑入期间临时置顶：Agent 窗口默认贴主窗口右缘，若 show 后没有抢到前景，
+          // 会整块躲在主窗口后面 → 用户只看到主窗口侧栏消失（m06844 截图）。
+          created.setAlwaysOnTop?.(true);
           created.show();
+          created.moveTop?.();
         } catch {
           closeProgrammatic();
           return;
@@ -604,6 +995,7 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
             lastOpacity = 1;
             applyBounds(created, targetBounds);
             applyOpacity(created, 1);
+            created.setAlwaysOnTop?.(false);
           },
         );
       });
@@ -617,6 +1009,11 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
         const wasTracked = win === created;
         if (wasTracked) {
           win = null;
+          iconMode = false;
+          iconRestoreBounds = null;
+          iconOffset = null;
+          iconScreen = null;
+          destroyIconWindow();
           stopAnimation();
         }
         if (wasTracked && !wasProgrammatic) notifyClosed();
@@ -655,6 +1052,24 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
     const animate = options?.animate !== false;
     stopAnimation();
     finalizeClosing();
+    if (iconMode) {
+      // 图标态没有可见的 Agent 大窗口：直接销毁图标窗口与大窗口，并通知主窗口恢复侧栏。
+      iconMode = false;
+      iconOffset = null;
+      iconScreen = null;
+      destroyIconWindow();
+      win = null;
+      expectedClose = current;
+      try {
+        if (current.destroy) current.destroy();
+        else current.close();
+      } catch {
+        // 已销毁：忽略
+      }
+      notifyClosed();
+      return;
+    }
+    destroyIconWindow();
     // 立即摘引用：关闭动画期间 isOpen=false（不再接受最小化/聚焦），重复 close 也幂等
     win = null;
     expectedClose = current;
@@ -670,21 +1085,18 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
       return;
     }
 
-    const bounds = safeBounds(current) ?? lastBounds;
-    const endX = workArea.x + workArea.width;
-    const startX = bounds.x;
+    // 关闭不再逐帧 setBounds 滑出：透明窗口每帧重排 + 移动会产生明显拖影/掉帧（用户 m06420）。
+    // 改为原地淡出（DWM 透明度动画，几乎零成本），主窗口侧栏随后展开，两个动画不互相踩。
     const fromOpacity = lastOpacity;
     closingWindow = current;
     runAnimation(
       AGENT_WINDOW_SLIDE_OUT_MS,
       (progress) => {
-        const x = Math.round(startX + (endX - startX) * progress);
-        applyBounds(current, { ...bounds, x });
         applyOpacity(current, fromOpacity * (1 - progress));
       },
       () => {
         finalizeClosing();
-        // 滑出动画结束后才通知：主窗口侧栏此刻才展开，不会与仍在右侧的窗口打架
+        // 淡出结束后才通知：主窗口侧栏此刻才展开，不会与仍在右侧的窗口打架
         notifyClosed();
       },
     );
@@ -697,6 +1109,8 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
   function reposition(): boolean {
     const current = currentWindow();
     if (!current || closingWindow) return false;
+    // 图标模式不参与贴边定位：图标就停在用户看到的位置，主窗口移动不拽走它
+    if (iconMode) return false;
     try {
       // 最小化窗口不抢位置：用户从任务栏还原时保持它原来的位置（Windows 习惯）
       if (current.isMinimized?.()) return false;
@@ -716,6 +1130,10 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
   }
 
   function webContentsId(): number | null {
+    if (iconMode) {
+      const iconId = iconWin?.webContents?.id;
+      if (typeof iconId === "number") return iconId;
+    }
     const current = currentWindow();
     const id = current?.webContents?.id;
     return typeof id === "number" ? id : null;
@@ -731,10 +1149,11 @@ export function createAgentWindowManager(deps: AgentWindowManagerDeps): AgentWin
   function dispose(): void {
     disposed = true;
     stopAnimation();
+    destroyIconWindow();
     finalizeClosing();
     closeProgrammatic();
     closedListeners.clear();
   }
 
-  return { open, close, isOpen, focus, minimize, reposition, webContentsId, onClosed, dispose };
+  return { open, close, isOpen, focus, minimize, restore: restoreFromIcon, beginAgentWindowDrag, dragBy, endAgentWindowDrag, moveBy, isIconMode: () => iconMode, reposition, webContentsId, onClosed, dispose };
 }

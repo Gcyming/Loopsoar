@@ -10,6 +10,7 @@
  * 纯展示：选择/关闭/新建全部由 App 注入，组件不碰浏览器状态。
  */
 import * as React from "react";
+import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
 import type { TabState } from "./types.js";
@@ -47,7 +48,16 @@ export default function BrowserTabs({
             }
           }}
         >
-          <span style={styles.tabTitle}>{tab.title || tr("browser.startNewTabTitle")}</span>
+          {tab.url ? (
+            tab.favicon ? (
+              <img src={tab.favicon} alt="" width={14} height={14} style={styles.tabFavicon} />
+            ) : (
+              <span style={styles.tabLetter}>{(tab.title || tab.url).trim().charAt(0).toUpperCase() || "·"}</span>
+            )
+          ) : (
+            <Icon name="globe" size={12} style={styles.tabFaviconFallback} />
+          )}
+          <span style={styles.tabTitle}>{tab.url ? tab.title : tr("browser.startNewTabTitle")}</span>
           <button
             type="button"
             className="icon-btn tab-close"
@@ -104,6 +114,9 @@ const styles: Record<string, React.CSSProperties> = {
     userSelect: "none",
     overflow: "hidden",
   },
+  tabFavicon: { flex: "none", borderRadius: 3, objectFit: "contain" },
+  tabLetter: { flex: "none", width: 16, height: 16, borderRadius: 3, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.06)", color: BRAND.linenMuted, fontSize: 10, fontWeight: 700 },
+  tabFaviconFallback: { flex: "none", color: BRAND.linenFaint },
   tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "1 1 auto" },
   tabClose: { width: 18, height: 18, flex: "none" },
   tabAdd: { width: 26, height: 26, flex: "none", marginBottom: 2, marginLeft: 2 },

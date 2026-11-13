@@ -102,8 +102,21 @@ export const FileWriteSchema = z.object({
 export const BrowserNavigateSchema = z.object({ url: z.string() });
 export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
+/** 删除会话时一并关闭该会话名下的全部网页（工作区 > 会话 > 网页）。 */
+export const BrowserSessionIdSchema = z.object({ sessionId: z.string().min(1).max(128) });
 export const BrowserSetOverlaySchema = z.object({ open: z.boolean() });
 export const BrowserTabRefSchema = z.object({ tabId: z.string().optional() });
+/** 开发者工具开关（缺省作用于当前会话活动标签）。 */
+export const BrowserDevToolsSchema = BrowserTabRefSchema;
+/** 历史/快捷入口缺图标时，按页面 URL 回抓站点 favicon（主进程抓取并转 data URL）。 */
+export const BrowserResolveFaviconSchema = z.object({ url: z.string().min(1).max(4096) });
+/** 浏览器扩展安装：path=本地未打包扩展目录；url=Chrome 应用商店链接或 32 位扩展 ID。 */
+/** 底部开发者工具面板：open=开合；height=面板高度（缺省沿用上次）。 */
+export const BrowserDevToolsPanelSchema = z.object({ open: z.boolean(), height: z.number().int().min(120).max(1200).optional() });
+export const BrowserInstallExtensionSchema = z.object({
+  path: z.string().min(1).max(4096).optional(),
+  url: z.string().min(1).max(4096).optional(),
+});
 export const BrowserDownloadActionSchema = z.object({
   id: z.string().min(1),
   action: z.enum(["cancel", "open", "showInFolder", "remove"]),
@@ -144,6 +157,12 @@ export const WorkspaceCreateSchema = z.object({
   name: z.string().min(1).max(60).optional(),
 });
 export const WorkspaceStatusSchema = z.object({ id: z.string().min(1).max(64).optional() });
+/** 新建会话：workspaceId=null 表示暂不归属工作区（首次对话时自动落到默认工作区）。 */
+export const BindSessionWorkspaceSchema = z.object({
+  sessionId: z.string().min(1).max(120).optional(),
+  workspaceId: z.string().min(1).max(128),
+});
+export const NewSessionSchema = z.object({ workspaceId: z.string().min(1).max(128).nullable().optional() });
 export const WorktreeSessionSchema = z.object({ sessionId: z.string().min(1).max(120) });
 export const WorktreeRemoveSchema = z.object({
   sessionId: z.string().min(1).max(120),
@@ -218,7 +237,7 @@ export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 /* ───────────────────────── 浏览器工具栏浮层（独立窗口渲染） ───────────────────────── */
 
 /** 浮层种类：更多菜单 / 收藏夹 / 历史记录 / 下载。 */
-export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads"]);
+export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads", "workspaces"]);
 
 /** 锚点矩形（相对主窗口内容区的 CSS px；主进程换算为屏幕坐标并做边缘翻转/夹取）。 */
 export const PopoverAnchorSchema = z.object({
@@ -246,6 +265,14 @@ export const ChromePopoverActionSchema = z.object({
 /** 打开会话栏独立窗口：可指定要展示的会话（缺省 = 当前会话）。 */
 export const OpenAgentWindowSchema = z.object({
   sessionId: z.string().max(128).optional(),
+});
+
+/** 图标模式下拖动小窗图标：dx/dy 为屏幕坐标增量（CSS px）。 */
+export const MoveAgentWindowSchema = z.object({
+  dx: z.number().finite().min(-10000).max(10000),
+  dy: z.number().finite().min(-10000).max(10000),
+  /** 普通态 Agent 窗口拖动会话阶段：start 记录起点，move 累加位移，end 结束（图标拖动忽略）。 */
+  phase: z.enum(["start", "move", "end"]).optional(),
 });
 
 export const ChatCompactSchema = z.object({
@@ -304,6 +331,10 @@ export const SettingsProviderSchema = z.object({
   provider: z.string().min(1).max(64),
   baseUrl: z.string().url(),
   model: z.string().min(1).max(200),
+  /** 测试连接：被测供应商的 id（据此取该供应商自己的密钥；缺省会按 provider+baseUrl 匹配）。 */
+  id: z.string().max(200).optional(),
+  /** 测试连接：表单里刚输入、尚未保存的密钥（只用于本次探测，不落盘、不回显）。 */
+  apiKey: z.string().max(2000).optional(),
   /** 测试连接所用端点协议（auto 按 baseUrl 推断；anthropic 走 /messages）。 */
   apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),
   /** 测试连接时的自定义请求头（模板与聊天一致；不落盘）。 */
@@ -319,7 +350,7 @@ export const PreferencesSchema = z.object({
   animations: z.enum(["full", "reduced", "off"]),
   /** 启动时恢复上次会话（当前为占位开关，会话持久化接入后生效）。 */
   restoreSession: z.boolean(),
-  searchEngine: z.enum(["bing", "google", "duckduckgo"]),
+  searchEngine: z.enum(["bing", "google", "baidu"]),
   /** 下载目录（空 = 用户下载文件夹）。 */
   downloadDir: z.string().max(1024).optional(),
   /** 工作区根（空 = 启动目录）；影响规则查找与沙箱根。 */
@@ -330,6 +361,8 @@ export const PreferencesSchema = z.object({
   memoryAutoCapture: z.boolean(),
   /** 右侧 Agent 面板宽度（可拖拽调整，持久化）。 */
   sidebarWidth: z.number().int().min(240).max(720),
+  /** Vibecoding 模式侧栏宽度（独立于标准宽度；约标准最小宽度的一半~3/5）。 */
+  vibeSidebarWidth: z.number().int().min(100).max(720).optional(),
   /** 界面主题：soft=柔和无框（默认）/ classic=旧版条框观感。 */
   theme: z.enum(["soft", "classic"]).optional(),
   /** 右侧会话栏模式：docked=常驻 / collapsed=收起成图标条 / float=小窗化浮动卡片。 */
@@ -535,10 +568,22 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: BrowserTabIdSchema,
     sensitive: true,
   },
+  "browser:closeSessionTabs": {
+    domain: "browser",
+    method: "closeSessionTabs",
+    request: BrowserSessionIdSchema,
+    sensitive: true,
+  },
   "browser:selectTab": {
     domain: "browser",
     method: "selectTab",
     request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:resolveFavicon": {
+    domain: "browser",
+    method: "resolveFavicon",
+    request: BrowserResolveFaviconSchema,
     sensitive: true,
   },
   "browser:listTabs": {
@@ -733,10 +778,47 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: BrowserTabRefSchema,
     sensitive: true,
   },
+  "browser:setDevToolsPanel": {
+    domain: "browser",
+    method: "setDevToolsPanel",
+    request: BrowserDevToolsPanelSchema,
+    sensitive: true,
+  },
+  "browser:toggleDevTools": {
+    domain: "browser",
+    method: "toggleDevTools",
+    request: BrowserDevToolsSchema,
+    sensitive: true,
+  },
+  "browser:listExtensions": {
+    domain: "browser",
+    method: "listExtensions",
+    request: null,
+    sensitive: true,
+  },
+  "browser:installExtension": {
+    domain: "browser",
+    method: "installExtension",
+    request: BrowserInstallExtensionSchema,
+    sensitive: true,
+  },
+  "browser:removeExtension": {
+    domain: "browser",
+    method: "removeExtension",
+    request: z.object({ id: z.string().min(1).max(64) }),
+    sensitive: true,
+  },
   "browser:history": {
     domain: "browser",
     method: "history",
     request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  /** 删除选中的全局历史条目（urls 为 list() 里的 url；批量、幂等）。 */
+  "browser:historyRemove": {
+    domain: "browser",
+    method: "historyRemove",
+    request: z.object({ urls: z.array(z.string().min(1).max(4096)).min(1).max(500) }),
     sensitive: true,
   },
   "browser:downloads": {
@@ -796,7 +878,7 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
   "chat:newSession": {
     domain: "chat",
     method: "newSession",
-    request: null,
+    request: NewSessionSchema,
     sensitive: true,
   },
   "chat:switchSession": {
@@ -823,10 +905,30 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: WorkspaceCreateSchema,
     sensitive: true,
   },
+  "workspace:bindSession": {
+    domain: "workspace",
+    method: "bindSession",
+    request: BindSessionWorkspaceSchema,
+    sensitive: true,
+  },
   "workspace:select": {
     domain: "workspace",
     method: "select",
     request: WorkspaceIdSchema,
+    sensitive: true,
+  },
+  /** 重命名工作区（仅改显示名，不动磁盘目录）。 */
+  "workspace:rename": {
+    domain: "workspace",
+    method: "rename",
+    request: z.object({ id: z.string().min(1).max(128), name: z.string().min(1).max(64) }),
+    sensitive: true,
+  },
+  /** 在系统文件管理器中打开工作区根目录。 */
+  "workspace:openFolder": {
+    domain: "workspace",
+    method: "openFolder",
+    request: z.object({ id: z.string().min(1).max(128) }),
     sensitive: true,
   },
   "workspace:remove": {
@@ -1015,6 +1117,18 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: OpenChromePopoverSchema,
     sensitive: true,
   },
+  /**
+   * 原子 toggle：已打开则关闭，否则打开。
+   * 为什么需要：浮层是独立子窗口，点击触发按钮会让子窗口失焦→触发 blur→关闭，
+   * 等渲染层 click 回调再判断「当前是否打开」时状态已被清掉 → 关→开连闪（用户 m02263）。
+   * 把判断放到主进程，避免跨窗口事件竞态。
+   */
+  "ui:togglePopover": {
+    domain: "ui",
+    method: "togglePopover",
+    request: OpenChromePopoverSchema,
+    sensitive: true,
+  },
   "ui:closePopover": {
     domain: "ui",
     method: "closePopover",
@@ -1045,6 +1159,27 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "ui",
     method: "minimizeAgentWindow",
     request: null,
+    sensitive: true,
+  },
+  /** 拖动普通态 Agent 窗口（自绘标题栏拖拽；只允许 Agent 窗口自身调用）。 */
+  "ui:dragAgentWindow": {
+    domain: "ui",
+    method: "dragAgentWindow",
+    request: MoveAgentWindowSchema,
+    sensitive: true,
+  },
+  /** 图标模式下还原小窗（点击图标按钮 → 只允许 Agent 窗口自身调用）。 */
+  "ui:restoreAgentWindow": {
+    domain: "ui",
+    method: "restoreAgentWindow",
+    request: null,
+    sensitive: true,
+  },
+  /** 图标模式下拖动小窗（只允许 Agent 窗口自身调用）。 */
+  "ui:moveAgentWindow": {
+    domain: "ui",
+    method: "moveAgentWindow",
+    request: MoveAgentWindowSchema,
     sensitive: true,
   },
 
@@ -1109,6 +1244,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: TerminalHistorySchema,
     sensitive: true,
   },
+  "terminal:diagnose": {
+    domain: "terminal",
+    method: "diagnose",
+    request: null,
+    sensitive: true,
+  },
 };
 
  /**
@@ -1140,7 +1281,12 @@ export const EVENTS = [
   "loop:fallback",
   "loop:changed",
   "chrome:popoverAction",
+  "chrome:popoverClosed",
+  "chrome:dismissPopovers",
+  "chrome:devToolsPanel",
   "chrome:agentWindowClosed",
+  "chrome:agentWindowIconMode",
+  "chrome:agentWindowTransition",
   "chat:compacted",
 ] as const;
 

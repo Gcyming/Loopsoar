@@ -84,7 +84,9 @@ export function usePopover(id: string, open: boolean, setOpen: (next: boolean) =
     if (!open) return;
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest("[data-popover],[data-popover-trigger]")) return;
+      const inside = target?.closest("[data-popover],[data-popover-trigger]");
+      // 防御：html/body 若被误打 data-popover（浮层窗口标记泄漏），不能让整页都算「浮层内部」。
+      if (inside && inside !== document.documentElement && inside !== document.body) return;
       // 注意：这里不能 preventDefault/stopPropagation —— 点击要透传给目标元素，
       // 只负责关闭浮层，否则会吞掉用户的第一次点击。
       setOpen(false);
@@ -93,9 +95,12 @@ export function usePopover(id: string, open: boolean, setOpen: (next: boolean) =
       if (event.key === "Escape") setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
+    // 兼容不派发 PointerEvent 的环境（WebView/远程桌面注入等）：mousedown 再兜一层。
+    document.addEventListener("mousedown", onPointerDown as unknown as (event: MouseEvent) => void, true);
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("mousedown", onPointerDown as unknown as (event: MouseEvent) => void, true);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open, setOpen]);

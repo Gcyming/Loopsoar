@@ -20,14 +20,14 @@ import {
   createWebContentsViewAdapter,
   type WebContentsViewLike,
 } from "../browserAdapter/backends/webContentsView.js";
-import type { BrowserAdapter, BrowserSnapshot } from "../browserAdapter/types.js";
+import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../browserAdapter/types.js";
 import { sanitizeBrowserState, type PersistedBrowserState, type PersistedBrowserTab } from "./browserSessionState.js";
 import { easeCubicBezier } from "./agentWindow.js";
 
 /** 侧栏展开/收起动画时长：与 UI 侧栏 DOM 过渡同一条 cubic-bezier(0.2,0,0.2,1) 曲线（单产地在 agentWindow.easeCubicBezier）。 */
 export const SIDEBAR_ANIMATION_MS = 320;
-/** 动画帧间隔（约 60fps）。 */
-export const SIDEBAR_ANIMATION_TICK_MS = 16;
+/** 动画帧间隔（目标 120fps；实际以主进程计时器为准，按时间插值保证总时长固定）。 */
+export const SIDEBAR_ANIMATION_TICK_MS = 8;
 
 export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
 
@@ -59,6 +59,16 @@ export interface BrowserHostDeps {
   onVisited?: (visit: BrowserVisit) => void;
   /** 页面标题变化：壳层用它刷新全局历史里同 URL 条目的标题（不新增访问）。 */
   onTitleChanged?: (url: string, title: string) => void;
+  /** 页面图标抓取（主进程实现：URL → data URL；缺省不抓，测试不联网）。 */
+  fetchFavicon?: (url: string) => Promise<string | null>;
+  /** 页面图标变化：壳层用它刷新全局历史里同 URL 条目的图标。 */
+  onFaviconChanged?: (url: string, favicon: string) => void;
+  /** 底部开发者工具面板：打开指定 WebContents 的调试前端（返回是否成功）。 */
+  openDevToolsPanel?: (webContents: unknown) => boolean;
+  /** 关闭底部开发者工具面板。 */
+  closeDevToolsPanel?: () => void;
+  /** 底部开发者工具面板是否已打开。 */
+  isDevToolsPanelOpen?: () => boolean;
   /** 网页请求新窗口时由宿主转为新标签。 */
   openInNewTab?: (url: string) => void;
   /** 初始会话（默认 default）。 */
@@ -78,6 +88,12 @@ export interface TabState {
   active: boolean;
   canBack: boolean;
   canForward: boolean;
+  /** 主框架加载中：渲染层显示加载页（原生视图被隐藏）。 */
+  loading: boolean;
+  /** 最近一次主框架加载失败（已过滤 ERR_ABORTED）：渲染层显示分类错误页。 */
+  loadFailure: BrowserLoadFailure | null;
+  /** 站点图标（data: URL；渲染层 CSP 只允许 self/data:）。 */
+  favicon?: string;
 }
 
 /** 一次成功访问（供壳层追加「全局历史」；与标签内部后退/前进栈无关）。 */
@@ -104,6 +120,16 @@ interface TabEntry {
    * 窗口会返回 false（旧实现静默 no-op）→ applyLayout 发现未挂载时补挂，页面才会真正显示。
    */
   attached: boolean;
+  /** 页面正在加载（主框架）：为 true 时隐藏原生视图，由 DOM 加载页接管。 */
+  loading: boolean;
+  /** 最近一次 setVisible 的值：动画帧里避免对同一视图重复调用 setVisible。 */
+  lastVisible?: boolean;
+  /** 最近一次 setBounds 的矩形：几何未变时跳过 setBounds。 */
+  lastBounds?: { x: number; y: number; width: number; height: number };
+  /** 最近一次主框架加载失败（-3 ERR_ABORTED 已过滤）；非空时隐藏原生视图、DOM 错误页接管。 */
+  loadFailure: BrowserLoadFailure | null;
+  /** 站点图标（data: URL，来自 page-favicon-updated）。 */
+  favicon?: string;
 }
 
 interface SessionGroup {
@@ -148,6 +174,16 @@ export class BrowserHost {
     return `tab-${this.seq}`;
   }
 
+  /** 指定 WebContents 是否属于本宿主的浏览器标签（浏览器页 preload 的 IPC 来源校验用）。 */
+  hasWebContents(webContentsId: number): boolean {
+    for (const group of this.groups.values()) {
+      for (const entry of group.tabs.values()) {
+        if (entry.view.webContents.id === webContentsId) return true;
+      }
+    }
+    return false;
+  }
+
   /** 当前可见会话（UI 的"文件夹"）。 */
   currentSessionId(): string {
     return this.activeSession;
@@ -165,9 +201,22 @@ export class BrowserHost {
     const view = this.deps.createView();
     const attached = this.tryAttach(view);
     const id = this.nextId();
+    /** 事件回调可能早于 entry 创建（loadURL 前的同步事件），用闭包引用兜底。 */
+    let entryRef: TabEntry | null = null;
     // 网页内点击/重定向/SPA 路由：同步地址、标题与历史栈，让地址栏与网页始终一致。
     const adapter = createWebContentsViewAdapter({
       view,
+      onDevToolsRequest: (): void => {
+        this.toggleDevTools(id, sessionId);
+      },
+      fetchFavicon: this.deps.fetchFavicon,
+      onFavicon: (dataUrl: string): void => {
+        const entry = entryRef ?? this.group(sessionId).tabs.get(id);
+        if (!entry || entry.favicon === dataUrl) return;
+        entry.favicon = dataUrl;
+        this.emitTabs(sessionId);
+        if (entry.url) this.deps.onFaviconChanged?.(entry.url, dataUrl);
+      },
       onNavigate: (url: string): void => {
         const entry = this.group(sessionId).tabs.get(id);
         if (!entry || entry.navigating || !url || entry.url === url) return;
@@ -192,8 +241,44 @@ export class BrowserHost {
         if (entry.url) this.deps.onTitleChanged?.(entry.url, next);
         this.emitTabs(sessionId);
       },
+      // 加载中/失败：渲染层据此显示「加载页 / 分类错误页」（原生视图在 applyLayout 里被隐藏）。
+      onLoadStart: (): void => {
+        const entry = entryRef;
+        if (!entry || entry.loading) return;
+        entry.loading = true;
+        entry.loadFailure = null;
+        this.emitTabs(sessionId);
+      },
+      onLoadEnd: (): void => {
+        const entry = entryRef;
+        if (!entry || !entry.loading) return;
+        entry.loading = false;
+        this.emitTabs(sessionId);
+      },
+      onLoadFailure: (failure: BrowserLoadFailure): void => {
+        const entry = entryRef;
+        if (!entry) return;
+        entry.loading = false;
+        entry.loadFailure = failure;
+        // 失败也把地址栏落到「尝试访问的 URL」：用户能看到自己打错/失败的地址，
+        // 且地址栏由此恢复为无功能放大镜（不再显示可切换的搜索引擎图标）。
+        if (failure.url && entry.url !== failure.url) entry.url = failure.url;
+        if (!entry.title || entry.title === "新标签页") entry.title = this.hostnameOf(failure.url);
+        this.emitTabs(sessionId);
+      },
     });
-    const entry: TabEntry = { view, adapter, url: "", title: "新标签页", history: [], index: -1, attached };
+    const entry: TabEntry = {
+      view,
+      adapter,
+      url: "",
+      title: "新标签页",
+      history: [],
+      index: -1,
+      attached,
+      loading: false,
+      loadFailure: null,
+    };
+    entryRef = entry;
     const group = this.group(sessionId);
     group.tabs.set(id, entry);
     // 新标签必须立即成为该会话的活动标签
@@ -226,6 +311,7 @@ export class BrowserHost {
       return;
     }
     const from = this.sidebarWidth;
+    const startedAt = Date.now();
     const totalFrames = Math.max(1, Math.round(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
     let frame = 0;
     const setIntervalImpl =
@@ -233,9 +319,13 @@ export class BrowserHost {
       ((callback: () => void, ms: number): unknown => setInterval(callback, ms));
     this.sidebarAnimation = setIntervalImpl(() => {
       frame += 1;
-      const linear = Math.min(1, frame / totalFrames);
+      // 按真实时间插值，保证 320ms 总时长；同时用帧数兜底（测试/被系统合并时也能推进）。
+      const linear = Math.min(
+        1,
+        Math.max((Date.now() - startedAt) / SIDEBAR_ANIMATION_MS, frame / totalFrames),
+      );
       this.sidebarWidth = from + (target - from) * easeCubicBezier(linear);
-      this.applyLayout();
+      this.applyLayout(true);
       if (linear >= 1) {
         this.cancelSidebarAnimation();
         // 最后一帧对齐精确目标值（插值在 1 处应已相等，这里防御浮点误差）
@@ -342,7 +432,11 @@ export class BrowserHost {
     }
   }
 
-  private applyLayout(): void {
+  /**
+   * @param activeOnly 动画帧只更新「当前会话的当前标签」：其余标签的视图是隐藏的，
+   *   每帧对它们 setBounds/setVisible 纯属浪费，正是侧栏逐帧动画在有网页时的卡顿来源。
+   */
+  private applyLayout(activeOnly = false): void {
     // 几何单一产地：侧栏宽度与底部 DOM 面板（全宽终端）高度都作为 options 传入，
     // 原生视图让出这两块区域，否则会被 DOM 盖住/盖住 DOM。
     const bounds = computeBrowserViewBounds(this.deps.getWindowSize(), LAYOUT, {
@@ -350,16 +444,37 @@ export class BrowserHost {
       bottomInset: this.bottomInset,
     });
     for (const [sessionId, group] of this.groups) {
+      if (activeOnly && sessionId !== this.activeSession) continue;
       for (const [id, entry] of group.tabs) {
+        if (activeOnly && id !== group.activeId) continue;
         // 启动恢复先于窗口创建：createTab 时 attachView 拿不到主窗口（旧实现静默 no-op），
         // 窗口就绪后必须在这里补挂，否则恢复的页面永远不会出现在窗口里（刷新也无效）。
         // 幂等：attached 为 true 时不重复 addChildView。
         if (!entry.attached) entry.attached = this.tryAttach(entry.view);
-        entry.view.setBounds(bounds);
+        const last = entry.lastBounds;
+        if (
+          !last ||
+          last.x !== bounds.x ||
+          last.y !== bounds.y ||
+          last.width !== bounds.width ||
+          last.height !== bounds.height
+        ) {
+          entry.view.setBounds(bounds);
+          entry.lastBounds = bounds;
+        }
         // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
+        // 加载中/失败也不显示：让 DOM 的加载页/错误页露出来（原生视图只能显示 Chromium 白屏/默认错误页）
         const visible =
-          sessionId === this.activeSession && id === group.activeId && !this.overlayOpen && Boolean(entry.url);
-        entry.view.setVisible?.(visible);
+          sessionId === this.activeSession &&
+          id === group.activeId &&
+          !this.overlayOpen &&
+          Boolean(entry.url) &&
+          !entry.loading &&
+          entry.loadFailure === null;
+        if (entry.lastVisible !== visible) {
+          entry.view.setVisible?.(visible);
+          entry.lastVisible = visible;
+        }
       }
     }
   }
@@ -382,7 +497,17 @@ export class BrowserHost {
       active: id === group.activeId,
       canBack: entry.index > 0,
       canForward: entry.index >= 0 && entry.index < entry.history.length - 1,
+      loading: entry.loading,
+      loadFailure: entry.loadFailure,
+      favicon: entry.favicon,
     }));
+  }
+
+  /** E2E 探针：在活动标签页执行一段 JS（真实网页动作验证，如商店安装按钮点击）。 */
+  async executeInActiveTab(code: string): Promise<unknown> {
+    const entry = this.activeEntry();
+    if (!entry) throw new Error("无活动标签页");
+    return entry.adapter.executeJs(code);
   }
 
   /** 指定标签（缺省=该会话语种的活动标签）。 */
@@ -411,6 +536,22 @@ export class BrowserHost {
     if (entry.index >= entry.history.length - 1) return { ok: false, error: "没有可前进的历史" };
     entry.index += 1;
     return this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
+  }
+
+  /**
+   * 开发者工具：停靠到底部面板（与终端同区域），不再开独立窗口。
+   * 面板的几何/开合由 electronBrowser 的 BrowserDevToolsPanel 管理。
+   */
+  toggleDevTools(tabId?: string, sessionId?: string): { ok: boolean; open?: boolean; error?: string } {
+    if (this.deps.isDevToolsPanelOpen?.()) {
+      this.deps.closeDevToolsPanel?.();
+      return { ok: true, open: false };
+    }
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return { ok: false, error: "无标签页" };
+    if (!this.deps.openDevToolsPanel) return { ok: false, error: "底部调试面板未装配" };
+    const ok = this.deps.openDevToolsPanel(resolved[1].view.webContents as unknown);
+    return ok ? { ok: true, open: true } : { ok: false, error: "无法打开开发者工具" };
   }
 
   async reload(tabId?: string, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
@@ -554,6 +695,19 @@ export class BrowserHost {
     }
     this.emitTabs(sessionId ?? this.activeSession);
     return true;
+  }
+
+  /**
+   * 删除会话时关闭它名下的全部网页（一个会话可以有多张网页）。
+   * 对应关系：工作区 > 会话 > 网页——网页需要会话，关网页不动会话；删会话才关网页。
+   */
+  async closeSessionTabs(sessionId: string): Promise<number> {
+    const group = this.groups.get(sessionId);
+    if (!group) return 0;
+    const ids = [...group.tabs.keys()];
+    for (const id of ids) await this.closeTab(id, sessionId);
+    this.groups.delete(sessionId);
+    return ids.length;
   }
 
   async closeAll(): Promise<void> {
