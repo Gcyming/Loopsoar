@@ -1885,7 +1885,7 @@
   1. **浮层去阴影 + 开关可再点收起**：`sidebarSessionOverlay`/`miniSessionOverlay` 删除 `boxShadow: SHADOW.float`（保留边框）；浮层 `top` 由 0 改为 52，`sidebarHeader` 加 `position:relative; zIndex:45` 压住浮层——开关永远可点，再点即收起（`onToggleSession` 本就是 toggle，此前只是被浮层挡住）。
   2. **浮层开关二次点击收起**：Vibecoding 的模型胶囊/「+」/工作区/推理四个触发器此前没加 `data-popover-trigger`，`usePopover` 的「点外部」判定先把菜单关了，随后 click 又把 open 置 true（观感像「重复展开」）。统一补 `data-popover-trigger`（Composer 早已如此）。
   3. **推理等级英文**：`effortLabel` 不再做中英映射，直接返回模型声明的档位名（`low/medium/high/max…`），关闭态 `off`；两处菜单的「关闭」项同步用 `effortLabel("")`。菜单标题仍走 i18n（「推理强度 / Reasoning effort」）。
-  4. **收起态竖条（只动会话按钮，不动展开按钮）**：用户复核「展开列表的按钮不用改，只改下面的会话按钮」→ `.sidebar-toggle` 保持原样（品牌底 + hover 高亮）；`.rail-item` 去掉边框与底色，仅 hover 高亮、选中 `rgba(200,118,60,0.16)`；新增 `.sidebar-rail-separator`（26×1，`linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent)`，`top:48`）；竖条 `padding-top` 由 44 改 56 —— 竖条原点在标题栏下方（y=40），56+40=96 与网页内容区上边界（TITLE_BAR 40 + TOP_BAR 48 + INSET 8）齐平。
+  4. **收起态竖条（只动会话按钮，不动展开按钮）**：用户复核「展开列表的按钮不用改，只改下面的会话按钮」→ `.sidebar-toggle` 保持原样（品牌底 + hover 高亮）；`.rail-item` 去掉边框与底色，仅 hover 高亮、选中 `rgba(200,118,60,0.16)`；新增 `.sidebar-rail-separator`（26×1，`linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent)`，`top:56`）——**分隔线上边界**与网页内容区上边界（窗口 y=96 = TITLE_BAR 40 + TOP_BAR 48 + INSET 8；竖条原点在标题栏下方 y=40）齐平；竖条 `padding-top` 改 66，会话按钮从分隔线下方 9px 开始（实测 `sepTop=96`、`firstItemTop=106`）。
   5. **浏览器控制入口搬家**：从 Composer「+」菜单与 Vibecoding「+」菜单移除，改为工作区选择同行右侧的胶囊（`composer-browser-chip` / `vibe-browser-chip`）：开启时品牌色底+描边，关闭时中性透明，点击即切换。
 - **验证（真机 E2E，逐项测量）**：
   - 会话列表：`panelShadow="none"`、`toggleHittable=true`、`closedBySameButton=true`、`reopened=true`（`e2e-evidence/p2-fix-session-panel.png`）。

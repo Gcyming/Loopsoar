@@ -771,9 +771,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    // 顶部留到「网页内容区上边界」：窗口坐标 96 = 标题栏 40 + 工具条 48 + 网页留白 8；
-    // 竖条自身从标题栏下方（y=40）开始，所以这里只需要 96 - 40 = 56px（用户 2026-11-14：会话按钮与网页顶边齐平）。
-    padding: "56px 0 8px",
+    // 分隔线上边界与网页内容区上边界齐平：窗口 y=96（标题栏 40 + 工具条 48 + 网页留白 8）→ 竖条内 56px；
+    // 会话按钮从分隔线下方 9px 开始（56 + 1 + 9 = 66），避免与分隔线贴在一起（用户 2026-11-14）。
+    padding: "66px 0 8px",
     boxSizing: "border-box",
     gap: 4,
   },
