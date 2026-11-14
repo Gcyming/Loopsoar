@@ -94,4 +94,17 @@
 
 **验证**：typecheck 5/5、vitest **185 文件 / 1585 tests**、gen/check 逐字节一致、build 5/5；真机 E2E `E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}`，向导卡片 `70/70` 不重叠；证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`。
 
+## 十、Slice H：Agent 工作区（折叠标签组）+ 页面接管锁（用户 m01270）
+
+用户要求（要点）：「一旦 agent 开始操作浏览器，那么它操作的那个网页（包括后面新建的）就直接与该会话的 agent 深度绑定，成为一个整体……在顶部导航栏出现一个『折叠』标签页，这个折叠标签页视作 agent 工作区，点击后向下展开折叠标签，内部是折叠与对应 agent 绑定后、由 agent 主导操作/启动的网页。用户想进入哪个网页，点击对应网页即可。但是这时候用户进入后无法对 agent 操作的网页进行操作，除非终止 agent 的运行，即停止会话。」跨会话点网页的行为：**直接切到那个会话**（agent 与网页成组一起切）。
+
+**设计（不新增第二套归属）**：会话 ↔ 标签组已由 `BrowserHost.groups` 承担（ADR-0104）。本片只做：
+1. **标记**：`TabState/TabEntry` 增 `agentBound`——Agent 工具发起的导航/新建置 true（用户手动打开为 false）；标签栏把 bound 标签收进「Agent 工作区」折叠组，普通区只显示 user 标签。
+2. **接管锁**：会话 busy 且存在 bound 标签时，壳层向该会话每个标签注入 closed-shadow 遮罩（`buildUserLockScript`）——只拦截 `isTrusted === true` 的真实输入（指针/滚轮/键盘/右键/拖拽），放行 Agent 合成事件；停止会话或切走后解锁；锁定期内新建标签自动补锁。
+
+**验收**：单测覆盖 agentBound 标记、锁脚本注入/解绑/新标签补锁、splitAgentTabs、轮次钩子；真机验证折叠组展开面板与运行期遮罩、停止后消失。
+
+**实现修正（落地时）**：接管锁改由壳层按轮次下发（`onTurnStarted/onTurnSettled`），不再依赖渲染层 busy——实测 UI busy 与本轮生命周期不同步，且后台会话/独立小窗没有 UI busy。只锁 `agentBound` 标签；命中验证对自家锁宿主开例外。见 ADR-0105。
+
+
 

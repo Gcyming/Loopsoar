@@ -165,7 +165,9 @@ const styles: Record<string, React.CSSProperties> = {
   titleBarMain: { borderBottom: "none" },
   /** Agent 小窗：标题栏与下方会话区需要一层极轻分隔（软主题下 border 已透明）。 */
   titleBarAgent: { borderBottom: `1px solid ${BRAND.border}` },
-  tabsSlot: { display: "flex", alignItems: "stretch", minWidth: 0, maxWidth: "76%", overflow: "hidden" },
+  // overflow 必须可见：Agent 工作区的展开列表挂在标签条下方（绝对定位），
+  // 这里一旦裁切，面板只会露出标题栏那一条。标签自身的超宽裁切交给 BrowserTabs 的 strip。
+  tabsSlot: { display: "flex", alignItems: "stretch", minWidth: 0, maxWidth: "76%", overflow: "visible" },
   tabsLeading: { display: "flex", alignItems: "stretch", flexShrink: 0, ...NO_DRAG_REGION },
   titleDrag: {
     display: "flex",

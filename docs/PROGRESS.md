@@ -1043,3 +1043,13 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E（布局）**：`E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}` —— 向导里选「独立小窗」已落库，Agent 打开网页**零询问**、布局只应用一次；向导第 2 步 `cardHeight=70/70`、`aria-pressed` 正确。证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`；决策 ADR-0102 / ADR-0103。
 
 
+
+## 二·四十六、2026-11-14 Slice H（Agent 工作区折叠标签组 + 运行期接管锁）
+
+用户 m01270：「一旦 agent 开始操作浏览器，那么它操作的那个网页（包括后面新建的）就直接与该会话的 agent 深度绑定……在顶部导航栏出现一个『折叠』标签页……点击后向下展开……用户想进入哪个网页，点击对应网页即可。但是这时候用户进入后无法对 agent 操作的网页进行操作，除非终止 agent 的运行，即停止会话。」
+
+- **绑定标记**：`TabState/TabEntry.agentBound`；Agent 工具以 origin=`agent` 导航/新建的标签置 true（用户之后在同一标签操作不撤销）；用户手动打开为 false。
+- **折叠工作区**：标签栏最前面渲染「Agent 工作区 · n 个网页」chip（普通区只留用户标签），点开在 chip 下方展开面板（图标/标题/活动勾），点击切到该页；打开面板时用 `browser:setOverlay` 隐藏原生网页视图；切会话/切标签/绑定清空自动收起。
+- **接管锁（改由壳层按轮次下发）**：`ChatDeps.onTurnStarted/onTurnSettled`——`chat:stream` 一开始就锁、`.finally` 解锁（异常/用户停止都覆盖）。页面内是 closed-shadow 遮罩，**只拦 isTrusted 真实输入**，放行合成事件；只锁 `agentBound` 标签；新标签/导航完成在 `emitTabs` 补注入（每文档最多 3 次）。命中验证对自家锁宿主开例外。
+- **连带修复（关键）**：「空白标签页 = 草稿」的判定会把 Agent 刚新建、url 尚未回填的页面当成空白页，把正在跑的会话重置成草稿（表现为「Agent 一开始操作，对话就没了」）。现在未知标签 / 有 URL / `agentBound` 一律不重置。
+- **验证**：typecheck 5/5、vitest **187 文件 / 1604 tests**、gen/check 逐字节一致、build 5/5、bundle 通过；真机 chip + 展开面板（`e2e-evidence/p2-agent-workspace.png`）；锁的像素证据 **27 → 19 → 27**。ADR-0105。

@@ -411,7 +411,10 @@ ${locateJs(resolved)}
   const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max(window.innerHeight - 1, 0));
   if (typeof document.elementFromPoint === 'function') {
     const hit = document.elementFromPoint(cx, cy);
-    if (hit && hit !== el && !el.contains(hit)) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(hit) };
+    // 接管锁浮层是本应用自己画的、Agent 运行期间常驻：它挡住的点击仍然是 Agent 发起的，
+    // 不能判成第三方遮罩 —— 否则锁一打开 Agent 就再也点不动页面。
+    const ownLock = Boolean(hit && (hit.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || hit.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)})));
+    if (hit && hit !== el && !el.contains(hit) && !ownLock) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(hit) };
   }
   el.click();
   return { ok: true };
@@ -492,6 +495,111 @@ ${locateJs(resolved)}
 
 /** 让光标动画走完再执行动作（毫秒）：既看得见，又不至于拖慢长任务。 */
 export const CURSOR_LEAD_MS = 170;
+
+/**
+ * 接管锁浮层的宿主属性：注入到页面 DOM 上时唯一可识别的标记
+ * （closed shadow root 内部页面拿不到，宿主节点是唯一可检测/可清理的锚点）。
+ */
+export const USER_LOCK_HOST_ATTR = "data-loopsoar-lock";
+
+/** 浮层宿主 id（固定值：解锁时即使 window 状态丢了也能按 id 清掉残留节点）。 */
+const USER_LOCK_HOST_ID = "loopsoar-user-lock";
+
+/** 浮层拦截的事件类型：覆盖鼠标/滚轮/键盘/输入/拖拽，全部在 capture 阶段抢先处理。 */
+const USER_LOCK_EVENTS = [
+  "pointerdown",
+  "pointerup",
+  "pointermove",
+  "click",
+  "wheel",
+  "contextmenu",
+  "keydown",
+  "keyup",
+  "beforeinput",
+  "dragstart",
+];
+
+/** 浮层文案的 HTML 转义（label 来自 i18n，仍按不可信输入处理：它最终进 innerHTML）。 */
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * 页面内公共前导：解绑旧监听 + 删除旧宿主。
+ * 为什么先清旧的：Agent 反复锁定/解锁、或页面把浮层节点搬走时，
+ * 只有「先删再建」才能保证重复调用幂等（不会叠加多层遮罩、不会泄漏监听）。
+ */
+function userLockPreambleJs(): string {
+  return `  const KEY = '__loopsoarUserLock';
+  const HOST_ID = ${JSON.stringify(USER_LOCK_HOST_ID)};
+  const ATTR = ${JSON.stringify(USER_LOCK_HOST_ATTR)};
+  const EVENTS = ${JSON.stringify(USER_LOCK_EVENTS)};
+  const doc = document;
+  const prev = window[KEY];
+  if (prev && typeof prev.handler === 'function') {
+    for (let i = 0; i < EVENTS.length; i += 1) {
+      try { window.removeEventListener(EVENTS[i], prev.handler, true); } catch (err) {}
+    }
+  }
+  try { delete window[KEY]; } catch (err) { window[KEY] = null; }
+  // 宿主节点可能因页面重渲染或异常中断残留：按 id 或属性都能找到并清掉。
+  const stale = doc.getElementById(HOST_ID) || doc.querySelector('[' + ATTR + ']');
+  if (stale && stale.parentNode) stale.parentNode.removeChild(stale);`;
+}
+
+/**
+ * Agent 接管锁脚本（会话运行期间浮在当前网页上，阻止用户操作该页面）。
+ *
+ * 关键约束：只拦 **isTrusted === true** 的真实用户事件。
+ *   · 合成事件（el.click() / dispatchEvent）的 isTrusted 一定是 false：
+ *     它们同样会经过捕获阶段，若无条件拦截，Agent 会把自己的动作一起锁死；
+ *   · 监听挂在 window 的 capture 阶段：比页面自己的 document 监听更早，
+ *     页面里注册的 handler 收不到事件（stopImmediatePropagation 连同一节点上的后续监听也停掉）。
+ *
+ * locked=false 时只做清理（解绑 + 删宿主），不建浮层：解锁必须能救回一个「锁坏了」的页面。
+ */
+export function buildUserLockScript(locked: boolean, label: string): string {
+  if (!locked) {
+    return `(() => {
+${userLockPreambleJs()}
+  return { ok: true, locked: false, removed: Boolean(prev || stale) };
+})()`;
+  }
+  // 文案先转义再放进 innerHTML：closed shadow root 里没有其它注入面，转义后即可安全插入。
+  const safeLabel = escapeHtmlText(label);
+  return `(() => {
+${userLockPreambleJs()}
+  const host = doc.createElement('div');
+  host.id = HOST_ID;
+  host.setAttribute(ATTR, 'active');
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:auto;';
+  const root = typeof host.attachShadow === 'function' ? host.attachShadow({ mode: 'closed' }) : host;
+  const mask = doc.createElement('div');
+  mask.style.cssText = 'position:absolute;inset:0;background:rgba(10,12,16,.55);pointer-events:auto;display:flex;align-items:flex-start;justify-content:center;';
+  const hint = doc.createElement('div');
+  hint.style.cssText = 'margin-top:72px;max-width:min(560px,86vw);padding:10px 16px;border-radius:999px;background:rgba(24,26,32,.92);color:#f7f2e8;font:500 13px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.4);text-align:center;';
+  hint.innerHTML = ${JSON.stringify(safeLabel)};
+  mask.appendChild(hint);
+  root.appendChild(mask);
+  (doc.documentElement || doc.body || doc).appendChild(host);
+  const handler = (event) => {
+    if (!event || event.isTrusted !== true) return;
+    try { event.preventDefault(); } catch (err) {}
+    try { event.stopImmediatePropagation(); } catch (err) {}
+  };
+  for (let i = 0; i < EVENTS.length; i += 1) {
+    // capture=true：抢在页面自身的监听之前把真实用户输入拦下。
+    window.addEventListener(EVENTS[i], handler, true);
+  }
+  window[KEY] = { host: host, handler: handler };
+  return { ok: true, locked: true };
+})()`;
+}
 
 /** 把目标元素滚进视野（截图前定位用）。 */
 export function buildScrollIntoViewScript(resolved: ResolvedTarget): string {

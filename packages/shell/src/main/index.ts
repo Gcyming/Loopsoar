@@ -1860,6 +1860,15 @@ app.whenReady().then(async () => {
    *   3. 同一会话已经应用过同一布局 → 不重复推（避免每次导航都动窗口）。
    */
   const appliedLayoutBySession = new Map<string, "docked" | "agentWindow" | "keep">();
+  /**
+   * 接管锁提示文案：主进程拿不到渲染层词典，这里按偏好语言保留一份
+   * （与 UI 的 browser.agentLockedHint 同义；改文案时两处一起改）。
+   */
+  const userLockLabel = (): string =>
+    loadPreferences(dirs.configDir).language.startsWith("en")
+      ? "The agent is operating this page · stop the session to take over"
+      : "Agent 正在操作此页面 · 停止会话后可自行操作";
+
   const beforeOpenBrowserPage = async (input: { sessionId?: string; url: string }) => {
     // 没有会话（草稿态）就读不到 browserControl；且此时 browser_* 工具本就不可见，直接放行。
     const sessionId = input.sessionId;
@@ -1968,6 +1977,19 @@ app.whenReady().then(async () => {
     getModelInfo: () => {
       const active = providers.active();
       return active ? { provider: active.provider, model: active.model } : undefined;
+    },
+    /**
+     * 「Agent 工作区」接管锁（Slice H）：一轮对话期间锁住该会话里 Agent 绑定/操作过的网页，
+     * 结束或用户停止后解锁。锁由壳层下发，因此后台会话、独立小窗、无窗口都成立。
+     */
+    onTurnStarted: (sessionId) => {
+      if (!browserHost) return;
+      // 没有开启浏览器控制的会话本来就没有 Agent 网页：锁了只会挡住用户自己开的页面。
+      if (sessions.get(sessionId)?.browserControl !== true) return;
+      void browserHost.lockForSession(sessionId, true, userLockLabel()).catch(() => undefined);
+    },
+    onTurnSettled: (sessionId) => {
+      void browserHost?.lockForSession(sessionId, false).catch(() => undefined);
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
     onSessionOpened: async (sessionId, requestedWorkspaceId) => {

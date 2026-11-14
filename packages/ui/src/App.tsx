@@ -30,7 +30,8 @@ import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 const TerminalPanel = React.lazy(() => import("./TerminalPanel.js"));
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
-import { setLanguage, getLanguage, t } from "./i18n.js";
+import { setLanguage, getLanguage, t, useT } from "./i18n.js";
+import { splitAgentTabs } from "./agentWorkspace.js";
 import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
 import AskUserDialog from "./AskUserDialog.js";
 const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
@@ -299,6 +300,8 @@ export default function App(): React.JSX.Element {
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => !isOnboardingDone());
   const [tabs, setTabs] = useState<TabState[]>([]);
+  /** Agent 工作区（折叠标签组）是否展开：展开时隐藏原生网页视图，否则列表面板会被网页盖住。 */
+  const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
   /** 新标签页/整页会话处于 Vibecoding 状态（侧栏会话按钮据此变成「会话列表」按钮）。 */
   const [vibeModeActive, setVibeModeActive] = useState(false);
   /** 用户是否刚在会话列表里主动选过会话：直接回话时才复用，否则每次直接回话都新建会话。 */
@@ -840,9 +843,21 @@ export default function App(): React.JSX.Element {
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleDevtools]);
 
+  const tr = useT();
+  // Agent 工作区：Agent 打开/导航过的标签折叠进一个 chip，其余仍是普通标签条
+  // （分组规则在 agentWorkspace.ts，纯函数可单测；这里只负责渲染与副作用）。
+  const { user: userTabs, bound: boundTabs } = useMemo(() => splitAgentTabs(tabs), [tabs]);
+  // 工作区里最后一个网页也没了（Agent 关页/会话切走）：折叠面板不该悬空留着。
+  useEffect(() => {
+    if (boundTabs.length === 0) setWorkspaceExpanded(false);
+  }, [boundTabs.length]);
+
   const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
   const activeTabIdRef = React.useRef<string | null>(null);
   activeTabIdRef.current = activeTabId;
+  /** 最新标签列表的同步镜像：effect 里要读「这一刻」的标签，state 可能晚一帧。 */
+  const tabsRef = React.useRef<TabState[]>(tabs);
+  tabsRef.current = tabs;
 
   /**
    * Agent 浏览器活动（会话隔离）：只让「当前会话」的浏览器显示呼吸灯；
@@ -887,8 +902,13 @@ export default function App(): React.JSX.Element {
     if (!activeTabId) return;
     const mapped = tabSessionRef.current.get(activeTabId) ?? null;
     if (mapped === (sessionIdRef.current || null)) return;
-    const tab = tabs.find((item) => item.id === activeTabId) ?? null;
-    if (!mapped && tab?.url) return;
+    // tabs 状态可能比 activeTabId 晚一帧：查不到这个 id 时**什么也不做**。
+    // 宁可保留现状，也不能把「未知标签」当成「空白新标签」把会话重置成草稿——
+    // 那会在 Agent 刚导航完成的一瞬间清空对话，看起来像两个会话串了。
+    const tab = tabsRef.current.find((item) => item.id === activeTabId) ?? null;
+    // 未知标签（state 晚一帧）与带 URL / Agent 绑定的标签都保持现状：
+    // Agent 新建的页面在「还没开始加载」的一瞬 url 为空，若按空白页处理会把正在跑的对话清空。
+    if (!mapped && (tab === null || tab.url || tab.agentBound === true)) return;
     if (!mapped) {
       sessionIdRef.current = "";
       setCurrentSession(null);
@@ -1637,6 +1657,7 @@ export default function App(): React.JSX.Element {
       if (!api) return;
       // 切标签属于切换界面：所有已展开列表/浮层先收起（用户 m02115 全局规则）。
       dismissAllPopovers();
+      setWorkspaceExpanded(false);
       void api.browser.selectTab({ tabId }).then(() => {
         void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         const tab = tabs.find((t) => t.id === tabId);
@@ -1835,6 +1856,8 @@ export default function App(): React.JSX.Element {
     if (!api) return;
     // 切会话属于切换界面：先收起所有展开列表/浮层（用户 m02115 全局规则）。
     dismissAllPopovers();
+    // 工作区面板属于「上一个会话的网页」：切会话必须收起，否则点开的是别人的页面列表。
+    setWorkspaceExpanded(false);
     const previousSessionId = sessionIdRef.current;
     void api.chat.switchSession({ sessionId }).then((r) => {
       if (!r.ok) return;
@@ -1998,9 +2021,15 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!api) return;
     const overlay =
-      settingsOpen || workspacePanelOpen || snapshotData !== null || onboardingOpen || chromePage !== null;
+      settingsOpen ||
+      workspacePanelOpen ||
+      snapshotData !== null ||
+      onboardingOpen ||
+      chromePage !== null ||
+      // Agent 工作区的展开列表是 DOM 浮层：原生网页视图不隐藏就会被它盖住。
+      workspaceExpanded;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, workspaceExpanded]);
   useEffect(() => {
     return () => {
       void api?.browser.setOverlay({ open: false }).catch(() => undefined);
@@ -2164,7 +2193,15 @@ export default function App(): React.JSX.Element {
               ),
               tabs: (
                 <BrowserTabs
-                  tabs={tabs}
+                  tabs={userTabs}
+                  boundTabs={boundTabs}
+                  workspaceExpanded={workspaceExpanded}
+                  onToggleWorkspace={() => {
+                    // 展开工作区属于「切换界面」：其它已展开菜单先收起（同一时刻只留一个浮层）。
+                    dismissAllPopovers();
+                    setWorkspaceExpanded((open) => !open);
+                  }}
+                  onSelectBoundTab={selectTab}
                   onSelectTab={selectTab}
                   onCloseTab={closeTab}
                   onNewTab={newTab}

@@ -145,3 +145,111 @@ describe("BrowserHost 会话级标签", () => {
     expect(host.listTabs()).toEqual([]);
   });
 });
+
+/**
+ * Slice H：Agent 工作区（标签归属）与会话接管锁。
+ * 浏览器只验证「宿主记了什么、注入了什么」，页面内的拦截行为由 userLockScript.spec + E2E 覆盖。
+ */
+function trackScripts(view: FakeView): string[] {
+  const scripts: string[] = [];
+  const wc = view.webContents as unknown as { executeJavaScript: (code: string) => Promise<unknown> };
+  const original = wc.executeJavaScript;
+  wc.executeJavaScript = (code: string) => {
+    scripts.push(code);
+    return original.call(wc, code);
+  };
+  return scripts;
+}
+
+describe("BrowserHost Agent 工作区（Slice H）", () => {
+  it("用户自己打开的标签即使会话被锁也保持可操作（只有 Agent 绑定页被盖住）", async () => {
+    const { host, created } = makeHost("sess-a");
+    await host.navigate("https://a.example/");
+    const userView = trackScripts(created[0]);
+    await host.lockForSession("sess-a", true, "x");
+    expect(userView.some((code) => code.includes("data-loopsoar-lock"))).toBe(false);
+  });
+
+  it("agent origin 的导航/新建把目标标签标成 agentBound，user origin 不标", async () => {
+    const { host } = makeHost("sess-a");
+    await host.navigate("https://u.example/");
+    expect(host.listTabs()[0].agentBound).toBe(false);
+
+    await host.navigate("https://a.example/", undefined, "sess-a", "agent");
+    expect(host.listTabs().find((tab) => tab.url === "https://a.example/")?.agentBound).toBe(true);
+
+    // 同一标签之后被用户导航：绑定不撤销，否则页面会从折叠组里掉出去
+    await host.navigate("https://a2.example/", undefined, "sess-a", "user");
+    expect(host.listTabs().find((tab) => tab.url === "https://a2.example/")?.agentBound).toBe(true);
+
+    const created = await host.newTab("https://b.example/", "sess-a", "agent");
+    expect(host.listTabs().find((tab) => tab.id === created.tabId)?.agentBound).toBe(true);
+  });
+
+  it("lockForSession 只给 Agent 绑定标签注入锁脚本，解锁注入清理脚本", async () => {
+    const { host, created } = makeHost("sess-a");
+    await host.navigate("https://one.example/", undefined, "sess-a", "agent");
+    await host.newTab("https://two.example/", "sess-a", "agent");
+    expect(created.length).toBe(2);
+    const scripts = created.map(trackScripts);
+
+    await host.lockForSession("sess-a", true, "x");
+    for (const list of scripts) {
+      expect(list.some((code) => code.includes("data-loopsoar-lock"))).toBe(true);
+    }
+
+    for (const list of scripts) list.length = 0;
+    await host.lockForSession("sess-a", false);
+    for (const list of scripts) {
+      expect(list.some((code) => code.includes("removeChild"))).toBe(true);
+      // 解锁只清理：不能再建浮层
+      expect(list.some((code) => code.includes("attachShadow"))).toBe(false);
+    }
+  });
+
+  it("解锁状态下新建的标签不会被注入锁", async () => {
+    const { host, created } = makeHost("sess-a");
+    await host.navigate("https://one.example/", undefined, "sess-a", "agent");
+    await host.lockForSession("sess-a", true, "x");
+    await host.lockForSession("sess-a", false);
+
+    const blank = await host.newTab();
+    const fresh = trackScripts(created[created.length - 1]);
+    await host.navigate("https://three.example/", blank.tabId, "sess-a");
+    expect(fresh.some((code) => code.includes("data-loopsoar-lock"))).toBe(false);
+  });
+
+  it("会话锁定期间导航完成的标签自动补注入（不依赖显式再锁定）", async () => {
+    const { host, created } = makeHost("sess-a");
+    await host.navigate("https://one.example/", undefined, "sess-a", "agent");
+    await host.lockForSession("sess-a", true, "x");
+
+    const blank = await host.newTab(undefined, "sess-a", "agent");
+    const fresh = trackScripts(created[created.length - 1]);
+    await host.navigate("https://two.example/", blank.tabId, "sess-a", "agent");
+    expect(fresh.some((code) => code.includes("data-loopsoar-lock"))).toBe(true);
+  });
+
+  it("锁只作用于指定会话，不串到其它会话的网页", async () => {
+    const { host, created } = makeHost("sess-a");
+    await host.navigate("https://a.example/", undefined, "sess-a", "agent");
+    const scriptsA = trackScripts(created[0]);
+    await host.switchSession("sess-b");
+    await host.navigate("https://b.example/");
+    const scriptsB = trackScripts(created[1]);
+
+    await host.lockForSession("sess-a", true, "x");
+    expect(scriptsA.some((code) => code.includes("data-loopsoar-lock"))).toBe(true);
+    expect(scriptsB.some((code) => code.includes("data-loopsoar-lock"))).toBe(false);
+  });
+
+  it("没有标签的会话调用 lockForSession 不抛错（锁状态仍然记住）", async () => {
+    const { host } = makeHost("sess-a");
+    await expect(host.lockForSession("sess-empty", true, "x")).resolves.toBeUndefined();
+    // 之后该会话新建的标签仍然按锁定状态补注入
+    const blank = await host.newTab("https://late.example/", "sess-empty", "agent");
+    expect(blank.ok).toBe(true);
+    expect(host.listTabs("sess-empty")[0].agentBound).toBe(true);
+  });
+});
+

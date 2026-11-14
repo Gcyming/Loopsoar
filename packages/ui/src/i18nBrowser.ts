@@ -130,6 +130,14 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "browser.browserSettings": { zh: "设置", en: "Settings" },
   "browser.morePending": { zh: "更多（待接）", en: "More (coming soon)" },
   "browser.newTab": { zh: "新建标签页", en: "New tab" },
+
+  /* ── Agent 工作区（折叠标签组 + 运行期接管锁） ── */
+  "browser.agentWorkspace": { zh: "Agent 工作区", en: "Agent workspace" },
+  "browser.agentWorkspaceCount": { zh: "{n} 个网页", en: "{n} pages" },
+  "browser.agentWorkspaceEmpty": {
+    zh: "这个会话还没有 Agent 打开的网页",
+    en: "No agent pages in this session yet",
+  },
   "browser.tabsAria": { zh: "标签页", en: "Tabs" },
   "browser.closeTab": { zh: "关闭标签", en: "Close tab" },
   "browser.historyTitle": { zh: "历史记录（全局）", en: "History (global)" },

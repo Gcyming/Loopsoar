@@ -169,6 +169,8 @@ export interface TabState {
   loading?: boolean;
   /** 站点图标（data: URL；来自主进程 page-favicon-updated）。 */
   favicon?: string;
+  /** Agent 打开或导航过：UI 把它折叠进「Agent 工作区」而不是普通标签条。 */
+  agentBound?: boolean;
   /** 最近一次主框架加载失败（已过滤 ERR_ABORTED）。 */
   loadFailure?: {
     code: number;
@@ -818,6 +820,7 @@ export interface LoopsoarAPI {
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[] }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
+    /** Agent 工作区接管锁：locked=true 时该会话的网页只拦真实用户事件（放行 Agent 的合成事件）。 */
     setSidebarWidth(payload: { width: number; animate?: boolean }): Promise<{ width: number }>;
     /** 底部 DOM 面板（全宽终端）占用高度：原生网页视图让出，避免被遮挡。 */
     setBottomInset(payload: { bottom: number }): Promise<{ bottom: number }>;

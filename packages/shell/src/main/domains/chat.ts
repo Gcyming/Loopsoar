@@ -26,6 +26,15 @@ export interface ChatDeps extends TrustedIpcDeps {
   onSessionDeleting?: (sessionId: string) => void | Promise<void>;
   /** 会话被删除（壳层据此销毁对应标签组并切到 nextId）。 */
   onSessionDeleted?: (sessionId: string, nextSessionId: string | null) => void | Promise<void>;
+  /**
+   * 一轮对话开始 / 结束（含异常与用户停止）。
+   *
+   * 为什么放在壳层而不是渲染层：接管锁的对象是**网页**，归属会话；后台会话、独立小窗、
+   * 甚至没有窗口的时候 Agent 都可能跑起来。渲染层只知道自己那一个会话的 busy，
+   * 用它决定锁不锁会在「后台会话仍在跑」时漏锁、在「切走会话」时锁错对象。
+   */
+  onTurnStarted?: (sessionId: string) => void;
+  onTurnSettled?: (sessionId: string) => void;
 }
 
 /** 错误清洗：解开多层 JSON 转义，提取 error.message，去控制字符并截断。 */
@@ -90,7 +99,7 @@ export function flushActivePartials(save: (sessionId: string, text: string) => v
 }
 
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
-function startStream(
+export function startStream(
   deps: ChatDeps,
   payload: { message: string; sessionId?: string; mode?: "build" | "plan"; reasoningEffort?: string },
 ): { accepted: boolean; sessionId: string } {
@@ -108,6 +117,8 @@ function startStream(
   let assistantText = "";
   const modelInfo = deps.getModelInfo?.();
   activeStreams.add(sessionId);
+  // 先上锁再开跑：模型第一个工具调用到达前，网页就已经处于「Agent 操作中」状态。
+  deps.onTurnStarted?.(sessionId);
 
   void deps.chatService
     .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort }, (item) => {
@@ -172,6 +183,10 @@ function startStream(
           console.warn("[Loopsoar] 记忆汇总失败（已忽略）：", err);
         }
       }
+    })
+    .finally(() => {
+      // 正常结束 / 异常 / 用户停止都会走到这里：解锁绝不能只挂在成功分支上。
+      deps.onTurnSettled?.(sessionId);
     })
     .catch((err: unknown) => {
       activeStreams.delete(sessionId);

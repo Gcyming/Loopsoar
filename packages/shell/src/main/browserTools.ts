@@ -340,7 +340,8 @@ export function registerBrowserTools(
         }
         const tabId = activeTabOf(host, ctx.sessionId);
         const before = readTab(host, ctx.sessionId, tabId);
-        const result = await host.navigate(params.url, undefined, ctx.sessionId);
+        // origin="agent"：该标签归属「Agent 工作区」（UI 折叠标签组 + 运行期接管锁）
+        const result = await host.navigate(params.url, undefined, ctx.sessionId, "agent");
         if (!result.ok) return { ok: false, content: `[错误] 导航失败：${result.error ?? "未知"}` };
         const created = (result as { tabId?: string }).tabId ?? tabId;
         const settled = await settleTab(host, ctx.sessionId, created, before);
@@ -441,7 +442,7 @@ export function registerBrowserTools(
 
         if (action === "new") {
           const countBefore = host.listTabs(sessionId).length;
-          const created = await host.newTab(params.url, sessionId);
+          const created = await host.newTab(params.url, sessionId, "agent");
           if (!created?.ok) {
             return {
               ok: false,

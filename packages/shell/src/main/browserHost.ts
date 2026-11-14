@@ -21,6 +21,7 @@ import {
   type WebContentsViewLike,
 } from "../browserAdapter/backends/webContentsView.js";
 import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../browserAdapter/types.js";
+import { buildUserLockScript } from "../browserAdapter/refs.js";
 import { sanitizeBrowserState, type PersistedBrowserState, type PersistedBrowserTab } from "./browserSessionState.js";
 import { easeCubicBezier } from "./agentWindow.js";
 
@@ -28,6 +29,12 @@ import { easeCubicBezier } from "./agentWindow.js";
 export const SIDEBAR_ANIMATION_MS = 320;
 /** 动画帧间隔（目标 120fps；实际以主进程计时器为准，按时间插值保证总时长固定）。 */
 export const SIDEBAR_ANIMATION_TICK_MS = 8;
+/**
+ * 单个标签最多向页面注入几次接管锁脚本。
+ * 为什么不无限重试：注入失败几乎都发生在「页面还没就绪/正在导航」的瞬间，
+ * 有上限才能保证挂死的页面不会把每次 emitTabs 都变成一次无意义的 executeJavaScript。
+ */
+const USER_LOCK_MAX_ATTEMPTS = 3;
 
 export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
 
@@ -94,6 +101,8 @@ export interface TabState {
   loadFailure: BrowserLoadFailure | null;
   /** 站点图标（data: URL；渲染层 CSP 只允许 self/data:）。 */
   favicon?: string;
+  /** 由 Agent 打开或导航过：UI 把它折叠进「Agent 工作区」标签组。 */
+  agentBound: boolean;
 }
 
 /** 一次成功访问（供壳层追加「全局历史」；与标签内部后退/前进栈无关）。 */
@@ -130,6 +139,10 @@ interface TabEntry {
   loadFailure: BrowserLoadFailure | null;
   /** 站点图标（data: URL，来自 page-favicon-updated）。 */
   favicon?: string;
+  /** 由 Agent 打开或导航过（UI 据此折叠进「Agent 工作区」标签组；用户导航不撤销）。 */
+  agentBound: boolean;
+  /** 接管锁脚本已推送到当前文档：导航/加载开始时会重置（用于去重与失败重试）。 */
+  lockPushed: boolean;
 }
 
 interface SessionGroup {
@@ -150,6 +163,10 @@ export class BrowserHost {
   /** 底部 DOM 面板（全宽终端）占用的高度：原生视图必须让出，否则会被面板盖住。 */
   private bottomInset = 0;
   private seq = 0;
+  /** 会话 → 接管锁（运行中的会话锁住它绑定/启动的网页，停止后解锁）。 */
+  private userLocks = new Map<string, { locked: boolean; label: string }>();
+  /** `${sessionId}::${tabId}` → 当前文档的注入尝试次数（导航/加载开始清零）。 */
+  private lockAttempts = new Map<string, number>();
 
   constructor(private deps: BrowserHostDeps) {
     this.activeSession = deps.initialSessionId?.trim() || "default";
@@ -247,6 +264,9 @@ export class BrowserHost {
         if (!entry || entry.loading) return;
         entry.loading = true;
         entry.loadFailure = null;
+        // 新文档开始加载：上一份文档里的接管锁浮层已随文档销毁，注入状态清零，
+        // 加载完成后由 emitTabs 重新盖上（否则锁只在首个页面生效，一导航就失效）。
+        this.resetUserLockTracking(sessionId, id, entry);
         this.emitTabs(sessionId);
       },
       onLoadEnd: (): void => {
@@ -277,6 +297,8 @@ export class BrowserHost {
       attached,
       loading: false,
       loadFailure: null,
+      agentBound: false,
+      lockPushed: false,
     };
     entryRef = entry;
     const group = this.group(sessionId);
@@ -479,8 +501,68 @@ export class BrowserHost {
     }
   }
 
+  /**
+   * 把「某个标签的当前文档该不该有接管锁」的记账清掉。
+   * 导航/加载开始 = 旧文档已销毁：注入状态与尝试次数都必须重置，新文档重新计次。
+   */
+  private resetUserLockTracking(sessionId: string, tabId: string, entry?: TabEntry): void {
+    this.lockAttempts.delete(`${sessionId}::${tabId}`);
+    const target = entry ?? this.groups.get(sessionId)?.tabs.get(tabId);
+    if (target) target.lockPushed = false;
+  }
+
+  /**
+   * 把当前锁状态推进某个标签的当前文档。
+   *
+   * 为什么吞掉注入失败：页面尚未就绪（about:blank、正在导航、渲染进程刚崩）时
+   * executeJavaScript 会抛错，这是时序问题而不是配置问题；锁只影响「用户能不能点」，
+   * 不该让 Agent 的会话启动/导航因此失败。失败的标签保持 lockPushed=false，等下一次重试。
+   */
+  private async pushUserLock(sessionId: string, tabId: string, entry: TabEntry): Promise<void> {
+    const key = `${sessionId}::${tabId}`;
+    const attempts = this.lockAttempts.get(key) ?? 0;
+    if (attempts >= USER_LOCK_MAX_ATTEMPTS) return;
+    const state = this.userLocks.get(sessionId);
+    const locked = state?.locked === true;
+    this.lockAttempts.set(key, attempts + 1);
+    try {
+      await entry.adapter.executeJs(buildUserLockScript(locked, state?.label ?? ""));
+      this.lockAttempts.delete(key);
+      entry.lockPushed = true;
+    } catch {
+      // 保持 lockPushed=false：下一次 emitTabs（加载完成/标题变化）继续补注入
+    }
+  }
+
+  /**
+   * 迟到注入：新建的标签、导航完成的标签、以及上次注入失败的标签在这里补一次。
+   * 只在会话处于锁定且页面可写时执行——加载中注入会被下一次文档销毁，等于白费一次机会。
+   */
+  private retryUserLocks(sessionId: string): void {
+    if (this.userLocks.get(sessionId)?.locked !== true) return;
+    const group = this.groups.get(sessionId);
+    if (!group) return;
+    for (const [tabId, entry] of group.tabs) {
+      if (!entry.agentBound) continue;
+      if (entry.lockPushed || entry.loading || !entry.url) continue;
+      if ((this.lockAttempts.get(`${sessionId}::${tabId}`) ?? 0) >= USER_LOCK_MAX_ATTEMPTS) continue;
+      void this.pushUserLock(sessionId, tabId, entry).catch(() => undefined);
+    }
+  }
+
+  /** 会话销毁时丢掉锁状态，避免同名会话重建后新标签被「幽灵锁」盖住。 */
+  private forgetUserLock(sessionId: string): void {
+    this.userLocks.delete(sessionId);
+    const prefix = `${sessionId}::`;
+    for (const key of [...this.lockAttempts.keys()]) {
+      if (key.startsWith(prefix)) this.lockAttempts.delete(key);
+    }
+  }
+
   private emitTabs(sessionId: string = this.activeSession): void {
     this.applyLayout();
+    // 会话锁定期间每次状态变化都补注入：新标签/导航完成都在这里对齐（已注入的会被跳过）。
+    this.retryUserLocks(sessionId);
     // 持久化回调覆盖所有会话（后台 Agent 在自己会话里导航也要落盘）
     this.deps.onSessionStateChanged?.(sessionId, this.snapshotSession(sessionId));
     if (sessionId === this.activeSession) {
@@ -500,7 +582,30 @@ export class BrowserHost {
       loading: entry.loading,
       loadFailure: entry.loadFailure,
       favicon: entry.favicon,
+      agentBound: entry.agentBound,
     }));
+  }
+
+  /**
+   * 会话接管锁：锁定 = 给它名下每个网页注入浮层（只拦真实用户事件）；
+   * 解锁 = 注入清理脚本（停止会话后用户立刻拿回页面）。
+   *
+   * 锁状态按会话记下来，而不是只写进当前页面：之后新建的标签、以及导航完成的标签
+   * 都会在 emitTabs 里按这份状态自动补注入，Agent 翻到下一页时锁不会掉。
+   */
+  async lockForSession(sessionId: string, locked: boolean, label?: string): Promise<void> {
+    const sid = sessionId.trim();
+    if (!sid) return;
+    this.userLocks.set(sid, { locked, label: label ?? "" });
+    const group = this.groups.get(sid);
+    if (!group) return;
+    for (const [tabId, entry] of group.tabs) {
+      // 只锁 Agent 绑定/操作过的网页：用户自己开的页在同一会话里也不该被 Agent 的运行挡住。
+      if (!entry.agentBound) continue;
+      // 显式调用 = 用户/会话状态真的变了：重置尝试计数，让这次推送拿到完整预算
+      this.resetUserLockTracking(sid, tabId, entry);
+      await this.pushUserLock(sid, tabId, entry);
+    }
   }
 
   /** E2E 探针：在活动标签页执行一段 JS（真实网页动作验证，如商店安装按钮点击）。 */
@@ -587,9 +692,17 @@ export class BrowserHost {
     this.applyLayout();
   }
 
-  /** 导航：默认在当前会话的活动标签内；无标签则先建一个（记录历史）。 */
-  async navigate(rawUrl: string, tabId?: string, sessionId?: string): Promise<NavigateOutcome> {
-    return this.navigateRecorded(rawUrl, tabId, true, sessionId);
+  /**
+   * 导航：默认在当前会话的活动标签内；无标签则先建一个（记录历史）。
+   * origin="agent" = Agent 发起的导航：目标标签从此归属「Agent 工作区」（UI 折叠标签组）。
+   */
+  async navigate(
+    rawUrl: string,
+    tabId?: string,
+    sessionId?: string,
+    origin: "agent" | "user" = "user",
+  ): Promise<NavigateOutcome> {
+    return this.navigateRecorded(rawUrl, tabId, true, sessionId, origin);
   }
 
   private async navigateRecorded(
@@ -597,6 +710,7 @@ export class BrowserHost {
     tabId?: string,
     record = true,
     sessionId?: string,
+    origin: "agent" | "user" = "user",
   ): Promise<NavigateOutcome> {
     const normalized = normalizeNavigateUrl(rawUrl);
     if (!normalized.ok) return { ok: false, error: normalized.reason };
@@ -610,6 +724,9 @@ export class BrowserHost {
     }
     group.activeId = id;
     const entry = group.tabs.get(id)!;
+    // Agent 导航过的标签永久属于 Agent 工作区：用户之后在同一标签点链接/输入地址也不撤销绑定，
+    // 否则「Agent 打开的页面」会因为用户碰了一下就从折叠组里掉出去。
+    if (origin === "agent") entry.agentBound = true;
     entry.navigating = true;
     try {
       const result = await entry.adapter.navigate(normalized.url);
@@ -647,8 +764,15 @@ export class BrowserHost {
     }
   }
 
-  /** 新建标签（可带初始 URL）并切为该会话的活动标签；同 URL 已存在时复用。 */
-  async newTab(rawUrl?: string, sessionId?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+  /**
+   * 新建标签（可带初始 URL）并切为该会话的活动标签；同 URL 已存在时复用。
+   * origin="agent" = Agent 新建：被复用的那个标签同样归属「Agent 工作区」。
+   */
+  async newTab(
+    rawUrl?: string,
+    sessionId?: string,
+    origin: "agent" | "user" = "user",
+  ): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
     const sid = sessionId ?? this.activeSession;
     const group = this.group(sid);
     if (rawUrl) {
@@ -656,6 +780,7 @@ export class BrowserHost {
       if (normalized.ok) {
         for (const [id, tab] of group.tabs) {
           if (tab.url === normalized.url) {
+            if (origin === "agent") tab.agentBound = true;
             group.activeId = id;
             this.emitTabs(sid);
             return { tabId: id, ok: true, url: tab.url };
@@ -663,11 +788,12 @@ export class BrowserHost {
         }
       }
     }
-    this.createTab(sid);
+    const entry = this.createTab(sid);
     const id = group.activeId!;
+    if (origin === "agent") entry.agentBound = true;
     this.emitTabs(sid);
     if (!rawUrl) return { tabId: id, ok: true };
-    const outcome = await this.navigate(rawUrl, id, sid);
+    const outcome = await this.navigate(rawUrl, id, sid, origin);
     if (!outcome.ok) return { tabId: id, ok: false, error: outcome.error };
     return { tabId: id, ok: true, url: outcome.url };
   }
@@ -707,6 +833,7 @@ export class BrowserHost {
     const ids = [...group.tabs.keys()];
     for (const id of ids) await this.closeTab(id, sessionId);
     this.groups.delete(sessionId);
+    this.forgetUserLock(sessionId);
     return ids.length;
   }
 
@@ -838,6 +965,7 @@ export class BrowserHost {
     if (group) {
       for (const id of [...group.tabs.keys()]) await this.closeTab(id, sessionId);
       this.groups.delete(sessionId);
+      this.forgetUserLock(sessionId);
     }
     if (this.activeSession === sessionId) {
       const next = this.groups.keys().next().value as string | undefined;
