@@ -1918,7 +1918,7 @@ export default function App(): React.JSX.Element {
     const chip = document.querySelector('[data-workspace-chip="1"]') as HTMLElement | null;
     if (!chip) return;
     const rect = chip.getBoundingClientRect();
-    void api.browser
+    void api.ui
       .togglePopover({
         kind: "workspace",
         anchor: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },

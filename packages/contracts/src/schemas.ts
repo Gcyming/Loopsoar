@@ -1378,4 +1378,5 @@ export const BROWSER_AGENT_TOOLS: readonly string[] = [
   "browser_press_key",
   "browser_select",
   "browser_hover",
+  "browser_dismiss_popup",
 ];

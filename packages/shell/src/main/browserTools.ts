@@ -21,6 +21,7 @@ import {
   NAMED_KEYS,
   getTabRegistry,
   isSupportedKey,
+  buildDismissOverlayScript,
   normalizeRef,
   performClick,
   performHover,
@@ -372,14 +373,51 @@ export function registerBrowserTools(
         if (!binding.ok) return { ok: false, content: binding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
         const before = readTab(host, ctx.sessionId, tabId);
         // ref → 注册表句柄；CSS / text= 直接透传。解析、命中验证与错误文案都在 refs.ts。
-        const result = await performClick(registryFor(ctx.sessionId, tabId), target, (script) =>
+        let result = await performClick(registryFor(ctx.sessionId, tabId), target, (script) =>
           host.executeScript(script, ctx.sessionId, tabId ?? undefined),
         );
+        // 被登录/引导弹窗挡住时先自己关掉再重试一次：模型常常只会「换个页面继续」，不会处理弹窗。
+        let autoDismissed: string | null = null;
+        if (!result.ok && result.code === "BLOCKED_BY_OVERLAY") {
+          const dismissed = (await host
+            .executeScript(buildDismissOverlayScript(), ctx.sessionId, tabId ?? undefined)
+            .catch(() => null)) as { ok?: boolean; action?: string } | null;
+          if (dismissed?.ok) {
+            autoDismissed = dismissed.action ?? "dismiss";
+            await new Promise((resolve) => setTimeout(resolve, 260));
+            result = await performClick(registryFor(ctx.sessionId, tabId), target, (script) =>
+              host.executeScript(script, ctx.sessionId, tabId ?? undefined),
+            );
+          }
+        }
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 点击失败：${target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
-        return { ok: true, content: statusLine(`已点击 ${result.label ?? target}`, settled) };
+        const note = autoDismissed ? `（已自动关闭遮挡弹窗：${autoDismissed}）` : "";
+        return { ok: true, content: statusLine(`已点击 ${result.label ?? target}`, settled) + note };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  registry.register({
+    name: "browser_dismiss_popup",
+    description:
+      "关闭当前页面上的遮挡弹窗（登录/引导/广告/公告层）：按「关闭/×/Esc」启发式处理并返回做了什么。点击被 BLOCKED_BY_OVERLAY 时也可直接调用",
+    permissions: { browser: true },
+    schema: z.object({}),
+    execute: async (ctx): Promise<ToolResult> => {
+      try {
+        const host = needHost();
+        const tabId = activeTabOf(host, ctx.sessionId);
+        const result = (await host
+          .executeScript(buildDismissOverlayScript(), ctx.sessionId, tabId ?? undefined)
+          .catch(() => null)) as { ok?: boolean; action?: string } | null;
+        if (!result?.ok) return { ok: false, content: "[错误] 当前没有可操作的网页标签" };
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        return { ok: true, content: `已关闭遮挡弹窗（${result.action ?? "dismiss"}）；如需继续操作请重新 browser_snapshot 获取最新状态` };
+      } catch (err) {
+        return { ok: false, content: `[错误] 关闭弹窗失败：${err instanceof Error ? err.message : String(err)}` };
       }
     },
   });

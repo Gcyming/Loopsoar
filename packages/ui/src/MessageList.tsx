@@ -247,7 +247,9 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minWidth: 0,
     overflowY: "auto",
-    overflowX: "hidden",
+    // 隐藏横向溢出会把「比列宽」的内容直接切在屏幕外（用户反复反馈右侧截断）；
+    // 这里保留横向滚动作为兜底：宁可出现一条细滚动条，也不让内容看不见。
+    overflowX: "auto",
     padding: "12px 34px 12px 14px",
     display: "flex",
     flexDirection: "column",

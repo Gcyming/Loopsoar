@@ -1115,7 +1115,7 @@
       background: #8b93a3;
     }
     .think-tool-btn {
-      display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+      display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; text-align: left;
       background: rgba(var(--ls-accent-rgb), 0.04);
       border: 1px solid rgba(var(--ls-accent-rgb), 0.10);
       border-radius: 7px; padding: 4px 8px;
@@ -1173,7 +1173,7 @@
       padding: 0; display: inline-flex;
     }
     .think-tool-detail-box {
-      margin: 4px 0 0 20px; padding: 6px 8px;
+      margin: 4px 0 0 20px; padding: 6px 8px; max-width: calc(100% - 20px); overflow-x: auto;
       background: rgba(var(--ls-accent-rgb), 0.05); border-radius: 6px;
       font-size: 11px; line-height: 1.6; color: #a8a296; word-break: break-word;
       max-height: 320px; overflow-y: auto; overscroll-behavior: contain;
@@ -1282,7 +1282,7 @@
     .think-diff-add { color: #3fb950; }
     .think-diff-del { color: #f85149; }
     .think-diff-body { max-height: 260px; overflow: auto; background: #0c0e13; }
-    .think-diff-row { display: flex; align-items: flex-start; padding: 0 8px; white-space: pre; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; line-height: 1.55; }
+    .think-diff-row { display: flex; align-items: flex-start; padding: 0 8px; white-space: pre-wrap; word-break: break-all; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; line-height: 1.55; }
     .think-diff-row.diff-add { background: rgba(63, 185, 80, 0.14); }
     .think-diff-row.diff-del { background: rgba(248, 81, 73, 0.14); }
     .think-diff-row.diff-eq { opacity: 0.55; }

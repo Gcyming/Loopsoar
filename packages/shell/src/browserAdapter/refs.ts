@@ -393,6 +393,53 @@ function locateJs(resolved: ResolvedTarget): string {
  * 校验元素中心点是否真的落在目标上。被遮罩/浮层挡住时 el.click() 依然会「成功」，
  * 模型会误以为点到了；这里先返回 BLOCKED_BY_OVERLAY + 遮挡元素摘要（Node 侧成文）。
  */
+
+/**
+ * 自动关闭遮挡弹窗（登录/引导/广告层）：点击命中被挡时先尝试自己处理，再重试原点击。
+ *
+ * 为什么启发式：不同站点的关闭控件五花八门（aria-label=关闭 / title=Close / 纯 × 字符 / .close）。
+ * 这里按「可见 + 文案或属性像关闭 + 位于上半屏/右侧」排序选一个点掉；实在找不到就按 Esc。
+ * 只是尽力而为——失败时仍返回 BLOCKED_BY_OVERLAY，让模型自己决定下一步。
+ */
+export function buildDismissOverlayScript(): string {
+  return `(() => {
+  const norm = (el) => String((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, '').slice(0, 24);
+  const isCloseText = (el) => /^(×|✕|✖|关闭|close|取消|cancel|知道了|我知道了|稍后再说|以后再说)$/i.test(norm(el));
+  const isCloseAttr = (el) => {
+    const attrs = String(el.getAttribute && el.getAttribute('aria-label') || '') + ' ' +
+      String(el.getAttribute && el.getAttribute('title') || '') + ' ' + String(el.className || '');
+    return /关闭|close|cancel|dismiss/i.test(attrs);
+  };
+  const candidates = [];
+  const nodes = document.querySelectorAll('button,[role="button"],a,span,div,i,svg');
+  for (let i = 0; i < nodes.length; i += 1) {
+    const el = nodes[i];
+    if (!el || el.nodeType !== 1) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) continue;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none' || style.pointerEvents === 'none') continue;
+    if (!isCloseText(el) && !isCloseAttr(el)) continue;
+    // 越靠上、越靠右越像弹窗的关闭按钮
+    const score = (rect.top < window.innerHeight * 0.45 ? 2 : 0) + (rect.left > window.innerWidth * 0.45 ? 1 : 0);
+    candidates.push({ el: el, score: score, top: rect.top });
+  }
+  candidates.sort((a, b) => (b.score - a.score) || (a.top - b.top));
+  const chosen = candidates[0];
+  if (chosen) {
+    const label = (norm(chosen.el) || chosen.el.getAttribute('aria-label') || 'close').slice(0, 24);
+    try { chosen.el.click(); } catch (err) {}
+    return { ok: true, action: 'click:' + label };
+  }
+  try {
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true });
+    document.dispatchEvent(ev);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+  } catch (err) {}
+  return { ok: true, action: 'escape' };
+})()`;
+}
+
 export function buildClickScript(resolved: ResolvedTarget): string {
   return `(() => {
 ${locateJs(resolved)}
