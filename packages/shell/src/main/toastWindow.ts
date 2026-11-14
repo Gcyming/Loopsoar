@@ -87,9 +87,10 @@ export function buildToastHtml(text: string): string {
        渐隐交给 mask —— 只用径向背景会得到椭圆而不是胶囊（用户 m02086 实测方边、m02086 后仍像椭圆）。 */
     .toast{max-width:calc(100% - 16px);padding:15px 34px;text-align:center;white-space:nowrap;
       overflow:hidden;text-overflow:ellipsis;border-radius:999px;
-      /* 浅灰 + 微透：底色抬到中性灰、alpha 降到 0.55 左右，隔着网页能透出一点内容。 */
-      background:rgba(118,122,130,.55);border:0;box-shadow:none;
-      text-shadow:0 1px 2px rgba(0,0,0,.45);
+      /* 中灰 + 微透：浅灰在亮网页上会看不清（用户 m02299），改用偏深的中性灰、alpha 0.86，
+         既不挡内容又能稳定读清文字。 */
+      background:rgba(64,68,76,.86);border:0;box-shadow:0 6px 22px rgba(0,0,0,.35);
+      text-shadow:0 1px 2px rgba(0,0,0,.55);
       -webkit-mask-image:radial-gradient(ellipse 100% 190% at 50% 50%,#000 58%,rgba(0,0,0,0) 100%);
       mask-image:radial-gradient(ellipse 100% 190% at 50% 50%,#000 58%,rgba(0,0,0,0) 100%);}
     @keyframes in{to{opacity:1;}}
