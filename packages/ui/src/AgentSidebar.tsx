@@ -784,10 +784,10 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 9,
-    // 用户 2026-11-14：不要再画框/加底色，只保留 hover 与选中高亮（见 index.html 的 .rail-item 规则）。
+    // 用户 2026-11-14：不要再画框/加底色，只保留 hover 与选中高亮。
+    // 注意：底色与文字色必须交给 index.html 的 .rail-item 规则 —— 内联样式优先级更高，
+    // 一旦在这里写 background/color，:hover 就被压掉（曾导致悬浮无反馈）。
     border: "none",
-    background: "transparent",
-    color: BRAND.linenMuted,
     cursor: "pointer",
     padding: 0,
   },

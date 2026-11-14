@@ -962,6 +962,50 @@ function scheduleE2EDemoChat(win: BrowserWindow): void {
   });
 }
 
+/**
+ * E2E：把鼠标移到收起态侧栏的会话按钮上，验证 hover 反馈（仅显式环境变量启用）。
+ * 为什么必须走 sendInputEvent：CSS :hover 不响应 DOM 合成事件，只有真实鼠标输入才触发。
+ */
+function scheduleE2ESidebarRailHover(win: BrowserWindow): void {
+  if (!process.env.LOOPSOAR_E2E_HOVER_SIDEBAR_RAIL) return;
+  win.webContents.once("did-finish-load", () => {
+    const startedAt = Date.now();
+    const poll = (): void => {
+      void win.webContents
+        .executeJavaScript(
+          `(() => {
+            const item = document.querySelector('[data-testid="rail-session"]');
+            if (!item) return null;
+            const box = item.getBoundingClientRect();
+            if (box.width <= 0 || box.height <= 0) return null;
+            return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+          })()`,
+        )
+        .then((pos: { x: number; y: number } | null) => {
+          if (!pos) {
+            if (Date.now() - startedAt < 12000) setTimeout(poll, 400);
+            else console.log("[E2E] SIDEBAR_RAIL_HOVER no-item");
+            return;
+          }
+          win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(pos.x), y: Math.round(pos.y) });
+          setTimeout(() => {
+            void win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const item = document.querySelector('[data-testid="rail-session"]');
+                  if (!item) return null;
+                  const cs = getComputedStyle(item);
+                  return { hovered: item.matches(':hover'), bg: cs.backgroundColor, color: cs.color };
+                })()`,
+              )
+              .then((m: unknown) => console.log("[E2E] SIDEBAR_RAIL_HOVER", JSON.stringify(m)));
+          }, 350);
+        });
+    };
+    setTimeout(poll, 800);
+  });
+}
+
 /** E2E：把鼠标移到卷轴上，验证悬停气泡/高亮（仅显式环境变量启用）。 */
 function scheduleE2ERailHover(win: BrowserWindow): void {
   if (!process.env.LOOPSOAR_E2E_HOVER_RAIL) return;
@@ -1249,6 +1293,7 @@ function createMainWindow(): void {
   }
   scheduleE2EScreenshot(mainWindow);
   scheduleE2ERailHover(mainWindow);
+  scheduleE2ESidebarRailHover(mainWindow);
   scheduleE2ELiveTool(mainWindow);
   scheduleE2EPlanDemo(mainWindow);
   scheduleE2ESteerDemo(mainWindow);

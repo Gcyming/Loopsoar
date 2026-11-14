@@ -340,6 +340,8 @@
       /* 会话列表浮层展开时，头部（含「会话列表」开关）始终在下拉层之上，可再次点击收起 */
       /* 收起态竖条里的会话按钮：无边框无底色，仅 hover / 选中高亮（用户 2026-11-14） */
       .rail-item {
+        background: transparent;
+        color: var(--ls-text-muted);
         transition: background-color 120ms ease, color 120ms ease;
       }
       .rail-item:hover {
