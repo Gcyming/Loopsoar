@@ -1882,7 +1882,8 @@
 
 - **背景**：第二阶段交付后，用户实测提出五处观感/交互问题：① 搜索页会话列表浮层四周阴影太重；② 浮层展开后「会话列表」开关被盖住，只能点外部关闭；③ Vibecoding 里所有点击展开的菜单，再点同一按钮是「重新展开」而非收起；④ 推理等级文案中英混杂；⑤ 收起态竖条里的图标带边框底色、缺分隔线、会话按钮未与网页顶边对齐；另要求把「浏览器控制」开关从「+」菜单移到工作区选择同行。
 - **决策**：
-  1. **浮层去阴影 + 开关可再点收起**：`sidebarSessionOverlay`/`miniSessionOverlay` 删除 `boxShadow: SHADOW.float`（保留边框）；浮层 `top` 由 0 改为 52，`sidebarHeader` 加 `position:relative; zIndex:45` 压住浮层——开关永远可点，再点即收起（`onToggleSession` 本就是 toggle，此前只是被浮层挡住）。
+  1. **浮层去阴影 + 开关可再点收起**：`sidebarSessionOverlay`/`miniSessionOverlay` 删除 `boxShadow: SHADOW.float`（保留边框）；浮层 `top` 由 0 改为 52（浮层实测起点 y=92，头部 40–88，天然不遮头部）——开关可再点即收起（`onToggleSession` 本就是 toggle，此前只是被浮层挡住）。
+     **回归与修正**：一度给 `sidebarHeader` 加 `position:relative; zIndex:45`，结果把头部的层叠抬到绝对定位的收起按钮（`.sidebar-toggle` zIndex:3）之上，**收起按钮整块失效**（用户 2026-11-14 实测）。已回退 header 的定位/z-index；实测收起按钮 `docked→collapsed→docked`、Vibecoding 同样可用、会话列表开关在浮层展开时仍可点（`elementFromPoint` 命中按钮自身或其图标）。
   2. **浮层开关二次点击收起**：Vibecoding 的模型胶囊/「+」/工作区/推理四个触发器此前没加 `data-popover-trigger`，`usePopover` 的「点外部」判定先把菜单关了，随后 click 又把 open 置 true（观感像「重复展开」）。统一补 `data-popover-trigger`（Composer 早已如此）。
   3. **推理等级英文**：`effortLabel` 不再做中英映射，直接返回模型声明的档位名（`low/medium/high/max…`），关闭态 `off`；两处菜单的「关闭」项同步用 `effortLabel("")`。菜单标题仍走 i18n（「推理强度 / Reasoning effort」）。
   4. **收起态竖条（只动会话按钮，不动展开按钮）**：用户复核「展开列表的按钮不用改，只改下面的会话按钮」→ `.sidebar-toggle` 保持原样（品牌底 + hover 高亮）；`.rail-item` 去掉边框与底色，仅 hover 高亮、选中 `rgba(200,118,60,0.16)`；新增 `.sidebar-rail-separator`（26×1，`linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent)`，`top:56`）——**分隔线上边界**与网页内容区上边界（窗口 y=96 = TITLE_BAR 40 + TOP_BAR 48 + INSET 8；竖条原点在标题栏下方 y=40）齐平；竖条 `padding-top` 改 66，会话按钮从分隔线下方 9px 开始（实测 `sepTop=96`、`firstItemTop=106`）。

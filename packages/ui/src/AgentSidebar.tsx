@@ -709,9 +709,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    // 头部必须压住会话列表浮层：否则浮层展开后「会话列表」开关被盖住，只能点外部关闭（用户 2026-11-14）。
-    position: "relative",
-    zIndex: 45,
     // 纵向拉长到与第二行网址工具条同高：会话栏头部按钮与网页工具条处在同一横带，
     // 不再缩在列顶，顶部的「两块面」因此连成一条。
     height: LAYOUT.TOP_BAR_HEIGHT,
