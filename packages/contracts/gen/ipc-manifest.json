@@ -176,6 +176,13 @@
       "hasRequest": true
     },
     {
+      "channel": "ui:toast",
+      "domain": "ui",
+      "method": "toast",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "settings:listModels",
       "domain": "settings",
       "method": "listModels",
@@ -193,6 +200,13 @@
       "channel": "browser:setSidebarWidth",
       "domain": "browser",
       "method": "setSidebarWidth",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:setTopInset",
+      "domain": "browser",
+      "method": "setTopInset",
       "sensitive": true,
       "hasRequest": true
     },
@@ -940,6 +954,7 @@
     "chrome:dismissPopovers",
     "chrome:devToolsPanel",
     "chrome:agentActivity",
+    "chrome:agentTurn",
     "chrome:agentWindowClosed",
     "chrome:agentWindowIconMode",
     "chrome:agentWindowTransition",

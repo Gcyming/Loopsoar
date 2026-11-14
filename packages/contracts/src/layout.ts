@@ -89,6 +89,11 @@ export interface BrowserBoundsOptions {
   sidebarWidth?: number;
   /** 底部被 DOM 面板（全宽终端）占用的高度；原生视图必须让出，否则被盖住。 */
   bottomInset?: number;
+  /**
+   * 顶部被 DOM 面板占用的高度（Agent 工作区展开列表）。
+   * 与 bottomInset 同一思路：不隐藏页面，而是把原生视图整体下移，页面和面板同时可见。
+   */
+  topInset?: number;
 }
 
 export function computeBrowserViewBounds(
@@ -98,6 +103,7 @@ export function computeBrowserViewBounds(
 ): BrowserViewBounds {
   const sidebarWidth = Math.max(0, options.sidebarWidth ?? layout.SIDEBAR_WIDTH);
   const bottomInset = Math.max(0, Math.min(options.bottomInset ?? 0, size.height));
+  const topInset = Math.max(0, Math.min(options.topInset ?? 0, size.height));
   // 分隔条只在「停靠且展开」时渲染：收起态（48px rail）与窗口化（侧栏让位为 0）都没有分隔条，
   // 此时再扣 SPLITTER_WIDTH 会让原生网页右侧留一条 DOM 缝（网页不铺满，用户可见）。
   // 宽度 2px：拖拽热区由 DOM 上的透明条提供，视觉上网页与会话之间只隔页框留白 + 一条细缝，
@@ -114,11 +120,12 @@ export function computeBrowserViewBounds(
       layout.TOP_BAR_HEIGHT -
       layout.STATUS_BAR_HEIGHT -
       bottomInset -
+      topInset -
       inset * 2,
   );
   return {
     x: inset,
-    y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + inset,
+    y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + inset + topInset,
     width,
     height,
   };

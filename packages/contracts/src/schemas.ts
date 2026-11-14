@@ -626,6 +626,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: BrowserSetOverlaySchema,
     sensitive: true,
   },
+  "ui:toast": {
+    domain: "ui",
+    method: "toast",
+    request: z.object({ text: z.string().min(1).max(300), sticky: z.boolean().optional() }),
+    sensitive: true,
+  },
   "settings:listModels": {
     domain: "settings",
     method: "listModels",
@@ -642,6 +648,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "setSidebarWidth",
     request: BrowserSidebarWidthSchema,
+    sensitive: true,
+  },
+  "browser:setTopInset": {
+    domain: "browser",
+    method: "setTopInset",
+    request: z.object({ top: z.number().int().min(0).max(2000) }),
     sensitive: true,
   },
   "browser:setBottomInset": {
@@ -1326,6 +1338,8 @@ export const EVENTS = [
    * 注意：跨会话只更新「该会话正在忙」的状态，绝不切走用户正在看的会话（会话隔离）。
    */
   "chrome:agentActivity",
+  /** 一轮对话开始/结束（Agent 接管网页的窗口期）：呼吸灯与接管锁共用这个生命周期。 */
+  "chrome:agentTurn",
   "chrome:agentWindowClosed",
   "chrome:agentWindowIconMode",
   "chrome:agentWindowTransition",

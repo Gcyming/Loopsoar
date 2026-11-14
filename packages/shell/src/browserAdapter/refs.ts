@@ -579,10 +579,13 @@ ${userLockPreambleJs()}
   host.setAttribute(ATTR, 'active');
   host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:auto;';
   const root = typeof host.attachShadow === 'function' ? host.attachShadow({ mode: 'closed' }) : host;
+  // 只做「透明输入拦截层」：不再给整页压暗（用户要求：运行期用网页四周的呼吸灯表达，
+  // 而不是把页面变暗）。层本身不画任何背景，但保留 pointer-events 以吞掉真实点击。
   const mask = doc.createElement('div');
-  mask.style.cssText = 'position:absolute;inset:0;background:rgba(10,12,16,.55);pointer-events:auto;display:flex;align-items:flex-start;justify-content:center;';
+  mask.style.cssText = 'position:absolute;inset:0;background:transparent;pointer-events:auto;display:flex;align-items:flex-start;justify-content:center;';
+  // 提示文案：无边框无底色块，中心（文字处）最实、向四周均匀渐隐（用户指定的渲染样式）。
   const hint = doc.createElement('div');
-  hint.style.cssText = 'margin-top:72px;max-width:min(560px,86vw);padding:10px 16px;border-radius:999px;background:rgba(24,26,32,.92);color:#f7f2e8;font:500 13px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.4);text-align:center;';
+  hint.style.cssText = 'margin-top:46px;max-width:min(620px,88vw);padding:16px 36px;color:#f7f2e8;font:500 13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:center;background:radial-gradient(120% 150% at 50% 42%, rgba(12,14,20,.94) 0%, rgba(12,14,20,.78) 38%, rgba(12,14,20,.42) 60%, rgba(12,14,20,0) 82%);border:0;box-shadow:none;pointer-events:none;';
   hint.innerHTML = ${JSON.stringify(safeLabel)};
   mask.appendChild(hint);
   root.appendChild(mask);

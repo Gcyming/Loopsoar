@@ -27,6 +27,8 @@ export interface BrowserTabsProps {
   workspaceExpanded: boolean;
   onToggleWorkspace: () => void;
   onSelectBoundTab: (tabId: string) => void;
+  /** 面板实际高度（展开时上报，App 用它给网页让位；收起时上报 0）。 */
+  onPanelHeightChange?: (height: number) => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
@@ -38,6 +40,7 @@ export default function BrowserTabs({
   workspaceExpanded,
   onToggleWorkspace,
   onSelectBoundTab,
+  onPanelHeightChange,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -126,7 +129,18 @@ export default function BrowserTabs({
         </button>
       </div>
       {workspaceExpanded ? (
-        <div style={styles.panel} role="menu" aria-label={tr("browser.agentWorkspace")}>
+        <div
+          style={styles.panel}
+          role="menu"
+          aria-label={tr("browser.agentWorkspace")}
+          ref={(node) => {
+            // 量真实高度而不是按条数估算：内外边距/滚动条都会影响，差几个像素网页就会出现黑缝。
+            if (!node) return;
+            const report = onPanelHeightChange;
+            if (!report) return;
+            report(Math.ceil(node.getBoundingClientRect().height));
+          }}
+        >
           {boundTabs.length === 0 ? (
             <div style={styles.panelEmpty}>{tr("browser.agentWorkspaceEmpty")}</div>
           ) : (
@@ -176,8 +190,9 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 2,
     padding: "0 9px",
     borderRadius: RADIUS.pill,
-    border: `1px solid ${BRAND.border}`,
-    background: BRAND.inkPanel,
+    // 无边框：交互反馈只用高亮（用户 m01968：反馈不要框，高亮就够了）。
+    border: "none",
+    background: "transparent",
     color: BRAND.linenMuted,
     fontSize: 11.5,
     cursor: "pointer",
@@ -186,7 +201,7 @@ const styles: Record<string, React.CSSProperties> = {
     userSelect: "none",
     transition: MOTION.hover,
   },
-  chipOpen: { background: BRAND.ochreSoft, borderColor: BRAND.ochre, color: BRAND.linen },
+  chipOpen: { background: BRAND.ochreSoft, color: BRAND.linen },
   chipIcon: { flex: "none", color: BRAND.ochreHover },
   chipLabel: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 },
   chipCount: { flex: "none", color: BRAND.linenFaint, fontSize: 11 },
@@ -225,7 +240,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 2,
     padding: 6,
     borderRadius: RADIUS.md,
-    border: `1px solid ${BRAND.borderStrong}`,
+    border: "none",
     background: BRAND.inkRaised,
     boxShadow: SHADOW.card,
     WebkitAppRegion: "no-drag",

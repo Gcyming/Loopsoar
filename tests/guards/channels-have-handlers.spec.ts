@@ -26,6 +26,7 @@ import type { LoopRuntime } from "../../packages/shell/src/main/loopRuntime.ts";
 import { registerBookmarksDomain } from "../../packages/shell/src/main/domains/bookmarks.ts";
 import { BookmarksStore } from "../../packages/shell/src/main/bookmarksStore.ts";
 import { registerPageSaveDomain } from "../../packages/shell/src/main/domains/pageSave.ts";
+import { registerToastDomain } from "../../packages/shell/src/main/domains/toast.ts";
 import { registerCompactDomain } from "../../packages/shell/src/main/domains/compact.ts";
 import { registerChromePopoverDomain } from "../../packages/shell/src/main/domains/chromePopover.ts";
 import { registerAgentWindowDomain } from "../../packages/shell/src/main/domains/agentWindow.ts";
@@ -100,6 +101,7 @@ function assemble(): void {
   registerLoopDomain(deps, fakeLoopRuntime());
   registerBookmarksDomain(deps, new BookmarksStore("C:/tmp/loopsoar-data-test/bookmarks"));
   registerPageSaveDomain({ ...deps, dataDir: "C:/tmp/loopsoar-data-test" });
+  registerToastDomain({ ...deps, showToast: () => {} });
   registerCompactDomain({
     ...deps,
     sessions: new SessionStore("C:/tmp/loopsoar-data-test/sessions"),

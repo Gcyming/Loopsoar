@@ -672,6 +672,7 @@ export type LoopsoarEvent =
   | "chrome:applyLayout"
   /** Agent 浏览器活动（{ sessionId?, tool, phase }）：当前会话显示呼吸灯，并切到操作中的标签。 */
   | "chrome:agentActivity"
+  | "chrome:agentTurn"
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
@@ -811,6 +812,10 @@ export interface LoopsoarAPI {
     status(): Promise<BootStatus>;
     version(): Promise<{ app: string; id: string; version: string }>;
   };
+  /** 应用级提示：主进程透明子窗口（永远压在原生网页之上）。 */
+  ui: LoopsoarDomain & {
+    toast(payload: { text: string; sticky?: boolean }): Promise<{ ok: boolean }>;
+  };
   browser: LoopsoarDomain & {
     navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; tabId?: string; error?: string }>;
     newTab(payload?: { url?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
@@ -824,6 +829,7 @@ export interface LoopsoarAPI {
     setSidebarWidth(payload: { width: number; animate?: boolean }): Promise<{ width: number }>;
     /** 底部 DOM 面板（全宽终端）占用高度：原生网页视图让出，避免被遮挡。 */
     setBottomInset(payload: { bottom: number }): Promise<{ bottom: number }>;
+    setTopInset(payload: { top: number }): Promise<{ top: number }>;
     back(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     forward(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     reload(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;

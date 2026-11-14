@@ -1053,3 +1053,5 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **接管锁（改由壳层按轮次下发）**：`ChatDeps.onTurnStarted/onTurnSettled`——`chat:stream` 一开始就锁、`.finally` 解锁（异常/用户停止都覆盖）。页面内是 closed-shadow 遮罩，**只拦 isTrusted 真实输入**，放行合成事件；只锁 `agentBound` 标签；新标签/导航完成在 `emitTabs` 补注入（每文档最多 3 次）。命中验证对自家锁宿主开例外。
 - **连带修复（关键）**：「空白标签页 = 草稿」的判定会把 Agent 刚新建、url 尚未回填的页面当成空白页，把正在跑的会话重置成草稿（表现为「Agent 一开始操作，对话就没了」）。现在未知标签 / 有 URL / `agentBound` 一律不重置。
 - **验证**：typecheck 5/5、vitest **187 文件 / 1604 tests**、gen/check 逐字节一致、build 5/5、bundle 通过；真机 chip + 展开面板（`e2e-evidence/p2-agent-workspace.png`）；锁的像素证据 **27 → 19 → 27**。ADR-0105。
+
+**E3 修订（同日，用户 m01968）**：接管锁去掉整页压暗（改为透明拦截 + 网页四周呼吸灯，按轮次亮，事件 `chrome:agentTurn`）；工作区展开改为 `browser:setTopInset` 让位、网页不再消失；提示改独立透明子窗口（`ui:toast`，无边框胶囊 + 径向渐隐、下方居中、压在网页之上）；chip/面板去边框只用高亮。验证：typecheck 5/5、vitest 187/1607、gen 一致、build/bundle 通过；页面截图 908→848 证明让位生效。

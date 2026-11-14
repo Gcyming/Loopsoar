@@ -162,6 +162,8 @@ export class BrowserHost {
   private sidebarAnimation: unknown = null;
   /** 底部 DOM 面板（全宽终端）占用的高度：原生视图必须让出，否则会被面板盖住。 */
   private bottomInset = 0;
+  /** 顶部 DOM 面板（Agent 工作区展开列表）占用的高度：原生视图下移，页面不被隐藏。 */
+  private topInset = 0;
   private seq = 0;
   /** 会话 → 接管锁（运行中的会话锁住它绑定/启动的网页，停止后解锁）。 */
   private userLocks = new Map<string, { locked: boolean; label: string }>();
@@ -392,6 +394,13 @@ export class BrowserHost {
     return this.bottomInset;
   }
 
+  /** 顶部 DOM 面板高度（Agent 工作区展开列表）：页面整体下移，不隐藏原生视图。 */
+  setTopInset(height: number): void {
+    const next = Number.isFinite(height) ? Math.round(height) : 0;
+    this.topInset = Math.max(0, Math.min(2000, next));
+    this.applyLayout();
+  }
+
   /**
    * E2E/诊断：当前窗口尺寸、**计算出的** bounds 与**活动视图真实 getBounds()**。
    * 三者对比才能定位「网页不随窗口自适应」的真实断点：
@@ -406,14 +415,16 @@ export class BrowserHost {
     tabId: string | null;
     /** 活动标签的原生视图是否已挂到主窗口（重启恢复 bug 的直接观测点）。 */
     attached: boolean;
-    /** 侧栏宽度与底部让位高度（诊断/回归断言用，说明 bounds 是怎么算出来的）。 */
+    /** 侧栏宽度、底部/顶部让位高度（诊断/回归断言用，说明 bounds 是怎么算出来的）。 */
     sidebarWidth: number;
     bottomInset: number;
+    topInset: number;
   } {
     const windowSize = this.deps.getWindowSize();
     const bounds = computeBrowserViewBounds(windowSize, LAYOUT, {
       sidebarWidth: this.sidebarWidth,
       bottomInset: this.bottomInset,
+      topInset: this.topInset,
     });
     const entry = this.activeEntry();
     let actual: { x: number; y: number; width: number; height: number } | null = null;
@@ -431,6 +442,7 @@ export class BrowserHost {
       attached: entry?.attached ?? false,
       sidebarWidth: this.sidebarWidth,
       bottomInset: this.bottomInset,
+      topInset: this.topInset,
     };
   }
 
@@ -464,6 +476,7 @@ export class BrowserHost {
     const bounds = computeBrowserViewBounds(this.deps.getWindowSize(), LAYOUT, {
       sidebarWidth: this.sidebarWidth,
       bottomInset: this.bottomInset,
+      topInset: this.topInset,
     });
     for (const [sessionId, group] of this.groups) {
       if (activeOnly && sessionId !== this.activeSession) continue;

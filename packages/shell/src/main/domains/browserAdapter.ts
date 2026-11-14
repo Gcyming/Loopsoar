@@ -63,6 +63,14 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
 
   // 底部 DOM 面板（全宽终端）高度：原生网页视图让出这一段，否则会被面板盖住。
   // 契约已限制 0..2000 整数，这里再夹一次并回显实际生效值（UI 可用返回值校准）。
+  // 顶部 DOM 面板（Agent 工作区展开列表）让位：页面下移而不是被隐藏。
+  handleTrusted(deps, "browser:setTopInset", (payload) => {
+    const p = (payload ?? {}) as { top?: number };
+    const top = Math.max(0, Math.min(2000, Math.round(Number(p.top) || 0)));
+    deps.browser?.setTopInset(top);
+    return { top };
+  });
+
   handleTrusted(deps, "browser:setBottomInset", (payload) => {
     const raw = (payload as { bottom: number }).bottom;
     const bottom = Math.max(0, Math.min(2000, Number.isFinite(raw) ? Math.round(raw) : 0));

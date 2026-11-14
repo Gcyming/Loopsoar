@@ -42,6 +42,8 @@ import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
 import { flushActivePartials, registerChatDomain } from "./domains/chat.js";
+import { registerToastDomain } from "./domains/toast.js";
+import { createToastWindow } from "./toastWindow.js";
 import { registerCompactDomain } from "./domains/compact.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
@@ -517,6 +519,11 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           if (process.env.LOOPSOAR_E2E_DESKTOP_SHOT) {
             const { desktopCapturer } = await import("electron");
             try {
+              // 桌面截图拍的是「屏幕最上层」，E2E 窗口必须置顶，否则拍到的是用户自己的浏览器。
+              mainWindow?.show();
+              mainWindow?.moveTop();
+              mainWindow?.focus();
+              await new Promise((r) => setTimeout(r, 400));
               const sources = await desktopCapturer.getSources({
                 types: ["screen"],
                 thumbnailSize: { width: 1920, height: 1200 },
@@ -1983,12 +1990,15 @@ app.whenReady().then(async () => {
      * 结束或用户停止后解锁。锁由壳层下发，因此后台会话、独立小窗、无窗口都成立。
      */
     onTurnStarted: (sessionId) => {
+      // 呼吸灯也按「轮次」而不是单次工具调用：工具执行只有几百毫秒，用户根本看不到。
+      pushToRenderer("chrome:agentTurn", { sessionId, running: true });
       if (!browserHost) return;
       // 没有开启浏览器控制的会话本来就没有 Agent 网页：锁了只会挡住用户自己开的页面。
       if (sessions.get(sessionId)?.browserControl !== true) return;
       void browserHost.lockForSession(sessionId, true, userLockLabel()).catch(() => undefined);
     },
     onTurnSettled: (sessionId) => {
+      pushToRenderer("chrome:agentTurn", { sessionId, running: false });
       void browserHost?.lockForSession(sessionId, false).catch(() => undefined);
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
@@ -2087,6 +2097,25 @@ app.whenReady().then(async () => {
       return spec?.contextWindow;
     },
   });
+  /**
+   * 应用级提示：独立透明子窗口，压在原生网页之上（DOM 提示会被 WebContentsView 盖住）。
+   * 以主窗口内容区为基准「下方居中」；定时自动隐藏，点击穿透。
+   */
+  const toastWindow = createToastWindow({
+    createWindow: (options) =>
+      new BrowserWindow({
+        ...(options as ConstructorParameters<typeof BrowserWindow>[0]),
+        parent: mainWindow ?? undefined,
+      }),
+    getAnchor: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return null;
+      const bounds = mainWindow.getContentBounds();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    },
+  });
+  mainWindow?.once("closed", () => toastWindow.destroy());
+  registerToastDomain({ ...deps, showToast: (text, sticky) => toastWindow.show(text, sticky) });
+
   registerBookmarksDomain(deps, bookmarks);
   registerPageSaveDomain({
     ...deps,

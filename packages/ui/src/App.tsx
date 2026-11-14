@@ -302,6 +302,8 @@ export default function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<TabState[]>([]);
   /** Agent 工作区（折叠标签组）是否展开：展开时隐藏原生网页视图，否则列表面板会被网页盖住。 */
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
+  /** 展开面板的实测高度：作为原生网页的顶部让位，页面不被隐藏也不留黑缝。 */
+  const [workspacePanelHeight, setWorkspacePanelHeight] = useState(0);
   /** 新标签页/整页会话处于 Vibecoding 状态（侧栏会话按钮据此变成「会话列表」按钮）。 */
   const [vibeModeActive, setVibeModeActive] = useState(false);
   /** 用户是否刚在会话列表里主动选过会话：直接回话时才复用，否则每次直接回话都新建会话。 */
@@ -461,6 +463,10 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!notice) return;
     const sticky = /(失败|错误|无法|中断)/.test(notice);
+    // 主窗口：提示交给壳层的透明子窗口（永远压在网页之上、下方居中）。
+    if (!miniWindow && api) {
+      void api.ui.toast({ text: String(notice ?? "").slice(0, 300), sticky }).catch(() => undefined);
+    }
     const timer = window.setTimeout(() => setNotice(""), sticky ? 8000 : 4500);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -851,6 +857,15 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (boundTabs.length === 0) setWorkspaceExpanded(false);
   }, [boundTabs.length]);
+  /**
+   * 工作区展开时把网页整体下移，而不是隐藏页面（用户 m01968：点开折叠标签后网页直接没了）。
+   * 高度与面板一致：上下 padding 12 + 每项 36，超过 320 由面板自己滚动。
+   */
+  useEffect(() => {
+    if (!api) return;
+    const height = workspaceExpanded ? workspacePanelHeight : 0;
+    void api.browser.setTopInset({ top: height }).catch(() => undefined);
+  }, [api, workspaceExpanded, workspacePanelHeight]);
 
   const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
   const activeTabIdRef = React.useRef<string | null>(null);
@@ -864,6 +879,20 @@ export default function App(): React.JSX.Element {
    * 动作发生在当前会话时，把它正在操作的标签切到可见；其它会话一概不动界面。
    */
   const [agentBrowserBusy, setAgentBrowserBusy] = React.useState(0);
+  /** 正在跑 Agent 的会话（轮次级）：呼吸灯按它点亮，工具执行只在轮次内的一小段。 */
+  const [agentTurnSessions, setAgentTurnSessions] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    if (!api || miniWindow) return;
+    return api.on("chrome:agentTurn", (payload) => {
+      const p = payload as { sessionId?: string; running?: boolean };
+      if (!p.sessionId) return;
+      setAgentTurnSessions((prev) => {
+        const has = prev.includes(p.sessionId as string);
+        if (p.running === true) return has ? prev : [...prev, p.sessionId as string];
+        return has ? prev.filter((id) => id !== p.sessionId) : prev;
+      });
+    });
+  }, [api, miniWindow]);
   const agentActivityRef = React.useRef<Map<string, number>>(new Map());
   React.useEffect(() => {
     if (!api || miniWindow) return;
@@ -2025,9 +2054,7 @@ export default function App(): React.JSX.Element {
       workspacePanelOpen ||
       snapshotData !== null ||
       onboardingOpen ||
-      chromePage !== null ||
-      // Agent 工作区的展开列表是 DOM 浮层：原生网页视图不隐藏就会被它盖住。
-      workspaceExpanded;
+      chromePage !== null;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
   }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, workspaceExpanded]);
   useEffect(() => {
@@ -2202,6 +2229,7 @@ export default function App(): React.JSX.Element {
                     setWorkspaceExpanded((open) => !open);
                   }}
                   onSelectBoundTab={selectTab}
+                  onPanelHeightChange={setWorkspacePanelHeight}
                   onSelectTab={selectTab}
                   onCloseTab={closeTab}
                   onNewTab={newTab}
@@ -2218,7 +2246,9 @@ export default function App(): React.JSX.Element {
         {miniWindow ? null : (
           <div style={{ ...styles.pageColumn, position: "relative" }}>
             {/* Agent 正在操控本会话浏览器：页框四周呼吸灯（会话隔离，仅当前会话显示） */}
-            {agentBrowserBusy > 0 ? <span className="agent-browser-glow" aria-hidden="true" data-testid="agent-browser-glow" /> : null}
+            {(agentTurnSessions.includes(currentSession ?? "") && boundTabs.length > 0) || agentBrowserBusy > 0 ? (
+              <span className="agent-browser-glow" aria-hidden="true" data-testid="agent-browser-glow" />
+            ) : null}
             <BrowserChrome
               tabs={tabs}
               address={address}
@@ -2596,7 +2626,8 @@ export default function App(): React.JSX.Element {
         <AskUserDialog key={askQueue[0].requestId} request={askQueue[0]} onRespond={respondAsk} />
       ) : null}
 
-      {notice ? <Toast text={notice} onDismiss={() => setNotice("")} /> : null}
+      {/* 主窗口的提示走独立子窗口（原生网页会盖住 DOM）；只有独立的小窗模式仍用内联 Toast。 */}
+      {notice && miniWindow ? <Toast text={notice} onDismiss={() => setNotice("")} /> : null}
     </>
   );
 
