@@ -877,11 +877,18 @@ export default function App(): React.JSX.Element {
       }
     });
   }, [api, miniWindow]);
-  // 标签页 ↔ 会话绑定：切回有会话的页面恢复该会话；新页面（未对话）回草稿。
+  // 标签页 ↔ 会话绑定（只用于「空白新标签页 = 草稿」这一条产品规则）。
+  //
+  // 浏览器的标签组本身已按会话隔离（BrowserHost.groups，见 ADR-0104）：切会话时主进程
+  // 换的是可见组，所以当前看到的页面永远属于当前会话——**不能**因为映射表里查不到就把
+  // 会话重置成草稿，否则「切到一个有网页的会话」会先清空消息、再被一次无关重渲染拉回来，
+  // 看起来就像两个会话的页面/对话串在了一起。只有「空白标签页」才是新对话的入口。
   React.useEffect(() => {
     if (!activeTabId) return;
     const mapped = tabSessionRef.current.get(activeTabId) ?? null;
     if (mapped === (sessionIdRef.current || null)) return;
+    const tab = tabs.find((item) => item.id === activeTabId) ?? null;
+    if (!mapped && tab?.url) return;
     if (!mapped) {
       sessionIdRef.current = "";
       setCurrentSession(null);
@@ -1833,8 +1840,6 @@ export default function App(): React.JSX.Element {
       if (!r.ok) return;
       pickedSessionRef.current = true;
       sessionIdRef.current = sessionId;
-      const activeTabId = tabs.find((tab) => tab.active)?.id;
-      if (activeTabId) tabSessionRef.current.set(activeTabId, sessionId);
       setCurrentSession(sessionId);
       // 优先恢复该会话的实时缓存（后台可能仍在跑）；否则用持久化历史
       const cached = sessionCacheRef.current.get(sessionId);
@@ -1853,6 +1858,8 @@ export default function App(): React.JSX.Element {
         .then((r) => {
           setTabs(r.tabs);
           const active = r.tabs.find((tab) => tab.active);
+          // 绑定方向：把「该会话自己的活动标签」记到它名下（而不是把上一個会话的标签改判给新会话）。
+          if (active) tabSessionRef.current.set(active.id, sessionId);
           const url = active?.url ?? "";
           lastSyncedUrlRef.current = url;
           setAddress(url);

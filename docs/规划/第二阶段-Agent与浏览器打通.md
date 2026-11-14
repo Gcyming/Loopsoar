@@ -90,6 +90,7 @@
 
 1. **布局询问下线，改首启向导选一次**（m00974）：`browserOpenLayout` 收敛为 `docked|agentWindow|keep`（老配置 `ask`→`docked` 迁移）；删除 `browserLayoutChoice.ts` 与整条会话记忆（字段/净化/setter/两个测试文件）；壳层钩子只按偏好应用并按会话去重；`Onboarding` 3→4 步新增「Agent 打开网页时，窗口怎么摆？」两张卡片，完成时落库。**第八节的 E2E 记录因此作废**：现在不再出现询问弹窗，Agent 打开网页时 `asks=0`。
 2. **Agent 浏览器可视化 + 会话隔离**（m00802/m00860）：页内虚拟光标（closed shadow root，指针/高亮/涟漪，动作前 170ms 先行）、窗口外侧呼吸灯（`chrome:agentActivity` 驱动，仅当前会话点亮）、截图前隐藏浮层；跨会话活动不动界面。
+3. **会话级浏览器隔离**（m01148）：壳层 `BrowserHost.groups` 早已按会话分标签组、可见性只在当前会话的活动标签上；缺陷在 UI——切会话时把上一个会话的标签改判给新会话，随后「查不到映射」就重置成草稿。已修正绑定方向与重置条件（仅空白标签页=草稿），并补单测 + 真机验证 A/B 标签组互不串扰（ADR-0104）。
 
 **验证**：typecheck 5/5、vitest **185 文件 / 1585 tests**、gen/check 逐字节一致、build 5/5；真机 E2E `E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}`，向导卡片 `70/70` 不重叠；证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`。
 

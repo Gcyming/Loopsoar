@@ -1039,6 +1039,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **截图守卫**：`browser_screenshot` 前隐藏浮层、之后恢复，Agent 不会把自己光标拍进证据图。
 - **布局询问下线，改首启向导选一次**：`browserOpenLayout` 枚举收敛为 `docked|agentWindow|keep`（老配置 `ask` → `docked` 迁移）；删除 `browserLayoutChoice.ts`、会话记忆 `browserLayoutChoice`（`SessionStore` 字段/净化/setter）与其两个测试文件；壳层钩子只按偏好应用并`appliedLayoutBySession`去重；`Onboarding` 3→4 步，新增「Agent 打开网页时，窗口怎么摆？」两张卡片（各解释两种安排），完成时落库（与当前值相同则不写）；设置·通用同步改三选一。
 - **验证**：typecheck 5/5、vitest **185 文件 / 1585 tests 全绿**（净 −20）、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5。
-- **真机 E2E**：`E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}` —— 向导里选「独立小窗」已落库，Agent 打开网页**零询问**、布局只应用一次；向导第 2 步 `cardHeight=70/70`、`aria-pressed` 正确。证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`；决策 ADR-0102 / ADR-0103。
+- **会话级浏览器隔离（m01148）**：核查确认壳层早已按会话分组（`BrowserHost.groups`，可见性只在当前会话的活动标签上），真正的缺陷在 UI——`App.switchSession` 把「上一个会话的活动标签」改判给新会话，随后 `activeTabId` 副作用查不到映射就重置成草稿（看起来像会话串了/对话消失）。修正：切换后只把**该会话自己的活动标签**记到它名下；草稿重置收紧为「映射缺失且标签是空白页」。单测新增「后台会话动作只落在自己的 WebContents」；真机 `E2E_EVAL {"idsA":["tab-2"],"tabsB_before":[],"idsB":["tab-3"],"sharedTabIds":0,"backIdsA":["tab-2"]}`（A/B 各自标签组、切回 A 原样恢复）；证据 `e2e-evidence/p2-session-isolation.png`、`p2-session-switch.png`。ADR-0104。
+- **真机 E2E（布局）**：`E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}` —— 向导里选「独立小窗」已落库，Agent 打开网页**零询问**、布局只应用一次；向导第 2 步 `cardHeight=70/70`、`aria-pressed` 正确。证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`；决策 ADR-0102 / ADR-0103。
 
 

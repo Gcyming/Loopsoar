@@ -84,6 +84,36 @@ describe("BrowserHost 会话级标签", () => {
     expect(await host.executeScript("1+1", "sess-b")).toBe(3);
   });
 
+  it("后台会话的动作只落在自己的 WebContents，前台页面完全不受影响", async () => {
+    const { host, created } = makeHost("sess-a");
+    await host.navigate("https://a.example/");
+    const viewA = created[0];
+    await host.switchSession("sess-b");
+    await host.navigate("https://b.example/");
+    const viewB = created[1];
+    let callsA = 0;
+    let callsB = 0;
+    (viewA.webContents as { executeJavaScript: (code: string) => Promise<unknown> }).executeJavaScript = async () => {
+      callsA += 1;
+      return 1;
+    };
+    (viewB.webContents as { executeJavaScript: (code: string) => Promise<unknown> }).executeJavaScript = async () => {
+      callsB += 1;
+      return 2;
+    };
+    // A 的 Agent 在自己会话里执行脚本：只打到 A 的 WebContents
+    expect(await host.executeScript("document.title", "sess-a")).toBe(1);
+    expect(callsA).toBe(1);
+    expect(callsB).toBe(0);
+    // 可见会话仍是 B，B 的页面没有任何变化
+    expect(host.currentSessionId()).toBe("sess-b");
+    expect(host.listTabs().map((t) => t.url)).toEqual(["https://b.example/"]);
+    // B 的 Agent 动作只打到 B
+    expect(await host.executeScript("document.title", "sess-b")).toBe(2);
+    expect(callsA).toBe(1);
+    expect(callsB).toBe(1);
+  });
+
   it("持久化快照只保存已打开页面，恢复后 URL/活动标签正确", async () => {
     const { host, created } = makeHost("sess-a");
     await host.navigate("https://one.example/");
