@@ -37,8 +37,9 @@ const styles: Record<string, React.CSSProperties> = {
     border: "none",
     // 无底板：中心最实、向四周均匀渐隐（与壳层 toast 窗口同一套渲染样式）。
     borderRadius: 999,
-    background:
-      "radial-gradient(closest-side, rgba(12,14,20,0.96) 0%, rgba(12,14,20,0.9) 55%, rgba(12,14,20,0.55) 82%, rgba(12,14,20,0) 100%)",
+    background: "rgba(12,14,20,0.93)",
+    maskImage: "radial-gradient(ellipse 100% 190% at 50% 50%, #000 58%, rgba(0,0,0,0) 100%)",
+    WebkitMaskImage: "radial-gradient(ellipse 100% 190% at 50% 50%, #000 58%, rgba(0,0,0,0) 100%)",
     color: BRAND.linen,
     fontSize: 12.5,
     cursor: "pointer",

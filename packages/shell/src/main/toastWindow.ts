@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 /**
  * 应用级 Toast 浮窗（独立透明子窗口）。
  *
@@ -16,6 +18,7 @@ export interface ToastWindowLike {
   hide(): void;
   setIgnoreMouseEvents(ignore: boolean): void;
   moveTop?(): void;
+  capturePage?(): Promise<{ toPNG(): Buffer } | null>;
   isDestroyed?(): boolean;
   destroy(): void;
 }
@@ -80,11 +83,13 @@ export function buildToastHtml(text: string): string {
     body{display:flex;align-items:center;justify-content:center;height:100vh;
       font:500 13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;color:#f7f2e8;opacity:0;
       animation:in 180ms ease-out forwards;}
-    /* 胶囊形：圆角 + 内部径向渐隐。渐变必须在元素内收干净，否则四角会留下方边（用户 m02086 实测）。 */
-    .toast{max-width:calc(100% - 16px);padding:16px 34px;text-align:center;white-space:nowrap;
+    /* 胶囊形：形状交给 border-radius（平顶平底 + 半圆端头），
+       渐隐交给 mask —— 只用径向背景会得到椭圆而不是胶囊（用户 m02086 实测方边、m02086 后仍像椭圆）。 */
+    .toast{max-width:calc(100% - 16px);padding:15px 34px;text-align:center;white-space:nowrap;
       overflow:hidden;text-overflow:ellipsis;border-radius:999px;
-      background:radial-gradient(closest-side,rgba(12,14,20,.96) 0%,rgba(12,14,20,.9) 55%,rgba(12,14,20,.55) 82%,rgba(12,14,20,0) 100%);
-      border:0;box-shadow:none;}
+      background:rgba(12,14,20,.93);border:0;box-shadow:none;
+      -webkit-mask-image:radial-gradient(ellipse 100% 190% at 50% 50%,#000 58%,rgba(0,0,0,0) 100%);
+      mask-image:radial-gradient(ellipse 100% 190% at 50% 50%,#000 58%,rgba(0,0,0,0) 100%);}
     @keyframes in{to{opacity:1;}}
   </style></head><body><div class="toast">${escaped}</div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
@@ -143,6 +148,17 @@ export function createToastWindow(deps: ToastWindowDeps): ToastWindowController 
           win.showInactive();
           // 子窗口与原生 WebContentsView 的层级在部分 GPU 合成路径下会反过来：显式抬到最前。
           win.moveTop?.();
+          // E2E：单独存一张浮窗自身截图（桌面截图会被用户其它窗口挡住，无法验证胶囊形状）。
+          const shotPath = process.env.LOOPSOAR_E2E_TOAST_SHOT;
+          if (shotPath) {
+            void Promise.resolve(win.capturePage?.() ?? null)
+              .then((image) => {
+                if (!image) return;
+                fs.writeFileSync(shotPath, image.toPNG());
+                console.log("TOAST_SHOT_SAVED", shotPath);
+              })
+              .catch(() => undefined);
+          }
         })
         .catch(() => undefined);
       if (timer !== null) cancel(timer);
