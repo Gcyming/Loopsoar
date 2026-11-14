@@ -241,6 +241,17 @@ const styles: Record<string, React.CSSProperties> = {
   messageArea: { position: "relative", flex: 1, minHeight: 0, display: "flex" },
   // 会话内容整体再收窄几像素（用户 m04830）：右侧 padding 20→24px，让气泡/代码块与卷轴
   // 之间有更明显的呼吸感；卷轴绝对定位、不受影响，头部与输入框也不在列表内。
-  messageList: { flex: 1, overflowY: "auto", padding: "12px 24px 12px 14px", display: "flex", flexDirection: "column", gap: 12 },
+  // 右侧 24px 会被 TopicRail（卷轴）压住内容：用户 2026-11-14 反馈「会话内右侧内容被截断」。
+  // 这里给卷轴留出安全区（34px），并禁止横向溢出（长 URL/长串由 word-break 处理）。
+  messageList: {
+    flex: 1,
+    minWidth: 0,
+    overflowY: "auto",
+    overflowX: "hidden",
+    padding: "12px 34px 12px 14px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
   emptyHint: { color: BRAND.linenFaint, fontSize: 12.5, lineHeight: 1.8, paddingTop: 24 },
 };

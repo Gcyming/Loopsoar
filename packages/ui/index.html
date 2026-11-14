@@ -1157,6 +1157,15 @@
       display: flex; align-items: flex-start; gap: 5px; font-size: 11px; line-height: 1.5;
     }
     .think-tool-detail-text { word-break: break-all; }
+    /* 长串（URL / base64 / 无空格文本）在窄侧栏里必须可断行，否则整块超出右边界被裁切 */
+    .think-tool-detail-text,
+    .think-tool-result-text,
+    .think-tool-result-code,
+    .steer-card-text,
+    .plan-item-text {
+      overflow-wrap: anywhere;
+      max-width: 100%;
+    }
     .think-terminal {
       margin: 6px 0 0; padding: 8px; border-radius: 6px;
       background: #0c0e13; border: 1px solid #2c2c31;
@@ -2875,6 +2884,12 @@
         border-color: var(--ls-border);
         border-radius: var(--ls-radius-lg);
         box-shadow: var(--ls-shadow-card);
+      }
+
+      /* 1b) 会话内卡片（规划卡/引导卡）不要投影：用户 2026-11-14「部分卡片四周还有阴影，去掉」。 */
+      html:not([data-theme="classic"]) .plan-card,
+      html:not([data-theme="classic"]) .steer-card {
+        box-shadow: none;
       }
 
       /* 2) 按钮/条目：大圆角 + hover 只换背景不位移（active 轻微 scale） */
