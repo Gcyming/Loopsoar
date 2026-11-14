@@ -157,10 +157,9 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.general.animationsHint": { zh: "关闭后全局停用动画与过渡", en: "Disables animations and transitions globally" },
   "settings.general.browserOpenLayout": { zh: "Agent 打开网页时的窗口布局", en: "Window layout when the agent opens a page" },
   "settings.general.browserOpenLayoutHint": {
-    zh: "浏览器控制开启的会话里，Agent 第一次打开网页前：询问一次 / 自动收齐会话到右侧 / 自动变为小窗 / 保持当前布局",
-    en: "In browser-control sessions, before the agent first opens a page: ask once / dock sessions to the right / switch to the small agent window / keep the current layout",
+    zh: "浏览器控制开启时，Agent 打开网页自动采用的窗口布局（首次启动向导里选过一次，随时可在这里改）：收齐到右侧=网页占主区域、会话栏停靠右侧；小窗=会话独立成小窗、网页铺满主窗口；保持布局=Agent 不动窗口。",
+    en: "Layout the agent applies when it opens a page in a browser-control session (chosen once in the first-run tour; change it here anytime). Dock right: page fills the main area, session panel docked right. Agent window: session becomes a floating mini window, page fills the main window. Keep layout: the agent never moves windows.",
   },
-  "settings.general.browserOpenLayout.ask": { zh: "每次询问", en: "Ask each time" },
   "settings.general.browserOpenLayout.docked": { zh: "收齐到右侧", en: "Dock to the right" },
   "settings.general.browserOpenLayout.agentWindow": { zh: "小窗", en: "Agent window" },
   "settings.general.browserOpenLayout.keep": { zh: "保持布局", en: "Keep layout" },

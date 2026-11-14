@@ -668,6 +668,8 @@ export type LoopsoarEvent =
   | "chrome:agentWindowTransition"
   /** Agent 首次打开网页前的会话窗口布局安排（{ mode: "docked" | "agentWindow"; sessionId?; reason? }）。 */
   | "chrome:applyLayout"
+  /** Agent 浏览器活动（{ sessionId?, tool, phase }）：当前会话显示呼吸灯，并切到操作中的标签。 */
+  | "chrome:agentActivity"
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */

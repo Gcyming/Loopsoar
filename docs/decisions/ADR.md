@@ -1898,6 +1898,34 @@
 
 ---
 ---
+## ADR-0102 Agent 浏览器可视化：页内虚拟光标 + 窗口外侧呼吸灯 + 会话隔离
+
+- **背景**：用户 m00802/m00860 实测反馈「Agent 在浏览器里操作时根本看不到它在做什么」，要求像真人一样能看见指针/点击位置，并对「正在被操作的会话」给出持续的可见反馈；同时强调**会话隔离**——只有进入对应会话才显示对应浏览器的活动，不能串。调研见 `docs/research/agent-browser-visualization.md`（520 行 / 29 来源）。
+- **关键约束（调研结论）**：Electron 的原生 `WebContentsView` 永远绘制在 DOM 之上，任何「画在会话栏那一侧」的边框都不可能盖住网页；呼吸灯只能画在**原生视图外侧的留白**（页面面板 inset 2px 的画布），几何复用 `computeBrowserViewBounds`。页内视觉只能注入到网页本身。
+- **决策**：
+  1. **页内虚拟光标**：`packages/shell/src/browserAdapter/refs.ts` 新增 `buildCursorScript`——closed shadow root 挂 `host[data-loopsoar-agent]`（页面 CSS 与选择器都碰不到内部），指针 + 目标高亮框 + 点击涟漪全部由逐条 CSSOM 内联写入，`pointer-events:none` 不挡命中；涟漪用 WAAPI（页面禁用动画时不阻塞动作）。`performClick`（带涟漪）与 `performType` 在真正动作前先注入，`CURSOR_LEAD_MS=170` 给人眼可感知的提前量——**不是为了动画，而是让「Agent 要动哪里」先可见**。
+  2. **窗口外侧呼吸灯**：contracts 新增事件 `chrome:agentActivity`（`{sessionId, tool, phase:"start"|"end"}`）；壳层在 `registerBrowserTools` 之后给 `BROWSER_AGENT_TOOLS` 逐个包一层 `execute`，start/end 推送；UI 在 `pageColumn` 渲染 `[data-testid="agent-browser-glow"]`（inset 2px、双 ring box-shadow、`agentGlowPulse 1.5s`），尊重 `data-animations`（reduced/off 时不动画）。
+  3. **会话隔离（用户明确要求）**：UI 只在该事件的 `sessionId` 等于当前会话时点亮呼吸灯，并在 `start` 时把「宿主当前活动标签」切到可见（用户手工切走的标签，Agent 动作时拉回来）；**跨会话的事件一律不动界面**——后台会话动网页不会把你的窗口切走。
+  4. **截图守卫**：`browser_screenshot` 截图前临时隐藏浮层、截图后恢复，避免 Agent 把自己的光标/涟漪拍进证据图。
+- **验证**：单测（脚本生成与执行次数、浮层与截图顺序）→ vitest **187 文件 / 1605 tests**；真机 E2E：API 驱动会话 `starts=4/ends=4`、UI 驱动会话 `glowSeen=true/glowAtEnd=true`（监听器挂得比事件晚，计数为 0，属探针时序而非功能缺陷），证据 `e2e-evidence/p2-agent-glow.png`。
+- **状态**：✅ 真机验证（2026-11-14）
+- **回退条件**：若某站点 CSP 禁止注入内联样式导致浮层失效，可改为只画呼吸灯（窗口外侧），页内光标降级为「动作后高亮目标一次」。
+
+## ADR-0103 布局选择改到首启向导（去掉「每次询问」策略；用户 m00974）
+
+- **背景**：用户实测后明确要求：「把那个 agent 操作浏览器时的选择页换到新用户时的弹窗那，这个设定只在用户第一次打开 loopsoar 时出现，以后想改直接去设置里面改就行，不要每次 agent 操作时都弹这个选项。」
+- **决策**：
+  1. **删除「每次询问」策略**：contracts `PreferencesSchema.browserOpenLayout` 由 `ask|docked|agentWindow|keep` 收敛为 `docked|agentWindow|keep`，缺省 `docked`；`mergePreferences` 把老配置里的 `"ask"` 迁移为 `"docked"`（不迁移会让整份偏好校验失败、设置页直接报错）。
+  2. **删除整条询问链路（避免死代码）**：`packages/shell/src/main/browserLayoutChoice.ts` 与 `tests/shell/browserLayoutChoice.spec.ts`、会话记忆字段 `browserLayoutChoice`（`SessionStore` 字段/净化/`setBrowserLayoutChoice`）及 `tests/shell/sessionBrowserLayoutChoice.spec.ts` 一并删除——它们只为「询问一次并记住」服务，留着就是没人读的状态。
+  3. **壳层钩子只做「按偏好应用」**：`beforeOpenBrowserPage` 读偏好 → `keep` 完全不动窗口 → `docked/agentWindow` 推 `chrome:applyLayout`；新增 `appliedLayoutBySession` 去重，同一会话同一布局只推一次（否则每次导航都会动窗口）。
+  4. **首启向导承担「选一次」**：`Onboarding` 由 3 步扩为 4 步，欢迎页后新增「Agent 打开网页时，窗口怎么摆？」——两张卡片各自解释两种安排（收齐到右侧＝网页占主区域、会话栏停靠右侧；独立小窗＝会话浮在桌面、网页铺满主窗口），完成时把选择交给 App 落库（`api.settings.setPreferences`），**与当前偏好相同则不写**（从设置·关于重开向导不会把用户设置冲掉）。
+  5. **设置 · 通用**同步改为三选一，提示文案写明「首次启动向导里选过一次，随时可在这里改」。
+- **验证**：vitest **185 文件 / 1585 tests**（净 −20：删 13 + 9，新增偏好迁移 1 + 守卫 1）、typecheck 5/5、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5。真机 E2E：向导第 2 步标题命中、卡片高度 70/70 不重叠、选中态 `aria-pressed=true`；走完向导后 `prefs="agentWindow"` 已落库，Agent 打开网页时 `asks=0`（**没有任何询问弹窗**）、`chrome:applyLayout` 只收到一次 `agentWindow`；证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`。
+- **状态**：✅ 真机验证（2026-11-14）
+- **回退条件**：若用户仍希望在某个会话里临时切布局，可加「本次会话」菜单项，但不恢复全局默认询问。
+
+---
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -2003,3 +2031,5 @@
 | ADR-0099 | 浏览器操作权限档 browser（策略独立档，默认 allow；敏感步骤仍逐次确认；沙箱仍按 network/L4） | ✅ 自动化已验证 |
 | ADR-0100 | Agent 打开网页前的布局询问（docked/小窗，纯函数决策 + 会话记忆 + fail-closed）+ 真机端到端验收脚本 | ✅ 自动化 + 真机 E2E |
 | ADR-0101 | 收口后 UI 打磨：浮层去阴影/开关可再点收起、Vibecoding 菜单二次点击收起、推理等级英文、收起态去框+分隔线+对齐、浏览器控制移到工作区同行 | ✅ 真机验证 |
+| ADR-0102 | Agent 浏览器可视化：页内虚拟光标（closed shadow root）+ 窗口外侧呼吸灯 + 会话隔离 + 截图守卫 | ✅ 真机验证 |
+| ADR-0103 | 布局选择改到首启向导（删除「每次询问」与会话记忆死代码；壳层按偏好应用并按会话去重） | ✅ 真机验证 |

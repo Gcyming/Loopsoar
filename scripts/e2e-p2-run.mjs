@@ -115,7 +115,7 @@ try {
   logStream.end();
 }
 
-// 退出后核对壳层落盘真值：会话文件里的 browserControl / browserLayoutChoice / 工具结果
+// 退出后核对壳层落盘真值：会话文件里的 browserControl / 工具结果
   try {
     const sessionsDir = path.join(DATA_DIR, "sessions");
     if (existsSync(sessionsDir)) {
@@ -132,7 +132,6 @@ try {
             JSON.stringify({
               sessionId: best.sessionId,
               browserControl: best.browserControl === true,
-              browserLayoutChoice: best.browserLayoutChoice ?? null,
               messages: best.messages?.length ?? 0,
               navigated: texts.includes("127.0.0.1:19443") || texts.includes("Loopsoar E2E 本地页"),
               snapshotWithRefs: /快照 #\d+/.test(texts) && texts.includes("#e"),

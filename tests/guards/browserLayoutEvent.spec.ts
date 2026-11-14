@@ -1,12 +1,15 @@
 /**
- * 守卫：chrome:applyLayout（Slice E · 询问后应用会话窗口布局）的链路一致。
+ * 守卫：chrome:applyLayout（Slice E · 按偏好应用会话窗口布局）的链路一致。
  *
  * 为什么需要：事件名/负载取值都走字符串，类型系统管不到跨进程那一跳；
- * 漏一处就表现为「询问完了但窗口没动」或「preload 白名单拒绝订阅」。
+ * 漏一处就表现为「窗口没按偏好摆」或「preload 白名单拒绝订阅」。
  *   · preload 的订阅白名单直接由 contracts 的 EVENTS 注入（--loopsoar-events），
  *     所以只要 EVENTS 里没有，渲染层 api.on 会抛「事件不在契约白名单」；
  *   · 生成物 EVENT_NAMES 必须与 EVENTS 同步（gen 校验之外再兜一层）；
  *   · 壳层 push 的事件名、UI 订阅的事件名必须与 EVENTS 字面一致。
+ *
+ * 语义（用户决定 m00974）：不再每次打开网页前询问——默认布局在首次启动向导里选一次，
+ * 之后在设置 · 通用里改；壳层只按偏好应用，keep 时不动窗口。
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -28,18 +31,24 @@ describe("守卫：chrome:applyLayout 事件链路", () => {
     expect(read("packages/ui/src/App.tsx")).toContain('api.on("chrome:applyLayout"');
   });
 
-  it("壳层推送该事件，且负载 mode 只有 docked / agentWindow 两种", () => {
-    expect(read("packages/shell/src/main/index.ts")).toContain('pushToRenderer("chrome:applyLayout"');
-    const decision = read("packages/shell/src/main/browserLayoutChoice.ts");
-    expect(decision).toContain('export type BrowserLayoutMode = "docked" | "agentWindow"');
-    // 负载里的 mode 直接来自上面这个联合类型，不允许出现第三态
-    expect(read("packages/shell/src/main/index.ts")).toContain("apply: (mode, reason) => pushToRenderer");
+  it("壳层按偏好推送该事件，mode 只有 docked / agentWindow，keep 不动窗口", () => {
+    const main = read("packages/shell/src/main/index.ts");
+    expect(main).toContain('pushToRenderer("chrome:applyLayout"');
+    expect(main).toContain('const layout = loadPreferences(dirs.configDir).browserOpenLayout ?? "docked"');
+    expect(main).toContain('if (layout === "keep") return { proceed: true };');
+    // 已删除的「逐次询问」决策模块不许回归（死代码）
+    expect(main).not.toContain("browserLayoutChoice");
   });
 
-  it("设置侧的四种策略仍是 ask / docked / agentWindow / keep（与决策模块同一口径）", () => {
+  it("设置侧只有 docked / agentWindow / keep：不再有「每次询问」策略", () => {
     const schemas = read("packages/contracts/src/schemas.ts");
-    expect(schemas).toContain('browserOpenLayout: z.enum(["ask", "docked", "agentWindow", "keep"]).optional()');
-    const decision = read("packages/shell/src/main/browserLayoutChoice.ts");
-    expect(decision).toContain('export type BrowserLayoutPreference = "ask" | "docked" | "agentWindow" | "keep"');
+    expect(schemas).toContain('browserOpenLayout: z.enum(["docked", "agentWindow", "keep"]).optional()');
+    expect(schemas).not.toContain('browserOpenLayout: z.enum(["ask"');
+  });
+
+  it("首启向导承担「选一次」：完成时把选择交给 App 落库", () => {
+    expect(read("packages/ui/src/Onboarding.tsx")).toContain("onChooseLayout");
+    expect(read("packages/ui/src/App.tsx")).toContain("onChooseLayout");
+    expect(read("packages/ui/src/Settings.tsx")).not.toContain("browserOpenLayout.ask");
   });
 });

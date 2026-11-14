@@ -1030,3 +1030,15 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 
 **验收**：typecheck 5/5、vitest **187 文件 / 1605 tests 全绿**、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5、**真机 E2E ok=true**（`node scripts/e2e-p2-run.mjs`，证据 `e2e-evidence/p2-agent-browser.log` / `p2-agent-browser-window.png` / `p2-composer-menu.png`）。
 
+## 二·四十五、2026-11-14 第二阶段 E2 增量（Agent 浏览器可视化 + 布局选择移入首启向导）
+
+用户两条反馈驱动（m00802 / m00860 / m00974）：① Agent 操作浏览器时「根本看不到它在做什么」，要求虚拟光标与呼吸灯可见反馈，并强调**只有进入对应会话才出现对应浏览器内容**；② 「把那个 agent 操作浏览器时的选择页换到新用户时的弹窗那，这个设定只在用户第一次打开 loopsoar 时出现，以后想改直接去设置里面改就行，不要每次 agent 操作时都弹这个选项。」
+
+- **页内虚拟光标**：`browserAdapter/refs.ts` 新增 `buildCursorScript`——closed shadow root 挂 `host[data-loopsoar-agent]`，指针 + 目标高亮 + 点击涟漪全部逐条 CSSOM 内联（不依赖页面 CSS），`pointer-events:none` 不遮挡命中，涟漪用 WAAPI；`performClick`/`performType` 动作前注入，`CURSOR_LEAD_MS=170` 让人眼先看到「要动哪里」。
+- **窗口外侧呼吸灯**：contracts 新增 `chrome:agentActivity`（`{sessionId, tool, phase}`）；壳层给 `BROWSER_AGENT_TOOLS` 每个 `execute` 包 start/end；UI 仅在 `sessionId === 当前会话` 时点亮 `.agent-browser-glow`（inset 2px 双 ring、1.5s 脉动、尊重动效设置），并在 start 时跟随宿主活动标签；**跨会话事件一律不动界面**（会话隔离）。
+- **截图守卫**：`browser_screenshot` 前隐藏浮层、之后恢复，Agent 不会把自己光标拍进证据图。
+- **布局询问下线，改首启向导选一次**：`browserOpenLayout` 枚举收敛为 `docked|agentWindow|keep`（老配置 `ask` → `docked` 迁移）；删除 `browserLayoutChoice.ts`、会话记忆 `browserLayoutChoice`（`SessionStore` 字段/净化/setter）与其两个测试文件；壳层钩子只按偏好应用并`appliedLayoutBySession`去重；`Onboarding` 3→4 步，新增「Agent 打开网页时，窗口怎么摆？」两张卡片（各解释两种安排），完成时落库（与当前值相同则不写）；设置·通用同步改三选一。
+- **验证**：typecheck 5/5、vitest **185 文件 / 1585 tests 全绿**（净 −20）、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5。
+- **真机 E2E**：`E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}` —— 向导里选「独立小窗」已落库，Agent 打开网页**零询问**、布局只应用一次；向导第 2 步 `cardHeight=70/70`、`aria-pressed` 正确。证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`；决策 ADR-0102 / ADR-0103。
+
+

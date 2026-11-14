@@ -604,9 +604,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           </Field>
           <Field l={tr("settings.general.browserOpenLayout")} h={tr("settings.general.browserOpenLayoutHint")}>
             <Seg
-              v={prefs.browserOpenLayout ?? "ask"}
+              v={prefs.browserOpenLayout ?? "docked"}
               opts={[
-                ["ask", tr("settings.general.browserOpenLayout.ask")],
                 ["docked", tr("settings.general.browserOpenLayout.docked")],
                 ["agentWindow", tr("settings.general.browserOpenLayout.agentWindow")],
                 ["keep", tr("settings.general.browserOpenLayout.keep")],

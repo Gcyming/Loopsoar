@@ -73,7 +73,6 @@ import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
-import { resolveBrowserOpenLayout } from "./browserLayoutChoice.js";
 import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
@@ -1852,42 +1851,54 @@ app.whenReady().then(async () => {
   bootTrace.mark("browser-host");
   // 注：全局历史补记（browser-history.json 的同步落盘）已移到首帧后的 deferred 启动任务里，见 runDeferredBootTasks。
   /**
-   * Agent 第一次打开网页前的「会话窗口布局」询问（第二阶段 Slice E · 功能②）。
+   * Agent 打开网页前的「会话窗口布局」应用（第二阶段 Slice E · 功能②，E2 修订）。
    *
-   * 链路：browser_navigate 在真正 host.navigate 之前调本钩子 → 本钩子读会话/偏好 →
-   * 询问或按记忆决定 → pushToRenderer("chrome:applyLayout") 让渲染层执行窗口动作 →
-   * 返回 { proceed, note }（note 追加到工具结果，模型知道这次为什么这样摆窗口）。
-   *
-   * 为什么把决策放在 browserLayoutChoice.ts：分支（ask/记忆/写死/keep/取消）需要单测，
-   * 装配层只负责读数据 + 接线，避免把策略散落进 index.ts。
+   * 用户决定（m00974）：不再每次打开网页都弹窗询问。默认布局在**首次启动向导**里选一次，
+   * 之后随时可在「设置 · 通用 → Agent 打开网页时的窗口布局」修改。因此本钩子只做三件事：
+   *   1. 读偏好；keep → 完全不动窗口（用户自己摆）；
+   *   2. docked / agentWindow → pushToRenderer("chrome:applyLayout")，渲染层执行真正窗口动作；
+   *   3. 同一会话已经应用过同一布局 → 不重复推（避免每次导航都动窗口）。
    */
+  const appliedLayoutBySession = new Map<string, "docked" | "agentWindow" | "keep">();
   const beforeOpenBrowserPage = async (input: { sessionId?: string; url: string }) => {
-    // 没有会话（草稿态）就没有会话记忆、也读不到 browserControl：
-    // 且此时 browser_* 工具本就不可见，直接放行。
+    // 没有会话（草稿态）就读不到 browserControl；且此时 browser_* 工具本就不可见，直接放行。
     const sessionId = input.sessionId;
     if (!sessionId) return { proceed: true };
     const session = sessions.get(sessionId);
-    if (!session) return { proceed: true };
-    const prefs = loadPreferences(dirs.configDir);
-    return resolveBrowserOpenLayout({
-      browserControl: session.browserControl === true,
-      preference: prefs.browserOpenLayout ?? "ask",
-      remembered: session.browserLayoutChoice ?? null,
-      language: prefs.language,
-      url: input.url,
-      ask: (input) => askBus.request(input),
-      // 记忆写在会话文件：下次同一会话不再询问（切走再切回仍记得）。
-      remember: (choice) => {
-        sessions.setBrowserLayoutChoice(sessionId, choice);
-      },
-      apply: (mode, reason) => pushToRenderer("chrome:applyLayout", { mode, sessionId, reason }),
-    });
+    if (!session || session.browserControl !== true) return { proceed: true };
+    const layout = loadPreferences(dirs.configDir).browserOpenLayout ?? "docked";
+    if (layout === "keep") return { proceed: true };
+    if (appliedLayoutBySession.get(sessionId) === layout) return { proceed: true };
+    appliedLayoutBySession.set(sessionId, layout);
+    pushToRenderer("chrome:applyLayout", { mode: layout, sessionId, reason: "preference" });
+    return { proceed: true };
   };
 
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost, resolveSessionRoot, {
     beforeOpenPage: beforeOpenBrowserPage,
   });
+  // Agent 浏览器活动广播（会话隔离）：只在动作执行期间推 start/end，
+  // 渲染层据此显示呼吸灯、把「该会话的活动标签」切到可见；绝不切走用户所在会话。
+  for (const toolName of BROWSER_AGENT_TOOLS) {
+    const def = registry.get(toolName);
+    if (!def) continue;
+    const original = def.execute.bind(def);
+    registry.register(
+      {
+        ...def,
+        execute: async (ctx) => {
+          pushToRenderer("chrome:agentActivity", { sessionId: ctx.sessionId, tool: toolName, phase: "start" });
+          try {
+            return await original(ctx);
+          } finally {
+            pushToRenderer("chrome:agentActivity", { sessionId: ctx.sessionId, tool: toolName, phase: "end" });
+          }
+        },
+      },
+      { force: true },
+    );
+  }
   registerTerminalTools(registry, resolveSessionRoot);
   registerPlanTools(registry);
   registerFileTools(registry, resolveSessionRoot);

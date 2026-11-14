@@ -13,7 +13,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PersistedBrowserState } from "./browserSessionState.js";
-import type { BrowserLayoutMode } from "./browserLayoutChoice.js";
 import { requireSessionId, sanitizeSessionId } from "./sessionId.js";
 
 export interface PersistedMessage {
@@ -55,12 +54,6 @@ export interface PersistedSession {
    * 缺省（旧会话 / 新会话）= 关闭（fail-closed）；非布尔脏值在读取/写入时一律丢弃。
    */
   browserControl?: boolean;
-  /**
-   * 会话级「打开网页时的窗口布局」记忆（第二阶段 Slice E · 功能②）：
-   * 设置策略为 ask 时，用户第一次被询问后答案落在这里，之后同一会话直接按它安排、不再询问。
-   * 缺省（旧会话 / 从未选过）= 未选择 → 下次仍会问；非法值在读取/写入时丢弃。
-   */
-  browserLayoutChoice?: BrowserLayoutMode;
 }
 
 export interface SessionMeta {
@@ -99,11 +92,6 @@ function sanitizeMeta(item: SessionMeta): SessionMeta {
 function sanitizeSession(data: PersistedSession): PersistedSession {
   if (data.browserControl !== undefined && typeof data.browserControl !== "boolean") {
     delete data.browserControl;
-  }
-  // 布局记忆只认两个字面量：脏值（"Docked"、1、null…）一律丢弃，缺省即「未选择」，
-  // 宁可再问一次，也不要让「第三种状态」影响后续导航。
-  if (data.browserLayoutChoice !== "docked" && data.browserLayoutChoice !== "agentWindow") {
-    delete data.browserLayoutChoice;
   }
   return data;
 }
@@ -444,27 +432,6 @@ export class SessionStore {
       meta.browserControl = enabled;
       this.saveIndex(index);
     }
-    return true;
-  }
-
-  /**
-   * 记住（或清除）本会话「打开网页时的窗口布局」选择（第二阶段 Slice E · 功能②）。
-   *
-   * 为什么只写会话文件、不写索引：SessionMeta 是「列表卡片」的信息（标题/预览/条数），
-   * 布局记忆只在工具执行前读一次；写索引只会让列表多一个无用字段、还会在并发写时多一份竞争面。
-   *
-   * choice=null → 清除（回到「下次仍会问」）。非法值同样按清除处理：
-   * 记忆宁愿没有，也不要一个会让用户看到「奇怪布局」的第三态。
-   * 非法会话 ID / 会话不存在 → false（fail-closed，绝不新建会话文件）。
-   */
-  setBrowserLayoutChoice(sessionId: string, choice: BrowserLayoutMode | null): boolean {
-    const file = this.sessionFile(sessionId);
-    if (!file) return false;
-    const data = this.readSession(file);
-    if (!data) return false;
-    if (choice === "docked" || choice === "agentWindow") data.browserLayoutChoice = choice;
-    else delete data.browserLayoutChoice;
-    this.writeJson(file, data);
     return true;
   }
 

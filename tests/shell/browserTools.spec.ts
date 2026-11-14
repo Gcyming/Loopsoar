@@ -196,7 +196,7 @@ describe("浏览器工具集", () => {
     const click = await run(registry, "browser_click", { target: "e3" }, "click-ref");
     expect(click.ok).toBe(true);
     expect(click.content).toContain('已点击 [#e3] textbox "搜索"');
-    expect(scripts[0]).toContain("#search");
+    expect(scripts[scripts.length - 1]).toContain("#search");
     expect(executed[0].tabId).toBe("tab-1");
   });
 
@@ -237,11 +237,11 @@ describe("浏览器工具集", () => {
     await run(registry, "browser_snapshot", {}, "reg-1");
     const byCss = await run(registry, "browser_click", { target: "#submit" }, "reg-1");
     expect(byCss.ok).toBe(true);
-    expect(scripts[0]).toContain("#submit");
+    expect(scripts[scripts.length - 1]).toContain("#submit");
     const byText = await run(registry, "browser_click", { target: "text=登录" }, "reg-1");
     expect(byText.ok).toBe(true);
     expect(byText.content).toContain("text=登录");
-    expect(scripts[1]).toContain('const KIND = "text"');
+    expect(scripts[scripts.length - 1]).toContain('const KIND = "text"');
   });
 
   it("browser_type：ref + 原生 setter 脚本（含回读比对）", async () => {
@@ -250,9 +250,9 @@ describe("浏览器工具集", () => {
     const typed = await run(registry, "browser_type", { target: "e3", text: "Loopsoar" }, "type-1");
     expect(typed.ok).toBe(true);
     expect(typed.content).toContain("已输入 [#e3]");
-    expect(scripts[0]).toContain("Object.getOwnPropertyDescriptor");
-    expect(scripts[0]).toContain("HTMLInputElement.prototype");
-    expect(scripts[0]).toContain("if (actual !== TEXT)");
+    expect(scripts[scripts.length - 1]).toContain("Object.getOwnPropertyDescriptor");
+    expect(scripts[scripts.length - 1]).toContain("HTMLInputElement.prototype");
+    expect(scripts[scripts.length - 1]).toContain("if (actual !== TEXT)");
   });
 
   it("browser_type：页面回读不一致 → 输入未生效 + 当前值", async () => {
@@ -273,7 +273,8 @@ describe("浏览器工具集", () => {
 
     const click = await run(registry, "browser_click", { target: "text=登录" }, "nav-1");
     expect(click.ok).toBe(true);
-    expect(calls.filter((c) => c === "script").length).toBe(1);
+    // 点击 = 光标脚本 + 点击脚本（两次 executeJavaScript）
+    expect(calls.filter((c) => c === "script").length).toBe(2);
   });
 
   it("动作后状态行：未导航 + 已就绪（URL/标题来自宿主 getTab）", async () => {

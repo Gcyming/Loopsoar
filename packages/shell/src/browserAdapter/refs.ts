@@ -418,6 +418,81 @@ ${locateJs(resolved)}
 })()`;
 }
 
+/**
+ * Agent 虚拟光标：在页面里画出「指针移动到目标 + 目标高亮框 + 点击涟漪」。
+ * 实现要点：
+ *   · 全部挂在 documentElement 的 **closed shadow root** 里（页面样式/CSP 影响不到，页面 DOM 不被污染）；
+ *   · pointer-events:none（不改变页面行为）、固定定位（不触发页面重排）；
+ *   · 只做视觉，失败也不影响动作本身（调用方 .catch 忽略）。
+ */
+export function buildCursorScript(resolved: ResolvedTarget, ripple: boolean): string {
+  return `(() => {
+${locateJs(resolved)}
+  const doc = document;
+  const KEY = '__loopsoarAgentOverlay';
+  let root = window[KEY];
+  if (!root || !root.host || !doc.documentElement.contains(root.host)) {
+    // 不用 <style> 标签：严格 CSP 站点会拦；全部走元素级 CSSOM + WAAPI（调研 §3 的结论）。
+    const host = doc.createElement('div');
+    host.setAttribute('data-loopsoar-agent', 'overlay');
+    host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
+    root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+    doc.documentElement.appendChild(host);
+    window[KEY] = root;
+  }
+  const rect = el.getBoundingClientRect();
+  const cx = Math.min(Math.max(rect.left + rect.width / 2, 4), Math.max(window.innerWidth - 4, 4));
+  const cy = Math.min(Math.max(rect.top + rect.height / 2, 4), Math.max(window.innerHeight - 4, 4));
+  let cursor = root.querySelector('.cursor');
+  if (!cursor) {
+    cursor = doc.createElement('div');
+    cursor.className = 'cursor';
+    cursor.style.cssText =
+      'position:fixed;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;' +
+      'background:rgba(217,138,79,.95);box-shadow:0 0 0 3px rgba(217,138,79,.22),0 2px 10px rgba(0,0,0,.45);' +
+      'transition:left .16s cubic-bezier(.2,0,.2,1),top .16s cubic-bezier(.2,0,.2,1);';
+    root.appendChild(cursor);
+  }
+  const prev = cursor.__lspos || { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) };
+  cursor.style.left = prev.x + 'px'; cursor.style.top = prev.y + 'px';
+  cursor.__lspos = { x: cx, y: cy };
+  requestAnimationFrame(() => requestAnimationFrame(() => { cursor.style.left = cx + 'px'; cursor.style.top = cy + 'px'; }));
+  const box = doc.createElement('div');
+  box.className = 'box';
+  box.style.cssText = 'position:fixed;border:2px solid rgba(217,138,79,.8);border-radius:6px;background:rgba(217,138,79,.10);transition:opacity .3s;';
+  box.style.left = Math.max(rect.left - 2, 0) + 'px';
+  box.style.top = Math.max(rect.top - 2, 0) + 'px';
+  box.style.width = Math.max(rect.width + 4, 6) + 'px';
+  box.style.height = Math.max(rect.height + 4, 6) + 'px';
+  root.appendChild(box);
+  setTimeout(() => { box.style.opacity = '0'; setTimeout(() => box.remove(), 320); }, 520);
+  if (ripple) {
+    const ring = doc.createElement('div');
+    ring.className = 'ring';
+    ring.style.cssText =
+      'position:fixed;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;' +
+      'border:2px solid rgba(217,138,79,.9);';
+    ring.style.left = cx + 'px';
+    ring.style.top = cy + 'px';
+    root.appendChild(ring);
+    try {
+      ring.animate(
+        [
+          { width: '12px', height: '12px', margin: '-6px 0 0 -6px', opacity: 1 },
+          { width: '56px', height: '56px', margin: '-28px 0 0 -28px', opacity: 0 },
+        ],
+        { duration: 520, easing: 'ease-out', fill: 'forwards' },
+      );
+    } catch (err) {}
+    setTimeout(() => ring.remove(), 620);
+  }
+  return { ok: true, x: cx, y: cy };
+})()`;
+}
+
+/** 让光标动画走完再执行动作（毫秒）：既看得见，又不至于拖慢长任务。 */
+export const CURSOR_LEAD_MS = 170;
+
 /** 把目标元素滚进视野（截图前定位用）。 */
 export function buildScrollIntoViewScript(resolved: ResolvedTarget): string {
   return `(() => {
@@ -827,6 +902,9 @@ export async function performClick(
   if (!resolved.ok) return { ok: false, code: resolved.code, message: resolved.message };
   let page: PageActionResult | null = null;
   try {
+    // 先画光标/高亮/涟漪（纯视觉，失败不影响点击），再执行真正的点击
+    await run(buildCursorScript(resolved, true)).catch(() => null);
+    await new Promise((resolve) => setTimeout(resolve, CURSOR_LEAD_MS));
     page = (await run(buildClickScript(resolved))) as PageActionResult | null;
   } catch (err) {
     return {
@@ -864,6 +942,8 @@ export async function performType(
   }
   let page: PageActionResult | null = null;
   try {
+    await run(buildCursorScript(resolved, false)).catch(() => null);
+    await new Promise((resolve) => setTimeout(resolve, CURSOR_LEAD_MS));
     page = (await run(buildTypeScript(resolved, text))) as PageActionResult | null;
   } catch (err) {
     return {

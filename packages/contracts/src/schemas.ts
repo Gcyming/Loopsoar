@@ -384,7 +384,8 @@ export const PreferencesSchema = z.object({
    * agentWindow=自动把会话变为小窗（独立 Agent 窗口，ADR-0020）；
    * keep=不动当前布局，也不询问。
    */
-  browserOpenLayout: z.enum(["ask", "docked", "agentWindow", "keep"]).optional(),
+  // 首启向导选一次，之后在设置里改；不再有「每次询问」策略（用户决定 m00974）。
+    browserOpenLayout: z.enum(["docked", "agentWindow", "keep"]).optional(),
   /** Agent 单次任务最多请求轮数。 */
   agentMaxRounds: z.number().int().min(1).max(500).optional(),
   /** Agent 单次任务最多工具调用次数。 */
@@ -1319,6 +1320,12 @@ export const EVENTS = [
   "chrome:popoverClosed",
   "chrome:dismissPopovers",
   "chrome:devToolsPanel",
+  /**
+   * Agent 正在操控浏览器的实时活动（{ sessionId?, tool, phase: "start" | "end" }）。
+   * 渲染层据此：① 当前会话只在动作期间显示浏览器边框呼吸灯；② 把操作中的标签切到可见。
+   * 注意：跨会话只更新「该会话正在忙」的状态，绝不切走用户正在看的会话（会话隔离）。
+   */
+  "chrome:agentActivity",
   "chrome:agentWindowClosed",
   "chrome:agentWindowIconMode",
   "chrome:agentWindowTransition",

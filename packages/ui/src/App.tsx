@@ -841,6 +841,42 @@ export default function App(): React.JSX.Element {
   }, [toggleDevtools]);
 
   const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
+  const activeTabIdRef = React.useRef<string | null>(null);
+  activeTabIdRef.current = activeTabId;
+
+  /**
+   * Agent 浏览器活动（会话隔离）：只让「当前会话」的浏览器显示呼吸灯；
+   * 动作发生在当前会话时，把它正在操作的标签切到可见；其它会话一概不动界面。
+   */
+  const [agentBrowserBusy, setAgentBrowserBusy] = React.useState(0);
+  const agentActivityRef = React.useRef<Map<string, number>>(new Map());
+  React.useEffect(() => {
+    if (!api || miniWindow) return;
+    return api.on("chrome:agentActivity", (payload) => {
+      const p = payload as { sessionId?: string; tool?: string; phase?: string };
+      const sid = p.sessionId;
+      if (!sid) return;
+      const counts = agentActivityRef.current;
+      const next = Math.max(0, (counts.get(sid) ?? 0) + (p.phase === "start" ? 1 : -1));
+      if (next === 0) counts.delete(sid);
+      else counts.set(sid, next);
+      const mine = sid === (sessionIdRef.current || null);
+      setAgentBrowserBusy(mine ? next : 0);
+      if (mine && p.phase === "start") {
+        // 跟随宿主的活动标签：用户手动切走了标签时，把它切回 Agent 正在操作的那一个
+        void api.browser
+          .listTabs()
+          .then((result) => {
+            const active = (result.tabs ?? []).find((tab) => tab.active);
+            if (active && active.id !== activeTabIdRef.current) {
+              return api.browser.selectTab({ tabId: active.id });
+            }
+            return null;
+          })
+          .catch(() => undefined);
+      }
+    });
+  }, [api, miniWindow]);
   // 标签页 ↔ 会话绑定：切回有会话的页面恢复该会话；新页面（未对话）回草稿。
   React.useEffect(() => {
     if (!activeTabId) return;
@@ -2137,6 +2173,8 @@ export default function App(): React.JSX.Element {
       <div style={styles.workRow}>
         {miniWindow ? null : (
           <div style={{ ...styles.pageColumn, position: "relative" }}>
+            {/* Agent 正在操控本会话浏览器：页框四周呼吸灯（会话隔离，仅当前会话显示） */}
+            {agentBrowserBusy > 0 ? <span className="agent-browser-glow" aria-hidden="true" data-testid="agent-browser-glow" /> : null}
             <BrowserChrome
               tabs={tabs}
               address={address}
@@ -2490,6 +2528,16 @@ export default function App(): React.JSX.Element {
         <Onboarding
           open={onboardingOpen}
           onClose={() => setOnboardingOpen(false)}
+          // 首启向导里选一次默认布局（用户决定 m00974）：之后 Agent 打开网页不再弹窗询问。
+          initialLayout={preferences?.browserOpenLayout === "agentWindow" ? "agentWindow" : "docked"}
+          onChooseLayout={(layout) => {
+            const next = { ...(preferences ?? {}), browserOpenLayout: layout } as Preferences;
+            setPreferences(next);
+            void api?.settings
+              .setPreferences(next)
+              .then((r) => setPreferences(r.preferences))
+              .catch(() => undefined);
+          }}
           onOpenSettings={(section) => {
             setOnboardingOpen(false);
             openSettings(section);

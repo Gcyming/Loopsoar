@@ -73,7 +73,7 @@
 | C | 稳定元素引用 + 语义快照（DOM 零打标、页面内句柄、导航即失效、原生 setter、可行动失败码） | vitest 181/1524 |
 | D | 多标签工具 + 按键/下拉/悬停 + 动作后状态增量 + 点击命中验证 + 标签级 ref | vitest 182/1562 |
 | G | 浏览器操作权限档 `browser`（策略默认 allow；敏感步骤仍逐次确认；沙箱仍 network/L4） | vitest 183/1573 |
-| E | 开网页前布局询问（纯函数决策 + 会话记忆 + fail-closed）+ 权限 chip 纳入 browser 档 | vitest 187/1605 |
+| E | 开网页前布局询问（纯函数决策 + 会话记忆 + fail-closed）+ 权限 chip 纳入 browser 档 | vitest 187/1605 —— **已被 E2 修订（见第九节）** |
 | F | ADR-0095~0100、FRAMEWORK-REVIEW 重写、真机 E2E 脚本与证据 | **E2E ok=true**（见下） |
 
 **真机端到端证据**（`e2e-evidence/p2-agent-browser.log` + `p2-agent-browser-window.png`）：
@@ -83,4 +83,14 @@
 - 复跑命令：`node scripts/e2e-p2-run.mjs`（自带本地页服务 + mock LLM + 独立数据目录）。
 
 **基线（阶段末）**：typecheck 5/5、vitest **187 文件 / 1605 tests**、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5。
+
+## 九、E2 修订（2026-11-14，用户 m00802 / m00860 / m00974）
+
+阶段完成后用户实测又提出两件事，均在第二阶段范围内收口（ADR-0102 / ADR-0103）：
+
+1. **布局询问下线，改首启向导选一次**（m00974）：`browserOpenLayout` 收敛为 `docked|agentWindow|keep`（老配置 `ask`→`docked` 迁移）；删除 `browserLayoutChoice.ts` 与整条会话记忆（字段/净化/setter/两个测试文件）；壳层钩子只按偏好应用并按会话去重；`Onboarding` 3→4 步新增「Agent 打开网页时，窗口怎么摆？」两张卡片，完成时落库。**第八节的 E2E 记录因此作废**：现在不再出现询问弹窗，Agent 打开网页时 `asks=0`。
+2. **Agent 浏览器可视化 + 会话隔离**（m00802/m00860）：页内虚拟光标（closed shadow root，指针/高亮/涟漪，动作前 170ms 先行）、窗口外侧呼吸灯（`chrome:agentActivity` 驱动，仅当前会话点亮）、截图前隐藏浮层；跨会话活动不动界面。
+
+**验证**：typecheck 5/5、vitest **185 文件 / 1585 tests**、gen/check 逐字节一致、build 5/5；真机 E2E `E2E_EVAL {"asks":0,"layouts":["agentWindow"],"closed":true,"prefs":"agentWindow"}`，向导卡片 `70/70` 不重叠；证据 `e2e-evidence/p2-onboarding-layout.png`、`p2-onb-behavior.png`、`p2-agent-glow.png`；调研 `docs/research/agent-browser-visualization.md`。
+
 

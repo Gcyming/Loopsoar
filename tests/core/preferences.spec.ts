@@ -86,16 +86,20 @@ describe("权限策略", () => {
 });
 
 describe("浏览器打开布局偏好（browserOpenLayout）", () => {
-  it("缺省为 ask，DEFAULT 可被契约 schema 解析", () => {
-    expect(mergePreferences({}).browserOpenLayout).toBe("ask");
-    expect(DEFAULT_PREFERENCES.browserOpenLayout).toBe("ask");
+  it("缺省为 docked（首启向导里选一次，之后在设置里改），DEFAULT 可被契约 schema 解析", () => {
+    expect(mergePreferences({}).browserOpenLayout).toBe("docked");
+    expect(DEFAULT_PREFERENCES.browserOpenLayout).toBe("docked");
     expect(PreferencesSchema.parse(DEFAULT_PREFERENCES)).toEqual(DEFAULT_PREFERENCES);
   });
 
-  it("四个合法值均保留", () => {
-    for (const value of ["ask", "docked", "agentWindow", "keep"] as const) {
+  it("三个合法值均保留", () => {
+    for (const value of ["docked", "agentWindow", "keep"] as const) {
       expect(mergePreferences({ browserOpenLayout: value }).browserOpenLayout).toBe(value);
     }
+  });
+
+  it("历史值 ask（每次询问）迁移为 docked，不判整份偏好非法", () => {
+    expect(mergePreferences({ browserOpenLayout: "ask" }).browserOpenLayout).toBe("docked");
   });
 
   it("未知字符串被拒（与既有非法枚举行为一致）", () => {

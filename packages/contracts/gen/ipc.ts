@@ -221,6 +221,7 @@ export const EVENT_NAMES = [
   "chrome:popoverClosed",
   "chrome:dismissPopovers",
   "chrome:devToolsPanel",
+  "chrome:agentActivity",
   "chrome:agentWindowClosed",
   "chrome:agentWindowIconMode",
   "chrome:agentWindowTransition",

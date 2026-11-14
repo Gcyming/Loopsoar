@@ -710,7 +710,33 @@ export function registerBrowserTools(
           if (!located.ok) return { ok: false, content: located.message ?? "[错误] 元素定位失败" };
         }
 
+        // 截图前先隐藏 Agent 浮层（光标/高亮/涟漪）：否则会被 capturePage 拍进证据图（调研 §风险-截图污染）
+        await host
+          .executeScript(
+            `(() => {
+              const root = window.__loopsoarAgentOverlay;
+              const host = root && root.host;
+              if (!host) return false;
+              host.__lsHidden = host.style.display;
+              host.style.display = 'none';
+              return true;
+            })()`,
+            ctx.sessionId,
+          )
+          .catch(() => null);
         const data = await host.screenshot(ctx.sessionId);
+        await host
+          .executeScript(
+            `(() => {
+              const root = window.__loopsoarAgentOverlay;
+              const host = root && root.host;
+              if (!host) return false;
+              host.style.display = host.__lsHidden || '';
+              return true;
+            })()`,
+            ctx.sessionId,
+          )
+          .catch(() => null);
         if (!data) return { ok: false, content: "[错误] 当前没有打开的网页标签" };
         // 兼容 dataURL（data:image/png;base64,xxx）与裸 base64 两种适配器实现
         const base64 = data.includes(",") ? data.slice(data.indexOf(",") + 1) : data;

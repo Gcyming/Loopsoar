@@ -43,29 +43,49 @@ export function resetOnboarding(): void {
   }
 }
 
+/** 首启向导里可选的窗口布局（与偏好 browserOpenLayout 的两种「自动应用」取值一致）。 */
+export type OnboardingLayout = "docked" | "agentWindow";
+
 export interface OnboardingProps {
   open: boolean;
   onClose: () => void;
   /** 跳转设置（供应商/技能等分区）；由 App 注入。 */
   onOpenSettings: (section?: string) => void;
+  /** 当前偏好（从设置·关于重开时，选项回显用户当下的选择，避免"完成"时把设置冲掉）。 */
+  initialLayout?: OnboardingLayout;
+  /** 完成时把用户选的默认布局交给 App 落库（与 initialLayout 相同则不落库）。 */
+  onChooseLayout?: (layout: OnboardingLayout) => void;
 }
 
-const TOTAL_STEPS = 3;
+const TOTAL_STEPS = 4;
 
-export default function Onboarding({ open, onClose, onOpenSettings }: OnboardingProps): React.ReactElement | null {
+export default function Onboarding({
+  open,
+  onClose,
+  onOpenSettings,
+  initialLayout = "docked",
+  onChooseLayout,
+}: OnboardingProps): React.ReactElement | null {
   const tr = useT();
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
   const [step, setStep] = React.useState(0);
+  const [layout, setLayout] = React.useState<OnboardingLayout>(initialLayout);
 
   // 每次重新打开都从第 1 步开始（从设置重开时不残留上次进度）
   React.useEffect(() => {
     if (open) setStep(0);
   }, [open]);
 
+  // 每次打开把「当前布局」同步进来（从设置重开时不会显示上次残留的选项）
+  React.useEffect(() => {
+    if (open) setLayout(initialLayout);
+  }, [open, initialLayout]);
+
   const finish = React.useCallback((): void => {
+    if (onChooseLayout && layout !== initialLayout) onChooseLayout(layout);
     markOnboardingDone();
     onClose();
-  }, [onClose]);
+  }, [onChooseLayout, layout, initialLayout, onClose]);
 
   // Esc = 跳过（与「跳过」按钮一致：写标记后关闭）
   React.useEffect(() => {
@@ -113,6 +133,44 @@ export default function Onboarding({ open, onClose, onOpenSettings }: Onboarding
               {tr("onboarding.welcome.b3")}
             </li>
           </ul>
+        </>
+      ),
+    },
+    {
+      title: tr("onboarding.layout.title"),
+      body: (
+        <>
+          <div className="onboarding-dim">{tr("onboarding.layout.desc")}</div>
+          <div style={styles.layoutOptions}>
+            {(
+              [
+                ["docked", "onboarding.layout.docked.name", "onboarding.layout.docked.desc"],
+                ["agentWindow", "onboarding.layout.agentWindow.name", "onboarding.layout.agentWindow.desc"],
+              ] as const
+            ).map(([value, nameKey, descKey]) => {
+              const active = layout === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className="onboarding-layout-option"
+                  style={{ ...styles.layoutOption, ...(active ? styles.layoutOptionActive : null) }}
+                  aria-pressed={active}
+                  data-testid={`onboarding-layout-${value}`}
+                  onClick={() => setLayout(value)}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700 }}>
+                    {active ? <Icon name="check" size={13} /> : null}
+                    {tr(nameKey)}
+                  </span>
+                  <span className="onboarding-dim" style={{ display: "block", textAlign: "left", whiteSpace: "normal" }}>
+                    {tr(descKey)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="onboarding-note">{tr("onboarding.layout.footer")}</div>
         </>
       ),
     },
@@ -222,4 +280,28 @@ export default function Onboarding({ open, onClose, onOpenSettings }: Onboarding
 
 const styles: Record<string, React.CSSProperties> = {
   bulletIcon: { flex: "none", color: "var(--ls-accent, #c8763c)", marginTop: 3 },
+  layoutOptions: { display: "grid", gap: 10, marginTop: 12 },
+  layoutOption: {
+    // 不复用 .onboarding-btn：那个类是按「一行按钮」定的高度，卡片内容两行会被裁切/重叠。
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 4,
+    height: "auto",
+    minHeight: 0,
+    padding: "12px 14px",
+    borderRadius: 10,
+    border: "1px solid var(--ls-border, #333a45)",
+    background: "transparent",
+    color: "inherit",
+    cursor: "pointer",
+    textAlign: "left",
+    whiteSpace: "normal",
+    lineHeight: 1.5,
+    font: "inherit",
+  },
+  layoutOptionActive: {
+    borderColor: "var(--ls-accent, #c8763c)",
+    boxShadow: "inset 0 0 0 1px var(--ls-accent, #c8763c)",
+  },
 };

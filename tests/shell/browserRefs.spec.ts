@@ -152,8 +152,9 @@ describe("动作解析与执行", () => {
       return { ok: true };
     });
     expect(result.ok).toBe(true);
-    expect(scripts).toHaveLength(1);
-    expect(scripts[0]).toContain("#login");
+    // 点击前会先画一次虚拟光标（视觉层），真正的点击脚本是最后一个
+    expect(scripts.length).toBeGreaterThanOrEqual(2);
+    expect(scripts[scripts.length - 1]).toContain("#login");
     expect(() => new Function(scripts[0])).not.toThrow();
     expect(result.label).toContain("登录");
   });

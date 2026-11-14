@@ -26,7 +26,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sidebarWidth: 360,
   theme: "soft",
   sidebarMode: "docked",
-  browserOpenLayout: "ask",
+  browserOpenLayout: "docked",
   agentMaxRounds: 40,
   agentMaxToolCalls: 100,
   agentRepeatToolWarn: 5,
@@ -45,6 +45,9 @@ export function mergePreferences(raw: unknown): Preferences {
   if (source.searchEngine === "duckduckgo" || typeof source.searchEngine !== "string") {
     delete source.searchEngine;
   }
+  // 历史兼容：「每次询问」策略已下线（首启向导选一次，之后在设置里改）。
+  // 老配置里的 "ask" 迁移为默认的 docked，否则 schema 校验失败会让整份偏好判为非法。
+  if (source.browserOpenLayout === "ask") source.browserOpenLayout = "docked";
   const merged = { ...DEFAULT_PREFERENCES, ...source };
   const parsed = PreferencesSchema.safeParse(merged);
   if (!parsed.success) {
@@ -66,7 +69,7 @@ export function mergePreferences(raw: unknown): Preferences {
     sensitiveAlwaysConfirm: parsed.data.sensitiveAlwaysConfirm ?? true,
     theme: parsed.data.theme ?? "soft",
     sidebarMode: parsed.data.sidebarMode ?? "docked",
-    browserOpenLayout: parsed.data.browserOpenLayout ?? "ask",
+    browserOpenLayout: parsed.data.browserOpenLayout ?? "docked",
   };
 }
 
