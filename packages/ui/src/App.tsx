@@ -930,11 +930,9 @@ export default function App(): React.JSX.Element {
     return spec?.thinkingEfforts && spec.thinkingEfforts.length > 0 ? spec.thinkingEfforts : ["low", "medium", "high"];
   }, [provider]);
 
-  const effortLabel = useCallback((value: string): string => {
-    if (!value) return "推理：关";
-    const map: Record<string, string> = { minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "最高" };
-    return `推理：${map[value] ?? value}`;
-  }, []);
+  // 推理等级统一英文（用户 2026-11-14：菜单里中英混杂很难看）：
+  // 档位名直接用模型声明的值（low / medium / high / max …），关闭态显示 off。
+  const effortLabel = useCallback((value: string): string => (value ? value : "off"), []);
 
   const chooseModel = useCallback(
     (modelId: string, providerId: string): void => {

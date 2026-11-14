@@ -386,13 +386,6 @@ export default function Composer({
       <div ref={boxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
         <div ref={measureRef} aria-hidden style={styles.measureRow}>
           <span style={styles.measureChip}><Icon name="bolt" size={12} style={{ marginRight: 4 }} />Build</span>
-          {/* 挤压测量：真正渲染出来才计入宽度，避免「没开也挤压」 */}
-          {browserControl ? (
-            <span style={styles.measureChip}>
-              <Icon name="globe" size={12} style={{ marginRight: 4 }} />
-              {tr("composer.browserChip")}
-            </span>
-          ) : null}
           <span style={styles.measureChip}>
             <Icon name="check" size={12} style={{ marginRight: 4 }} />
             {permSummary ? permissionLabel(permSummary) : tr("composer.permissionFallback")}
@@ -447,26 +440,6 @@ export default function Composer({
                   {tr("composer.attachLabel")}
                 </span>
               </button>
-              {/* 第二项：会话级「浏览器控制」开关（勾选态可见；点击立即切换并收起菜单） */}
-              <button
-                type="button"
-                className="model-item"
-                style={{ ...styles.modelMenuItem, ...(browserControl ? styles.modelMenuItemActive : {}) }}
-                role="menuitemcheckbox"
-                aria-checked={browserControl}
-                title={tr("composer.browserControlHint")}
-                data-testid="composer-browser-control"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onToggleBrowserControl();
-                }}
-              >
-                <span style={styles.modelItemName}>
-                  <Icon name="globe" size={14} style={{ marginRight: 8 }} />
-                  {tr("composer.browserControl")}
-                </span>
-                {browserControl ? <Icon name="check" size={12} /> : null}
-              </button>
             </Popover>
           </span>
 
@@ -483,19 +456,6 @@ export default function Composer({
             <Icon name="bolt" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
             {compactUi ? null : mode === "build" ? "Build" : "Plan"}
           </button>
-
-          {/* 浏览器控制开启：品牌色小胶囊（刻意不用 .chip 类：那条透明边框/灰字强规则会吃掉品牌底） */}
-          {browserControl ? (
-            <span
-              style={{ ...styles.browserChip, ...(compactUi ? styles.browserChipCompact : {}) }}
-              title={tr("composer.browserControlHint")}
-              aria-label={tr("composer.browserControlOn")}
-              data-testid="composer-browser-chip"
-            >
-              <Icon name="globe" size={11} style={compactUi ? undefined : { marginRight: 4 }} />
-              {compactUi ? null : tr("composer.browserChip")}
-            </span>
-          ) : null}
 
           <span ref={permAnchorRef} style={styles.anchor} data-popover-trigger>
             <button
@@ -759,6 +719,19 @@ export default function Composer({
             {tr("chat.addWorkspace")}
           </button>
         </Popover>
+        {/* 会话级「浏览器控制」开关：与工作区选择同一行、位于其右侧；开启时品牌色高亮 */}
+        <button
+          type="button"
+          style={{ ...(browserControl ? styles.browserChip : styles.browserChipOff), cursor: "pointer" }}
+          title={tr("composer.browserControlHint")}
+          aria-pressed={browserControl}
+          aria-label={browserControl ? tr("composer.browserControlOn") : tr("composer.browserControl")}
+          data-testid="composer-browser-chip"
+          onClick={onToggleBrowserControl}
+        >
+          <Icon name="globe" size={11} style={{ marginRight: 4 }} />
+          {tr("composer.browserControl")}
+        </button>
       </div>
     </div>
   );
@@ -804,6 +777,22 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   browserChipCompact: { width: 24, padding: 0, justifyContent: "center" },
+  /** 「浏览器控制」关闭态：不抢眼（无底无边），但仍可点击开关。 */
+  browserChipOff: {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 24,
+    padding: "0 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 600,
+    color: BRAND.linenMuted,
+    background: "transparent",
+    border: "1px solid transparent",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    transition: "background 120ms, color 120ms",
+  },
   workspaceList: { display: "flex", flexDirection: "column", gap: 1, maxHeight: 240, overflowY: "auto" },
   workspaceItem: { display: "flex", alignItems: "center", gap: 2, width: "100%", padding: "6px 8px", border: "none", borderRadius: 6, background: "transparent", color: BRAND.linen, fontSize: 12, cursor: "pointer", textAlign: "left" },
   workspaceItemName: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },

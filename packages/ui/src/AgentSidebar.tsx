@@ -291,12 +291,15 @@ export default function AgentSidebar({
           onMouseLeave={cancelRailExpand}
           data-testid="sidebar-collapsed-rail"
         >
+          {/* 展开按钮与会话列表之间的分隔线：中间实、两端渐隐（用户 2026-11-14）。 */}
+          <span className="sidebar-rail-separator" aria-hidden="true" />
           <div style={styles.railSessions}>
             {sessions.slice(0, 9).map((session) => (
               <button
                 key={session.id}
                 type="button"
-                style={{ ...styles.railItem, ...(session.id === currentSession ? styles.railItemActive : {}) }}
+                className={`rail-item${session.id === currentSession ? " is-active" : ""}`}
+                style={styles.railItem}
                 title={`${session.title}${session.preview ? ` · ${session.preview.slice(0, 32)}` : ""}`}
                 aria-label={session.title}
                 onClick={() => {
@@ -668,10 +671,10 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     left: 8,
     right: 8,
-    top: 0,
     // 高度固定为小窗内容区（实时）的约 1/4；窄窗再压一个 120px 下限，避免搜索框都放不下。
     height: "max(25%, 120px)",
     zIndex: 40,
+    top: 52,
     display: "flex",
     flexDirection: "column",
     minHeight: 0,
@@ -679,7 +682,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: BRAND.inkPanel,
     border: `1px solid ${BRAND.border}`,
     borderRadius: RADIUS.lg,
-    boxShadow: SHADOW.float,
+    // 用户 2026-11-14：展开列表四周的深色投影「黑不溜秋」，去掉；保留边框区分层次。
     overflow: "hidden",
   },
   /** 头部左侧：会话列表图标 + 标题。 */
@@ -689,9 +692,9 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     left: 8,
     right: 8,
-    top: 0,
     height: "min(420px, 55%)",
     zIndex: 40,
+    top: 52,
     display: "flex",
     flexDirection: "column",
     minHeight: 0,
@@ -699,13 +702,16 @@ const styles: Record<string, React.CSSProperties> = {
     background: BRAND.inkPanel,
     border: `1px solid ${BRAND.border}`,
     borderRadius: RADIUS.lg,
-    boxShadow: SHADOW.float,
+    // 用户 2026-11-14：去掉四周深色投影（影响观感），保留边框。
     overflow: "hidden",
   },
   sidebarHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+    // 头部必须压住会话列表浮层：否则浮层展开后「会话列表」开关被盖住，只能点外部关闭（用户 2026-11-14）。
+    position: "relative",
+    zIndex: 45,
     // 纵向拉长到与第二行网址工具条同高：会话栏头部按钮与网页工具条处在同一横带，
     // 不再缩在列顶，顶部的「两块面」因此连成一条。
     height: LAYOUT.TOP_BAR_HEIGHT,
@@ -765,7 +771,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    padding: "44px 0 8px",
+    // 顶部留到「网页内容区上边界」：窗口坐标 96 = 标题栏 40 + 工具条 48 + 网页留白 8；
+    // 竖条自身从标题栏下方（y=40）开始，所以这里只需要 96 - 40 = 56px（用户 2026-11-14：会话按钮与网页顶边齐平）。
+    padding: "56px 0 8px",
     boxSizing: "border-box",
     gap: 4,
   },
@@ -779,13 +787,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 9,
-    border: `1px solid ${BRAND.border}`,
-    background: BRAND.inkRaised,
+    // 用户 2026-11-14：不要再画框/加底色，只保留 hover 与选中高亮（见 index.html 的 .rail-item 规则）。
+    border: "none",
+    background: "transparent",
     color: BRAND.linenMuted,
     cursor: "pointer",
     padding: 0,
   },
-  railItemActive: { borderColor: "rgba(200,118,60,0.6)", background: "rgba(200,118,60,0.16)", color: BRAND.ochreHover },
+  railItemActive: { color: BRAND.ochreHover },
   railAvatar: { fontSize: 11.5, fontWeight: 700, lineHeight: 1 },
   railAdd: {
     width: 30,

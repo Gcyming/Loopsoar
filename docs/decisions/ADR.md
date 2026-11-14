@@ -1878,6 +1878,23 @@
 - **回退条件**：若「每会话问一次」被认为打扰，把设置默认改为 `keep` 即静默（无需删代码）。
 - **复核时间**：第三阶段接入多会话并发浏览时，复核「布局询问只对打开网页的会话生效」。
 
+## ADR-0101 第二阶段收口后的 UI 打磨（用户 2026-11-14 反馈 5 项）
+
+- **背景**：第二阶段交付后，用户实测提出五处观感/交互问题：① 搜索页会话列表浮层四周阴影太重；② 浮层展开后「会话列表」开关被盖住，只能点外部关闭；③ Vibecoding 里所有点击展开的菜单，再点同一按钮是「重新展开」而非收起；④ 推理等级文案中英混杂；⑤ 收起态竖条里的图标带边框底色、缺分隔线、会话按钮未与网页顶边对齐；另要求把「浏览器控制」开关从「+」菜单移到工作区选择同行。
+- **决策**：
+  1. **浮层去阴影 + 开关可再点收起**：`sidebarSessionOverlay`/`miniSessionOverlay` 删除 `boxShadow: SHADOW.float`（保留边框）；浮层 `top` 由 0 改为 52，`sidebarHeader` 加 `position:relative; zIndex:45` 压住浮层——开关永远可点，再点即收起（`onToggleSession` 本就是 toggle，此前只是被浮层挡住）。
+  2. **浮层开关二次点击收起**：Vibecoding 的模型胶囊/「+」/工作区/推理四个触发器此前没加 `data-popover-trigger`，`usePopover` 的「点外部」判定先把菜单关了，随后 click 又把 open 置 true（观感像「重复展开」）。统一补 `data-popover-trigger`（Composer 早已如此）。
+  3. **推理等级英文**：`effortLabel` 不再做中英映射，直接返回模型声明的档位名（`low/medium/high/max…`），关闭态 `off`；两处菜单的「关闭」项同步用 `effortLabel("")`。菜单标题仍走 i18n（「推理强度 / Reasoning effort」）。
+  4. **收起态竖条（只动会话按钮，不动展开按钮）**：用户复核「展开列表的按钮不用改，只改下面的会话按钮」→ `.sidebar-toggle` 保持原样（品牌底 + hover 高亮）；`.rail-item` 去掉边框与底色，仅 hover 高亮、选中 `rgba(200,118,60,0.16)`；新增 `.sidebar-rail-separator`（26×1，`linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent)`，`top:48`）；竖条 `padding-top` 由 44 改 56 —— 竖条原点在标题栏下方（y=40），56+40=96 与网页内容区上边界（TITLE_BAR 40 + TOP_BAR 48 + INSET 8）齐平。
+  5. **浏览器控制入口搬家**：从 Composer「+」菜单与 Vibecoding「+」菜单移除，改为工作区选择同行右侧的胶囊（`composer-browser-chip` / `vibe-browser-chip`）：开启时品牌色底+描边，关闭时中性透明，点击即切换。
+- **验证（真机 E2E，逐项测量）**：
+  - 会话列表：`panelShadow="none"`、`toggleHittable=true`、`closedBySameButton=true`、`reopened=true`（`e2e-evidence/p2-fix-session-panel.png`）。
+  - Vibecoding：`modelClosedBySameChip=true`、`plusClosedBySameButton=true`、`effortItems=["off","low","medium","high"]`、`vibeChipExists+s何ameRow=true`（`e2e-evidence/p2-fix-vibe-menus.png`）。
+  - 收起态：`firstItemTop=96`（与网页顶边齐平）、`separatorTop=88/宽26`、`itemBorder=0px`、`itemBg=transparent`、`toggleBg=transparent`（`e2e-evidence/p2-fix-collapsed-rail.png`）。
+  - 回归：typecheck 5/5、vitest **187 文件 / 1605 tests**、`pnpm build` 5/5。
+- **状态**：✅ 真机验证（2026-11-14）
+- **回退条件**：若「浮层不遮头部」导致可用高度不足，可改为浮层覆盖但把开关 z-index 抬到浮层之上（不恢复阴影）。
+
 ---
 ---
 ## 附：ADR 索引与状态总览
@@ -1984,3 +2001,4 @@
 | ADR-0098 | 多标签工具（tabs/back/forward/reload）+ 按键/下拉/悬停 + 动作后状态增量 + 点击命中验证 + 标签级 ref 绑定 | ✅ 自动化已验证 |
 | ADR-0099 | 浏览器操作权限档 browser（策略独立档，默认 allow；敏感步骤仍逐次确认；沙箱仍按 network/L4） | ✅ 自动化已验证 |
 | ADR-0100 | Agent 打开网页前的布局询问（docked/小窗，纯函数决策 + 会话记忆 + fail-closed）+ 真机端到端验收脚本 | ✅ 自动化 + 真机 E2E |
+| ADR-0101 | 收口后 UI 打磨：浮层去阴影/开关可再点收起、Vibecoding 菜单二次点击收起、推理等级英文、收起态去框+分隔线+对齐、浏览器控制移到工作区同行 | ✅ 真机验证 |

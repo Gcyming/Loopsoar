@@ -337,6 +337,30 @@
       }
       /* 会话栏收起/展开开关：两态共用的星标方块。宽度由内联控制（32↔62），
          底色/文字在这里定义，hover 才有反馈（内联 background 会压过 hover 规则）。 */
+      /* 会话列表浮层展开时，头部（含「会话列表」开关）始终在下拉层之上，可再次点击收起 */
+      /* 收起态竖条里的会话按钮：无边框无底色，仅 hover / 选中高亮（用户 2026-11-14） */
+      .rail-item {
+        transition: background-color 120ms ease, color 120ms ease;
+      }
+      .rail-item:hover {
+        background: var(--ls-surface-hover);
+        color: var(--ls-text);
+      }
+      .rail-item.is-active {
+        background: rgba(200, 118, 60, 0.16);
+      }
+      /* 展开按钮与会话列表之间的分隔线：中间明显、两端渐隐 */
+      .sidebar-rail-separator {
+        position: absolute;
+        /* 竖条原点在标题栏下方（y=40）：展开按钮底 y=80、会话按钮顶 y=96，分隔线取两者中间 y=88。 */
+        top: 48px;
+        left: 50%;
+        width: 26px;
+        height: 1px;
+        transform: translateX(-50%);
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+        pointer-events: none;
+      }
       .sidebar-toggle {
         background: var(--ls-accent-soft);
         color: var(--ls-accent-hover);

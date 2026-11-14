@@ -633,6 +633,7 @@ function VibeComposer({
   testIdPrefix,
   ...controls
 }: VibeComposerProps): React.JSX.Element {
+  const tr = useT();
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
   React.useEffect(() => {
     autoGrow(ref.current);
@@ -681,6 +682,19 @@ function VibeComposer({
           onAddWorkspace={controls.onAddWorkspace}
           onOpenWorkspacePanel={controls.onOpenWorkspacePanel}
         />
+        {/* 会话级「浏览器控制」开关：与工作区选择同行、位于其右侧；开启时品牌色高亮 */}
+        <button
+          type="button"
+          style={{ ...styles.vibeBrowserChip, ...(controls.browserControl ? styles.vibeBrowserChipOn : null) }}
+          title={tr("composer.browserControlHint")}
+          aria-pressed={controls.browserControl}
+          aria-label={controls.browserControl ? tr("composer.browserControlOn") : tr("composer.browserControl")}
+          data-testid="vibe-browser-chip"
+          onClick={controls.onToggleBrowserControl}
+        >
+          <Icon name="globe" size={11} style={{ marginRight: 4 }} />
+          {tr("composer.browserControl")}
+        </button>
       </div>
     </>
   );
@@ -727,6 +741,7 @@ function VibeModelChip({
         aria-expanded={open}
         title={tr("browser.ntp.modelChipTitle", { model: modelLabel })}
         data-testid="vibe-model-chip"
+        data-popover-trigger
       >
         <Icon name="bolt" size={11} style={styles.modelChipIcon} />
         <span style={styles.controlChipText}>{modelLabel}</span>
@@ -897,6 +912,7 @@ function VibeWorkspacePicker({
         ref={menu.triggerRef}
         type="button"
         style={styles.workspacePickChip}
+        data-popover-trigger
         title={active ? tr("browser.vibe.workspaceCurrent", { name: active.name }) : tr("browser.vibe.workspaceChoose")}
         aria-label={tr("browser.vibe.workspaceChoose")}
         aria-haspopup="menu"
@@ -983,6 +999,7 @@ function PlusControl({
         type="button"
         className="composer-plus vibe-plus"
         style={styles.vibePlusBtn}
+        data-popover-trigger
         title={active ? tr("browser.vibe.workspaceCurrent", { name: active.name }) : tr("browser.vibe.workspaceChoose")}
         aria-label={tr("browser.vibe.workspaceChoose")}
         onClick={menu.toggle}
@@ -1035,22 +1052,6 @@ function PlusControl({
             <Icon name="paperclip" size={12} style={styles.menuItemIcon} />
             <span style={styles.menuItemText}>{tr("composer.attachLabel")}</span>
           </button>
-          {/* 会话级「浏览器控制」开关：勾选态可见（与 Composer「+」菜单同一语义） */}
-          <button
-            type="button"
-            style={styles.menuItem}
-            role="menuitemcheckbox"
-            aria-checked={browserControl}
-            title={tr("composer.browserControlHint")}
-            onClick={() => {
-              onToggleBrowserControl();
-              menu.close();
-            }}
-            data-testid="vibe-browser-control"
-          >
-            <Icon name={browserControl ? "check" : "globe"} size={12} style={styles.menuItemIcon} />
-            <span style={styles.menuItemText}>{tr("composer.browserControl")}</span>
-          </button>
         </FloatingMenu>
       ) : null}
     </span>
@@ -1074,6 +1075,7 @@ function EffortControl({
         ref={menu.triggerRef}
         type="button"
         style={{ ...styles.controlChip, ...(compact ? styles.controlChipCompact : null) }}
+        data-popover-trigger
         title={tr("browser.vibe.effortTitle")}
         onClick={menu.toggle}
         data-testid="vibe-effort-chip"
@@ -1093,7 +1095,7 @@ function EffortControl({
             }}
           >
             <Icon name={reasoningEffort === "" ? "check" : "circle"} size={11} style={styles.menuItemIcon} />
-            <span style={styles.menuItemText}>{tr("browser.vibe.effortOff")}</span>
+            <span style={styles.menuItemText}>{effortLabel("")}</span>
           </button>
           {effortOptions.map((value) => (
             <button
@@ -1376,6 +1378,28 @@ const styles: Record<string, React.CSSProperties> = {
 
   /* ── Vibecoding 输入块 ── */
   vibeWorkspaceRow: { display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6, width: "100%", maxWidth: 720, marginTop: 6 },
+  /** 「浏览器控制」胶囊（关闭态中性、开启态品牌色），与工作区选择同行。 */
+  vibeBrowserChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 26,
+    padding: "0 10px",
+    borderRadius: 999,
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: BRAND.linenMuted,
+    background: "transparent",
+    border: "1px solid transparent",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    transition: "background 120ms, color 120ms, border-color 120ms",
+  },
+  vibeBrowserChipOn: {
+    color: BRAND.ochreHover,
+    background: BRAND.ochreSoft,
+    border: "1px solid rgba(200,118,60,0.55)",
+  },
   workspacePickChip: {
     height: 26,
     padding: "0 10px",
