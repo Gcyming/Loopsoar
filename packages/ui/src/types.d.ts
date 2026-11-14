@@ -676,7 +676,7 @@ export type LoopsoarEvent =
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
-export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces";
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace";
 
 /** 浏览器管理整页种类（更多菜单「查看更多」/设置打开）。 */
 export type ChromePageKind = "history" | "downloads" | "bookmarks" | "settings";
@@ -829,7 +829,6 @@ export interface LoopsoarAPI {
     setSidebarWidth(payload: { width: number; animate?: boolean }): Promise<{ width: number }>;
     /** 底部 DOM 面板（全宽终端）占用高度：原生网页视图让出，避免被遮挡。 */
     setBottomInset(payload: { bottom: number }): Promise<{ bottom: number }>;
-    setTopInset(payload: { top: number }): Promise<{ top: number }>;
     back(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     forward(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;
     reload(payload?: { tabId?: string }): Promise<{ ok: boolean; url?: string; error?: string }>;

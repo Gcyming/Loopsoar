@@ -428,9 +428,20 @@ ${locateJs(resolved)}
  *   · pointer-events:none（不改变页面行为）、固定定位（不触发页面重排）；
  *   · 只做视觉，失败也不影响动作本身（调用方 .catch 忽略）。
  */
+/** 虚拟光标素材（用户提供）：导航=箭头，忙=竖形等待符号；内联为 data URL，页面 CSP 下也能显示。 */
+const CURSOR_NAV_DATA = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/PjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+PHN2ZyB0PSIxNzk0NjY2OTI0NTgyIiBjbGFzcz0iaWNvbiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHAtaWQ9IjU4ODAiIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCI+PHBhdGggZD0iTTE0Ni45MjggMTIyLjc2OGwzMjcuNTIgNzY0IDE0MC44NDgtMjk0LjgxNiAyOTUuNTA0LTE0MS44MjRMMTQ2LjkyOCAxMjIuNzY4eiBtNDA4LjMyIDQwOS4yNjRMNDc4LjQgNjkyLjkxMiAyOTkuMjggMjc1LjA4OGw0MTguMDQ4IDE3OS4xNjgtMTYyLjA4IDc3Ljc2eiIgZmlsbD0iIzU2NUQ2NCIgcC1pZD0iNTg4MSI+PC9wYXRoPjwvc3ZnPg==";
+const CURSOR_BUSY_DATA = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/PjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+PHN2ZyB0PSIxNzk0NjY2OTI5NzI5IiBjbGFzcz0iaWNvbiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHAtaWQ9IjYwNDUiIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCI+PHBhdGggZD0iTTYxMC42MTEyIDE3NC4wOGM0Ny40MTEyIDAgNzEuMDY1NiAwIDg5LjA4OCAxNy43MTUyYTcyLjcwNCA3Mi43MDQgMCAwIDEgNi44NjA4IDguMDg5NmMxNC42NDMyIDIwLjQ4IDExLjM2NjQgNDAuMzQ1NiA1LjEyIDc5Ljg3Mi0xMC4yNCA2NC4yMDQ4LTM2LjU1NjggMTQ0LjA3NjgtMTAxLjU4MDggMTk5LjE2OEE0My44MjcyIDQzLjgyNzIgMCAwIDAgNTkzLjkyIDUxMmMwIDEyLjggNi4zNDg4IDI0Ljc4MDggMTYuMTc5MiAzMy4wNzUyIDY1LjAyNCA1NS4wOTEyIDkxLjM0MDggMTM0Ljk2MzIgMTAxLjU4MDggMTk5LjA2NTYgNi4yNDY0IDM5LjYyODggOS41MjMyIDU5LjQ5NDQtNS4xMiA3OS45NzQ0YTcyLjM5NjggNzIuMzk2OCAwIDAgMS02Ljg2MDggOC4xOTJjLTE4LjAyMjQgMTcuNjEyOC00MS42NzY4IDE3LjYxMjgtODkuMDg4IDE3LjYxMjhIMzcyLjMyNjRjLTQ3LjMwODggMC03MS4wNjU2IDAtODguOTg1Ni0xNy43MTUyYTcyLjM5NjggNzIuMzk2OCAwIDAgMS02Ljg2MDgtOC4wODk2Yy0xNC42NDMyLTIwLjQ4LTExLjQ2ODgtNDAuMzQ1Ni01LjEyLTc5Ljg3MiAxMC4yNC02NC4yMDQ4IDM2LjU1NjgtMTQ0LjA3NjggMTAxLjU4MDgtMTk5LjE2OEE0NC4wMzIgNDQuMDMyIDAgMCAwIDM4OS4xMiA1MTJhNDMuODI3MiA0My44MjcyIDAgMCAwLTE2LjE3OTItMzMuMDc1MkMzMDcuOTE2OCA0MjMuOTM2IDI4MS42IDM0NC4wNjQgMjcxLjM2IDI3OS44NTkyYy02LjM0ODgtMzkuNjI4OC05LjUyMzItNTkuNDk0NCA1LjEyLTc5Ljk3NDRhNzIuNzA0IDcyLjcwNCAwIDAgMSA2Ljg2MDgtOC4xOTJjMTcuOTItMTcuNjEyOCA0MS42NzY4LTE3LjYxMjggODkuMDg4LTE3LjYxMjhoMjM4LjE4MjR6IG0tMTk4LjE0NCA4MS40MDhjLTI3Ljk1NTIgMC4yMDQ4LTQxLjk4NCAwLjMwNzItNTAuOTk1MiAxMC42NDk2YTM1LjEyMzIgMzUuMTIzMiAwIDAgMC0zLjM3OTIgNC42MDhjLTcuMDY1NiAxMS44Nzg0LTMuMDcyIDIzLjc1NjggNC41MDU2IDQ3LjMwODggMjAuMTcyOCA2Mi42Njg4IDYyLjI1OTIgMTMyLjUwNTYgMTI5LjAyNCAxMzIuNTA1NiA2Ni41NiAwIDEwOC41NDQtNjkuNzM0NCAxMjguODE5Mi0xMzIuNTA1NiA3LjU3NzYtMjMuNTUyIDExLjM2NjQtMzUuNDMwNCA0LjQwMzItNDcuMzA4OGEzNS4wMjA4IDM1LjAyMDggMCAwIDAtMy4zNzkyLTQuNjA4Yy05LjExMzYtMTAuMzQyNC0yMy4wNC0xMC40NDQ4LTUwLjk5NTItMTAuNjQ5Ni01MC42ODgtMC40MDk2LTEwNy4zMTUyLTAuNDA5Ni0xNTguMDAzMiAweiIgcC1pZD0iNjA0NiI+PC9wYXRoPjwvc3ZnPg==";
+
+/** 光标图像（箭头热点在左上角）：白描边 + 阴影保证深色页面上也看得见。 */
+function cursorImgScript(): string {
+  return `  const NAV = ${JSON.stringify(CURSOR_NAV_DATA)};
+  const BUSY = ${JSON.stringify(CURSOR_BUSY_DATA)};
+`;
+}
+
 export function buildCursorScript(resolved: ResolvedTarget, ripple: boolean): string {
   return `(() => {
-${locateJs(resolved)}
+${cursorImgScript()}${locateJs(resolved)}
   const doc = document;
   const KEY = '__loopsoarAgentOverlay';
   let root = window[KEY];
@@ -446,16 +457,20 @@ ${locateJs(resolved)}
   const rect = el.getBoundingClientRect();
   const cx = Math.min(Math.max(rect.left + rect.width / 2, 4), Math.max(window.innerWidth - 4, 4));
   const cy = Math.min(Math.max(rect.top + rect.height / 2, 4), Math.max(window.innerHeight - 4, 4));
+  // 虚拟鼠标：用用户提供的两张 SVG（导航/忙），箭头热点对齐左上角；
+  // 之前的 14px 圆点太小、深色页面上几乎看不见（用户 m02333 反馈「虚拟鼠标呢」）。
   let cursor = root.querySelector('.cursor');
   if (!cursor) {
-    cursor = doc.createElement('div');
+    cursor = doc.createElement('img');
     cursor.className = 'cursor';
+    cursor.alt = '';
     cursor.style.cssText =
-      'position:fixed;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;' +
-      'background:rgba(217,138,79,.95);box-shadow:0 0 0 3px rgba(217,138,79,.22),0 2px 10px rgba(0,0,0,.45);' +
-      'transition:left .16s cubic-bezier(.2,0,.2,1),top .16s cubic-bezier(.2,0,.2,1);';
+      'position:fixed;width:26px;height:26px;margin:-2px 0 0 -2px;' +
+      'pointer-events:none;filter:drop-shadow(0 0 1.5px rgba(255,255,255,.95)) drop-shadow(0 2px 4px rgba(0,0,0,.45));' +
+      'transition:left .18s cubic-bezier(.2,0,.2,1),top .18s cubic-bezier(.2,0,.2,1),transform .12s ease;';
     root.appendChild(cursor);
   }
+  cursor.src = ripple ? NAV : BUSY;
   const prev = cursor.__lspos || { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) };
   cursor.style.left = prev.x + 'px'; cursor.style.top = prev.y + 'px';
   cursor.__lspos = { x: cx, y: cy };
@@ -470,6 +485,13 @@ ${locateJs(resolved)}
   root.appendChild(box);
   setTimeout(() => { box.style.opacity = '0'; setTimeout(() => box.remove(), 320); }, 520);
   if (ripple) {
+    // 点击时箭头做一个短促的按压反馈（WAAPI，页面禁用动画也不影响动作）。
+    try {
+      cursor.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(.82)' }, { transform: 'scale(1)' }],
+        { duration: 180, easing: 'ease-out' },
+      );
+    } catch (err) {}
     const ring = doc.createElement('div');
     ring.className = 'ring';
     ring.style.cssText =
@@ -494,6 +516,31 @@ ${locateJs(resolved)}
 }
 
 /** 让光标动画走完再执行动作（毫秒）：既看得见，又不至于拖慢长任务。 */
+/**
+ * 虚拟键盘提示：在光标旁显示当前按键/输入状态（如「⌨ Enter」「⌨ 输入中」），约 0.9s 后淡出。
+ * 为什么需要：用户要求「像用户操作电脑一样」——只有光标、看不到键盘，输入过程就是黑箱。
+ */
+export function buildKeyHintScript(label: string): string {
+  return `(() => {
+  const doc = document;
+  const root = window.__loopsoarAgentOverlay;
+  if (!root) return { ok: false };
+  const cursor = root.querySelector ? root.querySelector('.cursor') : null;
+  const x = cursor ? parseFloat(cursor.style.left || '24') : 40;
+  const y = cursor ? parseFloat(cursor.style.top || '24') : 40;
+  const chip = doc.createElement('div');
+  chip.className = 'key-chip';
+  chip.textContent = ${JSON.stringify(label)};
+  chip.style.cssText = 'position:fixed;left:' + (x + 22) + 'px;top:' + (y + 20) + 'px;' +
+    'padding:8px 14px;border-radius:999px;background:rgba(64,68,76,.9);color:#f7f2e8;' +
+    'font:500 12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;pointer-events:none;' +
+    'box-shadow:0 6px 18px rgba(0,0,0,.35);transition:opacity .25s ease;opacity:1;';
+  root.appendChild(chip);
+  setTimeout(() => { chip.style.opacity = '0'; setTimeout(() => chip.remove(), 280); }, 900);
+  return { ok: true };
+})()`;
+}
+
 export const CURSOR_LEAD_MS = 170;
 
 /**
@@ -585,7 +632,8 @@ ${userLockPreambleJs()}
   mask.style.cssText = 'position:absolute;inset:0;background:transparent;pointer-events:auto;display:flex;align-items:flex-start;justify-content:center;';
   // 提示文案：无边框无底色块，中心（文字处）最实、向四周均匀渐隐（用户指定的渲染样式）。
   const hint = doc.createElement('div');
-  hint.style.cssText = 'margin-top:46px;max-width:min(620px,88vw);padding:16px 36px;color:#f7f2e8;font:500 13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:center;background:radial-gradient(120% 150% at 50% 42%, rgba(12,14,20,.94) 0%, rgba(12,14,20,.78) 38%, rgba(12,14,20,.42) 60%, rgba(12,14,20,0) 82%);border:0;box-shadow:none;pointer-events:none;';
+  // 与全局提示统一：胶囊圆角 + 中灰微透 + 轻投影（用户 m02333：所有提示类浮窗写死这一套）。
+  hint.style.cssText = 'margin-top:44px;max-width:min(620px,88vw);padding:14px 30px;color:#f7f2e8;font:500 13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:center;background:rgba(64,68,76,.86);border-radius:999px;border:0;box-shadow:0 6px 22px rgba(0,0,0,.35);text-shadow:0 1px 2px rgba(0,0,0,.55);pointer-events:none;';
   hint.innerHTML = ${JSON.stringify(safeLabel)};
   mask.appendChild(hint);
   root.appendChild(mask);
@@ -1054,6 +1102,8 @@ export async function performType(
   let page: PageActionResult | null = null;
   try {
     await run(buildCursorScript(resolved, false)).catch(() => null);
+    // 虚拟键盘：输入时在光标旁显示「⌨ 输入中」，让操作过程可见。
+    await run(buildKeyHintScript("⌨ 输入中")).catch(() => null);
     await new Promise((resolve) => setTimeout(resolve, CURSOR_LEAD_MS));
     page = (await run(buildTypeScript(resolved, text))) as PageActionResult | null;
   } catch (err) {

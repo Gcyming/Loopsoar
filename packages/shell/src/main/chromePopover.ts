@@ -35,9 +35,9 @@ export interface PopoverSize {
 }
 
 /** 浮层种类（与契约 PopoverKindSchema 保持一致）。 */
-export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces";
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace";
 
-export const CHROME_POPOVER_KINDS: readonly ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces"];
+export const CHROME_POPOVER_KINDS: readonly ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces", "workspace"];
 
 /** 浮层与锚点之间的默认间距。 */
 export const DEFAULT_POPOVER_GAP = 6;
@@ -55,6 +55,8 @@ export const DEFAULT_POPOVER_SIZES: Record<ChromePopoverKind, PopoverSize> = {
   history: { width: 340, height: 460 },
   downloads: { width: 360, height: 440 },
   workspaces: { width: 230, height: 300 },
+  // Agent 工作区（折叠标签组）：列出该会话里 Agent 打开/操作过的网页，点一项切过去。
+  workspace: { width: 320, height: 380 },
 };
 
 function clamp(value: number, min: number, max: number): number {

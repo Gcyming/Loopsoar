@@ -23,12 +23,8 @@ export interface BrowserTabsProps {
   tabs: TabState[];
   /** Agent 工作区里的标签（顺序与宿主 listTabs 一致）。 */
   boundTabs: TabState[];
-  /** 工作区列表是否展开（展开时 App 还会隐藏原生网页视图，见 browser:setOverlay）。 */
-  workspaceExpanded: boolean;
+  /** 点 chip：由 App 打开独立浮层（网页既不消失也不被挤）。 */
   onToggleWorkspace: () => void;
-  onSelectBoundTab: (tabId: string) => void;
-  /** 面板实际高度（展开时上报，App 用它给网页让位；收起时上报 0）。 */
-  onPanelHeightChange?: (height: number) => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
@@ -37,10 +33,7 @@ export interface BrowserTabsProps {
 export default function BrowserTabs({
   tabs,
   boundTabs,
-  workspaceExpanded,
   onToggleWorkspace,
-  onSelectBoundTab,
-  onPanelHeightChange,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -54,25 +47,18 @@ export default function BrowserTabs({
         {boundTabs.length > 0 ? (
           <button
             type="button"
-            style={{ ...styles.chip, ...(workspaceExpanded ? styles.chipOpen : null) }}
+            style={styles.chip}
             title={tr("browser.agentWorkspace")}
             aria-label={`${tr("browser.agentWorkspace")} · ${tr("browser.agentWorkspaceCount", { n: boundTabs.length })}`}
-            aria-expanded={workspaceExpanded}
             aria-haspopup="menu"
+            data-chrome-popover-trigger=""
+            data-workspace-chip="1"
             onClick={onToggleWorkspace}
           >
             <Icon name="layers-linked" size={12} style={styles.chipIcon} />
             <span style={styles.chipLabel}>{tr("browser.agentWorkspace")}</span>
             <span style={styles.chipCount}>{tr("browser.agentWorkspaceCount", { n: boundTabs.length })}</span>
-            <Icon
-              name="chevron-down"
-              size={10}
-              style={{
-                flex: "none",
-                transform: workspaceExpanded ? "rotate(180deg)" : "none",
-                transition: `transform ${MOTION.fast} ${MOTION.ease}`,
-              }}
-            />
+            <Icon name="chevron-down" size={10} style={{ flex: "none" }} />
           </button>
         ) : null}
         {tabs.map((tab) => (
@@ -128,43 +114,6 @@ export default function BrowserTabs({
           <Icon name="plus" size={13} />
         </button>
       </div>
-      {workspaceExpanded ? (
-        <div
-          style={styles.panel}
-          role="menu"
-          aria-label={tr("browser.agentWorkspace")}
-          ref={(node) => {
-            // 量真实高度而不是按条数估算：内外边距/滚动条都会影响，差几个像素网页就会出现黑缝。
-            if (!node) return;
-            const report = onPanelHeightChange;
-            if (!report) return;
-            report(Math.ceil(node.getBoundingClientRect().height));
-          }}
-        >
-          {boundTabs.length === 0 ? (
-            <div style={styles.panelEmpty}>{tr("browser.agentWorkspaceEmpty")}</div>
-          ) : (
-            boundTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="menuitem"
-                style={{ ...styles.panelItem, ...(tab.active ? styles.panelItemActive : null) }}
-                title={tab.url || tab.title}
-                onClick={() => onSelectBoundTab(tab.id)}
-              >
-                {tab.favicon ? (
-                  <img src={tab.favicon} alt="" width={14} height={14} style={styles.tabFavicon} />
-                ) : (
-                  <span style={styles.tabLetter}>{(tab.title || tab.url || "·").trim().charAt(0).toUpperCase() || "·"}</span>
-                )}
-                <span style={styles.panelTitle}>{tab.title || tab.url}</span>
-                {tab.active ? <Icon name="check" size={12} style={styles.panelCheck} /> : null}
-              </button>
-            ))
-          )}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -227,39 +176,7 @@ const styles: Record<string, React.CSSProperties> = {
   tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "1 1 auto" },
   tabClose: { width: 18, height: 18, flex: "none" },
   tabAdd: { width: 26, height: 26, flex: "none", marginBottom: 2, marginLeft: 2 },
-  panel: {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    minWidth: 280,
-    maxHeight: 320,
-    overflow: "auto",
-    zIndex: 60,
-    display: "flex",
-    flexDirection: "column",
-    gap: 2,
-    padding: 6,
-    borderRadius: RADIUS.md,
-    border: "none",
-    background: BRAND.inkRaised,
-    boxShadow: SHADOW.card,
-    WebkitAppRegion: "no-drag",
-  } as React.CSSProperties,
-  panelItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    padding: "7px 9px",
-    border: "none",
-    borderRadius: RADIUS.sm,
-    background: "transparent",
-    color: BRAND.linen,
-    fontSize: 12,
-    textAlign: "left",
-    cursor: "pointer",
-    transition: MOTION.hover,
-  },
+
   panelItemActive: { background: BRAND.ochreSoft },
   panelTitle: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   panelCheck: { flex: "none", color: BRAND.ochreHover },

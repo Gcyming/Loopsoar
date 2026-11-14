@@ -301,9 +301,7 @@ export default function App(): React.JSX.Element {
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => !isOnboardingDone());
   const [tabs, setTabs] = useState<TabState[]>([]);
   /** Agent 工作区（折叠标签组）是否展开：展开时隐藏原生网页视图，否则列表面板会被网页盖住。 */
-  const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
-  /** 展开面板的实测高度：作为原生网页的顶部让位，页面不被隐藏也不留黑缝。 */
-  const [workspacePanelHeight, setWorkspacePanelHeight] = useState(0);
+
   /** 新标签页/整页会话处于 Vibecoding 状态（侧栏会话按钮据此变成「会话列表」按钮）。 */
   const [vibeModeActive, setVibeModeActive] = useState(false);
   /** 用户是否刚在会话列表里主动选过会话：直接回话时才复用，否则每次直接回话都新建会话。 */
@@ -854,18 +852,7 @@ export default function App(): React.JSX.Element {
   // （分组规则在 agentWorkspace.ts，纯函数可单测；这里只负责渲染与副作用）。
   const { user: userTabs, bound: boundTabs } = useMemo(() => splitAgentTabs(tabs), [tabs]);
   // 工作区里最后一个网页也没了（Agent 关页/会话切走）：折叠面板不该悬空留着。
-  useEffect(() => {
-    if (boundTabs.length === 0) setWorkspaceExpanded(false);
-  }, [boundTabs.length]);
-  /**
-   * 工作区展开时把网页整体下移，而不是隐藏页面（用户 m01968：点开折叠标签后网页直接没了）。
-   * 高度与面板一致：上下 padding 12 + 每项 36，超过 320 由面板自己滚动。
-   */
-  useEffect(() => {
-    if (!api) return;
-    const height = workspaceExpanded ? workspacePanelHeight : 0;
-    void api.browser.setTopInset({ top: height }).catch(() => undefined);
-  }, [api, workspaceExpanded, workspacePanelHeight]);
+
 
   const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
   const activeTabIdRef = React.useRef<string | null>(null);
@@ -1651,7 +1638,7 @@ export default function App(): React.JSX.Element {
   React.useEffect(() => {
     if (!api) return;
     return api.on("chrome:popoverAction", (payload) => {
-      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string } };
+      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string; tabId?: string } };
       if (p?.action === "openPage" && p.payload?.kind) {
         dismissAllPopovers();
         setChromePage(p.payload.kind);
@@ -1662,6 +1649,10 @@ export default function App(): React.JSX.Element {
         return;
       }
       if (p?.action === "savePage") savePageRef.current?.();
+      if (p?.action === "selectTab" && p.payload?.tabId) {
+        selectTab(p.payload.tabId);
+        return;
+      }
       if (p?.action === "selectWorkspace") {
         const id = (p.payload as { id?: unknown } | undefined)?.id;
         if (typeof id === "string") bindWorkspaceToCurrentSession(id);
@@ -1686,7 +1677,6 @@ export default function App(): React.JSX.Element {
       if (!api) return;
       // 切标签属于切换界面：所有已展开列表/浮层先收起（用户 m02115 全局规则）。
       dismissAllPopovers();
-      setWorkspaceExpanded(false);
       void api.browser.selectTab({ tabId }).then(() => {
         void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
         const tab = tabs.find((t) => t.id === tabId);
@@ -1885,8 +1875,6 @@ export default function App(): React.JSX.Element {
     if (!api) return;
     // 切会话属于切换界面：先收起所有展开列表/浮层（用户 m02115 全局规则）。
     dismissAllPopovers();
-    // 工作区面板属于「上一个会话的网页」：切会话必须收起，否则点开的是别人的页面列表。
-    setWorkspaceExpanded(false);
     const previousSessionId = sessionIdRef.current;
     void api.chat.switchSession({ sessionId }).then((r) => {
       if (!r.ok) return;
@@ -1920,6 +1908,24 @@ export default function App(): React.JSX.Element {
         .catch(() => undefined);
     });
   }, [api, metaFor, readPending, writeSessionMessages]);
+
+  /**
+   * 打开「Agent 工作区」浮层：独立子窗口，压在网页之上。
+   * 为什么不在主窗口里画：主窗口 DOM 在原生网页视图之下，面板要么被盖住、要么得把网页隐藏/下移。
+   */
+  const toggleWorkspacePopover = useCallback((): void => {
+    if (!api) return;
+    const chip = document.querySelector('[data-workspace-chip="1"]') as HTMLElement | null;
+    if (!chip) return;
+    const rect = chip.getBoundingClientRect();
+    void api.browser
+      .togglePopover({
+        kind: "workspace",
+        anchor: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        lang: preferences?.language === "en-US" ? "en-US" : "zh-CN",
+      })
+      .catch(() => undefined);
+  }, [api, preferences?.language]);
 
   /** 删除会话：当前会话被删时连同左侧标签切到下一个会话（原内联逻辑外置）。 */
   const deleteSession = useCallback(
@@ -2056,7 +2062,7 @@ export default function App(): React.JSX.Element {
       onboardingOpen ||
       chromePage !== null;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, workspaceExpanded]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage]);
   useEffect(() => {
     return () => {
       void api?.browser.setOverlay({ open: false }).catch(() => undefined);
@@ -2222,14 +2228,11 @@ export default function App(): React.JSX.Element {
                 <BrowserTabs
                   tabs={userTabs}
                   boundTabs={boundTabs}
-                  workspaceExpanded={workspaceExpanded}
                   onToggleWorkspace={() => {
-                    // 展开工作区属于「切换界面」：其它已展开菜单先收起（同一时刻只留一个浮层）。
+                    // 独立浮层：网页保持原样（不隐藏、不被挤），浮层天然压在网页之上。
                     dismissAllPopovers();
-                    setWorkspaceExpanded((open) => !open);
+                    toggleWorkspacePopover();
                   }}
-                  onSelectBoundTab={selectTab}
-                  onPanelHeightChange={setWorkspacePanelHeight}
                   onSelectTab={selectTab}
                   onCloseTab={closeTab}
                   onNewTab={newTab}

@@ -204,13 +204,6 @@
       "hasRequest": true
     },
     {
-      "channel": "browser:setTopInset",
-      "domain": "browser",
-      "method": "setTopInset",
-      "sensitive": true,
-      "hasRequest": true
-    },
-    {
       "channel": "browser:setBottomInset",
       "domain": "browser",
       "method": "setBottomInset",

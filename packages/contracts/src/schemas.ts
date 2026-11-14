@@ -247,7 +247,7 @@ export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 /* ───────────────────────── 浏览器工具栏浮层（独立窗口渲染） ───────────────────────── */
 
 /** 浮层种类：更多菜单 / 收藏夹 / 历史记录 / 下载。 */
-export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads", "workspaces"]);
+export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads", "workspaces", "workspace"]);
 
 /** 锚点矩形（相对主窗口内容区的 CSS px；主进程换算为屏幕坐标并做边缘翻转/夹取）。 */
 export const PopoverAnchorSchema = z.object({
@@ -648,12 +648,6 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "setSidebarWidth",
     request: BrowserSidebarWidthSchema,
-    sensitive: true,
-  },
-  "browser:setTopInset": {
-    domain: "browser",
-    method: "setTopInset",
-    request: z.object({ top: z.number().int().min(0).max(2000) }),
     sensitive: true,
   },
   "browser:setBottomInset": {

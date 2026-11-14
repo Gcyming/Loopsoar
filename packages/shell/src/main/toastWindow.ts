@@ -72,7 +72,7 @@ export function computeToastBounds(anchor: ToastAnchor, text: string): { x: numb
 }
 
 /** 无边框、无底板、中心最实四周渐隐的提示样式（用户 m01968 指定的渲染样式）。 */
-export function buildToastHtml(text: string): string {
+export function buildToastHtml(text: string, holdMs = 4500): string {
   const escaped = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -82,7 +82,9 @@ export function buildToastHtml(text: string): string {
     html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
     body{display:flex;align-items:center;justify-content:center;height:100vh;
       font:500 13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;color:#f7f2e8;opacity:0;
-      animation:in 180ms ease-out forwards;}
+      /* 入场 + 到点后自我淡出：主进程按同一时长关闭窗口，衔接处不会「啪」地消失（用户 m02333）。 */
+      animation:in 180ms ease-out forwards, out 260ms ease-in forwards;
+      animation-delay:0s, ${Math.max(0, holdMs - 260)}ms;}
     /* 胶囊形：形状交给 border-radius（平顶平底 + 半圆端头），
        渐隐交给 mask —— 只用径向背景会得到椭圆而不是胶囊（用户 m02086 实测方边、m02086 后仍像椭圆）。 */
     .toast{max-width:calc(100% - 16px);padding:15px 34px;text-align:center;white-space:nowrap;
@@ -94,6 +96,7 @@ export function buildToastHtml(text: string): string {
       -webkit-mask-image:radial-gradient(ellipse 100% 190% at 50% 50%,#000 58%,rgba(0,0,0,0) 100%);
       mask-image:radial-gradient(ellipse 100% 190% at 50% 50%,#000 58%,rgba(0,0,0,0) 100%);}
     @keyframes in{to{opacity:1;}}
+    @keyframes out{to{opacity:0;}}
   </style></head><body><div class="toast">${escaped}</div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -145,7 +148,8 @@ export function createToastWindow(deps: ToastWindowDeps): ToastWindowController 
       const target = ensure();
       if (!target) return;
       target.setBounds(computeToastBounds(anchor, clean));
-      void Promise.resolve(target.loadURL(buildToastHtml(clean.slice(0, 300))))
+      const holdMs = sticky ? 8000 : duration;
+      void Promise.resolve(target.loadURL(buildToastHtml(clean.slice(0, 300), holdMs)))
         .then(() => {
           if (!win || (win.isDestroyed?.() ?? false)) return;
           win.showInactive();

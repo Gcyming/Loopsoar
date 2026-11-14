@@ -22,7 +22,7 @@ import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
-import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry, WorkspaceRecord } from "./types.js";
+import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry, TabState, WorkspaceRecord } from "./types.js";
 
 export interface PopoverAppProps {
   kind: ChromePopoverKind;
@@ -53,7 +53,7 @@ const BOOKMARK_PREVIEW = 8;
 const HISTORY_PREVIEW = 8;
 const DOWNLOAD_PREVIEW = 5;
 
-const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces"];
+const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces", "workspace"];
 
 function isPopoverKind(value: unknown): value is ChromePopoverKind {
   return typeof value === "string" && POPOVER_KINDS.includes(value as ChromePopoverKind);
@@ -96,6 +96,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   const [history, setHistory] = React.useState<HistoryEntry[] | null>(null);
   const [downloads, setDownloads] = React.useState<DownloadItem[] | null>(null);
   const [workspaces, setWorkspaces] = React.useState<WorkspaceRecord[] | null>(null);
+  const [workspaceTabs, setWorkspaceTabs] = React.useState<TabState[] | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
 
@@ -125,6 +126,10 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
         } else if (kind === "downloads") {
           const result = await api?.browser.downloads();
           if (alive) setDownloads(result?.downloads ?? []);
+        } else if (kind === "workspace") {
+          // 浮层窗口与主窗口同进程、同一套 preload：listTabs 返回的就是「当前会话」的标签。
+          const result = await api?.browser.listTabs();
+          if (alive) setWorkspaceTabs(result?.tabs ?? []);
         } else if (kind === "workspaces") {
           const result = await api?.workspace.list();
           if (alive) {
@@ -249,6 +254,39 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
           <Icon name="workspace-add" size={14} className="chrome-pop-icon" />
           <span className="chrome-pop-label">{tr("chat.addWorkspace")}</span>
         </button>
+      </div>
+    );
+  };
+
+  /**
+   * Agent 工作区（折叠标签组）：只列 `agentBound` 的网页，点一项切过去。
+   * 浮层是独立窗口，所以展开时网页既不消失也不被往下挤（用户 m02333 的诉求）。
+   */
+  const renderWorkspaceTabs = (): React.ReactElement => {
+    const bound = (workspaceTabs ?? []).filter((tab) => tab.agentBound === true);
+    if (workspaceTabs === null) return loadingView();
+    return (
+      <div className="chrome-pop-menu" role="menu" aria-label={tr("browser.agentWorkspace")} onKeyDown={onListKeyDown}>
+        {header(tr("browser.agentWorkspace"), bound.length)}
+        {bound.length === 0
+          ? emptyView(tr("browser.agentWorkspaceEmpty"))
+          : bound.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="menuitem"
+                className="chrome-pop-item"
+                title={tab.url || tab.title}
+                onClick={() => void dispatch("selectTab", { tabId: tab.id })}
+              >
+                {tab.active ? (
+                  <Icon name="check" size={14} className="chrome-pop-icon" />
+                ) : (
+                  <Icon name="globe" size={14} className="chrome-pop-icon" />
+                )}
+                <span className="chrome-pop-label">{tab.title || tab.url}</span>
+              </button>
+            ))}
       </div>
     );
   };
@@ -444,9 +482,11 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   return (
     <div ref={rootRef} className="chrome-pop-shell" tabIndex={-1}>
       <div className={`chrome-pop-card chrome-pop-${kind}`} role="presentation">
-        {kind === "more"
-          ? renderMore()
-          : kind === "workspaces"
+        {kind === "workspace"
+          ? renderWorkspaceTabs()
+          : kind === "more"
+            ? renderMore()
+            : kind === "workspaces"
             ? renderWorkspaces()
             : kind === "bookmarks"
               ? renderBookmarks()
