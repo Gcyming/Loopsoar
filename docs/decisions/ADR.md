@@ -1975,7 +1975,7 @@
 3. **展开工作区不再隐藏网页**：新增 `browser:setTopInset`（`topInset` 进 `computeBrowserViewBounds`），展开面板时把原生视图整体下移、面板占住顶部让出的区域，页面保持可见。面板高度由 DOM 实测上报（不再按条数估算）。实测：展开前后同一标签的页面截图高度 **908 → 848**（面板 60px）。`browser:setOverlay` 不再因工作区展开而隐藏页面。
 4. **提示改为独立透明子窗口**：DOM Toast 会被原生网页盖住（用户截图实证）。新增 `ui:toast` 通道 + `toastWindow.ts`（注入窗口工厂，不 import electron）：无边框、透明、点击穿透、跟随主窗口**下方居中**，HTML 为「胶囊圆角 + 径向渐隐 + 文本处最实」，自动 4.5s/8s 关闭；主窗口不再渲染 DOM Toast，只有独立小窗模式保留内联版。
 5. **折叠标签组去边框**：chip 与展开面板一律去边框，交互反馈只用高亮（用户多次强调）。
-6. **提示是「胶囊」不是椭圆**：只靠 `radial-gradient` 背景会渲染成椭圆（用户先看到方边、再去掉方边后仍像椭圆）。最终形状交给 `border-radius:999px`（平顶平底 + 半圆端头），渐隐交给 `mask-image: radial-gradient(ellipse 100% 190% …)`——两者叠加即「胶囊 + 四周渐隐」，文字处最实。E2E 直接截浮窗自身帧（`LOOPSOAR_E2E_TOAST_SHOT`，325×90）核对形状。
+6. **提示是「胶囊」不是椭圆**：只靠 `radial-gradient` 背景会渲染成椭圆（用户先看到方边、再去掉方边后仍像椭圆）。最终形状交给 `border-radius:999px`（平顶平底 + 半圆端头），渐隐交给 `mask-image: radial-gradient(ellipse 100% 190% …)`——两者叠加即「胶囊 + 四周渐隐」，文字处最实。**色调按用户后续要求定为浅灰 + 微透**（`rgba(118,122,130,.55)` + 轻微文字投影；深色底会让提示像一块实心黑条）。E2E 直接截浮窗自身帧（`LOOPSOAR_E2E_TOAST_SHOT`，325×90）核对形状。
 6. **回归**：新增 `toastWindow.spec.ts`（居中/宽度夹取/胶囊 CSS/转义）与 `chatTurnHooks.spec.ts`（开始即锁、异常也解锁）；`browserSessionHost.spec.ts` 覆盖绑定标签才上锁、新标签补锁、不串会话。全量 **187 文件 / 1607 tests**。
 
 ## 附：ADR 索引与状态总览
