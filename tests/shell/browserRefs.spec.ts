@@ -1,0 +1,383 @@
+/**
+ * 元素引用（ref）注册表与动作解析（P0-2）：
+ * 快照产物 → 注册表 → ref 解析 → 可行动错误 → 原生 setter 输入 → 导航失效。
+ * 全部用假 WebContents（不引 electron），页面脚本直接按字符串断言。
+ */
+import { describe, expect, it } from "vitest";
+import { createWebContentsViewAdapter } from "../../packages/shell/src/browserAdapter/backends/webContentsView.ts";
+import {
+  BrowserActionError,
+  NAMED_KEYS,
+  RefRegistry,
+  SNAPSHOT_SCRIPT,
+  buildClickScript,
+  buildHoverScript,
+  buildPressKeyScript,
+  buildSelectScript,
+  buildTypeScript,
+  findCandidates,
+  formatCandidates,
+  isSupportedKey,
+  keyCodeOf,
+  normalizeRef,
+  performClick,
+  performHover,
+  performPressKey,
+  performSelect,
+  performType,
+  resolveTarget,
+  type RawBrowserElement,
+} from "../../packages/shell/src/browserAdapter/refs.ts";
+
+/** 假页面的快照产物：5 个元素，覆盖 link / textbox / button / heading / navigation。 */
+const PAGE: RawBrowserElement[] = [
+  { tag: "nav", role: "navigation", name: "主导航", selector: "nav", selectorWhy: "path" },
+  { tag: "a", role: "link", name: "登录", selector: "#login", selectorWhy: "id", href: "/login" },
+  { tag: "input", role: "textbox", name: "搜索", selector: "input[name=q]", selectorWhy: "name", type: "text", value: "" },
+  { tag: "button", role: "button", name: "提交", selector: "button", selectorWhy: "text", matchText: "提交" },
+  { tag: "h1", role: "heading", name: "欢迎", selector: "h1", selectorWhy: "path" },
+];
+
+function fakeView(scriptResult: unknown = { ok: true }) {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const scripts: string[] = [];
+  let snapshotPayload: unknown = {
+    url: "https://example.com/",
+    title: "示例页",
+    text: "正文",
+    elements: PAGE,
+    elementTotal: PAGE.length,
+  };
+  const view = {
+    webContents: {
+      async loadURL() {},
+      getURL: () => "https://example.com/",
+      async capturePage() {
+        return { toPNG: () => Buffer.from("") };
+      },
+      async executeJavaScript(code: string) {
+        scripts.push(code);
+        return code.startsWith("/* loopsoar:snapshot */") ? snapshotPayload : scriptResult;
+      },
+      on(event: string, cb: (...args: unknown[]) => void) {
+        handlers.set(event, cb);
+      },
+      setAudioMuted() {},
+      close() {},
+    },
+  };
+  return { view, handlers, scripts };
+}
+
+describe("元素引用注册表", () => {
+  it("快照脚本不写 DOM 属性，选择器按稳定性阶梯回退", () => {
+    expect(SNAPSHOT_SCRIPT).not.toContain("setAttribute");
+    expect(SNAPSHOT_SCRIPT).not.toContain("data-loops-el");
+    for (const token of ["aria-label", "data-testid", "nth-child", "matchText"]) {
+      expect(SNAPSHOT_SCRIPT).toContain(token);
+    }
+    // 注入页面的脚本必须是合法 JS（否则快照会静默失败）
+    expect(() => new Function(SNAPSHOT_SCRIPT)).not.toThrow();
+  });
+
+  it("每次快照按文档顺序重排 e1..eN，代数单调递增", () => {
+    const registry = new RefRegistry();
+    const first = registry.reset(PAGE);
+    expect(first.map((el) => el.ref)).toEqual(["e1", "e2", "e3", "e4", "e5"]);
+    expect(first[1].name).toBe("登录");
+    expect(registry.gen).toBe(1);
+    // matchText 是内部判别条件，不进入对外元素
+    expect("matchText" in first[3]).toBe(false);
+    registry.reset([PAGE[1]]);
+    expect(registry.gen).toBe(2);
+    expect(registry.size).toBe(1);
+  });
+
+  it("ref 别名归一化：#e5 / e5 / 5 都指向 e5，CSS 不被误判", () => {
+    expect(normalizeRef("e5")).toBe("e5");
+    expect(normalizeRef("E5")).toBe("e5");
+    expect(normalizeRef("5")).toBe("e5");
+    expect(normalizeRef("#e5")).toBe("e5");
+    expect(normalizeRef("[#e5]")).toBe("e5");
+    expect(normalizeRef("button#submit")).toBeNull();
+    expect(normalizeRef("text=登录")).toBeNull();
+  });
+
+  it("解析顺序：ref → 注册表句柄；CSS 原样；text= 走文本匹配", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const byRef = resolveTarget(registry, "e2");
+    expect(byRef.ok && byRef.kind === "ref" && byRef.selector === "#login").toBe(true);
+    const byNumber = resolveTarget(registry, "2");
+    expect(byNumber.ok && byNumber.selector === "#login").toBe(true);
+    // 精确文本句柄：选择器 + matchText 两段
+    const byTextHandle = resolveTarget(registry, "e4");
+    expect(byTextHandle.ok && byTextHandle.mode === "exactText" && byTextHandle.matchText === "提交").toBe(true);
+    const css = resolveTarget(registry, "button.primary");
+    expect(css.ok && css.kind === "css" && css.selector === "button.primary").toBe(true);
+    const text = resolveTarget(registry, "text=登录");
+    expect(text.ok && text.kind === "text" && text.matchText === "登录").toBe(true);
+  });
+
+  it("注册表没有该 ref → STALE_REF（导航清空 / 从未快照都覆盖）", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    registry.clear(); // 导航
+    const gone = resolveTarget(registry, "e2");
+    expect(gone.ok).toBe(false);
+    expect(!gone.ok && gone.code).toBe("STALE_REF");
+    expect(!gone.ok && gone.message).toContain("browser_snapshot");
+    const never = resolveTarget(null, "e1");
+    expect(!never.ok && never.message).toContain("[STALE_REF]");
+  });
+
+  it("ELEMENT_NOT_FOUND 候选 ≤3 且带 #eN 与 name", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const candidates = findCandidates(registry, "text=提交");
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.length).toBeLessThanOrEqual(3);
+    expect(candidates[0].name).toBe("提交");
+    expect(formatCandidates(candidates)).toContain("#e4");
+  });
+});
+
+describe("动作解析与执行", () => {
+  it("click：ref 解析成注册表选择器并注入页面脚本", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const scripts: string[] = [];
+    const result = await performClick(registry, "e2", async (script) => {
+      scripts.push(script);
+      return { ok: true };
+    });
+    expect(result.ok).toBe(true);
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain("#login");
+    expect(() => new Function(scripts[0])).not.toThrow();
+    expect(result.label).toContain("登录");
+  });
+
+  it("页面里查不到元素 → ELEMENT_NOT_FOUND + top3 候选", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const result = await performClick(registry, "e4", async () => ({ ok: false, code: "ELEMENT_NOT_FOUND" }));
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("ELEMENT_NOT_FOUND");
+    expect(result.message).toContain("[ELEMENT_NOT_FOUND]");
+    expect(result.message).toContain("候选");
+    expect(result.candidates?.length ?? 0).toBeLessThanOrEqual(3);
+  });
+
+  it("输入脚本走原生 setter 并回读比对（React 受控组件）", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const resolved = resolveTarget(registry, "e3");
+    if (!resolved.ok) throw new Error("解析失败");
+    const script = buildTypeScript(resolved, "Loopsoar");
+    expect(script).toContain("Object.getOwnPropertyDescriptor");
+    expect(script).toContain("HTMLInputElement.prototype");
+    expect(script).toContain("HTMLTextAreaElement.prototype");
+    expect(script).toContain("desc.set.call(el, TEXT)");
+    expect(script).toContain("InputEvent");
+    expect(script).toContain("if (actual !== TEXT)");
+    expect(script).toContain('"Loopsoar"');
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("输入被受控组件回滚 → 错误里带当前值", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const result = await performType(registry, "e3", "Loopsoar", async () => ({
+      ok: false,
+      code: "TYPE_NOT_EFFECTIVE",
+      actual: "旧值",
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("输入未生效");
+    expect(result.message).toContain("旧值");
+    expect(result.actualValue).toBe("旧值");
+  });
+
+  it("text= 不支持输入（提示改用 #eN）", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const result = await performType(registry, "text=搜索", "x", async () => ({ ok: true }));
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("#eN");
+  });
+});
+
+describe("WebContentsView 适配器：注册表生命周期", () => {
+  it("快照重建注册表、click 用句柄、导航后旧 ref 失效", async () => {
+    const ctx = fakeView();
+    const adapter = createWebContentsViewAdapter({ view: ctx.view });
+    const first = await adapter.snapshot();
+    expect(first.snapshotGen).toBe(1);
+    expect(first.elements.map((el) => el.ref)).toEqual(["e1", "e2", "e3", "e4", "e5"]);
+    expect(first.tabToken).toBeTruthy();
+    expect(first.elementTotal).toBe(PAGE.length);
+
+    await adapter.click("e2");
+    expect(ctx.scripts.at(-1)).toContain("#login");
+
+    const second = await adapter.snapshot();
+    expect(second.snapshotGen).toBe(2);
+
+    // 主框架导航 → 清空注册表；旧 ref 得到 STALE_REF 而不是「未找到元素」
+    ctx.handlers.get("did-navigate")?.({}, "https://example.com/next");
+    await expect(adapter.click("e2")).rejects.toBeInstanceOf(BrowserActionError);
+    await expect(adapter.click("e2")).rejects.toThrow(/STALE_REF/);
+  });
+
+  it("精确文本句柄：click 脚本按文本消歧", async () => {
+    const ctx = fakeView();
+    const adapter = createWebContentsViewAdapter({ view: ctx.view });
+    await adapter.snapshot();
+    await adapter.click("e4");
+    expect(ctx.scripts.at(-1)).toContain("exactText");
+    expect(ctx.scripts.at(-1)).toContain("提交");
+  });
+});
+
+describe("点击命中验证（BLOCKED_BY_OVERLAY）", () => {
+  it("点击脚本在 el.click() 前用 elementFromPoint 校验中心点归属", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const resolved = resolveTarget(registry, "e2");
+    if (!resolved.ok) throw new Error("解析失败");
+    const script = buildClickScript(resolved);
+    expect(script).toContain("elementFromPoint");
+    expect(script).toContain("hit !== el && !el.contains(hit)");
+    expect(script).toContain("BLOCKED_BY_OVERLAY");
+    // 命中校验必须发生在 click 之前（顺序断言，防止后来者把校验挪到点后）
+    expect(script.indexOf("elementFromPoint")).toBeLessThan(script.indexOf("el.click()"));
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("被遮挡 → 错误文案带遮挡元素摘要（tag.class + 文本，≤60 字）", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const result = await performClick(registry, "e4", async () => ({
+      ok: false,
+      code: "BLOCKED_BY_OVERLAY",
+      blocker: { tag: "div", className: "modal-mask", text: "登录弹窗" },
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("BLOCKED_BY_OVERLAY");
+    expect(result.message).toContain("[BLOCKED_BY_OVERLAY]");
+    expect(result.message).toContain('div.modal-mask "登录弹窗"');
+    expect(result.message).toContain("先关闭浮层");
+    expect(result.blocker).toBe('div.modal-mask "登录弹窗"');
+    expect((result.blocker ?? "").length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("按键 / 下拉 / 悬停脚本", () => {
+  it("按键白名单：命名键与单个可见字符通过，功能键/组合键拒绝", () => {
+    for (const key of NAMED_KEYS) expect(isSupportedKey(key)).toBe(true);
+    expect(isSupportedKey("a")).toBe(true);
+    expect(isSupportedKey("1")).toBe(true);
+    expect(isSupportedKey("/")).toBe(true);
+    expect(isSupportedKey(" ")).toBe(true);
+    expect(isSupportedKey("F1")).toBe(false);
+    expect(isSupportedKey("Control")).toBe(false);
+    expect(isSupportedKey("Shift+A")).toBe(false);
+    expect(isSupportedKey("")).toBe(false);
+    expect(keyCodeOf("Enter")).toBe("Enter");
+    expect(keyCodeOf("a")).toBe("KeyA");
+    expect(keyCodeOf("7")).toBe("Digit7");
+  });
+
+  it("按键脚本：keydown/keypress/keyup 齐全，Enter 有 requestSubmit 兜底，且是合法 JS", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const resolved = resolveTarget(registry, "e3");
+    if (!resolved.ok) throw new Error("解析失败");
+    const script = buildPressKeyScript(resolved, "Enter");
+    expect(script).toContain("'keydown'");
+    expect(script).toContain("'keypress'");
+    expect(script).toContain("'keyup'");
+    expect(script).toContain("requestSubmit");
+    expect(script).toContain('"Enter"');
+    expect(script).toContain("input[name=q]");
+    expect(() => new Function(script)).not.toThrow();
+    // 无 target：发到当前焦点/body，不注入定位代码
+    const bare = buildPressKeyScript(null, "Escape");
+    expect(bare).toContain("const el = null;");
+    expect(bare).toContain("document.activeElement");
+    expect(() => new Function(bare)).not.toThrow();
+  });
+
+  it("下拉脚本：原生 setter + input/change + selectedOptions 回读，且是合法 JS", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const resolved = resolveTarget(registry, "e2");
+    if (!resolved.ok) throw new Error("解析失败");
+    const script = buildSelectScript(resolved, ["北京", "上海"]);
+    expect(script).toContain("HTMLSelectElement.prototype");
+    expect(script).toContain("desc.set.call(el");
+    expect(script).toContain("new Event('input'");
+    expect(script).toContain("new Event('change'");
+    expect(script).toContain("selectedOptions");
+    expect(script).toContain("SELECT_NOT_EFFECTIVE");
+    expect(script).toContain('"北京"');
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("悬停脚本：五个事件齐全、over 冒泡 / enter 不冒泡，且是合法 JS", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const resolved = resolveTarget(registry, "e2");
+    if (!resolved.ok) throw new Error("解析失败");
+    const script = buildHoverScript(resolved);
+    for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]) {
+      expect(script).toContain(`'${type}'`);
+    }
+    expect(script).toContain("pointer('pointerover', true)");
+    expect(script).toContain("pointer('pointerenter', false)");
+    expect(script).toContain("mouse('mouseenter', false)");
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("performPressKey：回传实际路径（含 requestSubmit 兜底）", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const result = await performPressKey(registry, "e3", "Enter", async () => ({
+      ok: true,
+      path: "keydown+keypress+keyup+requestSubmit 兜底",
+    }));
+    expect(result.ok).toBe(true);
+    expect(result.label).toContain("搜索");
+    expect(result.detail).toContain("requestSubmit 兜底");
+  });
+
+  it("performSelect：回传选中项；performHover：回传派发事件数", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const selected = await performSelect(registry, "e2", ["北京"], async () => ({ ok: true, selected: ["北京"] }));
+    expect(selected.ok).toBe(true);
+    expect(selected.detail).toContain("已选中：北京");
+    const hovered = await performHover(registry, "e2", async () => ({
+      ok: true,
+      events: ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"],
+    }));
+    expect(hovered.ok).toBe(true);
+    expect(hovered.detail).toContain("派发 5 个事件");
+  });
+
+  it("performSelect：选项不存在 → OPTION_NOT_FOUND + 可用选项", async () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const result = await performSelect(registry, "e2", ["广州"], async () => ({
+      ok: false,
+      code: "OPTION_NOT_FOUND",
+      missing: ["广州"],
+      options: ["bj", "sh"],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("[OPTION_NOT_FOUND]");
+    expect(result.message).toContain("广州");
+    expect(result.message).toContain("bj；sh");
+  });
+});

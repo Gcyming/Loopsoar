@@ -95,6 +95,10 @@ export interface StartPageProps {
   onAddWorkspace: () => void;
   /** 选择附件（App 注入原生文件选择器）；返回路径后由 StartPage 插入当前输入草稿。 */
   onPickAttachment: () => Promise<string | null>;
+  /** 会话级「浏览器控制」开关：关闭（默认）时 browser_* 工具对模型不可见。 */
+  browserControl: boolean;
+  /** 切换「浏览器控制」（App 落库到会话；草稿态先记待落库标志）。 */
+  onToggleBrowserControl: () => void;
   /** 工作区「更多」：打开详细工作区面板（App 的 WorkspacePanel）。 */
   onOpenWorkspacePanel?: () => void;
 }
@@ -297,6 +301,8 @@ function NewTabPage({
   onAddWorkspace,
   onOpenWorkspacePanel,
   onAttach,
+  browserControl,
+  onToggleBrowserControl,
 }: NewTabPageProps): React.JSX.Element {
   const tr = useT();
   const api = useLoopsoarApi();
@@ -457,6 +463,8 @@ function NewTabPage({
                 onAddWorkspace={onAddWorkspace}
                 onOpenWorkspacePanel={onOpenWorkspacePanel}
                 onAttach={onAttach}
+                browserControl={browserControl}
+                onToggleBrowserControl={onToggleBrowserControl}
                 onSend={onSubmitVibe}
                 busy={false}
                 hint={tr("browser.ntp.vibeHint")}
@@ -507,6 +515,8 @@ function VibeChatView({
   onSelectWorkspace,
   onAddWorkspace,
   onAttach,
+  browserControl,
+  onToggleBrowserControl,
   draft,
   onDraftChange,
   onSend,
@@ -579,6 +589,8 @@ function VibeChatView({
               onSelectWorkspace={onSelectWorkspace}
               onAddWorkspace={onAddWorkspace}
               onAttach={onAttach}
+              browserControl={browserControl}
+              onToggleBrowserControl={onToggleBrowserControl}
             />
             <span style={styles.spacer} />
             {busy ? (
@@ -783,6 +795,9 @@ interface VibeControlsProps {
   onAddWorkspace: () => void;
   /** 选择附件后插入当前输入草稿。 */
   onAttach: () => void;
+  /** 会话级「浏览器控制」开关（关闭时 browser_* 工具对模型不可见）。 */
+  browserControl: boolean;
+  onToggleBrowserControl: () => void;
   /** 工作区「更多」：打开详细工作区面板（WorkspacePanel）。 */
   onOpenWorkspacePanel?: () => void;
   compact?: boolean;
@@ -942,13 +957,18 @@ function VibeWorkspacePicker({
   );
 }
 
-/** 圆形「+」：与右侧会话输入区同款；菜单 = 工作区（切换/选择文件夹）+ 更多操作（附件）。 */
+/**
+ * 圆形「+」：与右侧会话输入区同款（Composer.plusBtn）；菜单 = 工作区（切换/选择文件夹）
+ * + 更多操作（附件、会话级「浏览器控制」开关）。附件不再是独立按钮，统一折叠进这里。
+ */
 function PlusControl({
   workspaces,
   activeWorkspaceId,
   onSelectWorkspace,
   onAddWorkspace,
   onAttach,
+  browserControl,
+  onToggleBrowserControl,
 }: VibeControlsProps): React.JSX.Element {
   const tr = useT();
   const menu = useFloatingMenu(240);
@@ -966,7 +986,7 @@ function PlusControl({
         title={active ? tr("browser.vibe.workspaceCurrent", { name: active.name }) : tr("browser.vibe.workspaceChoose")}
         aria-label={tr("browser.vibe.workspaceChoose")}
         onClick={menu.toggle}
-        data-testid="vibe-workspace-plus"
+        data-testid="vibe-plus"
       >
         <Icon name="plus" size={14} />
       </button>
@@ -1014,6 +1034,22 @@ function PlusControl({
           >
             <Icon name="paperclip" size={12} style={styles.menuItemIcon} />
             <span style={styles.menuItemText}>{tr("composer.attachLabel")}</span>
+          </button>
+          {/* 会话级「浏览器控制」开关：勾选态可见（与 Composer「+」菜单同一语义） */}
+          <button
+            type="button"
+            style={styles.menuItem}
+            role="menuitemcheckbox"
+            aria-checked={browserControl}
+            title={tr("composer.browserControlHint")}
+            onClick={() => {
+              onToggleBrowserControl();
+              menu.close();
+            }}
+            data-testid="vibe-browser-control"
+          >
+            <Icon name={browserControl ? "check" : "globe"} size={12} style={styles.menuItemIcon} />
+            <span style={styles.menuItemText}>{tr("composer.browserControl")}</span>
           </button>
         </FloatingMenu>
       ) : null}

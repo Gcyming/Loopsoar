@@ -14,13 +14,14 @@ import { SandboxManager } from "../../packages/core/src/sandbox.ts";
 import { createNodePlatform } from "../../packages/core/src/platform/node.ts";
 import type { Permissions } from "../../packages/core/src/permissions.ts";
 
-/** 全 allow 策略：证明敏感步骤的确认不是来自类别策略。 */
+/** 全 allow 策略：证明敏感步骤的确认不是来自类别策略（含 browser 档——默认就是 allow）。 */
 function allowAllPolicy(): Permissions {
   return {
     read: "allow",
     write: "allow",
     terminal: "allow",
     network: "allow",
+    browser: "allow",
     workspaceRoots: [],
     confirmDangerousAlways: false,
   };

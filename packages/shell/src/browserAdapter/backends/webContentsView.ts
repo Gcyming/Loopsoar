@@ -3,10 +3,20 @@
  * 为什么依赖注入而非直接 import electron：
  *   ① 适配器保持零 electron 依赖 → 可在测试里用假 view 验证语义（不启真窗口）；
  *   ② 换基座（Tauri/WebView2+CDP）时只换后端，不动 Agent 内核。
- * 选择器约定：click/type 的 target 支持「元素编号」（数字）或标准 CSS 选择器。
- * 元素编号由 markInteractive() 在每次导航后注入（可交互元素序号化，元素优先于坐标）。
+ * 引用约定（P0-2）：快照返回的 #eN 只是显示别名，句柄是页面内算出的稳定选择器；
+ * 注册表在本适配器内（每标签一份），快照重建、主框架导航清空；click/type 的解析与
+ * 页面脚本全部走 refs.ts（工具层与适配器共用同一份实现，不再各写一套 querySelector）。
  */
 import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../types.js";
+import {
+  BrowserActionError,
+  SNAPSHOT_SCRIPT,
+  createTabRegistry,
+  dropTabRegistry,
+  performClick,
+  performType,
+  type RawBrowserElement,
+} from "../refs.js";
 
 /** WebContentsView 的最小形状（真实 Electron 对象结构兼容）。 */
 export interface WebContentsLike {
@@ -56,52 +66,14 @@ export interface WebContentsAdapterOptions {
   onLoadFailure?: (failure: BrowserLoadFailure) => void;
 }
 
-/** DOM 侧注入脚本：给可交互元素打编号（data-loops-el），返回数量。 */
-const MARKERS_SCRIPT = `(() => {
-  let i = 0;
-  const nodes = document.querySelectorAll('a,button,input,select,textarea,[role="button"],[onclick]');
-  nodes.forEach((el) => { el.setAttribute('data-loops-el', String(i++)); });
-  return nodes.length;
-})()`;
-
-const SNAPSHOT_SCRIPT = `(() => {
-  const els = Array.from(document.querySelectorAll('[data-loops-el]')).slice(0, 200).map((el) => ({
-    id: el.getAttribute('data-loops-el'),
-    tag: el.tagName.toLowerCase(),
-    type: el.getAttribute('type') || undefined,
-    text: (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 120),
-    href: el.getAttribute('href') || undefined,
-  }));
-  return {
-    url: location.href,
-    title: document.title,
-    text: (document.body ? document.body.innerText : '').slice(0, 20000),
-    elements: els,
-  };
-})()`;
-
-function selectorFor(target: string): string {
-  const trimmed = target.trim();
-  if (/^\d+$/.test(trimmed)) return `[data-loops-el="${trimmed}"]`;
-  return trimmed; // 交给 querySelector 处理；非法选择器会抛错由调用方感知
-}
-
-function jsString(value: string): string {
-  return JSON.stringify(value);
-}
+// 快照脚本与 ref 解析统一在 refs.ts：本文件不再给 DOM 打标记（
+// 「旧标记不清理」「编号每次重排」两个缺陷从根上消失）。这里只保留脚本参数序列化。
 
 export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): BrowserAdapter {
   const { view } = opts;
   const wc = view.webContents;
-
-  async function markInteractive(): Promise<number> {
-    try {
-      const n = await wc.executeJavaScript(MARKERS_SCRIPT, false);
-      return typeof n === "number" ? n : 0;
-    } catch {
-      return 0; // 页面尚未就绪：由调用方（navigate）决定是否重试
-    }
-  }
+  // 本标签的 ref 注册表：快照时重建、主框架导航清空；令牌随快照回传给工具层
+  const refs = createTabRegistry();
 
   async function waitDomReady(): Promise<void> {
     await new Promise<void>((resolve) => {
@@ -122,11 +94,15 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
 
   // 关键：用户点网页里的链接不会经过外壳的 navigate()，必须靠 WebContents 事件
   // 把地址回传给外壳；否则会出现"地址栏与网页各说各话"（网址与网页割裂）。
-  if (opts.onNavigate) {
-    // Electron 签名：(event, url, ...)；取 args[1]，否则地址栏会变成 [object Object]
-    wc.on("did-navigate", (...args) => opts.onNavigate?.(String(args[1] ?? "")));
-    wc.on("did-navigate-in-page", (...args) => opts.onNavigate?.(String(args[1] ?? "")));
-  }
+  // 主框架导航（含 SPA 路由）后页面可能整个换掉：旧 ref 一律作废，动作会得到 STALE_REF。
+  // 与地址栏同步共用一个处理器：Electron 每个事件只注册一次，测试假件按事件名存回调时也不会互相覆盖。
+  const handleNavigation = (isMainFrame: boolean, url: string): void => {
+    if (isMainFrame) refs.registry.clear();
+    opts.onNavigate?.(url);
+  };
+  // Electron 签名：(event, url, ...)；取 args[1]，否则地址栏会变成 [object Object]
+  wc.on("did-navigate", (...args) => handleNavigation(true, String(args[1] ?? "")));
+  wc.on("did-navigate-in-page", (...args) => handleNavigation(args[2] !== false, String(args[1] ?? "")));
   // 加载状态（加载页 / 失败页）：用主框架事件，不用 did-start-loading —— 子资源失败不该变成整页错误。
   if (opts.onLoadStart) {
     wc.on("did-start-navigation", (...args) => {
@@ -207,72 +183,44 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
     async navigate(url: string) {
       await wc.loadURL(url);
       await waitDomReady();
-      await markInteractive();
+      // 不再「导航后打标」：引用由 snapshot() 每次现算，导航只负责清空旧注册表（见 handleNavigation）
       return { url: wc.getURL() || url };
     },
 
     async snapshot(): Promise<BrowserSnapshot> {
-      await markInteractive();
       const raw = (await wc.executeJavaScript(SNAPSHOT_SCRIPT, false)) as {
-        url: string;
-        title: string;
-        text: string;
-        elements: unknown[];
-      };
+        url?: string;
+        title?: string;
+        text?: string;
+        elements?: RawBrowserElement[];
+        elementTotal?: number;
+      } | null;
+      const elements = refs.registry.reset(Array.isArray(raw?.elements) ? raw.elements : []);
       return {
-        url: raw.url,
-        title: raw.title,
-        text: raw.text,
-        elements: raw.elements,
-      } as BrowserSnapshot & { elements: unknown[] };
+        url: raw?.url ?? wc.getURL(),
+        title: raw?.title ?? "",
+        text: raw?.text ?? "",
+        elements,
+        snapshotGen: refs.registry.gen,
+        elementTotal: typeof raw?.elementTotal === "number" ? raw.elementTotal : elements.length,
+        tabToken: refs.token,
+      };
     },
 
     async click(target: string) {
-      const sel = selectorFor(target);
-      const code = `(() => {
-        const el = document.querySelector(${jsString(sel)});
-        if (!el) throw new Error('元素不存在: ' + ${jsString(sel)});
-        el.scrollIntoView({ block: 'center' });
-        el.click();
-        return true;
-      })()`;
-      await wc.executeJavaScript(code, true);
+      // ref/CSS/text= 的解析与脚本都在 refs.ts：失败抛可行动错误（STALE_REF / ELEMENT_NOT_FOUND + 候选）
+      const result = await performClick(refs.registry, target, (script) => wc.executeJavaScript(script, true));
+      if (!result.ok) throw new BrowserActionError(result);
     },
 
     async type(target: string, text: string) {
-      const sel = selectorFor(target);
-      const code = `(() => {
-        const el = document.querySelector(${jsString(sel)});
-        if (!el) throw new Error('元素不存在: ' + ${jsString(sel)});
-        el.focus();
-        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-        if (desc && desc.set) desc.set.call(el, ${jsString(text)});
-        else el.value = ${jsString(text)};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      })()`;
-      await wc.executeJavaScript(code, true);
-    },
-
-    async scroll(dir: "down" | "up" | "top" | "bottom") {
-      const code = `(() => {
-        if (${jsString(dir)} === 'top') window.scrollTo({ top: 0, behavior: 'instant' });
-        else if (${jsString(dir)} === 'bottom') window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
-        else window.scrollBy({ top: (${jsString(dir)} === 'down' ? 1 : -1) * window.innerHeight * 0.8, behavior: 'instant' });
-        return true;
-      })()`;
-      await wc.executeJavaScript(code, true);
+      const result = await performType(refs.registry, target, text, (script) => wc.executeJavaScript(script, true));
+      if (!result.ok) throw new BrowserActionError(result);
     },
 
     async screenshot(): Promise<string> {
       const image = await wc.capturePage();
       return image.toPNG().toString("base64");
-    },
-
-    async wait(ms: number) {
-      await new Promise((r) => setTimeout(r, Math.max(0, ms)));
     },
 
     async executeJs(code: string) {
@@ -297,6 +245,7 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
         // 忽略：部分平台/版本关闭失败时仍由外壳 detach
       }
       opts.onClose?.();
+      dropTabRegistry(refs.token);
     },
   };
 }

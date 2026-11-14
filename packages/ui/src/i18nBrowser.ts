@@ -22,6 +22,9 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   /* ── Agent 独立窗口（自绘标题栏） ── */
   "agentWindow.title": { zh: "Agent 对话", en: "Agent Chat" },
 
+  /* ── Agent 打开网页时的窗口布局（第二阶段 Slice E · chrome:applyLayout） ── */
+  "browser.layout.openFailed": { zh: "小窗打开失败：{error}", en: "Failed to open the agent window: {error}" },
+
   /* ── 浏览器顶栏（BrowserChrome） ── */
   "browser.back": { zh: "后退", en: "Back" },
   "browser.forward": { zh: "前进", en: "Forward" },
@@ -314,6 +317,30 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "browser.vibe.modeTitle": { zh: "对话模式：{mode}（点击切换）", en: "Chat mode: {mode} (click to toggle)" },
   "browser.vibe.modeBuild": { zh: "Build", en: "Build" },
   "browser.vibe.modePlan": { zh: "Plan", en: "Plan" },
+
+  /* ── 输入区「+」菜单：会话级「浏览器控制」开关（第二阶段 · 功能1） ── */
+  "composer.browserControl": { zh: "浏览器控制", en: "Browser control" },
+  "composer.browserControlHint": {
+    zh: "开启后 Agent 可控制内嵌浏览器（打开网页/点击/输入/截图）；关闭时浏览器工具对模型完全不可见。",
+    en: "When on, the agent can drive the embedded browser (open pages, click, type, screenshot). When off, browser tools are completely invisible to the model.",
+  },
+  "composer.browserChip": { zh: "浏览器", en: "Browser" },
+  "composer.browserControlOn": {
+    zh: "浏览器控制已开启：可以指挥 Agent 操作内嵌浏览器",
+    en: "Browser control on: you can ask the agent to drive the embedded browser",
+  },
+  "composer.browserControlOff": {
+    zh: "浏览器控制已关闭：浏览器工具对模型不可见",
+    en: "Browser control off: browser tools are invisible to the model",
+  },
+  "composer.browserControlFailed": {
+    zh: "浏览器控制切换失败：{error}",
+    en: "Failed to toggle browser control: {error}",
+  },
+  "composer.browserControlUnavailable": {
+    zh: "浏览器控制不可用：未连接主进程",
+    en: "Browser control unavailable: main process not connected",
+  },
 
   /* ── 工作区面板（WorkspacePanel） ── */
   "workspace.dialogAria": { zh: "工作区", en: "Workspace" },

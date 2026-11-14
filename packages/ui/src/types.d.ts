@@ -1,5 +1,10 @@
 // window.loopsoarAPI 声明文件（与 shell preload 白名单对齐）。
 // 只声明 UI 真正消费的域方法；事件白名单与 contracts 的 EVENTS 保持一致。
+//
+// 偏好类型直接消费契约推断类型（唯一产地 packages/contracts/src/schemas.ts）：
+// 不再手写第二份 interface —— 契约新增字段而 UI 类型不更新时，设置页读不到该字段，
+// 而壳层 zod safeParse 会 strip 未知键、静默落回默认值，这类漂移必须由编译期消灭。
+import type { PreferencesData } from "loopsoar-contracts/schemas";
 
 export interface LoopsoarDomain {
   [method: string]: (...args: unknown[]) => Promise<unknown>;
@@ -45,37 +50,15 @@ export interface BootStatus {
   version?: string;
 }
 
-export interface Preferences {
-  language: "zh-CN" | "en-US";
-  animations: "full" | "reduced" | "off";
-  restoreSession: boolean;
-  searchEngine: "bing" | "google" | "baidu";
-  /** 广告/追踪请求拦截（webRequest 层；缺省 true，误拦时可关闭）。 */
-  adBlockEnabled?: boolean;
-  downloadDir?: string;
-  workspaceRoot?: string;
-  memoryStorePath?: string;
-  memoryAutoCapture: boolean;
-  sidebarWidth: number;
-  /** Vibecoding 模式独立侧栏宽度（可选；未设置时进入 vibe 用其最小宽度）。 */
-  vibeSidebarWidth?: number;
-  agentMaxRounds?: number;
-  agentMaxToolCalls?: number;
-  agentRepeatToolWarn?: number;
-  agentRepeatToolStop?: number;
-  reasoningEffort?: string;
-  /** 当前 Agent-Loop id（缺省 = 内置 loop；主进程按需持久化）。 */
-  loopId?: string;
-  /** 界面主题（soft 默认 / classic 经典）。 */
-  theme?: ThemeMode;
-  /** 右侧会话栏模式。 */
-  sidebarMode?: SidebarMode;
-  /** 敏感步骤（登录/支付/不可撤销操作）始终强制人工确认（默认 true）。 */
-  sensitiveAlwaysConfirm?: boolean;
-}
+/**
+ * 通用偏好：契约 schema 的推断类型（单源）。
+ * 字段增删只改 packages/contracts/src/schemas.ts 的 PreferencesSchema，UI 自动跟随；
+ * 本文件不再保留手写字段表，避免「契约有、UI 没有」导致设置页静默丢字段。
+ */
+export type Preferences = PreferencesData;
 
 export interface PermissionCategory {
-  key: "read" | "write" | "terminal" | "network";
+  key: "read" | "write" | "terminal" | "network" | "browser";
   label: string;
   description: string;
 }
@@ -86,6 +69,8 @@ export interface PermissionsState {
     write: "allow" | "confirm" | "deny";
     terminal: "allow" | "confirm" | "deny";
     network: "allow" | "confirm" | "deny";
+    /** 浏览器操作（Agent 操控内嵌浏览器）；登录/支付/不可撤销动作仍逐次确认，不受此项影响。 */
+    browser: "allow" | "confirm" | "deny";
     workspaceRoots: string[];
     confirmDangerousAlways: boolean;
   };
@@ -261,6 +246,8 @@ export interface SessionMeta {
   messageCount: number;
   /** 会话归属的工作区（旧会话可能没有）。 */
   workspaceId?: string | null;
+  /** 会话级「浏览器控制」开关（缺省 = 关闭）；消息列表/当前会话查询据此水合。 */
+  browserControl?: boolean;
 }
 
 export interface WorkspaceRecord {
@@ -679,6 +666,8 @@ export type LoopsoarEvent =
   | "chrome:devToolsPanel"
   | "chrome:agentWindowIconMode"
   | "chrome:agentWindowTransition"
+  /** Agent 首次打开网页前的会话窗口布局安排（{ mode: "docked" | "agentWindow"; sessionId?; reason? }）。 */
+  | "chrome:applyLayout"
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
@@ -719,6 +708,11 @@ export interface LoopsoarAPI {
     deleteSession(payload: { sessionId: string }): Promise<{ removed: boolean; sessions: SessionMeta[]; currentId: string | null }>;
     /** /compact：压缩会话历史（apply=false 只预览统计；apply=true 写回持久化）。 */
     compact(payload?: { sessionId?: string; apply?: boolean }): Promise<CompactResult>;
+    /**
+     * 会话级「浏览器控制」开关（功能1）：
+     * 关闭（默认）时 browser_* 工具对模型不可见、也不可执行；开启后按原权限/确认流可用。
+     */
+    setBrowserControl(payload: { sessionId: string; enabled: boolean }): Promise<{ ok: boolean }>;
   };
   perm: LoopsoarDomain;
   ask: LoopsoarDomain & {

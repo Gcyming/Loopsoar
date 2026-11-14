@@ -111,20 +111,25 @@ describe("settings 域：权限", () => {
   it("默认 fail-closed → 保存 → 读取", async () => {
     const { handlers } = makeEnv(root);
     const before = (await invoke(handlers, "settings:getPermissions")) as {
-      permissions: { write: string; terminal: string };
+      permissions: { write: string; terminal: string; browser: string };
     };
     expect(before.permissions.write).toBe("confirm");
     expect(before.permissions.terminal).toBe("confirm");
+    // 浏览器操作默认 allow（会话「浏览器控制」开关即显式授权），其余仍是 fail-closed 基线
+    expect(before.permissions.browser).toBe("allow");
 
     await invoke(handlers, "settings:setPermissions", {
       read: "allow",
       write: "confirm",
       terminal: "deny",
       network: "allow",
+      browser: "deny",
       workspaceRoots: ["D:/w1"],
       confirmDangerousAlways: true,
     });
     expect(loadPermissions(path.join(root, "data", "config")).terminal).toBe("deny");
+    // browser 必须真的落盘：契约 schema 若漏掉该字段，handleTrusted 用 parsed.data 会把它剥掉、回落默认 allow
+    expect(loadPermissions(path.join(root, "data", "config")).browser).toBe("deny");
   });
 });
 

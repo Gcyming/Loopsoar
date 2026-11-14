@@ -276,6 +276,14 @@ export function registerChatDomain(deps: ChatDeps): void {
     return { ok, session: ok ? deps.sessions?.load() ?? null : null };
   });
 
+  // 会话级「浏览器控制」开关（功能1）：落到会话文件 + 索引；下一轮 stream 起工具面生效。
+  // 关闭时 browser_* 既不进 toolSchemas（模型看不见）也过不了执行闸（见 main/index.ts 装配）。
+  handleTrusted(deps, "chat:setBrowserControl", (payload) => {
+    const p = payload as { sessionId: string; enabled: boolean };
+    const ok = deps.sessions?.setBrowserControl(p.sessionId, p.enabled) ?? false;
+    return { ok };
+  });
+
   handleTrusted(deps, "chat:deleteSession", async (payload) => {
     const p = payload as { sessionId: string };
     if (deps.sessions?.get(p.sessionId)) await deps.onSessionDeleting?.(p.sessionId);

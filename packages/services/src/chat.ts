@@ -80,8 +80,12 @@ export interface ChatServiceOptions {
   resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
   /** 惰性获取 LLM 客户端（设置面板保存供应商后立即生效，无需重启）。 */
   getLlm?: (sessionId?: string) => LlmClient | undefined;
-  /** 按模式解析工具白名单（plan=只读，build=默认 Agent 白名单）。 */
-  getToolAllowlist?: (mode?: "build" | "plan") => string[] | undefined;
+  /**
+   * 按模式 + 会话解析工具白名单（plan=只读，build=默认 Agent 白名单）。
+   * 为什么要 sessionId：会话级开关（如「浏览器控制」关闭）只能按会话收窄工具面；
+   * 返回值同时用于模型可见面（registry.toolSchemas）与执行闸，undefined 才表示「全部可见」。
+   */
+  getToolAllowlist?: (mode?: "build" | "plan", sessionId?: string) => string[] | undefined;
   /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 6 万字符）。 */
   getContextWindow?: () => number | undefined;
   /** Agent 循环上限（设置 · 通用可调；缺省使用 core 默认）。 */
@@ -204,13 +208,42 @@ export class PermRequestBus {
   }
 }
 
-/** 由工具权限声明推导沙箱 kind（终端/网络优先，写次之，其余读）。 */
+/**
+ * 由工具权限声明推导**沙箱** kind（终端优先，browser/网络并列其次，写再次，其余读）。
+ *
+ * 为什么 browser 映射成 network：沙箱的 PermissionKind 只有 read/write/terminal/network 四档，
+ * 与 L0–L5 形式化分级一一对应（tests/core/permissionLevels.spec.ts 有等式断言），不为策略概念扩档。
+ * 浏览器动作在沙箱层就是 L4 网络访问；「浏览器操作」是更细的**策略**档，由
+ * categoryForToolPermissions 判定 —— 即「策略按 browser 档、沙箱按 network 级」，两层各管各的。
+ */
 function kindOfTool(permissions: Record<string, unknown> | undefined): PermissionKind {
   if (!permissions) return "read";
   if (permissions.terminal) return "terminal";
+  if (permissions.browser) return "network";
   if (permissions.network) return "network";
   if (permissions.write) return "write";
   return "read";
+}
+
+/**
+ * 解析「模型可见工具面」（装配层用的纯函数；抽出来是为了脱离 electron 单测）。
+ *
+ * 规则：
+ *   · exclude 为空 → 原样返回 base（undefined 仍表示「全部可见」）；
+ *   · base === undefined（= 全部可见）→ 以 allNames（注册表名字全集）为基剔除。
+ *     这里绝不能直接返回 undefined：那会把被剔除的工具又放回模型可见面（审计 P0-1 的同一个坑）；
+ *   · base 非 undefined → 从 base 中剔除。
+ */
+export function resolveToolSurface(options: {
+  base: readonly string[] | undefined;
+  allNames: readonly string[];
+  exclude: readonly string[];
+}): string[] | undefined {
+  const { base, allNames, exclude } = options;
+  if (exclude.length === 0) return base === undefined ? undefined : [...base];
+  const drop = new Set(exclude);
+  if (base === undefined) return allNames.filter((name) => !drop.has(name));
+  return base.filter((name) => !drop.has(name));
 }
 
 /** 工具执行器：权限判定 → 执行（allow）/ 挂起确认（confirm）/ 拒绝（deny）。 */
@@ -268,6 +301,9 @@ export class InternalToolExecutor {
     // 敏感步骤闸（登录 / 支付 / 不可撤销）：位置在「类别策略」之后、「沙箱」之前。
     // 为什么在这：类别策略是长期授权，而敏感动作必须每次单独确认；deny 仍然优先（下一段先返回），
     // 敏感判定只把「allow / 跳过确认」升级成 confirm，绝不把 deny 降级成 confirm。
+    // **这条依赖不许删**：browser 档默认 allow（会话「浏览器控制」开关=显式授权），
+    // 下面这行 forceSensitiveConfirm 是 browser=allow 之后唯一还拦着「登录/支付/不可撤销」的闸门；
+    // 删了它就等于 browser=allow 全放开。它也不受「本次会话总是允许」影响（allow-session 对敏感步骤降级为 allow-once）。
     const sensitive = classifySensitiveStep({ toolName: toolCall.name, params: toolCall.args });
     const forceSensitiveConfirm = sensitive.sensitive && (this.opts.sensitiveAlwaysConfirm?.() ?? true);
 
@@ -461,7 +497,10 @@ export class ChatService {
     const steers = new SteerBus();
     this.steerBuses.set(sessionId, steers);
 
-    const resolvedAllowlist = this.opts.getToolAllowlist?.(input.mode) ?? this.opts.toolAllowlist;
+    // 工具面只解析一次：模型可见面（toolSchemas）与执行闸共用同一份名单，
+    // 否则会出现「模型看不见却仍可被调用」或反之（审计 P0-1）。
+    const resolvedAllowlist =
+      this.opts.getToolAllowlist?.(input.mode, sessionId) ?? this.opts.toolAllowlist;
     const executor = new InternalToolExecutor({
       registry,
       sandbox,
@@ -483,8 +522,9 @@ export class ChatService {
     let claims: ClaimFinding[] = [];
 
     try {
+      // 白名单收窄模型可见面：undefined=全部工具，否则只广播名单内的工具（P0-1）
       const toolList = registry
-        ? registry.toolSchemas().map((s) => ({
+        ? registry.toolSchemas(resolvedAllowlist).map((s) => ({
             name: s.function.name,
             description: s.function.description,
             parameters: s.function.parameters,

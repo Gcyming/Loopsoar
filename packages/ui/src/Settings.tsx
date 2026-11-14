@@ -602,6 +602,18 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               on={(x) => setPrefs({ ...prefs, animations: x as Preferences["animations"] })}
             />
           </Field>
+          <Field l={tr("settings.general.browserOpenLayout")} h={tr("settings.general.browserOpenLayoutHint")}>
+            <Seg
+              v={prefs.browserOpenLayout ?? "ask"}
+              opts={[
+                ["ask", tr("settings.general.browserOpenLayout.ask")],
+                ["docked", tr("settings.general.browserOpenLayout.docked")],
+                ["agentWindow", tr("settings.general.browserOpenLayout.agentWindow")],
+                ["keep", tr("settings.general.browserOpenLayout.keep")],
+              ]}
+              on={(x) => setPrefs({ ...prefs, browserOpenLayout: x as Preferences["browserOpenLayout"] })}
+            />
+          </Field>
           <Field l={tr("settings.general.adBlock")} h={tr("settings.general.adBlockHint")}>
             <Toggle v={prefs.adBlockEnabled ?? true} on={(x) => setPrefs({ ...prefs, adBlockEnabled: x })} />
           </Field>

@@ -1017,3 +1017,16 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
   - 单测新增 2 条：关闭会话下全部网页、关最后一张网页后会话仍可新建网页。
 - **验证**：E2E 关闭最后标签 → 程序退出、会话 `browser` 字段清空；同数据目录重启 → 仅一张空白「新标签页」、NTP 可见（`e2e-evidence/close-last.log`、`relaunch-blank.log`）。全量 vitest **176 文件 / 1478 tests 全绿**；typecheck 5/5；gen/check/build 通过。
 - **文档**：ADR-0094。
+
+## 第二阶段完成（2026-11-14）
+
+主题：**Agent 与浏览器彻底打通（AI 自动浏览器）+ 框架夯实**。文档入口：`docs/规划/第二阶段-Agent与浏览器打通.md`；决策：ADR-0095~0100；调研：`docs/research/agent-browser-survey.md`；审计：`docs/FRAMEWORK-AUDIT-P2.md`。
+
+- **功能① 会话级「浏览器控制」开关**：输入框「+」菜单（侧栏 Composer 与 Vibecoding 输入框同款）+ 开启后的品牌色 chip；会话级持久化（缺省关，fail-closed）；关闭时 `browser_*` 对模型**不可见**且不可执行（工具面与执行闸同一份名单，顺带修掉审计 P0-1 的「全量广播」）。
+- **功能② 开网页前布局询问**：Agent 在会话里第一次打开网页前询问一次「收到右侧（常规布局）/ 变为小窗（独立 Agent 窗口）」，询问窗里解释两种安排；设置·通用新增「Agent 打开网页时的窗口布局」（每次询问/总是右侧/总是小窗/保持不动）；取消/超时 = 不导航（fail-closed）；选择记在本会话。
+- **Agent ↔ 浏览器闭环**：语义快照（`[快照 #gen | URL | 标题]` + 元素语义行）→ 稳定引用 `#eN`（DOM 零打标、页面内稳定性句柄、导航即失效）→ 14 个工具（快照/导航/点击/输入/滚动/截图/等待/标签/前进后退刷新/按键/下拉/悬停）→ 动作后状态增量（URL/标题/就绪/是否导航）→ 点击命中验证（`BLOCKED_BY_OVERLAY` + 遮挡元素）→ 可行动失败码（STALE_REF / ELEMENT_NOT_FOUND + 候选 / TYPE_NOT_EFFECTIVE …）。
+- **权限模型分层**：会话开关=是否授权 → 权限策略 `browser` 档=是否询问（默认 allow）→ 敏感步骤（登录/支付/不可撤销）逐次强制确认；沙箱仍按 network/L4。
+- **偏好单源**：contracts 的 `PreferencesSchema`+`z.infer` 为唯一产地，core 只留默认值与合并，UI 直接消费推断类型（消灭三份定义静默漂移）。
+
+**验收**：typecheck 5/5、vitest **187 文件 / 1605 tests 全绿**、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5、**真机 E2E ok=true**（`node scripts/e2e-p2-run.mjs`，证据 `e2e-evidence/p2-agent-browser.log` / `p2-agent-browser-window.png` / `p2-composer-menu.png`）。
+

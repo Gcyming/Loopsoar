@@ -10,6 +10,12 @@ export interface ToolPermissions {
   write?: boolean;
   terminal?: boolean;
   network?: boolean;
+  /**
+   * 浏览器操作（Agent 操控内嵌浏览器：导航/点击/输入/按键/滚动/标签…）。
+   * 策略层按 browser 档判定；沙箱层没有新档位，仍按 network（L4）判定（见 services/chat.ts 的 kindOfTool）。
+   * 直接抓取 URL 的 web_fetch 不属于浏览器操控，继续声明 network。
+   */
+  browser?: boolean;
 }
 
 export interface ToolDefinition {

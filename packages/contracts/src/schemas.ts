@@ -86,6 +86,16 @@ export const ChatRollbackSchema = z.object({
 });
 export const ChatStopSchema = z.object({ sessionId: SessionIdSchema });
 export const ChatSendSchema = z.object({ message: z.string(), sessionId: SessionIdSchema.optional() });
+/**
+ * 会话级「浏览器控制」开关（第二阶段 · 功能1）：
+ * 关闭（默认）= browser_* 工具对模型不可见（不进 toolSchemas）且不可执行；
+ * 开启 = 按原有权限策略 / 敏感步骤确认流可用。
+ * 注意：web_fetch 属于「网络权限域」，不随本开关变化（语义不混用）。
+ */
+export const BrowserControlSchema = z.object({
+  sessionId: SessionIdSchema,
+  enabled: z.boolean(),
+});
 export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enum(["allow-once", "allow-session", "deny"]) });
 export const FileReadSchema = z.object({
   path: z.string().min(1).max(2000),
@@ -367,6 +377,14 @@ export const PreferencesSchema = z.object({
   theme: z.enum(["soft", "classic"]).optional(),
   /** 右侧会话栏模式：docked=常驻 / collapsed=收起成图标条 / float=小窗化浮动卡片。 */
   sidebarMode: z.enum(["docked", "collapsed", "float"]).optional(),
+  /**
+   * Agent 打开网页时的窗口布局（浏览器控制开启的会话，Agent 第一次打开网页前生效）：
+   * ask=每次会话询问一次（默认，弹窗里解释两种布局并给选择）；
+   * docked=自动把会话收齐到右侧、恢复常规布局（网页占主区）；
+   * agentWindow=自动把会话变为小窗（独立 Agent 窗口，ADR-0020）；
+   * keep=不动当前布局，也不询问。
+   */
+  browserOpenLayout: z.enum(["ask", "docked", "agentWindow", "keep"]).optional(),
   /** Agent 单次任务最多请求轮数。 */
   agentMaxRounds: z.number().int().min(1).max(500).optional(),
   /** Agent 单次任务最多工具调用次数。 */
@@ -383,12 +401,21 @@ export const PreferencesSchema = z.object({
   sensitiveAlwaysConfirm: z.boolean().optional(),
 });
 
+/** 通用偏好的推断类型（契约单源）：core 的默认值/合并与 UI 的 types.d.ts 都消费这一份。 */
+export type PreferencesData = z.infer<typeof PreferencesSchema>;
+
 /** 权限策略（设置 · 权限）：工具类别的默认决策。 */
 export const PermissionsSchema = z.object({
   read: z.enum(["allow", "confirm", "deny"]),
   write: z.enum(["allow", "confirm", "deny"]),
   terminal: z.enum(["allow", "confirm", "deny"]),
   network: z.enum(["allow", "confirm", "deny"]),
+  /**
+   * 浏览器操作（Agent 操控内嵌浏览器）：策略层独立档，比 network 更具体，默认 allow。
+   * 必须写进契约：handleTrusted 用本 schema 校验后把 **parsed.data**（z.object 会剥掉未声明字段）交给 handler，
+   * 漏了这里，UI 选的 browser=confirm/deny 会在 IPC 边界被静默丢掉、回落默认值。
+   */
+  browser: z.enum(["allow", "confirm", "deny"]),
   /** 额外授权的工作目录（沙箱根之外）。 */
   workspaceRoots: z.array(z.string().max(1024)).max(20),
   /** 危险命令/敏感路径始终二次确认（不随 allow 放行）。 */
@@ -893,6 +920,14 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: SessionRefSchema,
     sensitive: true,
   },
+
+  /* ── 会话级浏览器控制（功能1：关闭时 browser_* 工具对模型不可见） ── */
+  "chat:setBrowserControl": {
+    domain: "chat",
+    method: "setBrowserControl",
+    request: BrowserControlSchema,
+    sensitive: true,
+  },
   "workspace:list": {
     domain: "workspace",
     method: "list",
@@ -1287,6 +1322,12 @@ export const EVENTS = [
   "chrome:agentWindowClosed",
   "chrome:agentWindowIconMode",
   "chrome:agentWindowTransition",
+  /**
+   * Agent 首次打开网页前的「会话窗口布局」安排（第二阶段 Slice E · 功能②）：
+   * 壳层询问/记忆完成后推送 { mode: "docked" | "agentWindow"; sessionId?; reason? }，
+   * 渲染层据此执行真正的窗口动作（收小窗 / 恢复右侧常驻）。
+   */
+  "chrome:applyLayout",
   "chat:compacted",
 ] as const;
 
@@ -1294,3 +1335,32 @@ export const EVENTS = [
  * Type for event names (string literal union).
  */
 export type EventName = typeof EVENTS[number];
+
+/**
+ * Agent 浏览器工具名单（单一产地，第二阶段 Slice A）。
+ *
+ * 会话「浏览器控制」关闭时，这里的工具既不出现在 `registry.toolSchemas()`
+ * 的模型可见面，也无法通过执行闸（两道闸用同一份名单）。
+ *
+ * 约束：shell/main/browserTools.ts 的注册名必须与本名单一致（有守卫测试兜底）；
+ * 第二阶段 Slice D 已扩展到动作/多标签面：browser_tabs（list/new/select/close）、
+ * browser_back / browser_forward / browser_reload、browser_press_key / browser_select /
+ * browser_hover —— 新增浏览器工具必须同时加到这里，否则开关关了它仍然可见。
+ * 注意：web_fetch 属网络权限域，不得加入本名单。
+ */
+export const BROWSER_AGENT_TOOLS: readonly string[] = [
+  "browser_snapshot",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_scroll",
+  "browser_screenshot",
+  "browser_wait",
+  "browser_tabs",
+  "browser_back",
+  "browser_forward",
+  "browser_reload",
+  "browser_press_key",
+  "browser_select",
+  "browser_hover",
+];

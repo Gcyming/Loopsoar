@@ -94,6 +94,19 @@ describe("levelForTool：工具声明 → 等级", () => {
     expect(categoryForToolPermissions(netWrite)).toBe("network");
   });
 
+  it("browser 比 network 更具体：策略归类取 browser，沙箱等级仍是 L4", () => {
+    // 策略层：browser 优先（否则 browser 档永远被 network 接走，永远不会生效）
+    expect(categoryForToolPermissions({ browser: true })).toBe("browser");
+    expect(categoryForToolPermissions({ browser: true, network: true })).toBe("browser");
+    expect(categoryForToolPermissions({ browser: true, terminal: true })).toBe("browser");
+    // 沙箱层不新增档位：浏览器动作仍然是 L4 网络访问（PermissionKind 未扩展，等式断言在上面）
+    expect(levelForTool("browser_click", { browser: true })).toBe(4);
+    expect(levelForTool("browser_navigate", { browser: true })).toBe(4);
+    expect(levelForPermissionKind("network")).toBe(4);
+    // 未声明 browser 的抓取工具不受影响
+    expect(categoryForToolPermissions({ network: true })).toBe("network");
+  });
+
   it("无法归类 → L5（fail-closed）", () => {
     expect(levelForTool("mystery_tool", {})).toBe(5);
     expect(levelForTool("mystery_tool")).toBe(5);

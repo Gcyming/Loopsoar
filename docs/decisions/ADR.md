@@ -1777,6 +1777,107 @@
 - **状态**：✅ 真机 E2E 已验证（2026-11-13）。
 - **后续（下一阶段）**：工作区级记忆（召回/写入按 workspace 隔离）、会话删除时的工作区统计与记忆保留策略。
 
+## ADR-0095 会话级「浏览器控制」开关 + 工具面单次解析（P0-1 修复）
+
+- **背景**：用户第二阶段指令：vibecoding 输入框「+」菜单要一个类似 slime「联网搜索」位的开关，但语义换成浏览器控制——开启后用户可直接用自然语言指挥 Agent 操控内嵌浏览器。框架审计（docs/FRAMEWORK-AUDIT-P2.md）P0-1 同时发现：services/chat.ts 把 registry.toolSchemas() 全量广播给模型，allowlist 只拦执行——「模型看得见却调不了」既浪费上下文又诱导失败重试（plan 模式现状即如此）。
+- **决策**：
+  1. **会话级开关**：`PersistedSession.browserControl`（缺省/非布尔脏值=关，fail-closed；文件与索引双写、读取统一净化）；契约新通道 `chat:setBrowserControl`（sessionId 用既有单源 SessionIdSchema）；SessionMeta 带初值供 UI 水合。新会话默认关；草稿态只记标志，`ensureSessionForSend` 建会话后**先落库再发首条消息**（否则首条消息的工具面按「关闭」解析，用户会看到「开了开关但 Agent 说没有浏览器能力」）。
+  2. **工具面单次解析（P0-1）**：`getToolAllowlist(mode, sessionId)`；新纯函数 `resolveToolSurface({base, allNames, exclude})`：exclude 为空→原样返回 base；base 为 undefined（=全部可见）→用注册表名字全集重构剔除后的名单（绝不能返回 undefined，否则被剔除的工具又回到可见面）；base 非空→过滤。同一份 resolvedAllowlist 既进 `registry.toolSchemas()`（模型可见面）也进执行闸，两边永远同源。plan 模式只读收窄语义不变，只是再交上浏览器开关。
+  3. **单源名单**：contracts 导出 `BROWSER_AGENT_TOOLS`（当前 7 个 browser_*，后续切片扩展），守卫测试锁死 shell 注册名与名单一致；`web_fetch` 属网络权限域、不随本开关（能力语义不混用）。
+  4. **UI**：Composer「+」菜单第二项（role=menuitemcheckbox + aria-checked + 勾选态），开启时 chip 行渲染品牌色胶囊并同步 measureRow 挤压测量；VibeControls 的「+」菜单（与工作区/附件同菜单，避免双加号）加同款开关；App 乐观更新、失败/会话不存在回滚、切会话按 meta 水合。
+- **理由**：开关是「能力授权」而不是「权限策略」：用户显式开启 = 会话内授权浏览器操控，浏览器工具才进入模型可见面（权限最小化=上下文最小化，调研 docs/research/agent-browser-survey.md §6.5）；P0-1 修复让可见面与执行闸同源，是后续一切会话级工具门控（C/D/G 片）的地基。
+- **验证**：vitest **180 文件 / 1500 tests 全绿**（新增 4 spec：resolveToolSurface 矩阵与 ChatService→toolSchemas 传参、sessionStore 落盘/重启/脏值净化、chat:setBrowserControl 域通道、BROWSER_AGENT_TOOLS 名单守卫）；typecheck 5/5；pnpm gen && pnpm check 逐字节一致；pnpm build 全绿。真机 E2E 于阶段末统一补录（见 docs/规划/第二阶段-Agent与浏览器打通.md Slice F）。
+- **状态**：✅ 自动化已验证（2026-11-13）
+- **回退条件**：若未来需要「模型可见但逐次确认」形态，应引入 risk 元数据（调研 §8-10）而不是回退可见面过滤。
+- **复核时间**：Slice G（浏览器交互权限档）落地时，复核「开关=会话级授权」与权限类别的正交性。
+
+## ADR-0096 偏好单源统一（contracts z.infer）+ 设置·通用「Agent 打开网页时的窗口布局」
+
+- **背景**：审计 P1：偏好 Preferences 曾有三份定义（contracts/schemas.ts、core/preferences.ts、ui/types.d.ts），故障链是「只改 core+UI 不改 contracts → 受信入口 zod safeParse 默认 strip 未知键 → 字段被静默丢弃 → 落盘回默认值」，全程不报错。同时第二阶段功能②需要新偏好 `browserOpenLayout`（Agent 打开网页前的布局策略）作为布局询问弹窗的默认策略来源。
+- **决策**：
+  1. **contracts 为唯一 schema 产地**：`PreferencesSchema` 新增 `browserOpenLayout: z.enum(["ask","docked","agentWindow","keep"]).optional()`（缺省 ask），并导出 `export type PreferencesData = z.infer<typeof PreferencesSchema>`。
+  2. **core 收敛为纯行为层**：删除自有 zod schema，改从 `loopsoar-contracts/schemas` 导入 schema/类型；保留 `DEFAULT_PREFERENCES`、`mergePreferences`（含 duckduckgo→bing 历史迁移与各字段 `??` 归一）、`searchUrlFor`；`AnimationsSchema` 由 `PreferencesSchema.shape.animations` 派生（引用而非第二份）。core→contracts 依赖在守卫白名单内（tests/guards/layering.spec.ts 的 ALLOWED_RUNTIME_DEPS.core 已含 loopsoar-contracts）。
+  3. **ui/types.d.ts 消费契约类型**：手写 `interface Preferences` 删除，改为 `export type Preferences = PreferencesData`（该文件本就是模块，消费方 import 路径零改动）；字段漂移由编译期消灭，无需运行时对齐守卫。
+  4. **设置·通用新增一行**「Agent 打开网页时的窗口布局」四选一：每次询问（ask，默认）/ 总是收到右侧（docked）/ 总是小窗（agentWindow，独立 Agent 窗口，ADR-0020）/ 保持不动（keep）；沿用通用分区 400ms 防抖自动保存，附说明行；i18n 中英成对。语义与产品意图写进 schema 注释，供 Slice E 消费。
+- **理由**：三份定义是典型的「静默漂移」屎山风险（不报错、只丢数据），单源化是后续所有设置项的地基；`ask` 缺省符合用户「默认询问一遍」的产品要求。
+- **验证**：vitest **180 文件 / 1503 tests 全绿**（新增 3 个 it：缺省 ask、四值保留、未知值拒绝；并断言 `PreferencesSchema.parse(DEFAULT_PREFERENCES)` 与 DEFAULT 深等——schema 缺字段会被 strip 导致不等，等价于 key 覆盖守卫）；typecheck 5/5；`pnpm gen && pnpm check` 逐字节一致（生成器只序列化通道元数据、不序列化 schema 字段内容，prefs 字段变化本就不改 gen——已实跑核实，非漏回填）；`pnpm build` 5/5 全绿。
+- **状态**：✅ 自动化已验证（2026-11-13）
+- **回退条件**：若未来偏好按域拆分（供应商/外观/Agent 各自独立 schema），按域拆多个 z.infer 类型并保持 contracts 单源，不回到多份手写定义。
+- **复核时间**：Slice E 读取 `browserOpenLayout` 时，复核「ask=每会话问一次」语义与设置文案一致。
+
+## ADR-0097 稳定元素引用与语义快照（P0-2：观察-动作闭环重建）
+
+- **背景**：审计 P0-2 + 调研 §8-1/2/3/7/13：旧实现 `browser_snapshot` 打印 `[#N]` 编号，但 `browser_click` 只做 `document.querySelector(target)`——编号传进去必然失败；能解析编号的 `selectorFor` 在适配器里**生产不可达**；编号是 `querySelectorAll` 顺序号，SPA 重渲染后指向别的元素；`MARKERS_SCRIPT` 每次快照往 DOM 打 `data-loops-el` 且从不清理；`BrowserSnapshot` 类型没有 `elements`（两处 `as` 强转）；`browser_type` 直接赋 `el.value`，React 19 受控组件会回滚（「返回成功但页面没变」）。这是「AI 自动浏览器」最致命的断裂：观察与动作对不上号。
+- **决策**：
+  1. **ref 由适配器生成并解析，工具层只透传**：新增 `packages/shell/src/browserAdapter/refs.ts` 作为闭环单一产地。快照脚本**不写任何 DOM 属性**（问题从根上消失），在页面内为可交互元素 + 标题 + 地标计算**稳定性打分句柄**（唯一 id > name > aria-label > data-testid > 精确文本(a/button，≤60 字，附 matchText 判别串) > `tag:nth-child` 结构路径，`{selector, why}` 逐级回退）。`e1..eN` 只是按文档顺序的显示别名。
+  2. **注册表生命周期**：每标签一个 `RefRegistry`（`createTabRegistry` 令牌 + 注册表），每次快照重建并 `gen+1`；`did-navigate` / `did-navigate-in-page`（主框架）清空 → 旧 ref 立即失效（宁可报 STALE_REF，也不误击别的元素）。
+  3. **解析顺序向后兼容**：`target` 依次尝试 ① ref（`e5` / `5`）→ 注册表句柄；② CSS 选择器；③ `text=` 前缀。`querySelector` 只出现在 refs.ts 生成的脚本里，适配器 `click/type` 与工具层共用 `resolveTarget/performClick/performType`，不再各写一份。
+  4. **语义快照输出**：首行 `[快照 #gen | URL | 标题]`，正文按 `maxChars` 截断，元素区一行一个（`[#e2] textbox "搜索" (value="")` / `[#e4] button "提交" (disabled)` / `[#e1] link "登录" → /login`），显示上限 80 条并提示总数，页面内最多为 200 个元素计算句柄（防巨型页面卡死）。
+  5. **可行动错误**：`STALE_REF`（引用过期，提示重新快照）/ `ELEMENT_NOT_FOUND`（带 ≤3 个按 name/role 相近的候选 `#eN`）/ `INVALID_SELECTOR` / `TYPE_NOT_EFFECTIVE`（附页面回读值）。
+  6. **原生 setter 输入**：`Object.getOwnPropertyDescriptor(HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement.prototype,'value').set.call(el, text)` + `InputEvent` + `change`，**输入后回读比对**，不一致即报「输入未生效」。
+  7. **类型正式化**：`BrowserSnapshot` 增加 `elements: BrowserElementSnapshot[]`、`snapshotGen`、`elementTotal`、`tabToken`，两处 `as` 强转删除。
+- **理由**：调研结论是「观察格式已收敛到语义树 + 稳定引用」，且引用必须能跨一次 DOM 变更存活、动作失败必须可行动；DOM 打标方案在 SPA 下天然不可靠（不清理 + 重排漂移），因此选择「页面内算句柄 + 进程内注册表 + 导航即失效」——多花一次页面脚本计算，换来动作的确定性。
+- **验证**：vitest **181 文件 / 1524 tests 全绿**（新增 `tests/shell/browserRefs.spec.ts` 13 例：脚本合法性、注册表 e1..eN 与代数、ref 归一化、解析顺序、STALE_REF、候选、原生 setter、适配器注册表生命周期；重写 `tests/shell/browserTools.spec.ts` 11 例：新快照形态、gen 单调、80 截断 + 总数、ref 点击、STALE_REF、ELEMENT_NOT_FOUND + 候选、CSS/text= 回归、输入脚本、输入未生效）；另用最小假 DOM 真跑快照脚本核对句柄类型（id/文本/路径三类均命中）。typecheck 5/5、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5。Lead 复核时补一处缺陷：`buildTypeScript` 原本直接 `querySelector(selector)`，会让「精确文本型」ref 句柄打到同标签首个元素——已改为与 click 共用 `locateJs` 定位段，24 例相关测试保持全绿。
+- **状态**：✅ 自动化已验证（2026-11-14）
+- **已知局限**：`snapshotTokens` 目前是会话级（工具面只有「活动标签」，无 tabId 参数）→ Slice D 扩多标签工具时必须改为标签级，否则切标签后旧令牌可能解析到另一标签的注册表。
+- **回退条件**：若将来改用 CDP `backendNodeId` 作句柄（更强稳定性），保留 `RefRegistry` 接口不变、只替换句柄来源。
+- **复核时间**：Slice D 接入多标签后，复核令牌与标签的绑定；Slice G 引入交互权限档时复核失败码与确认流程的组合。
+
+## ADR-0098 多标签工具 + 动作扩展 + 动作后状态增量 + 点击命中验证
+
+- **背景**：Slice C 打通的闭环只覆盖 7 个基础动作，且留了两个缺口：(a) 引用令牌是**会话级**——用户手动切标签后旧令牌可能解析到另一标签的注册表；(b) 动作只回「已点击」，模型要再花一轮快照才知道发生了什么（调研 §5.1：每步多一次 round-trip，长任务成本翻倍），点击也没有命中验证（被浮层遮挡时 `el.click()` 仍可能「成功」）。
+- **决策**：
+  1. **标签级引用绑定**：`BrowserHost.snapshot/executeScript` 增加可选 `tabId`（缺省=活动标签，行为不变），快照回传 `tabId`；工具层令牌表改以 `${sessionId}::${tabId}` 为键。跨标签使用旧 ref 时直接给 `[STALE_REF] 引用来自标签 A，当前操作标签是 B…`，不再猜测。
+  2. **动作扩展**（7 个新工具，全部进 `BROWSER_AGENT_TOOLS` 门控名单）：`browser_tabs`（list/new/select/close，返回 index/tabId/标题/URL/active 列表）、`browser_back` / `browser_forward` / `browser_reload`（可选 tabId）、`browser_press_key`（**按键白名单**：Enter/Tab/Escape/Backspace/Delete/方向键/Home/End/PageUp/PageDown + 单个可见字符；非法键直接 `INVALID_KEY` + 可用清单）、`browser_select`（原生 setter + input/change + `selectedOptions` 回读）、`browser_hover`（pointerover/enter + mouseover/enter + mousemove 五事件）。
+  3. **动作后状态增量**：所有动作统一追加紧凑状态行 `[状态] ✓ <动作> | URL … | 标题 … | 已就绪/仍在加载 | 发生导航/未发生导航`；先做 120ms 短探测（点击触发的导航可能晚于脚本返回），再按 100ms 轮询、1.5s 上限，`loading` 一变 false 立即返回——**不自动附完整快照**（省 token），发生导航时补一句「可 browser_snapshot 查看新页面」。
+  4. **点击命中验证**：`el.click()` 前在元素中心点做 `document.elementFromPoint`，命中必须是 `el` 或其后代；否则返回 `BLOCKED_BY_OVERLAY` + 遮挡元素摘要（tag/id/class/文本 ≤60 字）+ 可行动建议。
+  5. **失败码扩展**：`INVALID_KEY / NOT_A_SELECT / OPTION_NOT_FOUND / SELECT_NOT_EFFECTIVE / BLOCKED_BY_OVERLAY`（沿用「失败必须可行动」原则，每条都带建议）。
+  6. **死代码收口**：删除适配器里生产不可达、且零测试覆盖的 `scroll`/`wait` 实现（审计 P1「浏览器动作两套实现」）；`click/type` 自 Slice C 起与工具层共用 `refs.ts` 的同一套函数，不另做入口（否则新动作只能走 executeScript、又会分裂成两套编排）。
+- **理由**：多标签必须有「归属」语义（调研 §5.5），否则并发会话会互相串页；状态增量与命中验证是把「模型盲点」变成「确定性反馈」的最便宜手段；按键/下拉/悬停是把「能点能打字」升级为「能操作真实网站」的必要动作面。
+- **验证**：vitest **182 文件 / 1562 tests 全绿**（新增 `browserTabTools.spec.ts` 24 例；`browserTools.spec.ts` 11→15；`browserRefs.spec.ts` 13→22；`browserHost.spec.ts` +1）；typecheck 5/5；`pnpm gen && pnpm check` 逐字节一致（名单常量不进 gen 产物，已 grep 核实）；`pnpm build` 5/5。命中验证有测试锁定顺序（`script.indexOf("elementFromPoint") < script.indexOf("el.click()")`）。
+- **状态**：✅ 自动化已验证（2026-11-14）
+- **已知边界**：click/type/press_key/select/hover 只作用于活动标签（需要指定标签的只有 back/forward/reload 与 tabs）；`browser_scroll` 未加状态行（保持既有行为）。
+- **回退条件**：若状态行让模型误判（例如把「未发生导航」当作失败），改为可在设置里关闭的开关，而不是删除反馈。
+- **复核时间**：Slice E 接入开网页前的布局询问时（navigate 是唯一有前置拦截的动作）；Slice G 的权限档落地后复核「开关=授权、权限=策略」两级语义。
+
+## ADR-0099 浏览器操作权限档（browser）：让「AI 自动浏览器」真正跑得动
+
+- **背景**：Slice D 把工具面扩到 14 个浏览器工具，但它们沿用了 `permissions: { network: true }`，而「设置·权限」里 network 默认 **confirm** —— Agent 每点一个链接、每输入一次就弹一次确认框，长任务根本跑不完（调研 §8 末尾点名这是「实际不可用」的根因）。可另一方面，会话级「浏览器控制」开关（ADR-0095，默认关）本身就是用户对「让 Agent 操控浏览器」的显式授权，每步再问一次属于重复授权。
+- **决策（三层职责分离，缺一不可）**：
+  1. **① 会话「浏览器控制」开关 = 是否授权**：默认关，`BROWSER_AGENT_TOOLS` 同时收窄模型可见面与执行闸（ADR-0095/0097）。
+  2. **② 权限策略 `browser` 档 = 要不要问**：策略层新增独立类别 `browser`（比 `network` 更具体：network 是「抓网页/调服务」的粗粒度授权，browser 才是「Agent 操控内嵌浏览器」这件事本身）；默认 `allow`，用户可在设置·权限改成 `confirm` / `deny`；`categoryForToolPermissions` **先判 browser 再判 terminal/network**（否则 browser 档永远不生效）；`decisionFor` 类别联合同步放宽。
+  3. **③ 敏感步骤写死确认 = 逐次必问**：`classifySensitiveStep`（登录/支付/不可撤销）+ `sensitiveAlwaysConfirm` 原样保留，`needsConfirm` 公式一字未改——**这是 browser=allow 之后唯一的登录/支付闸门，代码里有「不许删」注释**；「本次会话总是允许」对敏感步骤也只降级为 allow-once。
+  4. **沙箱层不扩档**：`PermissionKind` 仍是 read/write/terminal/network（L0–L5 形式化分级与 `tests/core/permissionLevels.spec.ts` 的等式断言不动）；`kindOfTool` 把 browser 映射成 network，即「策略按 browser 档、沙箱按 network/L4 级」，两层各管各的。`levelForTool` 补 browser→4，避免落进「无法归类 → L5 fail-closed」。
+  5. **工具声明**：11 个动作型浏览器工具 `{network:true}` → `{browser:true}`；`browser_snapshot/screenshot/wait` 保持 `{read:true}`（只读探测不该被浏览器档影响）；`web_fetch` 保持 `{network:true}`（不是浏览器操控，语义不混用）。
+  6. **契约必须同步加字段**：`handleTrusted` 用契约 schema 校验后把 `parsed.data` 交给 handler，`z.object` 会剥掉未声明字段——契约不认 `browser`，用户选的 `confirm/deny` 会在 IPC 边界被静默丢弃并回落 allow（安全语义错位）。故 `packages/contracts/src/schemas.ts` 的权限 schema 增加 `browser` 枚举（只加字段，不改通道，gen 产物不变）。
+  7. **UI 暴露**：设置·权限新增「浏览器操作」行（三态与其余四类同一控件，行由 shell 返回的 `PERMISSION_CATEGORIES` 驱动，自动成行）；输入区权限菜单增加第 5 项；i18n 中英成对，说明文案写明「总开关；登录、支付与不可撤销操作不受此项影响，始终逐次确认」。
+- **理由**：把「授权闸」「策略闸」「敏感闸」分开，是本阶段安全模型的关键——用户用一次显式授权换来可用的自动化，而不可逆动作仍被独立的第三道闸逐次拦住；同时保留 `confirm/deny` 让谨慎用户随时收紧。相比「每步都问」（不可用）与「全放开」（危险），这是唯一既安全又可用的一档。
+- **验证**：vitest **183 文件 / 1573 tests 全绿**（新增 `tests/services/chatBrowserPolicy.spec.ts` 8 例：browser=allow 不弹窗且沙箱 kind=network、confirm 弹窗、deny 拒绝、browser=allow 不放行 web_fetch 的 network 确认、只读工具不受牵连、**browser=allow 下点「立即支付」/导航 `/checkout/pay` 仍 confirm**、敏感步骤 allow-session 不写白名单；core 偏好 +2、权限等级 +1；shell 守卫断言 11 个动作型工具全部 browser 且只读/web_fetch 归类正确；settings 域回读 `browser:"deny"` 不被吞）。typecheck 5/5、`pnpm gen && pnpm check` 逐字节一致、`pnpm build` 5/5。
+- **状态**：✅ 自动化已验证（2026-11-14）
+- **已知遗留**：输入区权限 chip 的摘要文案（App.tsx 的 `permissionLabel`）只聚合 write/terminal/network，尚未反映 browser 档 → Slice E 一并修。
+- **回退条件**：若 `browser: allow` 在某些场景被认为过宽，把默认改回 `confirm` 即可（改动只有一行），安全模型不变。
+- **复核时间**：真机 E2E 验证「开关开 → 连续点击不弹窗 / 点支付仍弹窗」时。
+
+## ADR-0100 Agent 打开网页前的布局询问 + 真机端到端验收（第二阶段收口）
+
+- **背景**：用户第二阶段指令的功能②：浏览器控制开启的会话里，Agent 在执行任务、打开网页之前要问用户一次——「会话收到右侧（常规布局）」还是「变为小窗（独立 Agent 窗口）」；默认策略放进设置·通用（Slice B 已落 `browserOpenLayout`），并且询问窗里必须把两种安排解释清楚。
+- **决策**：
+  1. **决策纯函数化**：新增 `packages/shell/src/main/browserLayoutChoice.ts`——只吃「开关状态 / 设置策略 / 会话记忆 / 语言 / 目标 URL」+ 三个注入回调（`ask` / `remember` / `apply`），零 electron、零 fs、零全局状态，分支全覆盖可单测。中英询问文案集中在此（AskBus 的 question 是跨进程字符串，主进程无法 import UI 词典，两处各存一份必然漂移，故只在主进程保留一份、UI 只留失败提示 key）。
+  2. **语义**：① `ask` + 会话无记忆 → 询问一次并记住；② `ask` + 已有记忆 → 不再问、按记忆应用；③ 设置写死 `docked`/`agentWindow` 属于「每次都这样」，**不写**会话记忆（否则用户改了设置，旧会话还按当年那次选择走）；④ `keep` → 既不问也不动布局；⑤ **取消/超时 → 不写记忆、不导航（fail-closed）**；⑥ 会话没开浏览器控制 → 直接放行（工具此时本不可见，这里只做防御）。
+  3. **询问文案**（写清两种安排 + 可去设置改）：
+     「Agent 准备在当前会话打开网页：{url}\n\n请选择会话窗口的布局（本次会话只需选择一次）：\n· 收到右侧（常规布局）——网页占据主区域，会话栏停靠在窗口右侧，适合边看边聊；\n· 变为小窗（独立 Agent 窗口）——会话独立成一个小窗浮在桌面上，主窗口的网页铺满全屏，适合专注浏览网页。\n\n选择会记在本会话；之后可以在「设置 · 通用 → Agent 打开网页时的窗口布局」修改默认行为。」
+  4. **落点**：`browser_navigate` 在真正导航前过 `hooks.beforeOpenPage`（`browser_tabs new` 不挂钩子，面收敛并注释说明）；壳层装配读会话/偏好 → 决策 → `pushToRenderer("chrome:applyLayout")`（EVENTS 新增）→ 渲染层执行真窗口动作（`ui.openAgentWindow` / `ui.closeAgentWindow` + `sidebarMode:"docked"` 落库）；工具结果追加 note。
+  5. **顺带修 Slice G 遗留**：输入区权限 chip 的 `permissionLabel` 纳入 `browser` 档。
+- **真机端到端验收（本轮新建、可重复）**：
+  - `scripts/mock-openai-server.mjs` 增加 `MOCK_TOOL_ARGS_SEQ`（按第 N 次工具调用取第 N 组参数；原先只有单一 `MOCK_TOOL_ARGS`，表达不了「导航→快照→点击→快照」这种不同参数的序列）。
+  - 新增 `scripts/e2e-p2-eval.js`（渲染层场景：配 mock 供应商 → 建会话并开浏览器控制 → 发指令 → **用真实按钮回答布局询问** → 取 `chat.history()` 取证）与 `scripts/e2e-p2-run.mjs`（起本地页服务 + mock 服务 → 独立数据目录启动 Electron → 落 log/截图 → 退出后核对会话落盘真值）。
+  - **实测结果（2026-11-14 13:43）**：`E2E_EVAL {"ok":true, ... "evidence":{"askDialogShown":true,"askDialogClosed":true,"navigated":true,"snapshotWithRefs":true,"clickedMarker":true}}`；mock 侧 `MOCK_TOOL_RESULT [快照 #2 | http://127.0.0.1:19443/ | Loopsoar E2E 本地页] … 点我 按钮已点击 … [#e1] heading … [#e2] button "点我"`；会话落盘 `browserControl:true`、`browserLayoutChoice:"docked"`。即：**Agent 自主完成「打开网页 → 读快照 → 点按钮 → 再读快照 → 汇总」全链路，布局询问在界面上真实弹出并被真实点击回答**。
+- **验证**：vitest **187 文件 / 1605 tests 全绿**（新增 `browserLayoutChoice.spec.ts` 13、`sessionBrowserLayoutChoice.spec.ts` 9、`browserNavigateHook.spec.ts` 6、`browserLayoutEvent.spec.ts` 4）；typecheck 5/5；`pnpm gen && pnpm check` 逐字节一致；`pnpm build` 5/5；真机 E2E 如上。
+- **状态**：✅ 自动化 + 真机 E2E 已验证（2026-11-14）
+- **已知边界**：小窗已打开时再次 apply 只聚焦、不换会话（`agentWindow.ts` 窗口管理器暂不支持换会话，已在代码注释标注）；E2E 的 `chat.history()` 取证依赖助手消息回灌文本（时间线持久化的独立校验留待后续）。
+- **回退条件**：若「每会话问一次」被认为打扰，把设置默认改为 `keep` 即静默（无需删代码）。
+- **复核时间**：第三阶段接入多会话并发浏览时，复核「布局询问只对打开网页的会话生效」。
+
 ---
 ---
 ## 附：ADR 索引与状态总览
@@ -1877,3 +1978,9 @@
 | ADR-0092 | 工作区入口归位标题栏左上角 + 设置内跳转直接生效 | ✅ 真机 E2E 已验证 |
 | ADR-0093 | 有网页时侧栏展开/收起不再逐帧 resize 原生视图（掉帧修复） | ✅ 行为验证 |
 | ADR-0094 | 工作区 > 会话 > 网页：关系与关闭语义（关最后网页不恢复、删会话关网页） | ✅ 真机 E2E 已验证 |
+| ADR-0095 | 会话级「浏览器控制」开关（+菜单/胶囊）+ 工具面单次解析修 P0-1（可见面=执行闸同源） | ✅ 自动化已验证 |
+| ADR-0096 | 偏好单源统一（contracts z.infer，消灭三份定义静默漂移）+ 通用「Agent 打开网页时的窗口布局」browserOpenLayout | ✅ 自动化已验证 |
+| ADR-0097 | 稳定元素引用与语义快照：DOM 零打标 + 页面内稳定性句柄 + ref 注册表（导航即失效）+ 原生 setter 输入 + 可行动失败码（修 P0-2） | ✅ 自动化已验证 |
+| ADR-0098 | 多标签工具（tabs/back/forward/reload）+ 按键/下拉/悬停 + 动作后状态增量 + 点击命中验证 + 标签级 ref 绑定 | ✅ 自动化已验证 |
+| ADR-0099 | 浏览器操作权限档 browser（策略独立档，默认 allow；敏感步骤仍逐次确认；沙箱仍按 network/L4） | ✅ 自动化已验证 |
+| ADR-0100 | Agent 打开网页前的布局询问（docked/小窗，纯函数决策 + 会话记忆 + fail-closed）+ 真机端到端验收脚本 | ✅ 自动化 + 真机 E2E |

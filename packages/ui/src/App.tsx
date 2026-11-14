@@ -153,6 +153,19 @@ export default function App(): React.JSX.Element {
     typeof location !== "undefined" && new URLSearchParams(location.search).get("mini") === "1";
   const [agentWindowOpen, setAgentWindowOpen] = useState(false);
   /**
+   * 小窗开合与偏好的「最新值」镜像：chrome:applyLayout 的事件回调只绑一次，
+   * 如果直接闭包 state 会读到开通/关窗之前的旧值（重复开窗或重复关窗）；
+   * 写进依赖数组又会让回调随每次偏好更新重订阅。用 ref 读最新值最稳。
+   */
+  const agentWindowOpenRef = useRef(false);
+  const preferencesRef = useRef<Preferences | null>(null);
+  useEffect(() => {
+    agentWindowOpenRef.current = agentWindowOpen;
+  }, [agentWindowOpen]);
+  useEffect(() => {
+    preferencesRef.current = preferences;
+  }, [preferences]);
+  /**
    * Agent 小窗的「最小化（缩成图标按钮）」状态：由主进程事件 chrome:agentWindowIconMode 驱动。
    * 图标模式只换视图，不卸载会话；点击图标 → ui:restoreAgentWindow 还原。
    */
@@ -345,6 +358,12 @@ export default function App(): React.JSX.Element {
   const [sessionResetToken, setSessionResetToken] = useState(0);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
+  /**
+   * 会话级「浏览器控制」开关（功能1）。真值以会话持久化（SessionMeta.browserControl）为准，
+   * 这里保持即时态；草稿态（还没有会话）先记 draftBrowserControlRef，建会话后立即落库。
+   */
+  const [browserControl, setBrowserControl] = useState(false);
+  const draftBrowserControlRef = useRef(false);
   const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
   // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc/切界面统一收起。
   // 会话历史下拉在 AgentSidebar 内用 usePopover("app-session") 登记；这里只负责全局收起。
@@ -387,6 +406,15 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     inputRef.current = input;
   }, [input]);
+  // 「浏览器控制」按会话水合：切会话跟着换；草稿态沿用用户刚点的选择（建会话后落库）
+  useEffect(() => {
+    if (!currentSession) {
+      setBrowserControl(draftBrowserControlRef.current);
+      return;
+    }
+    const meta = sessions.find((item) => item.id === currentSession);
+    if (meta) setBrowserControl(meta.browserControl === true);
+  }, [currentSession, sessions]);
 
   const metaFor = useCallback((sessionId: string): SessionStreamMeta => {
     let meta = sessionMetaRef.current.get(sessionId);
@@ -635,7 +663,69 @@ export default function App(): React.JSX.Element {
   // 独立窗口被用户关闭（或主进程回收）→ 主窗口恢复侧栏
   React.useEffect(() => {
     if (!api || miniWindow) return;
-    return api.on("chrome:agentWindowClosed", () => setAgentWindowOpen(false));
+    return api.on("chrome:agentWindowClosed", () => {
+      agentWindowOpenRef.current = false;
+      setAgentWindowOpen(false);
+    });
+  }, [api, miniWindow]);
+
+  /**
+   * Agent 第一次打开网页前的「会话窗口布局」安排（第二阶段 Slice E · 功能②）。
+   *
+   * 壳层已经完成询问/记忆（browser_navigate 的 beforeOpenPage 钩子），这里只执行真正的窗口动作：
+   *   · agentWindow：会话独立成小窗（已打开则不重复开——主进程 open 是单实例，只聚焦）；
+   *   · docked：先收小窗，再把侧栏恢复成「常驻右侧」并落库（常规布局 = 网页占主区）。
+   * 依赖只放 api/miniWindow（稳定值），小窗状态与偏好走 ref：
+   * 直接闭包 state 会读到开窗/偏好的旧值（重复开窗、或拿半份偏好覆盖设置）。
+   */
+  React.useEffect(() => {
+    if (!api || miniWindow) return;
+    return api.on("chrome:applyLayout", (payload) => {
+      const { mode, sessionId } = (payload ?? {}) as { mode?: string; sessionId?: string };
+      if (mode === "agentWindow") {
+        if (agentWindowOpenRef.current) {
+          // 已开：不重复开窗，只让它聚焦/切到该会话（主进程 open 单实例，重复调用只 focus）。
+          void api.ui.openAgentWindow({ sessionId }).catch(() => {});
+          return;
+        }
+        // 先占位再开：同一 tick 内再来一条事件也不会并发创建两个窗口。
+        agentWindowOpenRef.current = true;
+        void api.ui
+          .openAgentWindow({ sessionId })
+          .then((result) => {
+            if (result.ok) {
+              setAgentWindowOpen(true);
+              return;
+            }
+            agentWindowOpenRef.current = false;
+            setNotice(
+              t(getLanguage(), "browser.layout.openFailed", {
+                error: result.error ?? t(getLanguage(), "common.unknownError"),
+              }),
+            );
+          })
+          .catch(() => {
+            agentWindowOpenRef.current = false;
+            setNotice(
+              t(getLanguage(), "browser.layout.openFailed", { error: t(getLanguage(), "common.unknownError") }),
+            );
+          });
+        return;
+      }
+      if (mode !== "docked") return;
+      if (agentWindowOpenRef.current) {
+        agentWindowOpenRef.current = false;
+        void api.ui.closeAgentWindow().catch(() => {});
+        setAgentWindowOpen(false);
+      }
+      const prefs = preferencesRef.current;
+      // 偏好还没水合（null）/ 已经是常驻右侧：都不写盘，避免用半份偏好覆盖用户设置。
+      if (!prefs || prefs.sidebarMode === "docked") return;
+      void api.settings
+        .setPreferences({ ...prefs, sidebarMode: "docked" })
+        .then((result) => setPreferences(result.preferences))
+        .catch(() => {});
+    });
   }, [api, miniWindow]);
 
   /** 生效的侧栏宽度（收起态只用图标条宽度，让网页区自然变宽）。 */
@@ -878,6 +968,9 @@ export default function App(): React.JSX.Element {
       if (!api) return;
       pickedSessionRef.current = false;
       dismissAllPopovers();
+      // 新会话默认「浏览器控制」关（与 shell 侧缺省一致）；草稿标志一并清掉
+      draftBrowserControlRef.current = false;
+      setBrowserControl(false);
       draftRef.current.set(sessionIdRef.current, inputRef.current);
       if (options?.workspaceId && options.workspaceId !== activeWorkspaceId) {
         const selected = await api.workspace.select({ id: options.workspaceId });
@@ -1146,6 +1239,18 @@ export default function App(): React.JSX.Element {
     writeSessionMessages(sid, []);
     setSessions(created.sessions);
     setCurrentSession(sid);
+    // 草稿态点过「浏览器控制」：先落库再发首条消息——否则第一条消息的工具面会按「关闭」算，
+    // 用户看到的是「开了开关但 Agent 说没有浏览器能力」。
+    if (draftBrowserControlRef.current) {
+      try {
+        const saved = await api.chat.setBrowserControl({ sessionId: sid, enabled: true });
+        if (saved.ok) {
+          setSessions((prev) => prev.map((item) => (item.id === sid ? { ...item, browserControl: true } : item)));
+        }
+      } catch {
+        // 落库失败不阻断发送：工具面按关闭处理（fail-closed）
+      }
+    }
     setMessages([]);
     setPendingSteers([]);
     setBusy(false);
@@ -1561,6 +1666,51 @@ export default function App(): React.JSX.Element {
     setSessionOpen((value) => !value);
   }, [refreshSessions]);
 
+  /**
+   * 会话级「浏览器控制」开关（功能1）：开启 = Agent 看得见、也能执行 browser_* 工具。
+   * · 会话已存在 → 立即落库（shell 装配的 allowlist 在下一轮 stream 生效）；
+   * · 草稿态（还没会话 id）→ 只记标志，由 ensureSessionForSend 建会话后先写再发首条消息。
+   */
+  const toggleBrowserControl = useCallback((): void => {
+    const next = !browserControl;
+    setBrowserControl(next);
+    draftBrowserControlRef.current = next;
+    const sid = sessionIdRef.current || currentSession;
+    const notice = (key: string): void => setNotice(t(getLanguage(), key));
+    if (!sid) {
+      notice(next ? "composer.browserControlOn" : "composer.browserControlOff");
+      return;
+    }
+    if (!api) {
+      setBrowserControl(!next);
+      draftBrowserControlRef.current = !next;
+      notice("composer.browserControlUnavailable");
+      return;
+    }
+    void api.chat
+      .setBrowserControl({ sessionId: sid, enabled: next })
+      .then((r) => {
+        if (!r.ok) {
+          // 会话已不存在（被删/切走）：回滚 UI 真值，不要留下「界面开着但实际关着」的错觉
+          setBrowserControl(!next);
+          draftBrowserControlRef.current = !next;
+          setNotice(t(getLanguage(), "composer.browserControlFailed", { error: "会话不存在" }));
+          return;
+        }
+        setSessions((prev) => prev.map((item) => (item.id === sid ? { ...item, browserControl: next } : item)));
+        notice(next ? "composer.browserControlOn" : "composer.browserControlOff");
+      })
+      .catch((err: unknown) => {
+        setBrowserControl(!next);
+        draftBrowserControlRef.current = !next;
+        setNotice(
+          t(getLanguage(), "composer.browserControlFailed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      });
+  }, [api, browserControl, currentSession]);
+
   /** 收起态竖条：悬停/点条目后展开侧栏并打开会话列表（等宽度过渡结束再弹浮层，锚点才正确）。 */
   const expandSidebarWithSessions = useCallback((): void => {
     dismissAllPopovers();
@@ -1869,9 +2019,16 @@ export default function App(): React.JSX.Element {
       : `provider: ${provider.provider}（${provider.reason ?? "不可用"}）`;
   }, [provider]);
 
-  const agentLabel = agents.find((a) => a.isDefault)?.name ?? "—";  const permissionLabel = (state: PermissionsState): string => {
+  const agentLabel = agents.find((a) => a.isDefault)?.name ?? "—";
+  /**
+   * 权限 chip 摘要：只看「有风险的四档」——写文件 / 执行命令 / 网络 / 浏览器操作。
+   *  · 读权限不参与（读默认放行，算进去会让摘要永远显示「询问」）；
+   *  · 浏览器档与其余三档同一优先级顺序与文案口径（Slice G 遗留：此前漏了 browser，
+   *    导致只把浏览器档设为「拒绝 / 询问」时 chip 仍显示「放行」，与真实策略不一致）。
+   */
+  const permissionLabel = (state: PermissionsState): string => {
     const p = state.permissions;
-    const risky = [p.write, p.terminal, p.network];
+    const risky = [p.write, p.terminal, p.network, p.browser];
     if (risky.every((x) => x === "deny")) return "只读会话";
     if (risky.some((x) => x === "confirm")) return "权限：询问";
     return "权限：放行";
@@ -2042,6 +2199,8 @@ export default function App(): React.JSX.Element {
               onSelectWorkspace={bindWorkspaceToCurrentSession}
               onAddWorkspace={addWorkspaceForChat}
               onPickAttachment={pickAttachmentPath}
+              browserControl={browserControl}
+              onToggleBrowserControl={toggleBrowserControl}
               onOpenWorkspacePanel={() => {
                 dismissAllPopovers();
                 setWorkspacePanelOpen(true);
@@ -2175,6 +2334,8 @@ export default function App(): React.JSX.Element {
             activeWorkspaceId={sessionWorkspaceId}
             onSelectWorkspace={bindWorkspaceToCurrentSession}
             onAddWorkspace={addWorkspaceForChat}
+            browserControl={browserControl}
+            onToggleBrowserControl={toggleBrowserControl}
             onPickAttachment={() => {
               void pickAttachmentPath().then((path) => {
                 if (!path) return;

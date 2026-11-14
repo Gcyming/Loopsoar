@@ -27,6 +27,24 @@ const REPLY_CHUNKS = [
   "更多见 [Loopsoar](https://example.com)。",
 ];
 
+/**
+ * 逐个工具调用的参数：MOCK_TOOL_ARGS_SEQ='["{...}","{}"]'（按第 N 次工具调用取第 N 项），
+ * 缺省回退到单一 MOCK_TOOL_ARGS。浏览器 Agent 的 E2E 需要「导航→快照→点击→快照」不同参数，
+ * 单一 MOCK_TOOL_ARGS 表达不了这种序列，故补这一项（不影响既有用法）。
+ */
+function argsFor(index) {
+  const raw = process.env.MOCK_TOOL_ARGS_SEQ;
+  if (raw) {
+    try {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && typeof list[index] === "string") return list[index];
+    } catch {
+      // 配置写坏时按缺省处理，不阻断 mock 服务
+    }
+  }
+  return process.env.MOCK_TOOL_ARGS || "{}";
+}
+
 function sse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
@@ -115,7 +133,7 @@ const server = createServer(async (req, res) => {
               { content: "输出结构化结论", status: "pending" },
             ],
           })
-        : (process.env.MOCK_TOOL_ARGS || "{}");
+        : argsFor(toolResultCount);
       sse(res, {
         choices: [
           {

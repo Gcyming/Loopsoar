@@ -192,6 +192,28 @@ describe("BrowserHost（多标签）", () => {
     expect(await host.screenshot()).toBeTruthy();
   });
 
+  it("快照/脚本可按 tabId 定位；getTab 返回指定标签状态（Slice D 标签级绑定）", async () => {
+    const { host } = makeHost();
+    await host.navigate("https://a.example");
+    const first = host.activeTabId()!;
+    const second = (await host.newTab("https://b.example")).tabId;
+    expect(host.activeTabId()).toBe(second);
+
+    // 缺省 = 该会话的活动标签；显式 tabId = 指定标签，快照返回值带上 tabId
+    expect((await host.snapshot())?.tabId).toBe(second);
+    expect((await host.snapshot(undefined, first))?.tabId).toBe(first);
+    expect(host.getTab()?.id).toBe(second);
+    expect(host.getTab(undefined, first)?.id).toBe(first);
+    expect(host.getTab(undefined, "tab-404")).toBeNull();
+    // 指定标签执行脚本：不落在活动标签上也能跑
+    expect(await host.executeScript("1+1", undefined, first)).toBe(3);
+
+    const empty = makeHost();
+    expect(await empty.host.snapshot()).toBeNull();
+    expect(empty.host.getTab()).toBeNull();
+    await expect(empty.host.executeScript("1+1", undefined, "tab-404")).rejects.toThrow(/没有打开的网页标签/);
+  });
+
   it("窗口缩放 → syncBounds 重新对齐", async () => {
     const state = { width: 1360, height: 860 };
     const created: FakeView[] = [];

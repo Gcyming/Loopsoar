@@ -1,46 +1,18 @@
 /**
- * 通用偏好（设置 · 通用）：默认值 / 校验 / 合并（纯逻辑）。
- * 为什么把默认值放 core：壳层、UI、测试三处都要知道「未配置时是什么」，
- * 各写一份必然漂移；这里作为唯一产地，UI 只做展示与收集。
+ * 通用偏好（设置 · 通用）：默认值 / 合并（纯逻辑）。
+ *
+ * schema 唯一产地是契约层（packages/contracts/src/schemas.ts 的 PreferencesSchema）：
+ * 壳层受信入口用它 safeParse，UI 用它的推断类型渲染。core 若再自持一份 schema，
+ * 两边字段必然漂移 —— 契约侧不认识的字段会被 zod 默认 strip 掉，落盘时静默回默认值。
+ * 因此这里只保留「默认值 + 合并行为 + 搜索引擎 URL」，字段定义一律从契约导入。
  */
-import { z } from "zod";
+import { PreferencesSchema, type PreferencesData } from "loopsoar-contracts/schemas";
 
-export const AnimationsSchema = z.enum(["full", "reduced", "off"]);
-export type Animations = z.infer<typeof AnimationsSchema>;
+/** 动效强度枚举（由契约 schema 推导，保留旧导出名以免调用点断裂）。 */
+export const AnimationsSchema = PreferencesSchema.shape.animations;
+export type Animations = PreferencesData["animations"];
 
-export const PreferencesSchema = z.object({
-  language: z.enum(["zh-CN", "en-US"]),
-  animations: AnimationsSchema,
-  restoreSession: z.boolean(),
-  searchEngine: z.enum(["bing", "google", "baidu"]),
-  downloadDir: z.string().max(1024).optional(),
-  workspaceRoot: z.string().max(1024).optional(),
-  memoryStorePath: z.string().max(1024).optional(),
-  memoryAutoCapture: z.boolean(),
-  sidebarWidth: z.number().int().min(240).max(720),
-  /** Vibecoding 模式独立侧栏宽度（空 = 未单独设置，进入时用 vibe 最小宽度）。 */
-  vibeSidebarWidth: z.number().int().min(100).max(720).optional(),
-  theme: z.enum(["soft", "classic"]).optional(),
-  sidebarMode: z.enum(["docked", "collapsed", "float"]).optional(),
-  /** Agent 单次任务最多请求轮数（防止无限循环；默认 40）。 */
-  agentMaxRounds: z.number().int().min(1).max(500).optional(),
-  /** Agent 单次任务最多工具调用次数（默认 100）。 */
-  agentMaxToolCalls: z.number().int().min(1).max(2000).optional(),
-  /** 相同工具+参数重复调用的提醒阈值（默认 5）。 */
-  agentRepeatToolWarn: z.number().int().min(2).max(50).optional(),
-  /** 相同工具+参数重复调用的停止阈值（默认 30）。 */
-  agentRepeatToolStop: z.number().int().min(3).max(200).optional(),
-  /** 推理强度（空 = 模型默认；重启后保持）。 */
-  reasoningEffort: z.string().max(64).optional(),
-  /** 当前 Agent-Loop id（空 = 内置 loop）；与 contracts PreferencesSchema 同步，勿再漂移。 */
-  loopId: z.string().max(64).optional(),
-  /** 广告/追踪请求拦截开关（默认开启；与 contracts PreferencesSchema 同步）。 */
-  adBlockEnabled: z.boolean().optional(),
-  /** 敏感步骤（登录/支付/不可撤销操作）始终强制人工确认（默认 true）。 */
-  sensitiveAlwaysConfirm: z.boolean().optional(),
-});
-
-export type Preferences = z.infer<typeof PreferencesSchema>;
+export type Preferences = PreferencesData;
 
 export const DEFAULT_PREFERENCES: Preferences = {
   language: "zh-CN",
@@ -54,6 +26,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sidebarWidth: 360,
   theme: "soft",
   sidebarMode: "docked",
+  browserOpenLayout: "ask",
   agentMaxRounds: 40,
   agentMaxToolCalls: 100,
   agentRepeatToolWarn: 5,
@@ -93,6 +66,7 @@ export function mergePreferences(raw: unknown): Preferences {
     sensitiveAlwaysConfirm: parsed.data.sensitiveAlwaysConfirm ?? true,
     theme: parsed.data.theme ?? "soft",
     sidebarMode: parsed.data.sidebarMode ?? "docked",
+    browserOpenLayout: parsed.data.browserOpenLayout ?? "ask",
   };
 }
 

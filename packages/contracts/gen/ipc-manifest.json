@@ -519,6 +519,13 @@
       "hasRequest": true
     },
     {
+      "channel": "chat:setBrowserControl",
+      "domain": "chat",
+      "method": "setBrowserControl",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "workspace:list",
       "domain": "workspace",
       "method": "list",
@@ -935,6 +942,7 @@
     "chrome:agentWindowClosed",
     "chrome:agentWindowIconMode",
     "chrome:agentWindowTransition",
+    "chrome:applyLayout",
     "chat:compacted"
   ]
 }

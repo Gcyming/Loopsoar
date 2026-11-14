@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PersistedBrowserState } from "./browserSessionState.js";
+import type { BrowserLayoutMode } from "./browserLayoutChoice.js";
 import { requireSessionId, sanitizeSessionId } from "./sessionId.js";
 
 export interface PersistedMessage {
@@ -49,6 +50,17 @@ export interface PersistedSession {
   workspaceId?: string | null;
   /** 该会话的隔离 git worktree；存在时 Agent 的工作根目录取它。 */
   worktree?: PersistedWorktree | null;
+  /**
+   * 会话级「浏览器控制」开关（第二阶段 · 功能1）：开启后 Agent 才看得见 browser_* 工具。
+   * 缺省（旧会话 / 新会话）= 关闭（fail-closed）；非布尔脏值在读取/写入时一律丢弃。
+   */
+  browserControl?: boolean;
+  /**
+   * 会话级「打开网页时的窗口布局」记忆（第二阶段 Slice E · 功能②）：
+   * 设置策略为 ask 时，用户第一次被询问后答案落在这里，之后同一会话直接按它安排、不再询问。
+   * 缺省（旧会话 / 从未选过）= 未选择 → 下次仍会问；非法值在读取/写入时丢弃。
+   */
+  browserLayoutChoice?: BrowserLayoutMode;
 }
 
 export interface SessionMeta {
@@ -59,6 +71,8 @@ export interface SessionMeta {
   messageCount: number;
   /** 会话归属的工作区 id（旧会话可能没有）。 */
   workspaceId?: string | null;
+  /** 会话级「浏览器控制」开关（缺省 = 关闭）；列表/当前会话查询据此给 UI 水合初值。 */
+  browserControl?: boolean;
 }
 
 interface SessionIndex {
@@ -68,6 +82,31 @@ interface SessionIndex {
 
 const MAX_MESSAGES = 200;
 const MAX_SESSIONS = 100;
+
+/**
+ * 索引条目净化：`browserControl` 只认布尔。
+ * 旧版本写的索引 / 手工编辑出的脏值（"false"、1、null…）若留着，
+ * UI 与工具面会各按各的真值语义理解——这里统一丢弃，缺省即「关闭」。
+ */
+function sanitizeMeta(item: SessionMeta): SessionMeta {
+  if (item && typeof item === "object" && item.browserControl !== undefined && typeof item.browserControl !== "boolean") {
+    delete item.browserControl;
+  }
+  return item;
+}
+
+/** 会话文件净化：同 sanitizeMeta（缺省 = 关闭 = fail-closed）。 */
+function sanitizeSession(data: PersistedSession): PersistedSession {
+  if (data.browserControl !== undefined && typeof data.browserControl !== "boolean") {
+    delete data.browserControl;
+  }
+  // 布局记忆只认两个字面量：脏值（"Docked"、1、null…）一律丢弃，缺省即「未选择」，
+  // 宁可再问一次，也不要让「第三种状态」影响后续导航。
+  if (data.browserLayoutChoice !== "docked" && data.browserLayoutChoice !== "agentWindow") {
+    delete data.browserLayoutChoice;
+  }
+  return data;
+}
 
 export class SessionStore {
   private dir: string;
@@ -119,7 +158,7 @@ export class SessionStore {
     if (raw && Array.isArray(raw.items)) {
       return {
         currentId: raw.currentId && raw.items.some((i) => i.id === raw.currentId) ? raw.currentId : (raw.items[0]?.id ?? null),
-        items: raw.items,
+        items: raw.items.map((item) => sanitizeMeta(item)),
       };
     }
     return { currentId: null, items: [] };
@@ -139,6 +178,12 @@ export class SessionStore {
     const safe = sanitizeSessionId(id);
     if (!safe) return null;
     return path.join(this.dir, `${safe}.json`);
+  }
+
+  /** 唯一的「会话文件 → 对象」读取入口：读出来先净化字段。 */
+  private readSession(file: string): PersistedSession | null {
+    const data = this.readJson<PersistedSession>(file);
+    return data ? sanitizeSession(data) : null;
   }
 
   /** 旧版 last.json → 会话文件 + 索引。 */
@@ -162,6 +207,7 @@ export class SessionStore {
     messages: PersistedMessage[],
     updatedAt: number,
     workspaceId?: string | null,
+    browserControl?: boolean,
   ): SessionMeta {
     const firstUser = messages.find((m) => m.role === "user")?.text ?? "新会话";
     const last = messages[messages.length - 1]?.text ?? "";
@@ -172,6 +218,7 @@ export class SessionStore {
       preview: last.replace(/\s+/g, " ").slice(0, 80),
       messageCount: messages.length,
       ...(workspaceId ? { workspaceId } : {}),
+      ...(typeof browserControl === "boolean" ? { browserControl } : {}),
     };
   }
 
@@ -179,7 +226,7 @@ export class SessionStore {
   saveBrowserState(sessionId: string, state: PersistedBrowserState): boolean {
     const file = this.sessionFile(sessionId);
     if (!file) return false;
-    const data = this.readJson<PersistedSession>(file);
+    const data = this.readSession(file);
     if (!data) return false;
     data.browser = state.tabs.length > 0 ? state : undefined;
     this.writeJson(file, data);
@@ -206,7 +253,7 @@ export class SessionStore {
     if (!id) return false;
     const file = this.sessionFile(id);
     if (!file) return false;
-    const data = this.readJson<PersistedSession>(file);
+    const data = this.readSession(file);
     if (!data) return false;
     for (let i = data.messages.length - 1; i >= 0; i -= 1) {
       if (data.messages[i].role === "assistant") {
@@ -224,7 +271,7 @@ export class SessionStore {
     if (!id) return null;
     const file = this.sessionFile(id);
     if (!file) return null;
-    const data = this.readJson<PersistedSession>(file);
+    const data = this.readSession(file);
     if (!data) return null;
     const keep = Math.max(0, Math.min(Math.floor(keepCount), data.messages.length));
     data.messages = data.messages.slice(0, keep);
@@ -261,7 +308,7 @@ export class SessionStore {
     if (!id) return null;
     const file = this.sessionFile(id);
     if (!file) return null;
-    const data = this.readJson<PersistedSession>(file);
+    const data = this.readSession(file);
     if (!data) return null;
     const next = Array.isArray(messages) ? messages.slice(-MAX_MESSAGES) : [];
     data.messages = next;
@@ -289,7 +336,7 @@ export class SessionStore {
 
   get(id: string): PersistedSession | null {
     const file = this.sessionFile(id);
-    return file ? this.readJson<PersistedSession>(file) : null;
+    return file ? this.readSession(file) : null;
   }
 
   /**
@@ -311,13 +358,14 @@ export class SessionStore {
     const safeId = requireSessionId(session.sessionId);
     const file = this.sessionFile(safeId);
     if (!file) throw new Error(`[错误] 非法会话 ID：${safeId}`);
-    const trimmed: PersistedSession = {
+    // 写入同样净化：调用方可能把外部读来的对象整体回写，脏值不该被固化进磁盘。
+    const trimmed: PersistedSession = sanitizeSession({
       ...session,
       messages: session.messages.slice(-MAX_MESSAGES),
-    };
+    });
     this.writeJson(file, trimmed);
     const index = this.index();
-    const meta = this.metaOf(safeId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId);
+    const meta = this.metaOf(safeId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId, trimmed.browserControl);
     const at = index.items.findIndex((i) => i.id === safeId);
     if (at >= 0) index.items[at] = meta;
     else index.items.push(meta);
@@ -348,7 +396,7 @@ export class SessionStore {
   setWorkspaceId(sessionId: string, workspaceId: string | null): boolean {
     const file = this.sessionFile(sessionId);
     if (!file) return false;
-    const data = this.readJson<PersistedSession>(file);
+    const data = this.readSession(file);
     if (!data) return false;
     data.workspaceId = workspaceId;
     this.writeJson(file, data);
@@ -369,9 +417,53 @@ export class SessionStore {
   setWorktree(sessionId: string, worktree: PersistedWorktree | null): boolean {
     const file = this.sessionFile(sessionId);
     if (!file) return false;
-    const data = this.readJson<PersistedSession>(file);
+    const data = this.readSession(file);
     if (!data) return false;
     data.worktree = worktree;
+    this.writeJson(file, data);
+    return true;
+  }
+
+  /**
+   * 会话级「浏览器控制」开关（第二阶段 · 功能1）。
+   *
+   * 为什么同时写索引：UI 的会话列表/当前会话查询要拿初值水合；只写会话文件会让
+   * 「切走再切回」的开关状态回退成关闭，用户以为设置丢了。
+   * 非法 ID / 会话不存在 → false（fail-closed，绝不新建会话文件）。
+   */
+  setBrowserControl(sessionId: string, enabled: boolean): boolean {
+    const file = this.sessionFile(sessionId);
+    if (!file) return false;
+    const data = this.readSession(file);
+    if (!data) return false;
+    data.browserControl = enabled;
+    this.writeJson(file, data);
+    const index = this.index();
+    const meta = index.items.find((item) => item.id === sessionId);
+    if (meta) {
+      meta.browserControl = enabled;
+      this.saveIndex(index);
+    }
+    return true;
+  }
+
+  /**
+   * 记住（或清除）本会话「打开网页时的窗口布局」选择（第二阶段 Slice E · 功能②）。
+   *
+   * 为什么只写会话文件、不写索引：SessionMeta 是「列表卡片」的信息（标题/预览/条数），
+   * 布局记忆只在工具执行前读一次；写索引只会让列表多一个无用字段、还会在并发写时多一份竞争面。
+   *
+   * choice=null → 清除（回到「下次仍会问」）。非法值同样按清除处理：
+   * 记忆宁愿没有，也不要一个会让用户看到「奇怪布局」的第三态。
+   * 非法会话 ID / 会话不存在 → false（fail-closed，绝不新建会话文件）。
+   */
+  setBrowserLayoutChoice(sessionId: string, choice: BrowserLayoutMode | null): boolean {
+    const file = this.sessionFile(sessionId);
+    if (!file) return false;
+    const data = this.readSession(file);
+    if (!data) return false;
+    if (choice === "docked" || choice === "agentWindow") data.browserLayoutChoice = choice;
+    else delete data.browserLayoutChoice;
     this.writeJson(file, data);
     return true;
   }

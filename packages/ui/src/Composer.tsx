@@ -45,6 +45,10 @@ export interface ComposerProps {
   effortLabel: (value: string) => string;
   permissionLabel: (state: PermissionsState) => string;
   onPickAttachment: () => void;
+  /** 会话级「浏览器控制」开关：关闭（默认）时 browser_* 工具对模型不可见。 */
+  browserControl: boolean;
+  /** 切换「浏览器控制」（App 落库到会话；草稿态先记待落库标志）。 */
+  onToggleBrowserControl: () => void;
   /** 斜杠命令执行入口（App 负责 /new /clear /stop /settings /compact /help 的实际动作）。 */
   onCommand?: (command: string) => void;
   /** 组件内异步操作（粘贴图片/选文件/命令）的提示出口；缺省则静默。 */
@@ -60,6 +64,7 @@ const PERMISSION_CATEGORIES = [
   { key: "read", labelKey: "composer.perm.read" },
   { key: "write", labelKey: "composer.perm.write" },
   { key: "terminal", labelKey: "composer.perm.terminal" },
+  { key: "browser", labelKey: "composer.perm.browser" },
   { key: "network", labelKey: "composer.perm.network" },
 ] as const;
 
@@ -125,6 +130,8 @@ export default function Composer({
   effortLabel,
   permissionLabel,
   onPickAttachment,
+  browserControl,
+  onToggleBrowserControl,
   onCommand,
   onNotice,
   workspaces = [],
@@ -353,7 +360,7 @@ export default function Composer({
   usePopover("composer-plus", openMenu === "plus", (next) => {
     if (!next) setOpenMenu(null);
   });
-  /** 左下角「+」：圆形框格，目前只放「附件」；后续新增项统一收进这里。 */
+  /** 左下角「+」：圆形框格（附件 + 会话级「浏览器控制」开关）；后续新增项统一收进这里。 */
   const openPlusMenu = (): void => {
     onCloseModelMenu();
     setOpenMenu((prev) => (prev === "plus" ? null : "plus"));
@@ -367,7 +374,7 @@ export default function Composer({
     setOpenMenu(null);
     onOpenModelMenu();
   };
-  const adjustPermission = (category: "read" | "write" | "terminal" | "network", value: "allow" | "confirm" | "deny"): void => {
+  const adjustPermission = (category: "read" | "write" | "terminal" | "network" | "browser", value: "allow" | "confirm" | "deny"): void => {
     if (!permSummary) return;
     onPermissionChange({
       ...permSummary,
@@ -379,6 +386,13 @@ export default function Composer({
       <div ref={boxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
         <div ref={measureRef} aria-hidden style={styles.measureRow}>
           <span style={styles.measureChip}><Icon name="bolt" size={12} style={{ marginRight: 4 }} />Build</span>
+          {/* 挤压测量：真正渲染出来才计入宽度，避免「没开也挤压」 */}
+          {browserControl ? (
+            <span style={styles.measureChip}>
+              <Icon name="globe" size={12} style={{ marginRight: 4 }} />
+              {tr("composer.browserChip")}
+            </span>
+          ) : null}
           <span style={styles.measureChip}>
             <Icon name="check" size={12} style={{ marginRight: 4 }} />
             {permSummary ? permissionLabel(permSummary) : tr("composer.permissionFallback")}
@@ -433,6 +447,26 @@ export default function Composer({
                   {tr("composer.attachLabel")}
                 </span>
               </button>
+              {/* 第二项：会话级「浏览器控制」开关（勾选态可见；点击立即切换并收起菜单） */}
+              <button
+                type="button"
+                className="model-item"
+                style={{ ...styles.modelMenuItem, ...(browserControl ? styles.modelMenuItemActive : {}) }}
+                role="menuitemcheckbox"
+                aria-checked={browserControl}
+                title={tr("composer.browserControlHint")}
+                data-testid="composer-browser-control"
+                onClick={() => {
+                  setOpenMenu(null);
+                  onToggleBrowserControl();
+                }}
+              >
+                <span style={styles.modelItemName}>
+                  <Icon name="globe" size={14} style={{ marginRight: 8 }} />
+                  {tr("composer.browserControl")}
+                </span>
+                {browserControl ? <Icon name="check" size={12} /> : null}
+              </button>
             </Popover>
           </span>
 
@@ -449,6 +483,19 @@ export default function Composer({
             <Icon name="bolt" size={13} style={compactUi ? undefined : { marginRight: 4 }} />
             {compactUi ? null : mode === "build" ? "Build" : "Plan"}
           </button>
+
+          {/* 浏览器控制开启：品牌色小胶囊（刻意不用 .chip 类：那条透明边框/灰字强规则会吃掉品牌底） */}
+          {browserControl ? (
+            <span
+              style={{ ...styles.browserChip, ...(compactUi ? styles.browserChipCompact : {}) }}
+              title={tr("composer.browserControlHint")}
+              aria-label={tr("composer.browserControlOn")}
+              data-testid="composer-browser-chip"
+            >
+              <Icon name="globe" size={11} style={compactUi ? undefined : { marginRight: 4 }} />
+              {compactUi ? null : tr("composer.browserChip")}
+            </span>
+          ) : null}
 
           <span ref={permAnchorRef} style={styles.anchor} data-popover-trigger>
             <button
@@ -740,6 +787,23 @@ const styles: Record<string, React.CSSProperties> = {
     transition: "background 120ms, border-color 120ms, color 120ms",
   },
   workspaceChipText: { maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  /** 「浏览器控制」胶囊：沿用工作区胶囊的品牌色语言，但不带 .chip 类（见 ADR-0085 补充2）。 */
+  browserChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 24,
+    padding: "0 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 600,
+    color: BRAND.ochreHover,
+    background: BRAND.ochreSoft,
+    border: "1px solid rgba(200,118,60,0.55)",
+    boxShadow: "0 2px 10px rgba(200,118,60,0.12)",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
+  browserChipCompact: { width: 24, padding: 0, justifyContent: "center" },
   workspaceList: { display: "flex", flexDirection: "column", gap: 1, maxHeight: 240, overflowY: "auto" },
   workspaceItem: { display: "flex", alignItems: "center", gap: 2, width: "100%", padding: "6px 8px", border: "none", borderRadius: 6, background: "transparent", color: BRAND.linen, fontSize: 12, cursor: "pointer", textAlign: "left" },
   workspaceItemName: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },

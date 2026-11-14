@@ -155,6 +155,15 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.general.language": { zh: "语言", en: "Language" },
   "settings.general.animations": { zh: "动效强度", en: "Animation intensity" },
   "settings.general.animationsHint": { zh: "关闭后全局停用动画与过渡", en: "Disables animations and transitions globally" },
+  "settings.general.browserOpenLayout": { zh: "Agent 打开网页时的窗口布局", en: "Window layout when the agent opens a page" },
+  "settings.general.browserOpenLayoutHint": {
+    zh: "浏览器控制开启的会话里，Agent 第一次打开网页前：询问一次 / 自动收齐会话到右侧 / 自动变为小窗 / 保持当前布局",
+    en: "In browser-control sessions, before the agent first opens a page: ask once / dock sessions to the right / switch to the small agent window / keep the current layout",
+  },
+  "settings.general.browserOpenLayout.ask": { zh: "每次询问", en: "Ask each time" },
+  "settings.general.browserOpenLayout.docked": { zh: "收齐到右侧", en: "Dock to the right" },
+  "settings.general.browserOpenLayout.agentWindow": { zh: "小窗", en: "Agent window" },
+  "settings.general.browserOpenLayout.keep": { zh: "保持布局", en: "Keep layout" },
   "settings.general.searchEngine": { zh: "默认搜索引擎", en: "Default search engine" },
   "settings.general.adBlock": { zh: "广告拦截", en: "Ad blocking" },
   "settings.general.adBlockHint": {
@@ -230,6 +239,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.permissions.cat.write.desc": { zh: "新建或修改工作区内文件", en: "Create or modify files inside the workspace" },
   "settings.permissions.cat.terminal.label": { zh: "执行命令", en: "Run commands" },
   "settings.permissions.cat.terminal.desc": { zh: "在工作区执行终端命令", en: "Run terminal commands in the workspace" },
+  "settings.permissions.cat.browser.label": { zh: "浏览器操作", en: "Browser actions" },
+  "settings.permissions.cat.browser.desc": {
+    zh: "Agent 操控内嵌浏览器的总开关（点击、输入、按键、下拉、悬停、切换标签）；登录、支付与不可撤销操作不受此项影响，始终逐次确认",
+    en: "Master switch for the agent driving the embedded browser (click, type, keys, select, hover, switch tabs); sign-in, payment and irreversible actions are unaffected and always confirmed one by one",
+  },
   "settings.permissions.cat.network.label": { zh: "网络访问", en: "Network access" },
   "settings.permissions.cat.network.desc": { zh: "抓取网页与访问外部端点", en: "Fetch web pages and call external endpoints" },
   "settings.permissions.confirmDangerous": { zh: "危险操作始终确认", en: "Always confirm dangerous operations" },

@@ -84,6 +84,7 @@ export const IPC_CHANNELS = {
   "chat:newSession": { domain: "chat", method: "newSession", sensitive: true, hasRequest: true },
   "chat:switchSession": { domain: "chat", method: "switchSession", sensitive: true, hasRequest: true },
   "chat:deleteSession": { domain: "chat", method: "deleteSession", sensitive: true, hasRequest: true },
+  "chat:setBrowserControl": { domain: "chat", method: "setBrowserControl", sensitive: true, hasRequest: true },
   "workspace:list": { domain: "workspace", method: "list", sensitive: true, hasRequest: false },
   "workspace:create": { domain: "workspace", method: "create", sensitive: true, hasRequest: true },
   "workspace:bindSession": { domain: "workspace", method: "bindSession", sensitive: true, hasRequest: true },
@@ -165,7 +166,7 @@ export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEn
 export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
-    "chat": ["stream", "steer", "steerCancel", "rollback", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession", "compact"],
+    "chat": ["stream", "steer", "steerCancel", "rollback", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession", "setBrowserControl", "compact"],
     "fs": ["readImage", "saveImage"],
     "perm": ["respond"],
     "workspace": ["read", "write", "list", "create", "bindSession", "select", "rename", "openFolder", "remove", "status"],
@@ -223,5 +224,6 @@ export const EVENT_NAMES = [
   "chrome:agentWindowClosed",
   "chrome:agentWindowIconMode",
   "chrome:agentWindowTransition",
+  "chrome:applyLayout",
   "chat:compacted",
 ] as const;

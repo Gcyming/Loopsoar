@@ -10,13 +10,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHANNEL_BINDINGS, EVENTS } from "loopsoar-contracts/schemas";
+import { BROWSER_AGENT_TOOLS, CHANNEL_BINDINGS, EVENTS } from "loopsoar-contracts/schemas";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { createNodePlatform } from "loopsoar-core/platform";
 import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
-import { ChatService } from "loopsoar-services/chat";
+import { ChatService, resolveToolSurface } from "loopsoar-services/chat";
 import { createAnthropicClient, createOpenAiClient, inferApiFormat, type LlmClient } from "loopsoar-core/llm";
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
@@ -73,6 +73,7 @@ import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
+import { resolveBrowserOpenLayout } from "./browserLayoutChoice.js";
 import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
@@ -1663,15 +1664,26 @@ app.whenReady().then(async () => {
         repeatToolStopAt: prefs.agentRepeatToolStop,
       };
     },
-    // 模式：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单
-    getToolAllowlist: (mode?: "build" | "plan") => {
-      if (mode === "plan") {
-        return registry
-          .list()
-          .filter((t) => t.permissions.read && !t.permissions.write && !t.permissions.terminal && !t.permissions.network)
-          .map((t) => t.name);
-      }
-      return defaultAgent?.toolAllowlist;
+    // 模式 × 会话：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单。
+    // 再叠加会话级「浏览器控制」：关闭时剔除 BROWSER_AGENT_TOOLS（与 contracts 单源一致），
+    // 这份名单同时决定模型可见面与执行闸（services/chat.ts 只解析一次）。
+    getToolAllowlist: (mode?: "build" | "plan", sessionId?: string) => {
+      const base =
+        mode === "plan"
+          ? registry
+              .list()
+              .filter((t) => t.permissions.read && !t.permissions.write && !t.permissions.terminal && !t.permissions.network)
+              .map((t) => t.name)
+          : defaultAgent?.toolAllowlist;
+      const id = sessionId ?? sessions.currentId();
+      // 未知会话 / 读不到 → 关闭（fail-closed）：幽灵会话不该意外获得浏览器控制权。
+      const browserControl = id ? sessions.get(id)?.browserControl === true : false;
+      // 关闭时剔除浏览器工具；base 为 undefined 时由 resolveToolSurface 用注册表全集重构名单。
+      return resolveToolSurface({
+        base,
+        allNames: registry.list().map((t) => t.name),
+        exclude: browserControl ? [] : [...BROWSER_AGENT_TOOLS],
+      });
     },
     // 权限确认 → 推送到渲染层弹窗（perm:request 事件）
     onPermissionRequest: (request) => pushToRenderer("perm:request", request),
@@ -1794,8 +1806,43 @@ app.whenReady().then(async () => {
   }
   bootTrace.mark("browser-host");
   // 注：全局历史补记（browser-history.json 的同步落盘）已移到首帧后的 deferred 启动任务里，见 runDeferredBootTasks。
+  /**
+   * Agent 第一次打开网页前的「会话窗口布局」询问（第二阶段 Slice E · 功能②）。
+   *
+   * 链路：browser_navigate 在真正 host.navigate 之前调本钩子 → 本钩子读会话/偏好 →
+   * 询问或按记忆决定 → pushToRenderer("chrome:applyLayout") 让渲染层执行窗口动作 →
+   * 返回 { proceed, note }（note 追加到工具结果，模型知道这次为什么这样摆窗口）。
+   *
+   * 为什么把决策放在 browserLayoutChoice.ts：分支（ask/记忆/写死/keep/取消）需要单测，
+   * 装配层只负责读数据 + 接线，避免把策略散落进 index.ts。
+   */
+  const beforeOpenBrowserPage = async (input: { sessionId?: string; url: string }) => {
+    // 没有会话（草稿态）就没有会话记忆、也读不到 browserControl：
+    // 且此时 browser_* 工具本就不可见，直接放行。
+    const sessionId = input.sessionId;
+    if (!sessionId) return { proceed: true };
+    const session = sessions.get(sessionId);
+    if (!session) return { proceed: true };
+    const prefs = loadPreferences(dirs.configDir);
+    return resolveBrowserOpenLayout({
+      browserControl: session.browserControl === true,
+      preference: prefs.browserOpenLayout ?? "ask",
+      remembered: session.browserLayoutChoice ?? null,
+      language: prefs.language,
+      url: input.url,
+      ask: (input) => askBus.request(input),
+      // 记忆写在会话文件：下次同一会话不再询问（切走再切回仍记得）。
+      remember: (choice) => {
+        sessions.setBrowserLayoutChoice(sessionId, choice);
+      },
+      apply: (mode, reason) => pushToRenderer("chrome:applyLayout", { mode, sessionId, reason }),
+    });
+  };
+
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
-  registerBrowserTools(registry, () => browserHost, resolveSessionRoot);
+  registerBrowserTools(registry, () => browserHost, resolveSessionRoot, {
+    beforeOpenPage: beforeOpenBrowserPage,
+  });
   registerTerminalTools(registry, resolveSessionRoot);
   registerPlanTools(registry);
   registerFileTools(registry, resolveSessionRoot);

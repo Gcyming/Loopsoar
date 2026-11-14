@@ -716,15 +716,37 @@ export class BrowserHost {
     }
   }
 
-  /** 在指定会话的活动标签执行 JS（Agent 工具用；返回 JSON-safe 结果）。 */
-  async executeScript(script: string, sessionId?: string): Promise<unknown> {
-    const entry = this.activeEntry(sessionId);
+  /**
+   * 在指定会话的指定标签执行 JS（缺省 = 该会话的活动标签）。
+   * tabId 由 Slice D 引入：ref 注册表按标签绑定，动作必须能落在「快照的那个标签」上。
+   */
+  async executeScript(script: string, sessionId?: string, tabId?: string): Promise<unknown> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
     if (!entry) throw new Error("当前会话没有打开的网页标签");
     return entry.adapter.executeJs(script);
   }
 
-  async snapshot(sessionId?: string): Promise<BrowserSnapshot | null> {
-    return this.activeEntry(sessionId)?.adapter.snapshot() ?? null;
+  /**
+   * 快照：缺省取活动标签；返回值带上 tabId。
+   * 工具层据此把 ref 令牌绑定到「产生它的标签」，跨标签引用才会被判 STALE_REF。
+   */
+  async snapshot(sessionId?: string, tabId?: string): Promise<BrowserSnapshot | null> {
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return null;
+    const [id, entry] = resolved;
+    const snapshot = await entry.adapter.snapshot();
+    return { ...snapshot, tabId: id };
+  }
+
+  /**
+   * 单个标签的当前状态（工具层动作后状态行用：URL/标题/是否加载中）。
+   * 不存在返回 null（标签刚被关闭时工具层仍能拿到 null 而不是抛错）。
+   */
+  getTab(sessionId?: string, tabId?: string): TabState | null {
+    const group = this.group(sessionId);
+    const id = tabId ?? group.activeId;
+    if (!id) return null;
+    return this.listTabs(sessionId).find((tab) => tab.id === id) ?? null;
   }
 
   /** 页面缩放：0.5～2.0，按会话的活动标签生效（Ctrl + +/-/0）。 */
