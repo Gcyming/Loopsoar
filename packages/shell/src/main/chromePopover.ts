@@ -75,6 +75,15 @@ function clamp(value: number, min: number, max: number): number {
  * @param workArea 所在显示器的工作区（Electron screen.getDisplayMatching(anchor).workArea）
  * @param gap 锚点与浮层间距，默认 6px
  */
+/** 两个矩形的交集（宽高不足时退化为最小 1px，避免负尺寸）。 */
+export function intersectRect(a: PopoverRect, b: PopoverRect): PopoverRect {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+}
+
 export function computePopoverBounds(
   anchorScreenRect: PopoverRect,
   size: PopoverSize,
@@ -409,7 +418,16 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
         width: Math.max(1, Math.round(input.anchor.width)),
         height: Math.max(1, Math.round(input.anchor.height)),
       };
-      const workArea = screenApi.getDisplayMatching(anchorRect).workArea;
+      // 浮层必须留在程序窗口内：只看显示器工作区会让它跑到窗口外面（用户 m02556 截图）。
+      // 取「显示器工作区 ∩ 主窗口内容区」作为可用区域，四周再留 6px。
+      const displayWork = screenApi.getDisplayMatching(anchorRect).workArea;
+      const inset = 6;
+      const workArea = intersectRect(displayWork, {
+        x: Math.round(content.x + inset),
+        y: Math.round(content.y + inset),
+        width: Math.max(1, Math.round(content.width - inset * 2)),
+        height: Math.max(1, Math.round(content.height - inset * 2)),
+      });
       const bounds = computePopoverBounds(anchorRect, sizeFor(input.kind), workArea, DEFAULT_POPOVER_GAP);
 
       const win = createWindow({

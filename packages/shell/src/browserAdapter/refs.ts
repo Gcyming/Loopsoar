@@ -475,14 +475,14 @@ ${locateJs(resolved)}
  *   · pointer-events:none（不改变页面行为）、固定定位（不触发页面重排）；
  *   · 只做视觉，失败也不影响动作本身（调用方 .catch 忽略）。
  */
-/** 虚拟光标素材（用户提供）：导航=箭头，忙=竖形等待符号；内联为 data URL，页面 CSP 下也能显示。 */
-const CURSOR_NAV_DATA = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/PjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+PHN2ZyB0PSIxNzk0NjY2OTI0NTgyIiBjbGFzcz0iaWNvbiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHAtaWQ9IjU4ODAiIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCI+PHBhdGggZD0iTTE0Ni45MjggMTIyLjc2OGwzMjcuNTIgNzY0IDE0MC44NDgtMjk0LjgxNiAyOTUuNTA0LTE0MS44MjRMMTQ2LjkyOCAxMjIuNzY4eiBtNDA4LjMyIDQwOS4yNjRMNDc4LjQgNjkyLjkxMiAyOTkuMjggMjc1LjA4OGw0MTguMDQ4IDE3OS4xNjgtMTYyLjA4IDc3Ljc2eiIgZmlsbD0iIzU2NUQ2NCIgcC1pZD0iNTg4MSI+PC9wYXRoPjwvc3ZnPg==";
-const CURSOR_BUSY_DATA = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/PjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+PHN2ZyB0PSIxNzk0NjY2OTI5NzI5IiBjbGFzcz0iaWNvbiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHAtaWQ9IjYwNDUiIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCI+PHBhdGggZD0iTTYxMC42MTEyIDE3NC4wOGM0Ny40MTEyIDAgNzEuMDY1NiAwIDg5LjA4OCAxNy43MTUyYTcyLjcwNCA3Mi43MDQgMCAwIDEgNi44NjA4IDguMDg5NmMxNC42NDMyIDIwLjQ4IDExLjM2NjQgNDAuMzQ1NiA1LjEyIDc5Ljg3Mi0xMC4yNCA2NC4yMDQ4LTM2LjU1NjggMTQ0LjA3NjgtMTAxLjU4MDggMTk5LjE2OEE0My44MjcyIDQzLjgyNzIgMCAwIDAgNTkzLjkyIDUxMmMwIDEyLjggNi4zNDg4IDI0Ljc4MDggMTYuMTc5MiAzMy4wNzUyIDY1LjAyNCA1NS4wOTEyIDkxLjM0MDggMTM0Ljk2MzIgMTAxLjU4MDggMTk5LjA2NTYgNi4yNDY0IDM5LjYyODggOS41MjMyIDU5LjQ5NDQtNS4xMiA3OS45NzQ0YTcyLjM5NjggNzIuMzk2OCAwIDAgMS02Ljg2MDggOC4xOTJjLTE4LjAyMjQgMTcuNjEyOC00MS42NzY4IDE3LjYxMjgtODkuMDg4IDE3LjYxMjhIMzcyLjMyNjRjLTQ3LjMwODggMC03MS4wNjU2IDAtODguOTg1Ni0xNy43MTUyYTcyLjM5NjggNzIuMzk2OCAwIDAgMS02Ljg2MDgtOC4wODk2Yy0xNC42NDMyLTIwLjQ4LTExLjQ2ODgtNDAuMzQ1Ni01LjEyLTc5Ljg3MiAxMC4yNC02NC4yMDQ4IDM2LjU1NjgtMTQ0LjA3NjggMTAxLjU4MDgtMTk5LjE2OEE0NC4wMzIgNDQuMDMyIDAgMCAwIDM4OS4xMiA1MTJhNDMuODI3MiA0My44MjcyIDAgMCAwLTE2LjE3OTItMzMuMDc1MkMzMDcuOTE2OCA0MjMuOTM2IDI4MS42IDM0NC4wNjQgMjcxLjM2IDI3OS44NTkyYy02LjM0ODgtMzkuNjI4OC05LjUyMzItNTkuNDk0NCA1LjEyLTc5Ljk3NDRhNzIuNzA0IDcyLjcwNCAwIDAgMSA2Ljg2MDgtOC4xOTJjMTcuOTItMTcuNjEyOCA0MS42NzY4LTE3LjYxMjggODkuMDg4LTE3LjYxMjhoMjM4LjE4MjR6IG0tMTk4LjE0NCA4MS40MDhjLTI3Ljk1NTIgMC4yMDQ4LTQxLjk4NCAwLjMwNzItNTAuOTk1MiAxMC42NDk2YTM1LjEyMzIgMzUuMTIzMiAwIDAgMC0zLjM3OTIgNC42MDhjLTcuMDY1NiAxMS44Nzg0LTMuMDcyIDIzLjc1NjggNC41MDU2IDQ3LjMwODggMjAuMTcyOCA2Mi42Njg4IDYyLjI1OTIgMTMyLjUwNTYgMTI5LjAyNCAxMzIuNTA1NiA2Ni41NiAwIDEwOC41NDQtNjkuNzM0NCAxMjguODE5Mi0xMzIuNTA1NiA3LjU3NzYtMjMuNTUyIDExLjM2NjQtMzUuNDMwNCA0LjQwMzItNDcuMzA4OGEzNS4wMjA4IDM1LjAyMDggMCAwIDAtMy4zNzkyLTQuNjA4Yy05LjExMzYtMTAuMzQyNC0yMy4wNC0xMC40NDQ4LTUwLjk5NTItMTAuNjQ5Ni01MC42ODgtMC40MDk2LTEwNy4zMTUyLTAuNDA5Ni0xNTguMDAzMiAweiIgcC1pZD0iNjA0NiI+PC9wYXRoPjwvc3ZnPg==";
+/** 虚拟光标素材（用户提供）：导航=箭头，忙=竖形等待符号；内联成 SVG，避免 CSP 拦截 img data:。 */
+const CURSOR_NAV_SVG = "<svg viewBox=\"0 0 1024 1024\" width=\"26\" height=\"26\" aria-hidden=\"true\"><path d=\"M146.928 122.768l327.52 764 140.848-294.816 295.504-141.824L146.928 122.768z m408.32 409.264L478.4 692.912 299.28 275.088l418.048 179.168-162.08 77.76z\" fill=\"#f5efe6\" stroke=\"#191b21\" stroke-width=\"36\" stroke-linejoin=\"round\" paint-order=\"stroke\"/></svg>";
+const CURSOR_BUSY_SVG = "<svg viewBox=\"0 0 1024 1024\" width=\"26\" height=\"26\" aria-hidden=\"true\"><path d=\"M610.6112 174.08c47.4112 0 71.0656 0 89.088 17.7152a72.704 72.704 0 0 1 6.8608 8.0896c14.6432 20.48 11.3664 40.3456 5.12 79.872-10.24 64.2048-36.5568 144.0768-101.5808 199.168A43.8272 43.8272 0 0 0 593.92 512c0 12.8 6.3488 24.7808 16.1792 33.0752 65.024 55.0912 91.3408 134.9632 101.5808 199.0656 6.2464 39.6288 9.5232 59.4944-5.12 79.9744a72.3968 72.3968 0 0 1-6.8608 8.192c-18.0224 17.6128-41.6768 17.6128-89.088 17.6128H372.3264c-47.3088 0-71.0656 0-88.9856-17.7152a72.3968 72.3968 0 0 1-6.8608-8.0896c-14.6432-20.48-11.4688-40.3456-5.12-79.872 10.24-64.2048 36.5568-144.0768 101.5808-199.168A44.032 44.032 0 0 0 389.12 512a43.8272 43.8272 0 0 0-16.1792-33.0752C307.9168 423.936 281.6 344.064 271.36 279.8592c-6.3488-39.6288-9.5232-59.4944 5.12-79.9744a72.704 72.704 0 0 1 6.8608-8.192c17.92-17.6128 41.6768-17.6128 89.088-17.6128h238.1824z m-198.144 81.408c-27.9552 0.2048-41.984 0.3072-50.9952 10.6496a35.1232 35.1232 0 0 0-3.3792 4.608c-7.0656 11.8784-3.072 23.7568 4.5056 47.3088 20.1728 62.6688 62.2592 132.5056 129.024 132.5056 66.56 0 108.544-69.7344 128.8192-132.5056 7.5776-23.552 11.3664-35.4304 4.4032-47.3088a35.0208 35.0208 0 0 0-3.3792-4.608c-9.1136-10.3424-23.04-10.4448-50.9952-10.6496-50.688-0.4096-107.3152-0.4096-158.0032 0z\" fill=\"#f5efe6\" stroke=\"#191b21\" stroke-width=\"36\" stroke-linejoin=\"round\" paint-order=\"stroke\"/></svg>";
 
 /** 光标图像（箭头热点在左上角）：白描边 + 阴影保证深色页面上也看得见。 */
 function cursorImgScript(): string {
-  return `  const NAV = ${JSON.stringify(CURSOR_NAV_DATA)};
-  const BUSY = ${JSON.stringify(CURSOR_BUSY_DATA)};
+  return `  const NAV = ${JSON.stringify(CURSOR_NAV_SVG)};
+  const BUSY = ${JSON.stringify(CURSOR_BUSY_SVG)};
 `;
 }
 
@@ -504,20 +504,20 @@ ${cursorImgScript()}${locateJs(resolved)}
   const rect = el.getBoundingClientRect();
   const cx = Math.min(Math.max(rect.left + rect.width / 2, 4), Math.max(window.innerWidth - 4, 4));
   const cy = Math.min(Math.max(rect.top + rect.height / 2, 4), Math.max(window.innerHeight - 4, 4));
-  // 虚拟鼠标：用用户提供的两张 SVG（导航/忙），箭头热点对齐左上角；
-  // 之前的 14px 圆点太小、深色页面上几乎看不见（用户 m02333 反馈「虚拟鼠标呢」）。
+  // 虚拟鼠标：用户提供的两张 SVG（导航/忙）。
+  // 为什么用内联 <svg> 而不是 <img src=data:...>：部分站点 CSP 禁止 img data:，
+  // 图片加载失败会在页面左上角留下一个「破图小方块」（用户 m02556 的截图）。
   let cursor = root.querySelector('.cursor');
   if (!cursor) {
-    cursor = doc.createElement('img');
+    cursor = doc.createElement('div');
     cursor.className = 'cursor';
-    cursor.alt = '';
     cursor.style.cssText =
-      'position:fixed;width:26px;height:26px;margin:-2px 0 0 -2px;' +
-      'pointer-events:none;filter:drop-shadow(0 0 1.5px rgba(255,255,255,.95)) drop-shadow(0 2px 4px rgba(0,0,0,.45));' +
+      'position:fixed;width:26px;height:26px;margin:-2px 0 0 -2px;pointer-events:none;' +
+      'filter:drop-shadow(0 0 1.5px rgba(255,255,255,.95)) drop-shadow(0 2px 4px rgba(0,0,0,.45));' +
       'transition:left .18s cubic-bezier(.2,0,.2,1),top .18s cubic-bezier(.2,0,.2,1),transform .12s ease;';
     root.appendChild(cursor);
   }
-  cursor.src = ripple ? NAV : BUSY;
+  cursor.innerHTML = ripple ? NAV : BUSY;
   const prev = cursor.__lspos || { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) };
   cursor.style.left = prev.x + 'px'; cursor.style.top = prev.y + 'px';
   cursor.__lspos = { x: cx, y: cy };

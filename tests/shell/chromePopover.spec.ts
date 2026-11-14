@@ -15,6 +15,7 @@ import {
   POPOVER_BOUNDS_PADDING,
   POPOVER_HOVER_POLL_MS,
   computePopoverBounds,
+  intersectRect,
   createChromePopoverManager,
   isPointWithin,
   type ChromePopoverKind,
@@ -35,6 +36,26 @@ import {
 /* ────────────────────────── 纯几何 ────────────────────────── */
 
 const WORK = { x: 0, y: 0, width: 1920, height: 1080 };
+
+describe("intersectRect：浮层可用区域取窗口 ∩ 显示器", () => {
+  it("窗口比显示器小：结果等于窗口区域（浮层不会跑到窗口外）", () => {
+    const display = { x: 0, y: 0, width: 1920, height: 1080 };
+    const win = { x: 100, y: 50, width: 900, height: 700 };
+    expect(intersectRect(display, win)).toEqual(win);
+  });
+
+  it("窗口跨屏：只保留显示器内的部分", () => {
+    const display = { x: 0, y: 0, width: 1920, height: 1080 };
+    const win = { x: 1800, y: 100, width: 600, height: 500 };
+    expect(intersectRect(display, win)).toEqual({ x: 1800, y: 100, width: 120, height: 500 });
+  });
+
+  it("完全不相交时退化为 1×1（不产生负尺寸）", () => {
+    const result = intersectRect({ x: 0, y: 0, width: 100, height: 100 }, { x: 500, y: 500, width: 100, height: 100 });
+    expect(result.width).toBe(1);
+    expect(result.height).toBe(1);
+  });
+});
 
 describe("computePopoverBounds：默认位置与四边夹取", () => {
   it("默认在锚点下方、与锚点右对齐，间距默认 6px", () => {
