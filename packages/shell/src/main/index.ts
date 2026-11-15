@@ -1440,6 +1440,31 @@ app.whenReady().then(async () => {
   bootTrace.mark("whenReady");
   try {
     const dirs = ensureWritableDataDirs();
+  // 崩溃取证：原生 AV 进程直接退出，JS 抓不到；先把可捕获的进程/渲染器死亡与未处理异常写盘，
+  // 用户下次复现时我们才有 renderer/child-process 的 exitCode/reason，而不是只有一张报错弹窗。
+  const crashLogPath = path.join(dirs.dataDir, "crash.log");
+  const writeCrashLog = (kind: string, detail: unknown): void => {
+    try {
+      fs.appendFileSync(crashLogPath, `${new Date().toISOString()} ${kind} ${JSON.stringify(detail)}\n`);
+    } catch {
+      // 日志写不进去不阻断启动
+    }
+    console.error("[Loopsoar]", kind, detail);
+  };
+  process.on("uncaughtException", (err) => writeCrashLog("uncaughtException", { message: err.message, stack: err.stack }));
+  process.on("unhandledRejection", (reason) => writeCrashLog("unhandledRejection", reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason));
+  app.on("child-process-gone", (_event, details) => writeCrashLog("child-process-gone", details));
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("render-process-gone", (_evt, details) => {
+      let url = "";
+      try {
+        url = contents.getURL();
+      } catch {
+        // 已销毁
+      }
+      writeCrashLog("render-process-gone", { url, ...details });
+    });
+  });
   // 审计落盘：<dataDir>/logs/audit-YYYYMMDD.jsonl（重启可查；失败不影响主流程）
   auditFile = new AuditFileLogger({ dir: path.join(dirs.dataDir, "logs") });
   bootTrace.mark("data-dirs");

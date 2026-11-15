@@ -42,6 +42,7 @@ interface AgentInputWebContents {
   getZoomFactor?: () => number;
   /** 输入法式插入（CJK 等无法用单键字符表达的文字）；可信输入，会触发 beforeinput/input。 */
   insertText?: (text: string) => void;
+  isDestroyed?: () => boolean;
 }
 
 /** 按键白名单里的命名键 → Electron keyCode（单字符直接用字符本身）。 */
@@ -679,6 +680,30 @@ export class BrowserHost {
     return entry.adapter.executeJs(code);
   }
 
+  /**
+   * 输入注入前的最小存活检查：标签可能在我们 await 的几十毫秒里被关闭/导航销毁，
+   * 对已销毁的 WebContents 调 sendInputEvent 会走到 Chromium 的空指针（进程级崩溃，无法 try/catch）。
+   */
+  private inputAlive(entry: TabEntry, sessionId: string | undefined, tabId: string): boolean {
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || (typeof wc.isDestroyed === "function" && wc.isDestroyed())) return false;
+    // 隐藏中的 WebContentsView 没有可接收输入的 RenderWidgetHostView：对隐藏视图 sendInputEvent
+    // 会走到原生空指针（electron.exe 直接 AV，JS try/catch 接不住）。
+    if (entry.lastVisible === false) return false;
+    return this.groups.get(sessionId ?? this.activeSession)?.tabs.get(tabId) === entry;
+  }
+
+  /** 等页面真正可见再注入输入（刚克隆/正在加载时视图是隐藏的）。最多等 900ms。 */
+  private async waitInputReady(entry: TabEntry, sessionId: string | undefined, tabId: string): Promise<boolean> {
+    const deadline = Date.now() + 900;
+    while (Date.now() < deadline) {
+      if (this.inputAlive(entry, sessionId, tabId) && entry.lastVisible === true) return true;
+      if (!this.inputAlive(entry, sessionId, tabId)) return false;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return this.inputAlive(entry, sessionId, tabId) && entry.lastVisible === true;
+  }
+
   /** 指定标签（缺省=该会话语种的活动标签）。 */
   private resolveTab(tabId?: string, sessionId?: string): [string, TabEntry] | null {
     const group = this.group(sessionId);
@@ -953,19 +978,24 @@ export class BrowserHost {
     tabId: string | undefined,
     point: { x: number; y: number },
   ): Promise<boolean> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return false;
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return false;
+    const [tid, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
     const wc = entry.view.webContents as AgentInputWebContents | undefined;
     if (!wc || typeof wc.sendInputEvent !== "function") return false;
     const zoom = this.getPageZoom(sessionId, tabId);
     const x = Math.round(point.x * zoom);
     const y = Math.round(point.y * zoom);
+    if (!(await this.waitInputReady(entry, sid, tid))) return false;
     await this.setAgentDriving(entry, true);
     try {
+      if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseMove", x, y });
       wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
       // 真实按压有几十毫秒的停留：立刻 up 会让 :active 一闪而过，部分站点的手势识别也收不到。
       await new Promise((resolve) => setTimeout(resolve, 35));
+      if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
     } finally {
       this.releaseAgentDriving(entry);
@@ -992,13 +1022,16 @@ export class BrowserHost {
     text: string,
     options: { multiline?: boolean } = {},
   ): Promise<boolean> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return false;
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return false;
+    const [tid, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
     const wc = entry.view.webContents as AgentInputWebContents | undefined;
     if (!wc || typeof wc.sendInputEvent !== "function") return false;
     const multiline = options.multiline === true;
     const normalized = text.replace(/\r\n?/g, "\n");
     const body = multiline ? normalized : normalized.replace(/\n/g, " ");
+    if (!(await this.waitInputReady(entry, sid, tid))) return false;
     await this.setAgentDriving(entry, true);
     try {
       // 全选 + 退格 = 清空当前内容（和用户「点进来、全选、重输」完全一致）。
@@ -1009,7 +1042,7 @@ export class BrowserHost {
       const chars = Array.from(body);
       let pendingText = "";
       const flushText = async (): Promise<void> => {
-        if (!pendingText) return;
+        if (!pendingText || !this.inputAlive(entry, sid, tid)) return;
         const chunk = pendingText;
         pendingText = "";
         if (typeof wc.insertText === "function") {
@@ -1021,6 +1054,7 @@ export class BrowserHost {
         }
       };
       for (const ch of chars) {
+        if (!this.inputAlive(entry, sid, tid)) return false;
         if (ch === "\n") {
           await flushText();
           wc.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
@@ -1050,15 +1084,19 @@ export class BrowserHost {
     tabId: string | undefined,
     point: { x: number; y: number },
   ): Promise<boolean> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return false;
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return false;
+    const [tid, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
     const wc = entry.view.webContents as AgentInputWebContents | undefined;
     if (!wc || typeof wc.sendInputEvent !== "function") return false;
     const zoom = this.getPageZoom(sessionId, tabId);
     const x = Math.round(point.x * zoom);
     const y = Math.round(point.y * zoom);
+    if (!(await this.waitInputReady(entry, sid, tid))) return false;
     await this.setAgentDriving(entry, true);
     try {
+      if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseMove", x, y });
     } finally {
       this.releaseAgentDriving(entry);
@@ -1096,8 +1134,10 @@ export class BrowserHost {
     to: { x: number; y: number },
     steps = 10,
   ): Promise<boolean> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return false;
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return false;
+    const [tid, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
     const wc = entry.view.webContents as AgentInputWebContents | undefined;
     if (!wc || typeof wc.sendInputEvent !== "function") return false;
     const zoom = this.getPageZoom(sessionId, tabId);
@@ -1106,17 +1146,21 @@ export class BrowserHost {
     const tx = Math.round(to.x * zoom);
     const ty = Math.round(to.y * zoom);
     const frames = Math.max(3, Math.min(20, Math.round(steps)));
+    if (!(await this.waitInputReady(entry, sid, tid))) return false;
     await this.setAgentDriving(entry, true);
     try {
+      if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseMove", x: fx, y: fy });
       wc.sendInputEvent({ type: "mouseDown", x: fx, y: fy, button: "left", clickCount: 1 });
       for (let i = 1; i <= frames; i += 1) {
+        if (!this.inputAlive(entry, sid, tid)) return false;
         const ratio = i / frames;
         const x = Math.round(fx + (tx - fx) * ratio);
         const y = Math.round(fy + (ty - fy) * ratio);
-        wc.sendInputEvent({ type: "mouseMove", x, y, button: "left", buttons: 1 });
+        wc.sendInputEvent({ type: "mouseMove", x, y });
         await new Promise((resolve) => setTimeout(resolve, 14));
       }
+      if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseUp", x: tx, y: ty, button: "left", clickCount: 1 });
     } finally {
       this.releaseAgentDriving(entry);
@@ -1134,8 +1178,10 @@ export class BrowserHost {
     tabId: string | undefined,
     deltaY: number,
   ): Promise<boolean> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return false;
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return false;
+    const [tid, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
     const wc = entry.view.webContents as AgentInputWebContents | undefined;
     if (!wc || typeof wc.sendInputEvent !== "function") return false;
     const center = (await this.getViewportCenter(sessionId, tabId)) ?? { x: 400, y: 300 };
@@ -1144,20 +1190,23 @@ export class BrowserHost {
     const y = Math.round(center.y * zoom);
     const total = Math.round(deltaY);
     if (!Number.isFinite(total) || total === 0) return false;
+    const dir = total > 0 ? 1 : -1;
     const ticks = Math.min(12, Math.max(1, Math.ceil(Math.abs(total) / 120)));
-    const step = total / ticks;
+    if (!(await this.waitInputReady(entry, sid, tid))) return false;
     await this.setAgentDriving(entry, true);
     try {
       for (let i = 0; i < ticks; i += 1) {
+        if (!this.inputAlive(entry, sid, tid)) return false;
         wc.sendInputEvent({
           type: "mouseWheel",
           x,
           y,
           deltaX: 0,
-          deltaY: step,
+          // 一律整数值：Chromium 的滚轮输入对非整数 delta / wheelTicks 存在原生边界，
+          // 之前用 fractional step 是这次 electron.exe 崩溃的重点怀疑对象。
+          deltaY: dir * 120,
           wheelTicksX: 0,
-          wheelTicksY: step / 120,
-          hasPreciseScrollingDeltas: true,
+          wheelTicksY: dir,
           canScroll: true,
         });
         if (i < ticks - 1) await new Promise((resolve) => setTimeout(resolve, 12));
@@ -1173,14 +1222,18 @@ export class BrowserHost {
    * 与点击同理——页面拿到的是可信事件，表单默认行为（提交/跳转/关闭）才会真的发生。
    */
   async agentKey(sessionId: string | undefined, tabId: string | undefined, key: string): Promise<boolean> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return false;
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return false;
+    const [tid, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
     const wc = entry.view.webContents as AgentInputWebContents | undefined;
     if (!wc || typeof wc.sendInputEvent !== "function") return false;
     const keyCode = ELECTRON_KEY_CODES[key] ?? (key.length === 1 ? key : null);
     if (!keyCode) return false;
+    if (!(await this.waitInputReady(entry, sid, tid))) return false;
     await this.setAgentDriving(entry, true);
     try {
+      if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "keyDown", keyCode });
       if (key.length === 1) wc.sendInputEvent({ type: "char", keyCode });
       wc.sendInputEvent({ type: "keyUp", keyCode });

@@ -305,7 +305,8 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
       target.showInactive();
       windowVisible = true;
     }
-    target.moveTop?.();
+    // 不再每次动作都 moveTop：子窗口本就压在父窗口之上，频繁调整 z 序在 Windows 上是
+    // 额外的原生风险点（这次 electron.exe 崩溃排查中被列为次要嫌疑）。
   };
 
   const armHide = (): void => {
