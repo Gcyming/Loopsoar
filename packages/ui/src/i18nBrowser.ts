@@ -141,6 +141,7 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "browser.tabsAria": { zh: "标签页", en: "Tabs" },
   "browser.closeTab": { zh: "关闭标签", en: "Close tab" },
   "browser.closeWorkspace": { zh: "关闭整个 Agent 工作区", en: "Close the whole agent workspace" },
+  "browser.taskWorkspace": { zh: "任务工作区", en: "Task workspace" },
   "browser.historyTitle": { zh: "历史记录（全局）", en: "History (global)" },
   "browser.historyVisits": { zh: "访问 {count} 次", en: "visited {count}×" },
   "browser.historyEmpty": { zh: "暂无历史", en: "No history" },

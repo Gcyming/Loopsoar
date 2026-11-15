@@ -835,7 +835,13 @@ export interface LoopsoarAPI {
     /** 删除会话时关闭该会话名下的全部网页（工作区 > 会话 > 网页；删会话才关网页，关网页不删会话）。 */
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
-    listTabs(): Promise<{ tabs: TabState[] }>;
+    listTabs(): Promise<{ tabs: TabState[]; visibleSession: string }>;
+    /** 所有任务（跨会话任务条）。 */
+    listTasks(): Promise<{ tasks: { sessionId: string; tabs: TabState[] }[]; visibleSession: string }>;
+    /** 进入某个任务的折叠工作区（同时应切到该会话）。 */
+    showTask(payload: { sessionId: string }): Promise<{ ok: boolean; tabs: TabState[] }>;
+    /** 回到全局用户标签。 */
+    showUserTabs(): Promise<{ ok: boolean; tabs: TabState[] }>;
     /** 当前是否处于「切会话后网页收起」的状态（UI 水合）。 */
     viewState(): Promise<{ suppressed: boolean }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;

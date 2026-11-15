@@ -74,8 +74,15 @@
     // 布局询问已在 Slice E 之后取消：默认 docked（设置·通用里可选），所以不再要求 ask 证据。
     // 任务化证据：用户页 + Agent 克隆页并存（原页必须还在，且只有克隆页带 agentBound）。
     let tabs = [];
+    let userTabs = 0;
+    let agentTabs = 0;
     try {
       tabs = (await api.browser.listTabs())?.tabs ?? [];
+      agentTabs = tabs.filter((tab) => tab.agentBound === true).length;
+      // 全局用户标签独立于会话：先切回用户组再数，最后回到任务组。
+      await api.browser.showUserTabs();
+      userTabs = ((await api.browser.listTabs())?.tabs ?? []).filter((tab) => tab.agentBound !== true).length;
+      if (sid) await api.browser.showTask({ sessionId: sid });
     } catch {
       // 浏览器未就绪：证据为空即可
     }
@@ -84,8 +91,8 @@
       snapshotWithRefs: /快照 #\d+/.test(joined) && joined.includes("#e"),
       // 关键证据：真实鼠标事件（sendInputEvent）点中了页面按钮，页面文案随之变化。
       clickedMarker: joined.includes("按钮已点击"),
-      userTabs: tabs.filter((tab) => tab.agentBound !== true).length,
-      agentTabs: tabs.filter((tab) => tab.agentBound === true).length,
+      userTabs,
+      agentTabs,
     };
     out.ok =
       out.evidence.navigated &&

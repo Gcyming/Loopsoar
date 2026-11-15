@@ -635,6 +635,24 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "browser:listTasks": {
+    domain: "browser",
+    method: "listTasks",
+    request: null,
+    sensitive: true,
+  },
+  "browser:showTask": {
+    domain: "browser",
+    method: "showTask",
+    request: BrowserSessionIdSchema,
+    sensitive: true,
+  },
+  "browser:showUserTabs": {
+    domain: "browser",
+    method: "showUserTabs",
+    request: null,
+    sensitive: true,
+  },
   "browser:listTabs": {
     domain: "browser",
     method: "listTabs",

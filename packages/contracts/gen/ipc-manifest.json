@@ -176,6 +176,27 @@
       "hasRequest": false
     },
     {
+      "channel": "browser:listTasks",
+      "domain": "browser",
+      "method": "listTasks",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "browser:showTask",
+      "domain": "browser",
+      "method": "showTask",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:showUserTabs",
+      "domain": "browser",
+      "method": "showUserTabs",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "browser:listTabs",
       "domain": "browser",
       "method": "listTabs",

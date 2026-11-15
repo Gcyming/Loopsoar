@@ -30,6 +30,11 @@ export interface BrowserTabsProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
+  /** 跨会话任务条：所有带 Agent 工作区的会话。 */
+  agentTasks: { sessionId: string; tabs: TabState[] }[];
+  /** 当前会话（当前任务的 chip 由 boundTabs 那条渲染，避免重复）。 */
+  currentSessionId?: string | null;
+  onOpenTask: (sessionId: string) => void;
 }
 
 export default function BrowserTabs({
@@ -40,6 +45,9 @@ export default function BrowserTabs({
   onSelectTab,
   onCloseTab,
   onNewTab,
+  agentTasks,
+  currentSessionId,
+  onOpenTask,
 }: BrowserTabsProps): React.ReactElement {
   const tr = useT();
   return (
@@ -47,6 +55,22 @@ export default function BrowserTabs({
     // 面板必须挂在 strip 之外，否则会被一起裁掉。
     <div style={styles.wrap}>
       <div style={styles.strip} role="tablist" aria-label={tr("browser.tabsAria")}>
+        {agentTasks
+          .filter((task) => task.sessionId !== (currentSessionId ?? null))
+          .map((task) => (
+            <button
+              key={task.sessionId}
+              type="button"
+              style={styles.chip}
+              title={tr("browser.agentWorkspace")}
+              onClick={() => onOpenTask(task.sessionId)}
+              data-agent-task={task.sessionId}
+            >
+              <Icon name="layers-linked" size={12} style={styles.chipIcon} />
+              <span style={styles.chipLabel}>{tr("browser.taskWorkspace")}</span>
+              <span style={styles.chipCount}>{task.tabs.length}</span>
+            </button>
+          ))}
         {boundTabs.length > 0 ? (
           <span className="workspace-chip-wrap" style={styles.chipWrap}>
             <button

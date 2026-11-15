@@ -91,14 +91,15 @@ describe("BrowserHost · Agent 工作区任务化", () => {
     await host.switchSession("sess-b");
     expect(created[0].visible).toBe(false); // 进会话不再被网页拖着
 
+    host.showTask("sess-b");
     await host.navigate("https://b.example/", undefined, "sess-b");
-    expect(created[1].visible).toBe(true); // 明确导航 = 要看页面
+    expect(created[1].visible).toBe(true); // 明确进入任务工作区/导航 = 要看页面
 
     await host.switchSession("sess-a");
     expect(created[1].visible).toBe(false);
     expect(created[0].visible).toBe(false);
-    host.selectTab(host.listTabs("sess-a")[0].id);
-    expect(created[0].visible).toBe(true); // 点标签才展开
+    host.showTask("sess-a");
+    expect(created[0].visible).toBe(true); // 点任务 chip/进入任务会话才展开
 
     // Agent 首次动手也会展开（克隆页要可见）
     await host.ensureAgentTab("sess-a");

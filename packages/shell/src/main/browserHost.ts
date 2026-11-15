@@ -36,6 +36,9 @@ export const SIDEBAR_ANIMATION_TICK_MS = 8;
  */
 const USER_LOCK_MAX_ATTEMPTS = 3;
 
+/** 全局用户标签组（不属于任何会话）：网页 ＜ 会话 的解耦锚点。 */
+export const USER_TABS_SESSION = "__user_tabs__";
+
 /** sendInputEvent/getZoomFactor 的最小面：真实 WebContents 满足，测试假件可选实现。 */
 interface AgentInputWebContents {
   sendInputEvent?: (event: Record<string, unknown>) => void;
@@ -192,6 +195,8 @@ export type NavigateOutcome = { ok: true; url: string; tabId: string } | { ok: f
 export class BrowserHost {
   private groups = new Map<string, SessionGroup>();
   private activeSession: string;
+  /** 当前显示的标签组：默认用户全局标签；进入任务会话时指向该会话的 Agent 工作区。 */
+  private visibleSession: string;
   private overlayOpen = false;
   /**
    * 切会话时先把网页收起来（不显示原生视图），用户点某个标签才展开。
@@ -215,6 +220,9 @@ export class BrowserHost {
   constructor(private deps: BrowserHostDeps) {
     this.activeSession = deps.initialSessionId?.trim() || "default";
     this.ensureGroup(this.activeSession);
+    this.ensureGroup(USER_TABS_SESSION);
+    // 初始仍显示当前会话（启动恢复测试与旧行为兼容）；index 启动时会显式 showUserTabs()。
+    this.visibleSession = this.activeSession;
   }
 
   private ensureGroup(sessionId: string): SessionGroup {
@@ -543,7 +551,7 @@ export class BrowserHost {
         // 加载中/失败也不显示：让 DOM 的加载页/错误页露出来（原生视图只能显示 Chromium 白屏/默认错误页）
         const visible =
           !this.viewSuppressed &&
-          sessionId === this.activeSession &&
+          sessionId === this.visibleSession &&
           id === group.activeId &&
           !this.overlayOpen &&
           Boolean(entry.url) &&
@@ -557,7 +565,7 @@ export class BrowserHost {
     }
     // 覆盖窗口只跟随「当前会话的当前标签」：后台会话的页面不可见，指针也不该出现在屏幕上
     // （会话隔离要求：只有进入对应会话才看到对应内容）。几何与原生视图同源，避免两套坐标。
-    const activeGroup = this.groups.get(this.activeSession);
+    const activeGroup = this.groups.get(this.visibleSession);
     const activeEntry = activeGroup?.activeId ? activeGroup.tabs.get(activeGroup.activeId) : null;
     this.deps.onViewLayout?.(
       activeEntry?.lastVisible
@@ -624,13 +632,13 @@ export class BrowserHost {
     }
   }
 
-  private emitTabs(sessionId: string = this.activeSession): void {
+  private emitTabs(sessionId: string = this.visibleSession): void {
     this.applyLayout();
     // 会话锁定期间每次状态变化都补注入：新标签/导航完成都在这里对齐（已注入的会被跳过）。
     this.retryUserLocks(sessionId);
     // 持久化回调覆盖所有会话（后台 Agent 在自己会话里导航也要落盘）
     this.deps.onSessionStateChanged?.(sessionId, this.snapshotSession(sessionId));
-    if (sessionId === this.activeSession) {
+    if (sessionId === this.visibleSession) {
       this.deps.onTabsChanged?.(this.listTabs(sessionId));
     }
   }
@@ -912,7 +920,12 @@ export class BrowserHost {
     if (group.activeId === tabId) {
       group.activeId = group.tabs.keys().next().value ?? null;
     }
-    this.emitTabs(sessionId ?? this.activeSession);
+    const sid = sessionId ?? this.activeSession;
+    this.emitTabs(sid);
+    // 任务工作区的最后一个页面关掉：回到用户全局标签，而不是停在一片空白。
+    if (group.tabs.size === 0 && sid !== USER_TABS_SESSION && this.visibleSession === sid) {
+      this.showUserTabs();
+    }
     return true;
   }
 
@@ -1264,7 +1277,8 @@ export class BrowserHost {
    * 工具层据此把 ref 令牌绑定到「产生它的标签」，跨标签引用才会被判 STALE_REF。
    */
   async snapshot(sessionId?: string, tabId?: string): Promise<BrowserSnapshot | null> {
-    const resolved = this.resolveTab(tabId, sessionId);
+    // 会话还没有自己的任务页时，「看」用户当前页不算工作：只读快照回落到全局用户标签。
+    const resolved = this.resolveTab(tabId, sessionId) ?? (tabId ? null : this.resolveTab(undefined, USER_TABS_SESSION));
     if (!resolved) return null;
     const [id, entry] = resolved;
     const snapshot = await entry.adapter.snapshot();
@@ -1292,7 +1306,7 @@ export class BrowserHost {
   }
 
   async screenshot(sessionId?: string): Promise<string | null> {
-    return this.activeEntry(sessionId)?.adapter.screenshot() ?? null;
+    return (this.activeEntry(sessionId) ?? this.activeEntry(USER_TABS_SESSION))?.adapter.screenshot() ?? null;
   }
 
   /** 当前/指定会话的标签快照（持久化用）。空白标签不写入。 */
@@ -1338,7 +1352,10 @@ export class BrowserHost {
       return id;
     }
     const source = group.activeId ? group.tabs.get(group.activeId) : null;
-    const sourceUrl = source?.url ?? "";
+    // 会话里没有自己的页：克隆用户当前正在看的那一页（这是「Agent 克隆原页」的主路径）。
+    const userGroup = this.groups.get(USER_TABS_SESSION);
+    const userActive = userGroup?.activeId ? userGroup.tabs.get(userGroup.activeId) : null;
+    const sourceUrl = source?.url || userActive?.url || "";
     const entry = this.createTab(sid);
     const id = group.activeId!;
     entry.agentBound = true;
@@ -1348,29 +1365,64 @@ export class BrowserHost {
       const outcome = await this.navigate(sourceUrl, id, sid, "agent");
       if (!outcome.ok) entry.url = sourceUrl;
     }
-    this.emitTabs(sid);
+    // Agent 工作区成为可见组：折叠页与任务标签条同时出现。
+    this.showTask(sid);
     // 页面此刻才真正可见：把「常驻光标」从现在开始算，而不是等用户看到第一次点击。
     this.deps.onAgentActing?.(sid);
     return id;
   }
 
   /** 切换到某个会话；restore 只在该会话还没有任何标签时使用（不覆盖内存里的活页面）。 */
+  /** 显示全局用户标签（普通会话/搜索页）。 */
+  showUserTabs(): void {
+    this.visibleSession = USER_TABS_SESSION;
+    this.setViewSuppressed(false);
+    this.emitTabs(USER_TABS_SESSION);
+  }
+
+  /** 显示某个任务会话的 Agent 工作区（折叠标签页）。 */
+  showTask(sessionId: string): void {
+    const sid = sessionId.trim();
+    if (!sid) return;
+    this.ensureGroup(sid);
+    this.visibleSession = sid;
+    this.setViewSuppressed(false);
+    this.emitTabs(sid);
+  }
+
+  /** 当前显示的标签组（USER_TABS_SESSION = 用户全局标签）。 */
+  visibleSessionId(): string {
+    return this.visibleSession;
+  }
+
+  /** 所有「有 Agent 绑定页面」的任务（跨会话任务条的数据源）。 */
+  listTasks(): { sessionId: string; tabs: TabState[] }[] {
+    const tasks: { sessionId: string; tabs: TabState[] }[] = [];
+    for (const sessionId of this.groups.keys()) {
+      if (sessionId === USER_TABS_SESSION) continue;
+      const tabs = this.listTabs(sessionId);
+      if (tabs.some((tab) => tab.agentBound === true)) tasks.push({ sessionId, tabs });
+    }
+    return tasks;
+  }
+
   async switchSession(sessionId: string, restore?: PersistedBrowserState): Promise<TabState[]> {
     const sid = sessionId.trim();
     if (!sid) return this.listTabs();
     if (sid !== this.activeSession) {
-      // 先把旧会话的页面状态交给持久化层，再换可见会话
+      // 先把旧会话的页面状态交给持久化层，再换会话
       this.deps.onSessionStateChanged?.(this.activeSession, this.snapshotSession(this.activeSession));
       this.activeSession = sid;
     }
     const group = this.ensureGroup(sid);
-    const willRestoreTask = Boolean(restore && group.tabs.size === 0 && restore.tabs.length > 0);
-    if (willRestoreTask && restore) {
+    const willRestore = Boolean(restore && group.tabs.size === 0 && restore.tabs.length > 0);
+    if (willRestore && restore) {
       await this.restoreInto(sid, restore);
     }
-    // 普通会话：只切对话，网页收起来（用户点标签才展开）；任务会话恢复工作区时直接展开。
-    this.setViewSuppressed(!willRestoreTask);
-    this.emitTabs(sid);
+    // 任务会话：显示它自己的折叠工作区；普通会话：显示全局用户标签（绝不把会话的页面当门面）。
+    const isTask = [...group.tabs.values()].some((entry) => entry.agentBound === true);
+    if (isTask || willRestore) this.showTask(sid);
+    else this.showUserTabs();
     return this.listTabs(sid);
   }
 
@@ -1385,6 +1437,13 @@ export class BrowserHost {
   /** 当前是否处于「网页收起、只显示对话/空白页」的状态（UI 水合用）。 */
   isViewSuppressed(): boolean {
     return this.viewSuppressed;
+  }
+
+  /** 启动恢复全局用户标签（不属于任何会话）。 */
+  async restoreUserTabs(restore: PersistedBrowserState): Promise<void> {
+    const group = this.ensureGroup(USER_TABS_SESSION);
+    if (group.tabs.size === 0) await this.restoreInto(USER_TABS_SESSION, restore);
+    this.showUserTabs();
   }
 
   private async restoreInto(sessionId: string, restore: PersistedBrowserState): Promise<void> {

@@ -129,6 +129,8 @@ export default function App(): React.JSX.Element {
   const [currentUrl, setCurrentUrl] = useState<string>("");
   /** 切会话后网页是否被收起（此时显示空白页/纯净对话，点标签才展开网页）。 */
   const [viewSuppressed, setViewSuppressed] = useState(false);
+  /** 跨会话任务条：所有带 Agent 工作区的会话（浏览器控制触发的折叠工作区）。 */
+  const [agentTasks, setAgentTasks] = useState<{ sessionId: string; tabs: TabState[] }[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
   // 待发指令（运行中插入的引导）：按会话保队列（切走再切回不丢），当前会话的队列镜像到 UI。
@@ -870,6 +872,21 @@ export default function App(): React.JSX.Element {
   const [agentBrowserBusy, setAgentBrowserBusy] = React.useState(0);
   /** 正在跑 Agent 的会话（轮次级）：呼吸灯按它点亮，工具执行只在轮次内的一小段。 */
   const [agentTurnSessions, setAgentTurnSessions] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    if (!api) return;
+    const refreshTasks = (): void => {
+      void api.browser
+        .listTasks()
+        .then((r) => setAgentTasks(r.tasks))
+        .catch(() => undefined);
+    };
+    refreshTasks();
+    const off = api.on("browser:tabs", refreshTasks);
+    return () => {
+      off?.();
+    };
+  }, [api, currentSession]);
+
   React.useEffect(() => {
     if (!api) return;
     const applySuppressed = (suppressed: boolean): void => {
@@ -1964,6 +1981,24 @@ export default function App(): React.JSX.Element {
    * 为什么需要：Agent 浏览器操作会把会话绑在任务上，用户之后可能只想纯讨论——
    * 分支给出一条干净的对话线，原会话完全不动（浏览器任务也不被复制）。
    */
+  /** 点跨会话任务 chip / 任务会话：进入该任务的折叠工作区（同时切到对应会话）。 */
+  const openAgentTask = useCallback(
+    (taskSessionId: string): void => {
+      if (!api) return;
+      switchSession(taskSessionId);
+      void api.browser
+        .showTask({ sessionId: taskSessionId })
+        .then((r) => {
+          setTabs(r.tabs);
+          const active = r.tabs.find((tab) => tab.active);
+          setAddress(active?.url ?? "");
+          setCurrentUrl(active?.url ?? "");
+        })
+        .catch(() => undefined);
+    },
+    [api, switchSession],
+  );
+
   const forkFrom = useCallback(
     (targetId: string): void => {
       if (!api) return;
@@ -2315,6 +2350,9 @@ export default function App(): React.JSX.Element {
                     toggleWorkspacePopover();
                   }}
                   onCloseWorkspace={closeAgentWorkspace}
+                  agentTasks={agentTasks}
+                  currentSessionId={currentSession}
+                  onOpenTask={openAgentTask}
                   onSelectTab={selectTab}
                   onCloseTab={closeTab}
                   onNewTab={newTab}

@@ -35,7 +35,8 @@ import { BrowserDevToolsPanel, createElectronBrowserHost, DownloadsBridge, resol
 import { BrowserExtensionHost, type ExtensionApiLike } from "./browserExtensions.js";
 import { SESSION_PARTITION } from "../shared/brand.js";
 import { withProviderDefaults } from "./providerDefaults.js";
-import { createDebouncedRunner, type BrowserHost } from "./browserHost.js";
+import { createDebouncedRunner, USER_TABS_SESSION, type BrowserHost } from "./browserHost.js";
+import { sanitizeBrowserState } from "./browserSessionState.js";
 import { BrowserHistoryStore } from "./browserHistoryStore.js";
 import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
@@ -1845,6 +1846,8 @@ app.whenReady().then(async () => {
     sessions.setWorkspaceId(initialSessionId, workspaces.activeId());
   }
   const tabSaveTimers = new Map<string, NodeJS.Timeout>();
+  /** 全局用户标签的落盘文件（不属于任何会话）。 */
+  const userTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
   const queueBrowserStateSave = (sessionId: string, state: PersistedBrowserState): void => {
     const prev = tabSaveTimers.get(sessionId);
     if (prev) clearTimeout(prev);
@@ -1852,6 +1855,14 @@ app.whenReady().then(async () => {
       sessionId,
       setTimeout(() => {
         tabSaveTimers.delete(sessionId);
+        if (sessionId === USER_TABS_SESSION) {
+          try {
+            fs.writeFileSync(userTabsFile, JSON.stringify(state), "utf8");
+          } catch {
+            // 用户标签落盘失败不阻断浏览
+          }
+          return;
+        }
         // 任务会话把页面关光（或只剩用户页）时，保留上一次的任务页快照：
         // 用户重新打开这个会话时，折叠工作区还能按原样回来（关页 ≠ 结束任务）。
         if (sessions.isTask(sessionId) && !state.tabs.some((tab) => tab.agentBound === true)) return;
@@ -1939,7 +1950,12 @@ app.whenReady().then(async () => {
       },
       // Agent 首次动手 → 会话升级为「浏览器任务」：列表专属标记，关页不退回普通会话。
       onTaskCreated: (sessionId) => {
+        if (sessions.isTask(sessionId)) return;
         sessions.setTask(sessionId, true);
+        // 首次动作 = 任务阶段：当前会话成为任务；同时复制一份「执行前」的讨论分支（普通会话）。
+        // 分支不激活（当前回合继续留在任务会话里），用户之后可在这个干净分支里纯讨论。
+        const source = sessions.get(sessionId);
+        if (source) sessions.fork(sessionId, source.messages.length, undefined, { activate: false });
       },
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
@@ -1962,14 +1978,26 @@ app.whenReady().then(async () => {
       },
     },
   );
-  // 启动即恢复当前会话上次的网页（标题/URL/活动标签）
-  const bootBrowserState = sessions.getBrowserState(initialSessionId);
-  if (bootBrowserState) {
-    void browserHost
-      .switchSession(initialSessionId, bootBrowserState)
-      .then((tabs) => pushToRenderer("browser:tabs", { tabs }))
-      .catch(() => undefined);
+  // 启动恢复：全局用户标签独立于会话；会话只恢复 Agent 工作区（agentBound 标签）。
+  let bootUserState: PersistedBrowserState | null = null;
+  try {
+    if (fs.existsSync(userTabsFile)) {
+      bootUserState = sanitizeBrowserState(JSON.parse(fs.readFileSync(userTabsFile, "utf8")));
+    }
+  } catch {
+    // 文件损坏：当作没有用户标签
   }
+  const bootBrowserState = sessions.getBrowserState(initialSessionId);
+  const bootTaskState = bootBrowserState && bootBrowserState.tabs.some((tab) => tab.agentBound === true)
+    ? { ...bootBrowserState, tabs: bootBrowserState.tabs.filter((tab) => tab.agentBound === true) }
+    : undefined;
+  void (async () => {
+    if (bootUserState) await browserHost.restoreUserTabs(bootUserState);
+    const tabs = await browserHost.switchSession(initialSessionId, bootTaskState).catch(() => []);
+    // 普通会话启动时显示用户全局标签；任务会话显示自己的工作区。
+    if (!sessions.isTask(initialSessionId)) browserHost.showUserTabs();
+    pushToRenderer("browser:tabs", { tabs });
+  })();
   bootTrace.mark("browser-host");
   // 注：全局历史补记（browser-history.json 的同步落盘）已移到首帧后的 deferred 启动任务里，见 runDeferredBootTasks。
   /**
@@ -2065,6 +2093,14 @@ app.whenReady().then(async () => {
       // 否则退出这一次会把「重新打开任务会话能恢复工作区」的存档覆盖成空。
       if (sessions.isTask(meta.id) && !state.tabs.some((tab) => tab.agentBound === true)) continue;
       sessions.saveBrowserState(meta.id, state);
+    }
+    const userState = browserHost?.snapshotSession(USER_TABS_SESSION);
+    if (userState && userState.tabs.length > 0) {
+      try {
+        fs.writeFileSync(userTabsFile, JSON.stringify(userState), "utf8");
+      } catch {
+        // 退出落盘失败不阻断退出
+      }
     }
   };
 
@@ -2202,6 +2238,26 @@ app.whenReady().then(async () => {
     browserExtensions,
     devtoolsPanel: devToolsPanel ?? undefined,
     resolveFavicon: resolveFaviconForPage,
+    // 任务条持久化：已落盘、尚未打开的任务会话也要出现（否则重启后任务条是空的）。
+    listTaskSessions: () =>
+      sessions
+        .list()
+        .filter((meta) => sessions.isTask(meta.id))
+        .map((meta) => {
+          const state = sessions.getBrowserState(meta.id);
+          const tabs = (state?.tabs ?? [])
+            .map((tab, index) => ({ tab, index }))
+            .filter(({ tab }) => tab.agentBound === true)
+            .map(({ tab, index }) => ({
+              id: `saved-${meta.id}-${index}`,
+              url: tab.url,
+              title: tab.title ?? "",
+              active: state?.activeIndex === index,
+              agentBound: true,
+            }));
+          return { sessionId: meta.id, tabs };
+        })
+        .filter((task) => task.tabs.length > 0),
   });
   // 浏览器页 preload 的「应用商店安装」通道：不进入受信 IPC 契约（发送者不是 loopsoar://），
   // 先校验发送者必须是本应用的浏览器标签页，再走 BrowserExtensionHost（含 Chrome/Edge 商店下载）。

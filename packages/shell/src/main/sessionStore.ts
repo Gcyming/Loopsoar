@@ -382,13 +382,14 @@ export class SessionStore {
    * 只复制「对话前缀」——运行态（allow-session 权限、进行中的流、压缩状态、浏览器标签）
    * 一律不继承；浏览器任务态由调用方显式决定。分支会话与原会话从此各自演进。
    */
-  fork(sessionId: string, keepCount: number, title?: string): PersistedSession | null {
+  fork(sessionId: string, keepCount: number, title?: string, options: { activate?: boolean } = {}): PersistedSession | null {
     const sourceId = sanitizeSessionId(sessionId);
     if (!sourceId) return null;
     const source = this.get(sourceId);
     if (!source) return null;
     const keep = Math.max(0, Math.min(Math.floor(keepCount), source.messages.length));
     const forkedAt = Date.now();
+    const previousCurrent = this.index().currentId;
     const base = this.newSession(source.workspaceId ?? null);
     const file = this.sessionFile(base.sessionId);
     if (!file) return null;
@@ -410,7 +411,9 @@ export class SessionStore {
       item.updatedAt = forkedAt;
       item.forkedFrom = { ...forked.forkedFrom! };
       if (forked.browserControl !== undefined) item.browserControl = forked.browserControl;
-      index.currentId = base.sessionId;
+      // newSession 会把自己设成 currentId；不激活的分支必须把当前会话还原，否则回合中途会被「讨论副本」顶掉。
+      if (options.activate !== false) index.currentId = base.sessionId;
+      else index.currentId = previousCurrent;
       this.saveIndex(index);
     }
     return forked;

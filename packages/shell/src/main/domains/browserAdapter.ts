@@ -4,6 +4,7 @@
  */
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { BrowserHost } from "../browserHost.js";
+import { USER_TABS_SESSION } from "../browserHost.js";
 import type { BrowserHistoryStore } from "../browserHistoryStore.js";
 import type { DownloadsBridge } from "../electronBrowser.js";
 import type { BrowserExtensionHost } from "../browserExtensions.js";
@@ -15,6 +16,8 @@ export interface BrowserDeps extends TrustedIpcDeps {
   history?: BrowserHistoryStore;
   /** 浏览器扩展宿主（未装配时列表为空、安装返回错误）。 */
   browserExtensions?: BrowserExtensionHost;
+  /** 跨会话任务条：已落盘但尚未打开的任务会话（live listTasks 之外的持久化部分）。 */
+  listTaskSessions?: () => { sessionId: string; tabs: Array<{ id: string; url: string; title: string; active: boolean; agentBound?: boolean }> }[];
   /** 历史/快捷入口缺图标时按页面 URL 回抓（主进程实现，含 HTML link 解析）。 */
   resolveFavicon?: (pageUrl: string) => Promise<string | null>;
   /** 底部开发者工具面板（开合/高度/可见性）。 */
@@ -24,18 +27,18 @@ export interface BrowserDeps extends TrustedIpcDeps {
 export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:navigate", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    return deps.browser.navigate((payload as { url: string }).url);
+    return deps.browser.navigate((payload as { url: string }).url, undefined, deps.browser.visibleSessionId());
   });
 
   handleTrusted(deps, "browser:newTab", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
     const p = (payload ?? {}) as { url?: string };
-    return deps.browser.newTab(p.url);
+    return deps.browser.newTab(p.url, deps.browser.visibleSessionId());
   });
 
   handleTrusted(deps, "browser:closeTab", async (payload) => {
     if (!deps.browser) return { closed: false };
-    return { closed: await deps.browser.closeTab((payload as { tabId: string }).tabId) };
+    return { closed: await deps.browser.closeTab((payload as { tabId: string }).tabId, deps.browser.visibleSessionId()) };
   });
 
   handleTrusted(deps, "browser:closeSessionTabs", async (payload) => {
@@ -45,15 +48,38 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
 
   handleTrusted(deps, "browser:selectTab", (payload) => {
     if (!deps.browser) return { selected: false };
-    return { selected: deps.browser.selectTab((payload as { tabId: string }).tabId) };
+    return { selected: deps.browser.selectTab((payload as { tabId: string }).tabId, deps.browser.visibleSessionId()) };
   });
 
   handleTrusted(deps, "browser:viewState", () => ({
     suppressed: deps.browser?.isViewSuppressed() ?? false,
   }));
   handleTrusted(deps, "browser:listTabs", () => ({
-    tabs: deps.browser?.listTabs() ?? [],
+    tabs: deps.browser?.listTabs(deps.browser.visibleSessionId()) ?? [],
+    visibleSession: deps.browser?.visibleSessionId() ?? USER_TABS_SESSION,
   }));
+  handleTrusted(deps, "browser:listTasks", () => {
+    const merged = new Map<string, { sessionId: string; tabs: unknown[] }>();
+    for (const task of deps.browser?.listTasks() ?? []) merged.set(task.sessionId, task);
+    for (const task of deps.listTaskSessions?.() ?? []) {
+      if (!merged.has(task.sessionId)) merged.set(task.sessionId, task);
+    }
+    return {
+      tasks: [...merged.values()],
+      visibleSession: deps.browser?.visibleSessionId() ?? USER_TABS_SESSION,
+    };
+  });
+  handleTrusted(deps, "browser:showTask", (payload) => {
+    if (!deps.browser) return { ok: false, tabs: [] };
+    const sessionId = (payload as { sessionId?: string } | null)?.sessionId;
+    if (!sessionId) return { ok: false, tabs: [] };
+    deps.browser.showTask(sessionId);
+    return { ok: true, tabs: deps.browser.listTabs(sessionId) };
+  });
+  handleTrusted(deps, "browser:showUserTabs", () => {
+    deps.browser?.showUserTabs();
+    return { ok: true, tabs: deps.browser?.listTabs(USER_TABS_SESSION) ?? [] };
+  });
 
   // 侧栏调宽：拖拽（animate 缺省 = false）必须立即跟手；收起/展开按钮传 animate:true，
   // 由宿主用与 DOM 侧栏相同的曲线/时长逐帧重算原生视图，消除「侧栏先动、网页后动」。
