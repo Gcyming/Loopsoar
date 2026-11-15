@@ -1995,7 +1995,7 @@
 - **设计**：
   1. **应用级覆盖窗口**（packages/shell/src/main/agentPointerWindow.ts）：无边框、透明、focusable:false、setIgnoreMouseEvents(true)、hasShadow:false、parent 为主窗口；内容是一张 data:text/html 页面（内联用户提供的箭头 SVG + 高亮框 + 涟漪 + 键盘胶囊）。指针窗口**懒创建**（第一次动作才建），空闲 1.6s 自动隐藏，setArea(null) 立即隐藏。
   2. **几何单源**：BrowserHost.applyLayout 在算完原生视图 bounds 后回调 onViewLayout(rect | null)；index.ts 只做「主窗口内容区原点 + 视图矩形」的平移得到屏幕坐标，16ms 防抖跟随窗口 move/resize/侧栏动画。没有可见网页（无标签/加载中/浮层打开/非活动会话）时回传 null，覆盖层随之隐藏——后台会话的 Agent 动作不会把光标画到前台。
-  3. **真实输入**：browser_click 拆成「只定位（performTargetPoint，不点击）→ 光标移动/高亮/涟漪 → BrowserHost.agentClick」。后者用 webContents.sendInputEvent 依次派发 mouseMove/mouseDown/mouseUp，坐标按页面缩放换算；browser_press_key 走 agentKey（keyDown/char/keyUp，命名键映射 Electron keyCode）。视图不支持 sendInputEvent（测试假件/旧后端）时回退旧的脚本点击，保证兼容。browser_hover/browser_type/browser_select 复用落点做视觉。
+  3. **真实输入**：browser_click 拆成「只定位（performTargetPoint，不点击）→ 光标移动/高亮/涟漪 → BrowserHost.agentClick」。后者用 webContents.sendInputEvent 依次派发 mouseMove/mouseDown/mouseUp，坐标按页面缩放换算；browser_press_key 走 agentKey（keyDown/char/keyUp，命名键映射 Electron keyCode）；browser_type 走 agentType——先真实点进输入框，再 Ctrl+A 全选、逐字派发 keyDown/char/keyUp（CJK 等单键无法表达的文字走 insertText，等价输入法上屏），多行用 Enter 换行、单行折成空格，最后轮询回读校验（输入事件异步到达，不能按键刚排队就下结论）。视图不支持 sendInputEvent（测试假件/旧后端）或回读不通过时回退原生 setter，保证兼容。browser_hover/browser_select 复用落点做视觉。
   4. **接管锁放行**：buildAgentDrivingScript(on) 在页面置位 window.__loopsoarAgentDriving，并把锁宿主/遮罩临时设为 pointer-events:none；锁的 capture handler 在标志为真时直接返回。事件派发后 120ms 恢复（事件是异步到达的，立刻恢复会把事件挡在遮罩上）。E2E 与单测都覆盖了「锁开着时真实点击仍然生效」。
   5. **后台页面必须仍可交互**：Windows 的原生遮挡检测会把「被其它窗口盖住」的页面标成 hidden，Chromium 随即**丢弃注入的输入事件**（实测：hidden 时 probe 收不到任何事件，visible 时 pointerdown/mousedown/mouseup/click 全到）。因此启动时 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion")，并对网页视图设 backgroundThrottling:false，保证用户切到别的窗口时 Agent 的点击/按键仍然有效。
   6. **删除页内痕迹**：buildCursorScript / buildKeyHintScript / 页内 __loopsoarAgentOverlay 一并移除；browser_screenshot 不再需要「先隐藏浮层再截图」（覆盖层不在 capturePage 里），截图天然干净。
@@ -2006,9 +2006,10 @@
 - **验证**：
   - 单测新增 agentPointerWindow.spec.ts（懒创建/几何跟随/涟漪序号/键盘胶囊/空闲隐藏/关闭）、browserAgentInput.spec.ts（坐标按缩放换算、可信事件顺序、驱动标志、键盘映射、不支持时回退、onViewLayout 推送与清空），browserRefs.spec.ts 增加落点脚本/驱动脚本/锁放行断言；受影响工具测试按新链路更新。
   - 真机 E2E（node scripts/e2e-p2-run.mjs）：mock 模型驱动 navigate → snapshot → click → snapshot，页面按钮文案从「等待交互」变为「按钮已点击」，E2E_EVAL ok=true；只截指针覆盖窗口自身的 PNG 为 1089×909（显示缩放 1.25），光标像素包围盒 60×60 正好落在被点按钮中心，证明覆盖层与页面坐标对齐。桌面/窗口截图会拍到用户自己的窗口，已从 E2E 移除，避免隐私泄露。
-  - 基线：typecheck 5/5、全量 vitest **191 文件 / 1621 tests**、pnpm build、pnpm bundle:shell。
+  - 逐字键盘 E2E（node scripts/e2e-type-run.mjs）：navigate → browser_type(#name, "Loopsoar 中文 123") → snapshot。快照里输入框 value 完整出现，页面自建的 keydown 计数器为 **15**（13 个 ASCII 字符 + Ctrl+A + Backspace；两个汉字走输入法上屏不产生 keydown）——原生 setter 路径该计数恒为 0，因此这条证据能区分「真的在敲键盘」和「直接改值」。
+  - 基线：typecheck 5/5、全量 vitest **192 文件 / 1625 tests**、pnpm build、pnpm bundle:shell。
 - **状态**：✅ 自动化 + 真机 E2E（真实点击生效）；视觉细节待用户目视复核。
-- **已知边界**：browser_type 仍用原生 setter 写值（真实键盘逐字输入涉及 IME/组合键，后续再做）；覆盖层是子窗口，主窗口最小化时随之不见；「暂停/继续操作进程」仍待办。
+- **已知边界**：CJK 走 insertText（等价输入法上屏），没有模拟 IME 的候选词/组合态中间过程；超长文本仍逐字排队派发（受页面处理速度约束，工具侧以回读轮询兜底）；覆盖层是子窗口，主窗口最小化时随之不见；「暂停/继续操作进程」仍待办。
 
 ## 附：ADR 索引与状态总览
 
@@ -2119,4 +2120,4 @@
 | ADR-0103 | 布局选择改到首启向导（删除「每次询问」与会话记忆死代码；壳层按偏好应用并按会话去重） | ✅ 真机验证 |
 | ADR-0104 | 会话级浏览器隔离：标签组按会话（壳层唯一事实来源）+ 修正 UI 绑定方向与草稿重置条件 | ✅ 真机验证 |
 | ADR-0105 | Agent 工作区（折叠标签组，agentBound）+ 运行期接管锁（按轮次由壳层下发，只拦真实输入） | ✅ 真机验证 |
-| ADR-0106 | 虚拟鼠标/键盘改应用级覆盖层 + sendInputEvent 真实输入 + 锁放行 + 关 Windows 遮挡检测（后台也可交互） | ✅ 自动化 + 真机 E2E |
+| ADR-0106 | 虚拟鼠标/键盘改应用级覆盖层 + sendInputEvent 真实输入（点击 + 逐字键盘）+ 锁放行 + 关 Windows 遮挡检测（后台也可交互） | ✅ 自动化 + 真机 E2E |

@@ -497,7 +497,12 @@ ${locateJs(resolved)}
     const ownLock = Boolean(hit && (hit.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || hit.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)})));
     if (hit && hit !== el && !el.contains(hit) && !ownLock) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(hit) };
   }
-  return { ok: true, x: cx, y: cy, width: Math.max(rect.width, 2), height: Math.max(rect.height, 2) };
+  // 输入类元素的可编辑信息：真实键盘输入需要知道「能不能打字」「是不是多行」。
+  const tag = el.tagName.toLowerCase();
+  const inputType = tag === 'input' ? String(el.getAttribute('type') || 'text').toLowerCase() : '';
+  const editable = tag === 'textarea' || (tag === 'input' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].indexOf(inputType) >= 0) || Boolean(el.isContentEditable);
+  const multiline = tag === 'textarea' || Boolean(el.isContentEditable);
+  return { ok: true, x: cx, y: cy, width: Math.max(rect.width, 2), height: Math.max(rect.height, 2), tag, type: inputType, editable, multiline };
 })()`;
 }
 
@@ -660,6 +665,16 @@ ${locateJs(resolved)}
   if (actual !== TEXT) return { ok: false, code: 'TYPE_NOT_EFFECTIVE', actual: actual.slice(0, 200) };
   return { ok: true };
 })()`;
+}
+
+/**
+ * 输入回读脚本：只读当前值，用来校验「真实键盘输入是否真的落进页面」。
+ * 与 buildTypeScript 的回读口径一致（有 value 取 value，否则取 textContent）。
+ */
+export function buildTypeReadbackScript(resolved: ResolvedTarget): string {
+  return "/* loopsoar:type-readback */\n(() => {\n" + locateJs(resolved) +
+    "\n  const actual = ('value' in el) ? String(el.value == null ? '' : el.value) : String(el.textContent == null ? '' : el.textContent);\n" +
+    "  return { ok: true, value: actual };\n})()";
 }
 
 /** 按键白名单：13 个命名键（浏览器交互常用）+ 单个可见字符。 */
@@ -1050,9 +1065,24 @@ export interface TargetPointResult extends BrowserActionResult {
   y?: number;
   width?: number;
   height?: number;
+  /** 元素标签/输入类型；editable = 可以接收真实键盘输入（input 文本类/textarea/contenteditable）。 */
+  tag?: string;
+  type?: string;
+  editable?: boolean;
+  /** 是否多行（textarea/contenteditable）：真实输入时换行用 Enter，否则折成空格。 */
+  multiline?: boolean;
 }
 
-type PagePointResult = PageActionResult & { x?: number; y?: number; width?: number; height?: number };
+type PagePointResult = PageActionResult & {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  tag?: string;
+  type?: string;
+  editable?: boolean;
+  multiline?: boolean;
+};
 
 /**
  * 只定位、不点击：拿到目标中心的视口坐标（真实鼠标事件需要它）。
@@ -1083,6 +1113,10 @@ export async function performTargetPoint(
       y: page.y,
       width: page.width,
       height: page.height,
+      ...(page.tag ? { tag: page.tag } : {}),
+      ...(page.type ? { type: page.type } : {}),
+      ...(typeof page.editable === "boolean" ? { editable: page.editable } : {}),
+      ...(typeof page.multiline === "boolean" ? { multiline: page.multiline } : {}),
       ...(resolved.ref ? { ref: resolved.ref } : {}),
       selector: resolved.selector,
     };
@@ -1106,6 +1140,22 @@ export function buildAgentDrivingScript(on: boolean): string {
   }
   return true;
 })()`;
+}
+
+/** 输入后回读（真实键盘路径用）：解析 target → 读取当前值；text= 与解析失败直接返回不可读。 */
+export async function performTypeReadback(
+  registry: RefRegistry | null,
+  target: string,
+  run: ScriptRunner,
+): Promise<{ ok: boolean; value?: string }> {
+  const resolved = resolveTarget(registry, target);
+  if (!resolved.ok || resolved.kind === "text") return { ok: false };
+  try {
+    const page = (await run(buildTypeReadbackScript(resolved))) as { ok?: boolean; value?: string } | null;
+    return { ok: page?.ok === true, ...(typeof page?.value === "string" ? { value: page.value } : {}) };
+  } catch {
+    return { ok: false };
+  }
 }
 
 /** 输入：解析 target → 原生 setter 脚本 → 回读校验 → 可行动错误。 */

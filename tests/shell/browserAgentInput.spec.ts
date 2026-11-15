@@ -10,6 +10,7 @@ import { BrowserHost, type HostView } from "../../packages/shell/src/main/browse
 interface FakeView extends HostView {
   events: Record<string, unknown>[];
   scripts: string[];
+  inserted: string[];
 }
 
 function makeHost(options: { zoom?: number; input?: boolean; onViewLayout?: (rect: { x: number; y: number; width: number; height: number } | null) => void } = {}) {
@@ -22,6 +23,7 @@ function makeHost(options: { zoom?: number; input?: boolean; onViewLayout?: (rec
       const view = {
         events: [] as Record<string, unknown>[],
         scripts: [] as string[],
+        inserted: [] as string[],
         setBounds(bounds: { x: number; y: number; width: number; height: number }) {
           lastBounds = bounds;
         },
@@ -38,6 +40,9 @@ function makeHost(options: { zoom?: number; input?: boolean; onViewLayout?: (rec
             : {
                 sendInputEvent(event: Record<string, unknown>) {
                   view.events.push(event);
+                },
+                insertText(text: string) {
+                  view.inserted.push(text);
                 },
                 getZoomFactor: () => options.zoom ?? 1,
               }),
@@ -103,6 +108,46 @@ describe("Agent 真实输入", () => {
     expect(layout?.width ?? 0).toBeGreaterThan(0);
     await host.closeAll();
     expect(layout).toBeNull();
+  });
+
+  it("agentType：先全选清空，再逐字派发 keyDown/char/keyUp；CJK 走 insertText", async () => {
+    const { host, views } = makeHost();
+    const created = await host.newTab("https://example.com/", "s1", "agent");
+    expect(await host.agentType("s1", created.tabId, "a中b")).toBe(true);
+    const events = views[0].events.map((event) => [event.type, event.keyCode, (event.modifiers as string[] | undefined)?.[0] ?? null]);
+    expect(events.slice(0, 4)).toEqual([
+      ["keyDown", "A", "control"],
+      ["keyUp", "A", "control"],
+      ["keyDown", "Backspace", null],
+      ["keyUp", "Backspace", null],
+    ]);
+    // ASCII 逐字三连发；汉字成段走输入法上屏
+    expect(events.slice(4)).toEqual([
+      ["keyDown", "a", null],
+      ["char", "a", null],
+      ["keyUp", "a", null],
+      ["keyDown", "b", null],
+      ["char", "b", null],
+      ["keyUp", "b", null],
+    ]);
+    expect(views[0].inserted).toEqual(["中"]);
+  });
+
+  it("agentType：多行用 Enter 换行；单行把换行折成空格；空文本只清空", async () => {
+    const { host, views } = makeHost();
+    const created = await host.newTab("https://example.com/", "s1", "agent");
+    await host.agentType("s1", created.tabId, "a\nb", { multiline: true });
+    expect(views[0].events.map((event) => [event.type, event.keyCode])).toContainEqual(["keyDown", "Enter"]);
+    expect(views[0].events.map((event) => [event.type, event.keyCode])).toContainEqual(["keyUp", "Enter"]);
+
+    views[0].events.length = 0;
+    await host.agentType("s1", created.tabId, "a\nb");
+    expect(views[0].events.map((event) => [event.type, event.keyCode])).toContainEqual(["char", " "]);
+    expect(views[0].events.map((event) => [event.type, event.keyCode])).not.toContainEqual(["keyDown", "Enter"]);
+
+    views[0].events.length = 0;
+    await host.agentType("s1", created.tabId, "");
+    expect(views[0].events.map((event) => event.type)).toEqual(["keyDown", "keyUp", "keyDown", "keyUp"]);
   });
 
   it("视图不支持 sendInputEvent：返回 false（调用方回退到脚本点击）", async () => {

@@ -30,6 +30,7 @@ import {
   performSelect,
   performTargetPoint,
   performType,
+  performTypeReadback,
   type RefRegistry,
 } from "../browserAdapter/refs.js";
 
@@ -494,7 +495,7 @@ export function registerBrowserTools(
   registry.register({
     name: "browser_type",
     description:
-      "在输入框输入文本：优先用快照里的 #eN（如 e2），也支持 CSS 选择器（原生 setter 写入并回读校验）；返回地址/标题/加载态状态行",
+      "在输入框输入文本：优先用快照里的 #eN（如 e2），也支持 CSS 选择器；会像用户一样点进输入框、全选后逐字敲键盘（CJK 经输入法上屏），回读校验不通过时回退原生 setter；返回地址/标题/加载态状态行",
     permissions: { browser: true },
     schema: z.object({ target: z.string().min(1).max(500), text: z.string().max(4000) }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -508,7 +509,8 @@ export function registerBrowserTools(
         const before = readTab(host, ctx.sessionId, tabId);
         const registry = registryFor(ctx.sessionId, tabId);
         const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
-        // 视觉：光标移到输入框 + 键盘胶囊（输入本身仍走原生 setter，保证 React 受控组件不丢字）。
+        const text = params.text ?? "";
+        // 视觉：光标移到输入框 + 键盘胶囊（真实键盘输入时用户能看到「光标停在输入框上」）。
         const point = await performTargetPoint(registry, params.target, run);
         const shown = point.ok && typeof point.x === "number" && typeof point.y === "number"
           ? pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height })
@@ -517,8 +519,33 @@ export function registerBrowserTools(
           shown.pointer.chip("⌨ 输入中");
           await new Promise((resolve) => setTimeout(resolve, 170));
         }
-        // 原生 setter + InputEvent + 回读比对（React 受控组件不再「返回成功但页面没变」）
-        const result = await performType(registry, params.target, params.text ?? "", run);
+        // 真实键盘优先：点进输入框 → Ctrl+A → 逐字输入 → 回读校验。
+        // 不成立（不支持 sendInputEvent / 受控组件拒收 / 非文本元素）时回退原生 setter。
+        let result: Awaited<ReturnType<typeof performType>> | null = null;
+        if (point.ok && point.editable === true && typeof point.x === "number" && typeof point.y === "number") {
+          const focused = await host.agentClick(ctx.sessionId, tabId ?? undefined, { x: point.x, y: point.y });
+          const typed = focused && typeof host.agentType === "function"
+            ? await host.agentType(ctx.sessionId, tabId ?? undefined, text, { multiline: point.multiline === true })
+            : false;
+          if (typed) {
+            const expected = point.multiline === true
+              ? text.replace(/\r\n?/g, "\n")
+              : text.replace(/\r\n?/g, "\n").replace(/\n/g, " ");
+            // 输入事件是异步到达渲染进程的：轮询回读，别在按键还没上屏时抢占结论。
+            for (let attempt = 0; attempt < 12; attempt += 1) {
+              const read = await performTypeReadback(registry, params.target, run);
+              if (read.ok && read.value === expected) {
+                result = { ok: true, label: point.label ?? params.target };
+                break;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 60));
+            }
+          }
+        }
+        if (!result) {
+          // 原生 setter + InputEvent + 回读比对（React 受控组件不再「返回成功但页面没变」）
+          result = await performType(registry, params.target, text, run);
+        }
         fadePointerHighlight();
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 输入失败：${params.target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);

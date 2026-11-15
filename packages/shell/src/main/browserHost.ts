@@ -40,6 +40,8 @@ const USER_LOCK_MAX_ATTEMPTS = 3;
 interface AgentInputWebContents {
   sendInputEvent?: (event: Record<string, unknown>) => void;
   getZoomFactor?: () => number;
+  /** 输入法式插入（CJK 等无法用单键字符表达的文字）；可信输入，会触发 beforeinput/input。 */
+  insertText?: (text: string) => void;
 }
 
 /** 按键白名单里的命名键 → Electron keyCode（单字符直接用字符本身）。 */
@@ -952,6 +954,74 @@ export class BrowserHost {
     }
     if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
       console.log("[agent-click]", JSON.stringify({ zoom, x, y }));
+    }
+    return true;
+  }
+
+  /**
+   * Agent 逐字输入：像用户一样先全选再一个字一个字敲。
+   *
+   * - 开始先用 Ctrl+A 选中已有内容（首字自然替换），空文本则 Backspace 清空；
+   * - ASCII 可见字符逐字派发 keyDown/char/keyUp（真实键盘事件，React 受控组件、onKeyDown 都生效）；
+   * - CJK 等非 ASCII 走 insertText（等价输入法上屏；单键事件无法表达汉字），成段插入后让出一次事件循环保证顺序；
+   * - 多行（textarea/contenteditable）用 Enter 换行；单行 input 把换行折成空格（input 本身也不接受换行）。
+   *
+   * 返回 false = 视图不支持 sendInputEvent（测试假件/旧后端），调用方回退原生 setter。
+   */
+  async agentType(
+    sessionId: string | undefined,
+    tabId: string | undefined,
+    text: string,
+    options: { multiline?: boolean } = {},
+  ): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return false;
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || typeof wc.sendInputEvent !== "function") return false;
+    const multiline = options.multiline === true;
+    const normalized = text.replace(/\r\n?/g, "\n");
+    const body = multiline ? normalized : normalized.replace(/\n/g, " ");
+    await this.setAgentDriving(entry, true);
+    try {
+      // 全选 + 退格 = 清空当前内容（和用户「点进来、全选、重输」完全一致）。
+      wc.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+      wc.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+      wc.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+      wc.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+      const chars = Array.from(body);
+      let pendingText = "";
+      const flushText = async (): Promise<void> => {
+        if (!pendingText) return;
+        const chunk = pendingText;
+        pendingText = "";
+        if (typeof wc.insertText === "function") {
+          wc.insertText(chunk);
+          // 让 IPC/渲染进程把这段文本上屏，避免后续按键插到它前面（顺序敏感）。
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        } else {
+          for (const ch of chunk) wc.sendInputEvent?.({ type: "char", keyCode: ch });
+        }
+      };
+      for (const ch of chars) {
+        if (ch === "\n") {
+          await flushText();
+          wc.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+          wc.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+          continue;
+        }
+        const code = ch.codePointAt(0) ?? 0;
+        if (code >= 0x20 && code <= 0x7e) {
+          await flushText();
+          wc.sendInputEvent({ type: "keyDown", keyCode: ch });
+          wc.sendInputEvent({ type: "char", keyCode: ch });
+          wc.sendInputEvent({ type: "keyUp", keyCode: ch });
+        } else {
+          pendingText += ch;
+        }
+      }
+      await flushText();
+    } finally {
+      this.releaseAgentDriving(entry);
     }
     return true;
   }

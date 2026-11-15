@@ -18,9 +18,19 @@ const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
 <body><div class="card">
   <h1>Loopsoar 浏览器视图 ✔</h1>
   <p>这一页由 WebContentsView 真实加载（E2E）</p>
+  <input id="name" placeholder="名字" oninput="document.getElementById('out').textContent=this.value">
   <button onclick="document.getElementById('out').textContent='按钮已点击'">点我</button>
   <div id="out">等待交互</div>
-</div></body></html>`;
+  <div id="keys">keydown=0</div>
+</div>
+<script>
+  // 真实键盘证据：只有可信 keydown 才会计数（原生 setter 路径不会产生按键事件）。
+  let __keys = 0;
+  document.addEventListener('keydown', () => {
+    __keys += 1;
+    document.getElementById('keys').textContent = 'keydown=' + __keys;
+  });
+</script></body></html>`;
 
 createServer((_req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
