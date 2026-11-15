@@ -469,126 +469,38 @@ ${locateJs(resolved)}
 }
 
 /**
- * Agent 虚拟光标：在页面里画出「指针移动到目标 + 目标高亮框 + 点击涟漪」。
- * 实现要点：
- *   · 全部挂在 documentElement 的 **closed shadow root** 里（页面样式/CSP 影响不到，页面 DOM 不被污染）；
- *   · pointer-events:none（不改变页面行为）、固定定位（不触发页面重排）；
- *   · 只做视觉，失败也不影响动作本身（调用方 .catch 忽略）。
+ * 目标落点脚本（不点击）：滚到视野中心 → 元素中心（视口 CSS 像素）→ 命中验证。
+ *
+ * 为什么要单独有：Agent 的点击已经改成「应用级覆盖窗口画光标 + webContents.sendInputEvent
+ * 派发真实鼠标事件」——真实事件只认坐标，所以必须先把目标换算成一个点；
+ * 命中验证仍在这里做，BLOCKED_BY_OVERLAY 的语义和文案与旧路径完全一致。
  */
-/** 虚拟光标素材（用户提供）：导航=箭头，忙=竖形等待符号；内联成 SVG，避免 CSP 拦截 img data:。 */
-const CURSOR_NAV_SVG = "<svg viewBox=\"0 0 1024 1024\" width=\"26\" height=\"26\" aria-hidden=\"true\"><path d=\"M146.928 122.768l327.52 764 140.848-294.816 295.504-141.824L146.928 122.768z m408.32 409.264L478.4 692.912 299.28 275.088l418.048 179.168-162.08 77.76z\" fill=\"#f5efe6\" stroke=\"#191b21\" stroke-width=\"36\" stroke-linejoin=\"round\" paint-order=\"stroke\"/></svg>";
-const CURSOR_BUSY_SVG = "<svg viewBox=\"0 0 1024 1024\" width=\"26\" height=\"26\" aria-hidden=\"true\"><path d=\"M610.6112 174.08c47.4112 0 71.0656 0 89.088 17.7152a72.704 72.704 0 0 1 6.8608 8.0896c14.6432 20.48 11.3664 40.3456 5.12 79.872-10.24 64.2048-36.5568 144.0768-101.5808 199.168A43.8272 43.8272 0 0 0 593.92 512c0 12.8 6.3488 24.7808 16.1792 33.0752 65.024 55.0912 91.3408 134.9632 101.5808 199.0656 6.2464 39.6288 9.5232 59.4944-5.12 79.9744a72.3968 72.3968 0 0 1-6.8608 8.192c-18.0224 17.6128-41.6768 17.6128-89.088 17.6128H372.3264c-47.3088 0-71.0656 0-88.9856-17.7152a72.3968 72.3968 0 0 1-6.8608-8.0896c-14.6432-20.48-11.4688-40.3456-5.12-79.872 10.24-64.2048 36.5568-144.0768 101.5808-199.168A44.032 44.032 0 0 0 389.12 512a43.8272 43.8272 0 0 0-16.1792-33.0752C307.9168 423.936 281.6 344.064 271.36 279.8592c-6.3488-39.6288-9.5232-59.4944 5.12-79.9744a72.704 72.704 0 0 1 6.8608-8.192c17.92-17.6128 41.6768-17.6128 89.088-17.6128h238.1824z m-198.144 81.408c-27.9552 0.2048-41.984 0.3072-50.9952 10.6496a35.1232 35.1232 0 0 0-3.3792 4.608c-7.0656 11.8784-3.072 23.7568 4.5056 47.3088 20.1728 62.6688 62.2592 132.5056 129.024 132.5056 66.56 0 108.544-69.7344 128.8192-132.5056 7.5776-23.552 11.3664-35.4304 4.4032-47.3088a35.0208 35.0208 0 0 0-3.3792-4.608c-9.1136-10.3424-23.04-10.4448-50.9952-10.6496-50.688-0.4096-107.3152-0.4096-158.0032 0z\" fill=\"#f5efe6\" stroke=\"#191b21\" stroke-width=\"36\" stroke-linejoin=\"round\" paint-order=\"stroke\"/></svg>";
-
-/** 光标图像（箭头热点在左上角）：白描边 + 阴影保证深色页面上也看得见。 */
-function cursorImgScript(): string {
-  return `  const NAV = ${JSON.stringify(CURSOR_NAV_SVG)};
-  const BUSY = ${JSON.stringify(CURSOR_BUSY_SVG)};
-`;
-}
-
-export function buildCursorScript(resolved: ResolvedTarget, ripple: boolean): string {
-  return `(() => {
-${cursorImgScript()}${locateJs(resolved)}
-  const doc = document;
-  const KEY = '__loopsoarAgentOverlay';
-  let root = window[KEY];
-  if (!root || !root.host || !doc.documentElement.contains(root.host)) {
-    // 不用 <style> 标签：严格 CSP 站点会拦；全部走元素级 CSSOM + WAAPI（调研 §3 的结论）。
-    const host = doc.createElement('div');
-    host.setAttribute('data-loopsoar-agent', 'overlay');
-    host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
-    root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
-    doc.documentElement.appendChild(host);
-    window[KEY] = root;
-  }
+export function buildTargetPointScript(resolved: ResolvedTarget): string {
+  return `/* loopsoar:target-point */
+(() => {
+${locateJs(resolved)}
+  el.scrollIntoView({ block: 'center' });
+  const describe = (node) => {
+    if (!node || node.nodeType !== 1) return null;
+    const cls = String(node.getAttribute('class') || '').trim().split(' ').filter(Boolean).slice(0, 3).join('.');
+    const raw = String(node.innerText || node.textContent || '');
+    let text = '';
+    for (let i = 0; i < raw.length; i += 1) text += raw.charCodeAt(i) <= 32 ? ' ' : raw.charAt(i);
+    text = text.replace(/ +/g, ' ').trim().slice(0, 40);
+    return { tag: node.tagName.toLowerCase(), id: node.getAttribute('id') || undefined, className: cls || undefined, text: text || undefined };
+  };
   const rect = el.getBoundingClientRect();
-  const cx = Math.min(Math.max(rect.left + rect.width / 2, 4), Math.max(window.innerWidth - 4, 4));
-  const cy = Math.min(Math.max(rect.top + rect.height / 2, 4), Math.max(window.innerHeight - 4, 4));
-  // 虚拟鼠标：用户提供的两张 SVG（导航/忙）。
-  // 为什么用内联 <svg> 而不是 <img src=data:...>：部分站点 CSP 禁止 img data:，
-  // 图片加载失败会在页面左上角留下一个「破图小方块」（用户 m02556 的截图）。
-  let cursor = root.querySelector('.cursor');
-  if (!cursor) {
-    cursor = doc.createElement('div');
-    cursor.className = 'cursor';
-    cursor.style.cssText =
-      'position:fixed;width:26px;height:26px;margin:-2px 0 0 -2px;pointer-events:none;' +
-      'filter:drop-shadow(0 0 1.5px rgba(255,255,255,.95)) drop-shadow(0 2px 4px rgba(0,0,0,.45));' +
-      'transition:left .18s cubic-bezier(.2,0,.2,1),top .18s cubic-bezier(.2,0,.2,1),transform .12s ease;';
-    root.appendChild(cursor);
+  const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max(window.innerWidth - 1, 0));
+  const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max(window.innerHeight - 1, 0));
+  if (typeof document.elementFromPoint === 'function') {
+    const hit = document.elementFromPoint(cx, cy);
+    const ownLock = Boolean(hit && (hit.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || hit.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)})));
+    if (hit && hit !== el && !el.contains(hit) && !ownLock) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(hit) };
   }
-  cursor.innerHTML = ripple ? NAV : BUSY;
-  const prev = cursor.__lspos || { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) };
-  cursor.style.left = prev.x + 'px'; cursor.style.top = prev.y + 'px';
-  cursor.__lspos = { x: cx, y: cy };
-  requestAnimationFrame(() => requestAnimationFrame(() => { cursor.style.left = cx + 'px'; cursor.style.top = cy + 'px'; }));
-  const box = doc.createElement('div');
-  box.className = 'box';
-  box.style.cssText = 'position:fixed;border:2px solid rgba(217,138,79,.8);border-radius:6px;background:rgba(217,138,79,.10);transition:opacity .3s;';
-  box.style.left = Math.max(rect.left - 2, 0) + 'px';
-  box.style.top = Math.max(rect.top - 2, 0) + 'px';
-  box.style.width = Math.max(rect.width + 4, 6) + 'px';
-  box.style.height = Math.max(rect.height + 4, 6) + 'px';
-  root.appendChild(box);
-  setTimeout(() => { box.style.opacity = '0'; setTimeout(() => box.remove(), 320); }, 520);
-  if (ripple) {
-    // 点击时箭头做一个短促的按压反馈（WAAPI，页面禁用动画也不影响动作）。
-    try {
-      cursor.animate(
-        [{ transform: 'scale(1)' }, { transform: 'scale(.82)' }, { transform: 'scale(1)' }],
-        { duration: 180, easing: 'ease-out' },
-      );
-    } catch (err) {}
-    const ring = doc.createElement('div');
-    ring.className = 'ring';
-    ring.style.cssText =
-      'position:fixed;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;' +
-      'border:2px solid rgba(217,138,79,.9);';
-    ring.style.left = cx + 'px';
-    ring.style.top = cy + 'px';
-    root.appendChild(ring);
-    try {
-      ring.animate(
-        [
-          { width: '12px', height: '12px', margin: '-6px 0 0 -6px', opacity: 1 },
-          { width: '56px', height: '56px', margin: '-28px 0 0 -28px', opacity: 0 },
-        ],
-        { duration: 520, easing: 'ease-out', fill: 'forwards' },
-      );
-    } catch (err) {}
-    setTimeout(() => ring.remove(), 620);
-  }
-  return { ok: true, x: cx, y: cy };
+  return { ok: true, x: cx, y: cy, width: Math.max(rect.width, 2), height: Math.max(rect.height, 2) };
 })()`;
 }
 
-/** 让光标动画走完再执行动作（毫秒）：既看得见，又不至于拖慢长任务。 */
-/**
- * 虚拟键盘提示：在光标旁显示当前按键/输入状态（如「⌨ Enter」「⌨ 输入中」），约 0.9s 后淡出。
- * 为什么需要：用户要求「像用户操作电脑一样」——只有光标、看不到键盘，输入过程就是黑箱。
- */
-export function buildKeyHintScript(label: string): string {
-  return `(() => {
-  const doc = document;
-  const root = window.__loopsoarAgentOverlay;
-  if (!root) return { ok: false };
-  const cursor = root.querySelector ? root.querySelector('.cursor') : null;
-  const x = cursor ? parseFloat(cursor.style.left || '24') : 40;
-  const y = cursor ? parseFloat(cursor.style.top || '24') : 40;
-  const chip = doc.createElement('div');
-  chip.className = 'key-chip';
-  chip.textContent = ${JSON.stringify(label)};
-  chip.style.cssText = 'position:fixed;left:' + (x + 22) + 'px;top:' + (y + 20) + 'px;' +
-    'padding:8px 14px;border-radius:999px;background:rgba(64,68,76,.9);color:#f7f2e8;' +
-    'font:500 12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;pointer-events:none;' +
-    'box-shadow:0 6px 18px rgba(0,0,0,.35);transition:opacity .25s ease;opacity:1;';
-  root.appendChild(chip);
-  setTimeout(() => { chip.style.opacity = '0'; setTimeout(() => chip.remove(), 280); }, 900);
-  return { ok: true };
-})()`;
-}
-
-export const CURSOR_LEAD_MS = 170;
 
 /**
  * 接管锁浮层的宿主属性：注入到页面 DOM 上时唯一可识别的标记
@@ -649,7 +561,8 @@ function userLockPreambleJs(): string {
 /**
  * Agent 接管锁脚本（会话运行期间浮在当前网页上，阻止用户操作该页面）。
  *
- * 关键约束：只拦 **isTrusted === true** 的真实用户事件。
+ * 关键约束：只拦 **isTrusted === true** 且非 Agent 派发的真实用户事件
+ * （window.__loopsoarAgentDriving 由 buildAgentDrivingScript 置位）。
  *   · 合成事件（el.click() / dispatchEvent）的 isTrusted 一定是 false：
  *     它们同样会经过捕获阶段，若无条件拦截，Agent 会把自己的动作一起锁死；
  *   · 监听挂在 window 的 capture 阶段：比页面自己的 document 监听更早，
@@ -687,6 +600,9 @@ ${userLockPreambleJs()}
   (doc.documentElement || doc.body || doc).appendChild(host);
   const handler = (event) => {
     if (!event || event.isTrusted !== true) return;
+    // Agent 正在派发真实输入（webContents.sendInputEvent）时放行：它同样 isTrusted=true，
+    // 但语义上是「Loopsoar 自己的鼠标」，不是用户在抢操作。标志由主进程在派发前置位。
+    if (window.__loopsoarAgentDriving === true) return;
     try { event.preventDefault(); } catch (err) {}
     try { event.stopImmediatePropagation(); } catch (err) {}
   };
@@ -694,7 +610,8 @@ ${userLockPreambleJs()}
     // capture=true：抢在页面自身的监听之前把真实用户输入拦下。
     window.addEventListener(EVENTS[i], handler, true);
   }
-  window[KEY] = { host: host, handler: handler };
+  // mask 也要记住：放行真实输入时它必须 pointer-events:none，否则点击打在遮罩上到不了页面。
+  window[KEY] = { host: host, mask: mask, handler: handler };
   return { ok: true, locked: true };
 })()`;
 }
@@ -1108,9 +1025,6 @@ export async function performClick(
   if (!resolved.ok) return { ok: false, code: resolved.code, message: resolved.message };
   let page: PageActionResult | null = null;
   try {
-    // 先画光标/高亮/涟漪（纯视觉，失败不影响点击），再执行真正的点击
-    await run(buildCursorScript(resolved, true)).catch(() => null);
-    await new Promise((resolve) => setTimeout(resolve, CURSOR_LEAD_MS));
     page = (await run(buildClickScript(resolved))) as PageActionResult | null;
   } catch (err) {
     return {
@@ -1128,6 +1042,70 @@ export async function performClick(
     };
   }
   return failureOf(registry, resolved, target, page);
+}
+
+/** 目标落点：成功时带视口 CSS 坐标与尺寸（覆盖窗口据此画光标/高亮）。 */
+export interface TargetPointResult extends BrowserActionResult {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+type PagePointResult = PageActionResult & { x?: number; y?: number; width?: number; height?: number };
+
+/**
+ * 只定位、不点击：拿到目标中心的视口坐标（真实鼠标事件需要它）。
+ * 失败翻译与 performClick 走同一个 failureOf，错误文案不会出现两套。
+ */
+export async function performTargetPoint(
+  registry: RefRegistry | null,
+  target: string,
+  run: ScriptRunner,
+): Promise<TargetPointResult> {
+  const resolved = resolveTarget(registry, target);
+  if (!resolved.ok) return { ok: false, code: resolved.code, message: resolved.message };
+  let page: PagePointResult | null = null;
+  try {
+    page = (await run(buildTargetPointScript(resolved))) as PagePointResult | null;
+  } catch (err) {
+    return {
+      ok: false,
+      code: "SCRIPT_ERROR",
+      message: `[错误] 定位脚本执行失败：${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (page?.ok && typeof page.x === "number" && typeof page.y === "number") {
+    return {
+      ok: true,
+      label: labelOf(registry, resolved, target),
+      x: page.x,
+      y: page.y,
+      width: page.width,
+      height: page.height,
+      ...(resolved.ref ? { ref: resolved.ref } : {}),
+      selector: resolved.selector,
+    };
+  }
+  return failureOf(registry, resolved, target, page) as TargetPointResult;
+}
+
+/**
+ * Agent 真实输入放行开关：页面接管锁只拦 isTrusted 事件，而 sendInputEvent 产生的正是
+ * trusted 事件——必须在派发前置位，否则锁会把 Agent 自己的点击吞掉。
+ * 同时把锁的宿主/遮罩设为 pointer-events:none，否则真实点击会打在遮罩上到不了页面。
+ */
+export function buildAgentDrivingScript(on: boolean): string {
+  const pointerEvents = on ? "'none'" : "'auto'";
+  return `(() => {
+  window.__loopsoarAgentDriving = ${on ? "true" : "false"};
+  const lock = window.__loopsoarUserLock;
+  if (lock) {
+    if (lock.host) lock.host.style.pointerEvents = ${pointerEvents};
+    if (lock.mask) lock.mask.style.pointerEvents = ${pointerEvents};
+  }
+  return true;
+})()`;
 }
 
 /** 输入：解析 target → 原生 setter 脚本 → 回读校验 → 可行动错误。 */
@@ -1148,10 +1126,6 @@ export async function performType(
   }
   let page: PageActionResult | null = null;
   try {
-    await run(buildCursorScript(resolved, false)).catch(() => null);
-    // 虚拟键盘：输入时在光标旁显示「⌨ 输入中」，让操作过程可见。
-    await run(buildKeyHintScript("⌨ 输入中")).catch(() => null);
-    await new Promise((resolve) => setTimeout(resolve, CURSOR_LEAD_MS));
     page = (await run(buildTypeScript(resolved, text))) as PageActionResult | null;
   } catch (err) {
     return {

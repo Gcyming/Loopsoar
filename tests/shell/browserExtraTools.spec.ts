@@ -144,9 +144,8 @@ describe("browser_screenshot · 截图落盘", () => {
     const registry = makeRegistry(host, root);
     const result = await run(registry, "browser_screenshot", { selector: "#main .card" });
     expect(result.ok).toBe(true);
-    // 截图路径现在会先隐藏 Agent 浮层、再滚动定位、最后恢复：断言定位脚本存在即可
-    expect(state.scripts.length).toBeGreaterThanOrEqual(2);
-    expect(state.scripts.find((script) => script.includes('"#main '))).toBeTruthy();
+    // 光标画在应用级覆盖窗口（capturePage 拍不到），截图路径只注入滚动定位脚本
+    expect(state.scripts.length).toBe(1);
     expect(state.scripts[0]).toContain('"#main .card"');
     expect(state.scripts[0]).toContain("scrollIntoView");
     expect(state.screenshotCalls).toBe(1);

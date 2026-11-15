@@ -1989,6 +1989,27 @@
 7. **虚拟鼠标不再用 `<img data:>`**：部分站点 CSP 禁止 img data:，图片加载失败会在网页左上角留一个破图小方块、光标也看不见。改为在 shadow root 里内联 `<svg>`（CSP 不拦、矢量清晰）。
 8. **工具卡右侧截断**：`.think-tool-btn` 是 `width:100%` + padding/border 且没有 `box-sizing:border-box`，实际宽度比列宽多出 ~18px，右缘被裁掉。补 `box-sizing:border-box`（详情框同理）。
 9. 说明：操作进程暂停/继续仍未完成，见规划文档待办。
+## ADR-0106 虚拟鼠标/键盘改为应用级覆盖层 + 真实输入注入（按用户新定义）
+
+- **背景**：ADR-0102 把光标/键盘提示画在网页 DOM 里，ADR-0105 修订又改成页内内联 SVG。用户（m02991）指出这是理解错了：虚拟鼠标应当被当作「用户的鼠标」，不是网页的一部分，而是**程序最上层**的一个指针；把网页视作电脑屏幕，光标由 Loopsoar 在程序内绘制并控制，用精准坐标移动并点击。光标消失、破图方块、样式不统一等问题的根因都是「画在别人家的文档里」。
+- **设计**：
+  1. **应用级覆盖窗口**（packages/shell/src/main/agentPointerWindow.ts）：无边框、透明、focusable:false、setIgnoreMouseEvents(true)、hasShadow:false、parent 为主窗口；内容是一张 data:text/html 页面（内联用户提供的箭头 SVG + 高亮框 + 涟漪 + 键盘胶囊）。指针窗口**懒创建**（第一次动作才建），空闲 1.6s 自动隐藏，setArea(null) 立即隐藏。
+  2. **几何单源**：BrowserHost.applyLayout 在算完原生视图 bounds 后回调 onViewLayout(rect | null)；index.ts 只做「主窗口内容区原点 + 视图矩形」的平移得到屏幕坐标，16ms 防抖跟随窗口 move/resize/侧栏动画。没有可见网页（无标签/加载中/浮层打开/非活动会话）时回传 null，覆盖层随之隐藏——后台会话的 Agent 动作不会把光标画到前台。
+  3. **真实输入**：browser_click 拆成「只定位（performTargetPoint，不点击）→ 光标移动/高亮/涟漪 → BrowserHost.agentClick」。后者用 webContents.sendInputEvent 依次派发 mouseMove/mouseDown/mouseUp，坐标按页面缩放换算；browser_press_key 走 agentKey（keyDown/char/keyUp，命名键映射 Electron keyCode）。视图不支持 sendInputEvent（测试假件/旧后端）时回退旧的脚本点击，保证兼容。browser_hover/browser_type/browser_select 复用落点做视觉。
+  4. **接管锁放行**：buildAgentDrivingScript(on) 在页面置位 window.__loopsoarAgentDriving，并把锁宿主/遮罩临时设为 pointer-events:none；锁的 capture handler 在标志为真时直接返回。事件派发后 120ms 恢复（事件是异步到达的，立刻恢复会把事件挡在遮罩上）。E2E 与单测都覆盖了「锁开着时真实点击仍然生效」。
+  5. **后台页面必须仍可交互**：Windows 的原生遮挡检测会把「被其它窗口盖住」的页面标成 hidden，Chromium 随即**丢弃注入的输入事件**（实测：hidden 时 probe 收不到任何事件，visible 时 pointerdown/mousedown/mouseup/click 全到）。因此启动时 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion")，并对网页视图设 backgroundThrottling:false，保证用户切到别的窗口时 Agent 的点击/按键仍然有效。
+  6. **删除页内痕迹**：buildCursorScript / buildKeyHintScript / 页内 __loopsoarAgentOverlay 一并移除；browser_screenshot 不再需要「先隐藏浮层再截图」（覆盖层不在 capturePage 里），截图天然干净。
+- **关键决策**：
+  1. **不用 CDP Input.dispatchMouseEvent 作为主路径**：实测两者都能工作，但 CDP 需要 attach debugger（与 DevTools 面板争用），sendInputEvent 是官方公开 API、无副作用；CDP 只在排障时验证过。
+  2. **点击仍然先做命中验证**：落点脚本用 elementFromPoint 确认目标没有被第三方遮罩挡住（自家锁开例外），失败时保留「自动关登录弹窗再重试一次」的既有行为；真实点击只负责「按下去」。
+  3. **视觉与动作分离**：鼠标移动/按压动画只在覆盖层里，实际输入直接注入页面；两者共用同一个页面坐标，所以「看到点哪里」与「点到哪里」永远一致。
+- **验证**：
+  - 单测新增 agentPointerWindow.spec.ts（懒创建/几何跟随/涟漪序号/键盘胶囊/空闲隐藏/关闭）、browserAgentInput.spec.ts（坐标按缩放换算、可信事件顺序、驱动标志、键盘映射、不支持时回退、onViewLayout 推送与清空），browserRefs.spec.ts 增加落点脚本/驱动脚本/锁放行断言；受影响工具测试按新链路更新。
+  - 真机 E2E（node scripts/e2e-p2-run.mjs）：mock 模型驱动 navigate → snapshot → click → snapshot，页面按钮文案从「等待交互」变为「按钮已点击」，E2E_EVAL ok=true；只截指针覆盖窗口自身的 PNG 为 1089×909（显示缩放 1.25），光标像素包围盒 60×60 正好落在被点按钮中心，证明覆盖层与页面坐标对齐。桌面/窗口截图会拍到用户自己的窗口，已从 E2E 移除，避免隐私泄露。
+  - 基线：typecheck 5/5、全量 vitest **191 文件 / 1621 tests**、pnpm build、pnpm bundle:shell。
+- **状态**：✅ 自动化 + 真机 E2E（真实点击生效）；视觉细节待用户目视复核。
+- **已知边界**：browser_type 仍用原生 setter 写值（真实键盘逐字输入涉及 IME/组合键，后续再做）；覆盖层是子窗口，主窗口最小化时随之不见；「暂停/继续操作进程」仍待办。
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -2098,3 +2119,4 @@
 | ADR-0103 | 布局选择改到首启向导（删除「每次询问」与会话记忆死代码；壳层按偏好应用并按会话去重） | ✅ 真机验证 |
 | ADR-0104 | 会话级浏览器隔离：标签组按会话（壳层唯一事实来源）+ 修正 UI 绑定方向与草稿重置条件 | ✅ 真机验证 |
 | ADR-0105 | Agent 工作区（折叠标签组，agentBound）+ 运行期接管锁（按轮次由壳层下发，只拦真实输入） | ✅ 真机验证 |
+| ADR-0106 | 虚拟鼠标/键盘改应用级覆盖层 + sendInputEvent 真实输入 + 锁放行 + 关 Windows 遮挡检测（后台也可交互） | ✅ 自动化 + 真机 E2E |

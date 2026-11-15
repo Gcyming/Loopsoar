@@ -88,6 +88,9 @@ try {
     LOOPSOAR_DATA_DIR: DATA_DIR,
     LOOPSOAR_E2E_HOLD_MS: "4000",
     LOOPSOAR_E2E_SHOT: SHOT,
+    // 取证：只截指针覆盖窗口自身（不含桌面）+ 光标保持可见
+    LOOPSOAR_E2E_POINTER_SHOT: path.join(OUT_DIR, "p2-agent-pointer.png"),
+    LOOPSOAR_POINTER_IDLE_MS: "60000",
     LOOPSOAR_E2E_EVAL: evalSource,
   });
 

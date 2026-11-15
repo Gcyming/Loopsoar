@@ -10,10 +10,13 @@ import {
   NAMED_KEYS,
   RefRegistry,
   SNAPSHOT_SCRIPT,
+  buildAgentDrivingScript,
   buildClickScript,
   buildHoverScript,
   buildPressKeyScript,
   buildSelectScript,
+  buildTargetPointScript,
+  buildUserLockScript,
   buildTypeScript,
   findCandidates,
   formatCandidates,
@@ -142,6 +145,37 @@ describe("元素引用注册表", () => {
   });
 });
 
+describe("Agent 真实输入 · 坐标与锁", () => {
+  it("落点脚本：带定位标记、命中验证与中心坐标（不点击）", () => {
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const resolved = resolveTarget(registry, "e2");
+    if (!resolved.ok) throw new Error("解析失败");
+    const script = buildTargetPointScript(resolved);
+    expect(script).toContain("loopsoar:target-point");
+    expect(script).toContain("elementFromPoint");
+    expect(script).toContain("#login");
+    expect(script).toContain("return { ok: true, x: cx, y: cy");
+    expect(script).not.toContain("el.click()");
+  });
+
+  it("放行脚本：置位驱动标志并把锁宿主/遮罩设为 pointer-events:none", () => {
+    const on = buildAgentDrivingScript(true);
+    expect(on).toContain("__loopsoarAgentDriving = true");
+    expect(on).toContain("pointerEvents = 'none'");
+    const off = buildAgentDrivingScript(false);
+    expect(off).toContain("__loopsoarAgentDriving = false");
+    expect(off).toContain("pointerEvents = 'auto'");
+  });
+
+  it("接管锁：记住 mask，并在驱动标志为真时放行可信事件", () => {
+    const script = buildUserLockScript(true, "Agent 正在操作");
+    expect(script).toContain("__loopsoarAgentDriving === true");
+    expect(script).toContain("mask: mask");
+    expect(script).toContain("isTrusted !== true");
+  });
+});
+
 describe("动作解析与执行", () => {
   it("click：ref 解析成注册表选择器并注入页面脚本", async () => {
     const registry = new RefRegistry();
@@ -152,9 +186,9 @@ describe("动作解析与执行", () => {
       return { ok: true };
     });
     expect(result.ok).toBe(true);
-    // 点击前会先画一次虚拟光标（视觉层），真正的点击脚本是最后一个
-    expect(scripts.length).toBeGreaterThanOrEqual(2);
-    expect(scripts[scripts.length - 1]).toContain("#login");
+    // 光标/高亮已移到应用级覆盖窗口：performClick 只注入一次真正的点击脚本
+    expect(scripts.length).toBe(1);
+    expect(scripts[0]).toContain("#login");
     expect(() => new Function(scripts[0])).not.toThrow();
     expect(result.label).toContain("登录");
   });

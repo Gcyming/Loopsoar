@@ -67,19 +67,14 @@
     const joined = messages.map((m) => String(m.text ?? "")).join("\n");
     out.historyText = joined.slice(-900);
     out.askSeen = askSeen;
+    // 布局询问已在 Slice E 之后取消：默认 docked（设置·通用里可选），所以不再要求 ask 证据。
     out.evidence = {
-      askDialogShown: Boolean(askSeen && askSeen.question && askSeen.question.includes("布局")),
-      askDialogClosed: !document.body.innerText.includes("Agent 需要你的回答"),
       navigated: joined.includes("127.0.0.1:19443") || joined.includes("Loopsoar E2E 本地页"),
       snapshotWithRefs: /快照 #\d+/.test(joined) && joined.includes("#e"),
+      // 关键证据：真实鼠标事件（sendInputEvent）点中了页面按钮，页面文案随之变化。
       clickedMarker: joined.includes("按钮已点击"),
     };
-    out.ok =
-      out.evidence.askDialogShown &&
-      out.evidence.askDialogClosed &&
-      out.evidence.navigated &&
-      out.evidence.snapshotWithRefs &&
-      out.evidence.clickedMarker;
+    out.ok = out.evidence.navigated && out.evidence.snapshotWithRefs && out.evidence.clickedMarker;
     return out;
   } catch (err) {
     return { ...out, error: err && err.message ? err.message : String(err) };

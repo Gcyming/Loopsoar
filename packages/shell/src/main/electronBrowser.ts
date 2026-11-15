@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { lookup } from "node:dns/promises";
 import { app, BrowserWindow, session, shell, WebContentsView } from "electron";
-import { LAYOUT } from "loopsoar-contracts/layout";
+import { LAYOUT, type BrowserViewBounds } from "loopsoar-contracts/layout";
 import { SESSION_PARTITION } from "../shared/brand.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +35,8 @@ export interface ElectronBrowserHostOptions {
   onTitleChanged?: (url: string, title: string) => void;
   /** 页面图标迟到 → 刷新全局历史里同 URL 条目的图标（不新增访问）。 */
   onFaviconChanged?: (url: string, favicon: string) => void;
+  /** 网页视图几何（主窗口内容坐标）变化：Agent 覆盖指针据此贴住网页区域（null = 无可见网页）。 */
+  onViewLayout?: (rect: BrowserViewBounds | null) => void;
   /** 底部开发者工具面板（由 index 创建；未装配时平台上仍保持旧 detach 行为）。 */
   devToolsPanel?: BrowserDevToolsPanel;
   /**
@@ -371,6 +373,7 @@ export function createElectronBrowserHost(
     onTitleChanged: options.onTitleChanged,
     fetchFavicon: fetchFaviconDataUrl,
     onFaviconChanged: options.onFaviconChanged,
+    onViewLayout: options.onViewLayout,
     openDevToolsPanel: options.devToolsPanel ? (webContents) => options.devToolsPanel!.open(webContents as Electron.WebContents) : undefined,
     closeDevToolsPanel: options.devToolsPanel ? () => options.devToolsPanel!.close() : undefined,
     isDevToolsPanelOpen: options.devToolsPanel ? () => options.devToolsPanel!.isOpen() : undefined,
@@ -382,6 +385,10 @@ export function createElectronBrowserHost(
           contextIsolation: true,
           nodeIntegration: false,
           partition: SESSION_PARTITION,
+          // Agent 输入注入必须落在「看起来在后台」的页面上：窗口被遮挡时 Chromium 会把页面
+          // 标成 hidden 并丢弃输入事件。关掉 backgroundThrottling 同时关闭基于遮挡的页面隐藏，
+          // 这样用户切到别的窗口时 Agent 的点击/按键仍然有效（关闭它只影响本应用内的网页视图）。
+          backgroundThrottling: false,
           ...(browserPreload ? { preload: browserPreload } : {}),
         },
       });

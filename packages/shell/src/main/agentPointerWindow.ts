@@ -1,0 +1,370 @@
+/**
+ * Agent 虚拟指针（应用级覆盖窗口）。
+ *
+ * 为什么不再把光标画进网页：用户 m02991 明确指出——网页就是「电脑屏幕」，
+ * Agent 的鼠标应当像真实鼠标一样浮在**最上层**，由 Loopsoar 自己绘制和移动，
+ * 而不是作为 DOM 节点注入页面（注入会随页面导航消失、被 CSP/重排影响，也不是用户看到的「系统光标」）。
+ *
+ * 实现：一个跟随网页视图几何的透明子窗口（parent = 主窗口），
+ *   · focusable:false + setIgnoreMouseEvents(true)：真实用户点击直接穿透到网页，不抢焦点；
+ *   · 主进程通过 executeJavaScript 推状态（位置/高亮/涟漪/键盘提示），页面只负责画；
+ *   · 坐标使用「页面 CSS 像素」，窗口本身与网页视图同尺寸同位置，因此换算只有缩放系数。
+ *
+ * 与截图的关系：capturePage 只截网页 WebContents，覆盖窗口不会被拍进证据图，无需临时隐藏。
+ */
+
+export interface PointerWindowLike {
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
+  loadURL(url: string): Promise<void> | void;
+  showInactive(): void;
+  hide(): void;
+  setIgnoreMouseEvents(ignore: boolean): void;
+  moveTop?(): void;
+  isDestroyed?(): boolean;
+  destroy(): void;
+  webContents: { executeJavaScript(code: string): Promise<unknown> };
+}
+
+export interface PointerRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PointerHighlight {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface AgentPointerWindowDeps {
+  /** 装配层注入：new BrowserWindow({ ...options, parent: mainWindow })。 */
+  createWindow(options: Record<string, unknown>): PointerWindowLike;
+  /** 空闲后自动隐藏（毫秒）：动作结束光标不该长期停在页面上。 */
+  idleHideMs?: number;
+  setTimeoutFn?: (callback: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (handle: unknown) => void;
+}
+
+export interface AgentPointerController {
+  /** 网页视图的屏幕矩形；null = 当前没有可见网页（覆盖窗口跟着隐藏）。 */
+  setArea(rect: PointerRect | null): void;
+  /** 把光标移到页面坐标（CSS 像素）。 */
+  moveTo(x: number, y: number): void;
+  /** 目标高亮框（页面坐标）；null = 清除。 */
+  highlight(rect: PointerHighlight | null): void;
+  /** 点击涟漪（缺省用当前光标位置）。 */
+  click(x?: number, y?: number): void;
+  /** 光标旁的键盘/输入提示（胶囊，约 1 秒后淡出）。 */
+  chip(text: string): void;
+  /** 立即隐藏（stop/会话切换）。 */
+  hide(): void;
+  destroy(): void;
+}
+
+/** 光标热点在 SVG 左上角：把图形往左上偏 2px，视觉上箭头尖就是坐标点。 */
+const CURSOR_OFFSET = 2;
+/** 光标尺寸（CSS 像素）。 */
+const CURSOR_SIZE = 30;
+
+/** 用户提供的素材（m02602）：导航=箭头；忙=竖形等待符号。内联 SVG，避免 CSP/破图。 */
+const CURSOR_NAV_SVG =
+  '<svg viewBox="0 0 1024 1024" width="' + CURSOR_SIZE + '" height="' + CURSOR_SIZE + '" aria-hidden="true"><path d="M146.928 122.768l327.52 764 140.848-294.816 295.504-141.824L146.928 122.768z m408.32 409.264L478.4 692.912 299.28 275.088l418.048 179.168-162.08 77.76z" fill="#f5efe6" stroke="#191b21" stroke-width="36" stroke-linejoin="round" paint-order="stroke"/></svg>';
+const CURSOR_BUSY_SVG =
+  '<svg viewBox="0 0 1024 1024" width="' + CURSOR_SIZE + '" height="' + CURSOR_SIZE + '" aria-hidden="true"><path d="M610.6112 174.08c47.4112 0 71.0656 0 89.088 17.7152a72.704 72.704 0 0 1 6.8608 8.0896c14.6432 20.48 11.3664 40.3456 5.12 79.872-10.24 64.2048-36.5568 144.0768-101.5808 199.168A43.8272 43.8272 0 0 0 593.92 512c0 12.8 6.3488 24.7808 16.1792 33.0752 65.024 55.0912 91.3408 134.9632 101.5808 199.0656 6.2464 39.6288 9.5232 59.4944-5.12 79.9744a72.3968 72.3968 0 0 1-6.8608 8.192c-18.0224 17.6128-41.6768 17.6128-89.088 17.6128H372.3264c-47.3088 0-71.0656 0-88.9856-17.7152a72.3968 72.3968 0 0 1-6.8608-8.0896c-14.6432-20.48-11.4688-40.3456-5.12-79.872 10.24-64.2048 36.5568-144.0768 101.5808-199.168A44.032 44.032 0 0 0 389.12 512a43.8272 43.8272 0 0 0-16.1792-33.0752C307.9168 423.936 281.6 344.064 271.36 279.8592c-6.3488-39.6288-9.5232-59.4944 5.12-79.9744a72.704 72.704 0 0 1 6.8608-8.192c17.92-17.6128 41.6768-17.6128 89.088-17.6128h238.1824z m-198.144 81.408c-27.9552 0.2048-41.984 0.3072-50.9952 10.6496a35.1232 35.1232 0 0 0-3.3792 4.608c-7.0656 11.8788-3.072 23.7568 4.5056 47.3088 20.1728 62.6688 62.2592 132.5056 129.024 132.5056 66.56 0 108.544-69.7344 128.8192-132.5056 7.5776-23.552 11.3664-35.4304 4.4032-47.3088a35.0208 35.0208 0 0 0-3.3792-4.608c-9.1136-10.3424-23.04-10.4448-50.9952-10.6496-50.688-0.4096-107.3152-0.4096-158.0032 0z" fill="#f5efe6" stroke="#191b21" stroke-width="36" stroke-linejoin="round" paint-order="stroke"/></svg>';
+
+/** 覆盖窗口的文档：透明背景 + 光标 / 高亮框 / 涟漪 / 键盘胶囊。 */
+export function buildPointerHtml(): string {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
+      user-select:none;-webkit-user-select:none;cursor:none;}
+    /* 光标：位置用 transform（GPU 合成，不触发布局）；位移做 150ms 补间，像人手移动。 */
+    #cursor{position:fixed;left:0;top:0;width:${CURSOR_SIZE}px;height:${CURSOR_SIZE}px;pointer-events:none;
+      opacity:0;will-change:transform;
+      transition:transform 150ms cubic-bezier(.2,0,.2,1),opacity 120ms ease;
+      filter:drop-shadow(0 0 1.5px rgba(255,255,255,.95)) drop-shadow(0 3px 6px rgba(0,0,0,.45));}
+    /* 目标高亮：与页面内旧样式同源（品牌色描边 + 10% 填充），只画在覆盖层。 */
+    #highlight{position:fixed;left:0;top:0;pointer-events:none;opacity:0;box-sizing:border-box;
+      border:2px solid rgba(217,138,79,.85);border-radius:8px;background:rgba(217,138,79,.10);
+      transition:opacity 140ms ease;}
+    #ripple{position:fixed;left:0;top:0;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
+      border:2px solid rgba(217,138,79,.9);opacity:0;pointer-events:none;}
+    /* 键盘提示与全局提示同一套胶囊：圆角 999 + 中灰微透 + 轻投影。 */
+    #chip{position:fixed;left:0;top:0;max-width:240px;padding:7px 14px;border-radius:999px;
+      background:rgba(64,68,76,.86);color:#f7f2e8;font:500 12px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;opacity:0;
+      box-shadow:0 6px 18px rgba(0,0,0,.35);text-shadow:0 1px 2px rgba(0,0,0,.55);
+      transition:opacity 120ms ease;}
+  </style></head><body>
+    <div id="highlight"></div>
+    <div id="ripple"></div>
+    <div id="cursor">${CURSOR_NAV_SVG}<span id="busy" style="display:none">${CURSOR_BUSY_SVG}</span></div>
+    <div id="chip"></div>
+    <script>
+      (() => {
+        const cursor = document.getElementById('cursor');
+        const highlight = document.getElementById('highlight');
+        const ripple = document.getElementById('ripple');
+        const chip = document.getElementById('chip');
+        let rippleSeq = 0;
+        let chipSeq = 0;
+        let chipTimer = 0;
+        const place = (node, x, y) => { node.style.left = x + 'px'; node.style.top = y + 'px'; };
+        window.__lsPointer = (state) => {
+          const s = state || {};
+          // 光标：热点在左上角，所以整体左移/上移一个偏移量。
+          if (typeof s.x === 'number' && typeof s.y === 'number') {
+            cursor.style.transform = 'translate3d(' + (s.x - ${CURSOR_OFFSET}) + 'px,' + (s.y - ${CURSOR_OFFSET}) + 'px,0)';
+          }
+          cursor.style.opacity = s.visible === false ? '0' : '1';
+          const nav = cursor.querySelector('svg');
+          const busy = document.getElementById('busy');
+          if (nav) nav.style.display = s.busy ? 'none' : 'block';
+          if (busy) busy.style.display = s.busy ? 'block' : 'none';
+          if (s.highlight) {
+            place(highlight, s.highlight.x, s.highlight.y);
+            highlight.style.width = Math.max(0, s.highlight.width) + 'px';
+            highlight.style.height = Math.max(0, s.highlight.height) + 'px';
+            highlight.style.opacity = '1';
+          } else {
+            highlight.style.opacity = '0';
+          }
+          if (typeof s.ripple === 'number' && s.ripple !== rippleSeq) {
+            rippleSeq = s.ripple;
+            place(ripple, s.x || 0, s.y || 0);
+            try {
+              ripple.animate(
+                [{ width: '12px', height: '12px', margin: '-6px 0 0 -6px', opacity: 1 },
+                 { width: '54px', height: '54px', margin: '-27px 0 0 -27px', opacity: 0 }],
+                { duration: 460, easing: 'cubic-bezier(.2,0,.2,1)' },
+              );
+            } catch (err) {}
+          }
+          if (s.chip && s.chip.seq !== chipSeq) {
+            chipSeq = s.chip.seq;
+            chip.textContent = s.chip.text;
+            place(chip, (s.x || 0) + 24, (s.y || 0) + 18);
+            chip.style.opacity = '1';
+            if (chipTimer) clearTimeout(chipTimer);
+            chipTimer = setTimeout(() => { chip.style.opacity = '0'; }, 1000);
+          }
+        };
+      })();
+    </script>
+  </body></html>`;
+  return "data:text/html;charset=utf-8," + encodeURIComponent(html);
+}
+
+/**
+ * 创建覆盖窗口控制器。
+ *
+ * 只在需要时创建窗口（用户不开网页、Agent 不操作就完全没开销）；
+ * 状态用序号去重：位置没变不重复 executeJavaScript，涟漪/提示用 seq 触发一次性动画。
+ */
+export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPointerController {
+  let win: PointerWindowLike | null = null;
+  let ready = false;
+  let pending: Record<string, unknown> | null = null;
+  let area: PointerRect | null = null;
+  let x = 0;
+  let y = 0;
+  let highlight: PointerHighlight | null = null;
+  let ripple = 0;
+  let chip: { text: string; seq: number } | null = null;
+  let hideTimer: unknown = null;
+  const idleHideMs = deps.idleHideMs ?? 1600;
+  const schedule = deps.setTimeoutFn ?? ((cb: () => void, ms: number) => setTimeout(cb, ms));
+  const cancel = deps.clearTimeoutFn ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+
+  const alive = (): PointerWindowLike | null => {
+    if (!win || (win.isDestroyed?.() ?? false)) return null;
+    return win;
+  };
+
+  const flush = (): void => {
+    const target = alive();
+    if (!target) return;
+    const state = {
+      x,
+      y,
+      visible: area !== null,
+      highlight,
+      ripple,
+      ...(chip ? { chip } : {}),
+    };
+    if (!ready) {
+      pending = state;
+      return;
+    }
+    void target.webContents.executeJavaScript(`window.__lsPointer && window.__lsPointer(${JSON.stringify(state)})`).catch(() => undefined);
+  };
+
+  const ensure = (): PointerWindowLike | null => {
+    const existing = alive();
+    if (existing) return existing;
+    win = deps.createWindow({
+      width: Math.max(1, area?.width ?? 320),
+      height: Math.max(1, area?.height ?? 240),
+      show: false,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      alwaysOnTop: false,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    ready = false;
+    const load = win.loadURL(buildPointerHtml());
+    Promise.resolve(load)
+      .catch(() => undefined)
+      .then(() => {
+        const target = alive();
+        if (!target) return;
+        ready = true;
+        try {
+          target.setIgnoreMouseEvents(true);
+        } catch {
+          // 平台不支持时忽略：覆盖窗口仍可工作，只是用户点击会被挡（Windows/macOS 均支持）。
+        }
+        if (area) target.showInactive();
+        if (pending) {
+          const state = pending;
+          pending = null;
+          void target.webContents.executeJavaScript(`window.__lsPointer && window.__lsPointer(${JSON.stringify(state)})`).catch(() => undefined);
+        }
+      });
+    return win;
+  };
+
+  const show = (): void => {
+    if (!area) return;
+    const target = ensure();
+    if (!target) return;
+    if (hideTimer) {
+      cancel(hideTimer);
+      hideTimer = null;
+    }
+    target.setBounds(area);
+    target.setIgnoreMouseEvents(true);
+    target.showInactive();
+    target.moveTop?.();
+  };
+
+  const armHide = (): void => {
+    if (!area) return;
+    if (hideTimer) cancel(hideTimer);
+    hideTimer = schedule(() => {
+      hideTimer = null;
+      alive()?.hide();
+    }, idleHideMs);
+  };
+
+  return {
+    setArea(rect: PointerRect | null): void {
+      const next = rect
+        ? {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.max(1, Math.round(rect.width)),
+            height: Math.max(1, Math.round(rect.height)),
+          }
+        : null;
+      const same =
+        (!next && !area) ||
+        (next && area && next.x === area.x && next.y === area.y && next.width === area.width && next.height === area.height);
+      area = next;
+      if (!area) {
+        if (hideTimer) {
+          cancel(hideTimer);
+          hideTimer = null;
+        }
+        // 换会话/关网页：隐藏并把视觉状态清空，下一段会话出现时不会带上一段的残影。
+        highlight = null;
+        chip = null;
+        alive()?.hide();
+        return;
+      }
+      // setArea 只对齐几何，不创建窗口：真正的动作（moveTo/click/chip）才需要「鼠标」。
+      if (!same) {
+        const target = alive();
+        if (target) {
+          target.setBounds(area);
+          if (ready) target.showInactive();
+        }
+      }
+    },
+
+    moveTo(nextX: number, nextY: number): void {
+      x = Math.round(nextX);
+      y = Math.round(nextY);
+      show();
+      flush();
+      armHide();
+    },
+
+    highlight(next: PointerHighlight | null): void {
+      highlight = next
+        ? {
+            x: Math.round(next.x),
+            y: Math.round(next.y),
+            width: Math.max(0, Math.round(next.width)),
+            height: Math.max(0, Math.round(next.height)),
+          }
+        : null;
+      // 只清高亮时不再强制显示窗口：否则空闲隐藏后 700ms 的「淡出」会把光标又亮出来。
+      if (highlight) show();
+      flush();
+      armHide();
+    },
+
+    click(atX?: number, atY?: number): void {
+      if (typeof atX === "number" && typeof atY === "number") {
+        x = Math.round(atX);
+        y = Math.round(atY);
+      }
+      ripple += 1;
+      show();
+      flush();
+      armHide();
+    },
+
+    chip(text: string): void {
+      chip = { text, seq: (chip?.seq ?? 0) + 1 };
+      show();
+      flush();
+      armHide();
+    },
+
+    hide(): void {
+      if (hideTimer) {
+        cancel(hideTimer);
+        hideTimer = null;
+      }
+      highlight = null;
+      chip = null;
+      alive()?.hide();
+    },
+
+    destroy(): void {
+      if (hideTimer) {
+        cancel(hideTimer);
+        hideTimer = null;
+      }
+      try {
+        win?.destroy();
+      } catch {
+        // 已销毁：忽略
+      }
+      win = null;
+      ready = false;
+    },
+  };
+}

@@ -44,6 +44,7 @@ import { registerAgentsDomain } from "./domains/agents.js";
 import { flushActivePartials, registerChatDomain } from "./domains/chat.js";
 import { registerToastDomain } from "./domains/toast.js";
 import { createToastWindow } from "./toastWindow.js";
+import { createAgentPointerWindow, type AgentPointerController } from "./agentPointerWindow.js";
 import { registerCompactDomain } from "./domains/compact.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
@@ -158,6 +159,30 @@ let devToolsPanel: BrowserDevToolsPanel | null = null;
 let deferredBootTasks: (() => void) | null = null;
 // Agent 会话栏独立窗口管理器（main() 内创建；createMainWindow 的 closed 回调需在模块作用域访问）
 let agentWindow: AgentWindowManager | null = null;
+/** Agent 虚拟指针覆盖窗口（应用级；主窗口 closed 时销毁）。 */
+let agentPointer: AgentPointerController | null = null;
+/** 网页视图矩形（主窗口内容坐标）；null = 当前没有可见网页。几何由 BrowserHost.applyLayout 单源推送。 */
+let lastViewRect: { x: number; y: number; width: number; height: number } | null = null;
+
+/**
+ * 把覆盖指针贴到网页视图上：屏幕坐标 = 主窗口内容区原点 + 视图矩形。
+ * 单源：矩形与原生 WebContentsView 是同一份 bounds，这里只做平移，绝不另算一套几何。
+ */
+function syncPointerArea(): void {
+  if (!agentPointer) return;
+  if (!lastViewRect || !mainWindow || mainWindow.isDestroyed()) {
+    agentPointer.setArea(null);
+    return;
+  }
+  const content = mainWindow.getContentBounds();
+  agentPointer.setArea({
+    x: content.x + lastViewRect.x,
+    y: content.y + lastViewRect.y,
+    width: lastViewRect.width,
+    height: lastViewRect.height,
+  });
+}
+const schedulePointerAreaSync = createDebouncedRunner(syncPointerArea, 16);
 
 /**
  * 退出清理：MCP/扩展子进程、终端会话、标签落盘、审计 flush 必须收尾。
@@ -515,6 +540,29 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             }
           }
 
+          // E2E：只截 Agent 指针覆盖窗口自身（透明背景，不包含用户桌面任何内容）。
+          // 为什么不用桌面截图：抓屏会把用户自己的窗口拍进证据图，既不安全也不稳定。
+          if (process.env.LOOPSOAR_E2E_POINTER_SHOT) {
+            const pointerWin = BrowserWindow.getAllWindows().find((w) => {
+              try {
+                return w.webContents.getURL().startsWith("data:text/html");
+              } catch {
+                return false;
+              }
+            });
+            if (pointerWin) {
+              try {
+                const img = await pointerWin.capturePage();
+                if (!img.isEmpty()) {
+                  fs.writeFileSync(process.env.LOOPSOAR_E2E_POINTER_SHOT, img.toPNG());
+                  console.log("POINTER_SHOT_SAVED", process.env.LOOPSOAR_E2E_POINTER_SHOT);
+                }
+              } catch (err) {
+                console.warn("POINTER_SHOT_SKIPPED", err instanceof Error ? err.message : String(err));
+              }
+            }
+          }
+
           // E2E：整屏截图（用于验证独立浮层窗口真实浮在网页之上）
           if (process.env.LOOPSOAR_E2E_DESKTOP_SHOT) {
             const { desktopCapturer } = await import("electron");
@@ -543,6 +591,11 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           // 用 desktopCapturer 抓屏后按窗口矩形裁切，验证网页圆角面板/标签高亮等合成效果（不含桌面其他内容）。
           if (process.env.LOOPSOAR_E2E_WINDOW_SHOT === "1") {
             try {
+              // 先置顶：抓屏只能拍到屏幕上真正可见的像素，窗口被别的应用盖住时裁切出来会是别人的内容。
+              win.show();
+              win.moveTop();
+              win.focus();
+              await new Promise((r) => setTimeout(r, 350));
               const { desktopCapturer } = await import("electron");
               const winBounds = win.getBounds();
               const display = screen.getDisplayMatching(winBounds);
@@ -1269,6 +1322,8 @@ function createMainWindow(): void {
   const syncWindowGeometry = (): void => {
     scheduleBoundsSync.schedule();
     scheduleAgentWindowFollow.schedule();
+    // 窗口移动时视图矩形（内容坐标）不变，但屏幕原点变了：覆盖层必须跟着挪。
+    schedulePointerAreaSync.schedule();
   };
   mainWindow.on("move", syncWindowGeometry);
   mainWindow.on("resize", syncWindowGeometry);
@@ -1280,6 +1335,7 @@ function createMainWindow(): void {
   mainWindow.on("closed", () => {
     scheduleBoundsSync.cancel();
     scheduleAgentWindowFollow.cancel();
+    schedulePointerAreaSync.cancel();
     // 独立 Agent 窗口若常驻，主窗口关掉后 window-all-closed 不会触发，进程会残留成“只有小窗”
     // 主窗口销毁场景不需要滑出动画（目标屏幕/工作区可能已不可用），立即关闭。
     agentWindow?.close({ animate: false });
@@ -1361,6 +1417,10 @@ try {
   const preDirs = ensureWritableDataDirs();
   const language = loadPreferences(preDirs.configDir).language;
   app.commandLine.appendSwitch("lang", language);
+  // Windows 原生遮挡检测会把「被其它窗口盖住」的网页标记为 hidden，Chromium 随即丢弃注入的
+  // 输入事件（Agent 点击/按键会静默失效）。浏览器自动化要求网页在后台仍可交互，关掉该特性。
+  // 只影响本应用的页面可见性判定，不改变用户看到的窗口行为。
+  app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 } catch (err) {
   console.warn("[Loopsoar] 设置 Chromium 语言失败", err instanceof Error ? err.message : String(err));
 }
@@ -1838,6 +1898,11 @@ app.whenReady().then(async () => {
       onFaviconChanged: (url, favicon) => {
         browserHistory.updateFavicon(url, favicon);
       },
+      // 网页视图几何（单源）：覆盖指针贴住网页区域；没有可见网页时传 null → 覆盖层隐藏。
+      onViewLayout: (rect) => {
+        lastViewRect = rect;
+        syncPointerArea();
+      },
       // 广告/追踪拦截开关跟随偏好（默认开；设置里改动即时生效）
       isAdBlockEnabled: () => loadPreferences(dirs.configDir).adBlockEnabled ?? true,
       // 点原生网页 = 点了「列表外」：通知渲染层收起按钮展开的浮层（DOM 收不到该区域 pointerdown）
@@ -1893,6 +1958,13 @@ app.whenReady().then(async () => {
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost, resolveSessionRoot, {
     beforeOpenPage: beforeOpenBrowserPage,
+    // 视觉层：Agent 的「鼠标」画在应用级覆盖窗口里（网页 DOM 零注入）。
+    pointer: {
+      moveTo: (x, y) => agentPointer?.moveTo(x, y),
+      highlight: (rect) => agentPointer?.highlight(rect),
+      click: (x, y) => agentPointer?.click(x, y),
+      chip: (text) => agentPointer?.chip(text),
+    },
   });
   // Agent 浏览器活动广播（会话隔离）：只在动作执行期间推 start/end，
   // 渲染层据此显示呼吸灯、把「该会话的活动标签」切到可见；绝不切走用户所在会话。
@@ -2115,6 +2187,27 @@ app.whenReady().then(async () => {
   });
   mainWindow?.once("closed", () => toastWindow.destroy());
   registerToastDomain({ ...deps, showToast: (text, sticky) => toastWindow.show(text, sticky) });
+
+  /**
+   * Agent 虚拟指针：透明、不可聚焦、点击穿透的覆盖窗口，严丝合缝盖在网页视图上。
+   * 用户要求（m02991）：把网页当屏幕，光标是最上层的「Agent 的鼠标」，由应用绘制。
+   */
+  // 空闲隐藏时长可调：E2E 取证时保持光标可见（默认 1.6s 足够看完一次动作）。
+  const pointerIdleMs = Number(process.env.LOOPSOAR_POINTER_IDLE_MS ?? "");
+  agentPointer = createAgentPointerWindow({
+    ...(Number.isFinite(pointerIdleMs) && pointerIdleMs > 0 ? { idleHideMs: pointerIdleMs } : {}),
+    createWindow: (options) =>
+      new BrowserWindow({
+        ...(options as ConstructorParameters<typeof BrowserWindow>[0]),
+        parent: mainWindow ?? undefined,
+      }),
+  });
+  mainWindow?.once("closed", () => {
+    agentPointer?.destroy();
+    agentPointer = null;
+  });
+  // 初始化对齐：页面在启动恢复时可能已经可见（此时还没有任何 Agent 动作，窗口保持懒创建）。
+  syncPointerArea();
 
   registerBookmarksDomain(deps, bookmarks);
   registerPageSaveDomain({

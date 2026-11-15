@@ -80,6 +80,8 @@ function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = 
       scripts.push(script);
       executed.push({ script, tabId });
       if (scriptHook) scriptHook(script);
+      // 「只定位不点击」脚本：真实实现回目标中心坐标（getBoundingClientRect 的视口坐标）。
+      if (script.includes("loopsoar:target-point")) return { ok: true, x: 120, y: 90, width: 40, height: 20 };
       return scriptResult;
     },
   };
@@ -273,7 +275,7 @@ describe("浏览器工具集", () => {
 
     const click = await run(registry, "browser_click", { target: "text=登录" }, "nav-1");
     expect(click.ok).toBe(true);
-    // 点击 = 光标脚本 + 点击脚本（两次 executeJavaScript）
+    // 点击 = 定位脚本 + 回退点击脚本（假视图不支持 sendInputEvent，走 performClick 兜底）
     expect(calls.filter((c) => c === "script").length).toBe(2);
   });
 

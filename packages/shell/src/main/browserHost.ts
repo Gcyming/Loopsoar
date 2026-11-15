@@ -21,7 +21,7 @@ import {
   type WebContentsViewLike,
 } from "../browserAdapter/backends/webContentsView.js";
 import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../browserAdapter/types.js";
-import { buildUserLockScript } from "../browserAdapter/refs.js";
+import { buildAgentDrivingScript, buildUserLockScript } from "../browserAdapter/refs.js";
 import { sanitizeBrowserState, type PersistedBrowserState, type PersistedBrowserTab } from "./browserSessionState.js";
 import { easeCubicBezier } from "./agentWindow.js";
 
@@ -35,6 +35,29 @@ export const SIDEBAR_ANIMATION_TICK_MS = 8;
  * 有上限才能保证挂死的页面不会把每次 emitTabs 都变成一次无意义的 executeJavaScript。
  */
 const USER_LOCK_MAX_ATTEMPTS = 3;
+
+/** sendInputEvent/getZoomFactor 的最小面：真实 WebContents 满足，测试假件可选实现。 */
+interface AgentInputWebContents {
+  sendInputEvent?: (event: Record<string, unknown>) => void;
+  getZoomFactor?: () => number;
+}
+
+/** 按键白名单里的命名键 → Electron keyCode（单字符直接用字符本身）。 */
+const ELECTRON_KEY_CODES: Record<string, string> = {
+  Enter: "Enter",
+  Tab: "Tab",
+  Escape: "Escape",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+};
 
 export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
 
@@ -70,6 +93,11 @@ export interface BrowserHostDeps {
   fetchFavicon?: (url: string) => Promise<string | null>;
   /** 页面图标变化：壳层用它刷新全局历史里同 URL 条目的图标。 */
   onFaviconChanged?: (url: string, favicon: string) => void;
+  /**
+   * 网页视图几何（主窗口内容坐标系）：Agent 覆盖窗口据此严丝合缝地贴住网页区域。
+   * 传 null = 当前没有可见网页（无标签 / 加载中 / 浮层打开 / 非活动会话），覆盖层必须隐藏。
+   */
+  onViewLayout?: (rect: BrowserViewBounds | null) => void;
   /** 底部开发者工具面板：打开指定 WebContents 的调试前端（返回是否成功）。 */
   openDevToolsPanel?: (webContents: unknown) => boolean;
   /** 关闭底部开发者工具面板。 */
@@ -512,6 +540,15 @@ export class BrowserHost {
         }
       }
     }
+    // 覆盖窗口只跟随「当前会话的当前标签」：后台会话的页面不可见，指针也不该出现在屏幕上
+    // （会话隔离要求：只有进入对应会话才看到对应内容）。几何与原生视图同源，避免两套坐标。
+    const activeGroup = this.groups.get(this.activeSession);
+    const activeEntry = activeGroup?.activeId ? activeGroup.tabs.get(activeGroup.activeId) : null;
+    this.deps.onViewLayout?.(
+      activeEntry?.lastVisible
+        ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+        : null,
+    );
   }
 
   /**
@@ -864,6 +901,97 @@ export class BrowserHost {
     const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
     if (!entry) throw new Error("当前会话没有打开的网页标签");
     return entry.adapter.executeJs(script);
+  }
+
+  /**
+   * 这个会话的网页此刻是否真的显示在界面上（当前会话 + 活动标签 + 可见）。
+   * Agent 覆盖指针只在「用户正看着这个网页」时出现——后台会话的动作不能把光标画到前台。
+   */
+  isSessionVisible(sessionId?: string): boolean {
+    const sid = sessionId ?? this.activeSession;
+    if (sid !== this.activeSession) return false;
+    const group = this.groups.get(sid);
+    const entry = group?.activeId ? group.tabs.get(group.activeId) : null;
+    return Boolean(entry?.lastVisible);
+  }
+
+  /** 页面缩放系数：覆盖层与真实输入都按「CSS 像素 × 缩放」换算（假视图没有实现时按 1）。 */
+  getPageZoom(sessionId?: string, tabId?: string): number {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    const wc = entry?.view.webContents as AgentInputWebContents | undefined;
+    const factor = typeof wc?.getZoomFactor === "function" ? wc.getZoomFactor() : 1;
+    return Number.isFinite(factor) && factor > 0 ? factor : 1;
+  }
+
+  /**
+   * Agent 点击：按页面 CSS 坐标派发**真实鼠标事件**（mouseMove → mouseDown → mouseUp）。
+   *
+   * 为什么不用 el.click()：用户 m02991 要求 Agent 像人一样用鼠标——只有真实输入事件才会经过
+   * Chromium 的命中测试、焦点、:active/hover 与页面自己的 pointer 事件链路；el.click() 只触发 click。
+   * 返回 false = 视图不支持 sendInputEvent（测试假件/旧后端），调用方回退到脚本点击。
+   */
+  async agentClick(
+    sessionId: string | undefined,
+    tabId: string | undefined,
+    point: { x: number; y: number },
+  ): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return false;
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || typeof wc.sendInputEvent !== "function") return false;
+    const zoom = this.getPageZoom(sessionId, tabId);
+    const x = Math.round(point.x * zoom);
+    const y = Math.round(point.y * zoom);
+    await this.setAgentDriving(entry, true);
+    try {
+      wc.sendInputEvent({ type: "mouseMove", x, y });
+      wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+      wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+    } finally {
+      this.releaseAgentDriving(entry);
+    }
+    if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
+      console.log("[agent-click]", JSON.stringify({ zoom, x, y }));
+    }
+    return true;
+  }
+
+  /**
+   * Agent 按键：sendInputEvent 派发真实键盘事件（Enter/Tab/Esc/方向键/单字符）。
+   * 与点击同理——页面拿到的是可信事件，表单默认行为（提交/跳转/关闭）才会真的发生。
+   */
+  async agentKey(sessionId: string | undefined, tabId: string | undefined, key: string): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return false;
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || typeof wc.sendInputEvent !== "function") return false;
+    const keyCode = ELECTRON_KEY_CODES[key] ?? (key.length === 1 ? key : null);
+    if (!keyCode) return false;
+    await this.setAgentDriving(entry, true);
+    try {
+      wc.sendInputEvent({ type: "keyDown", keyCode });
+      if (key.length === 1) wc.sendInputEvent({ type: "char", keyCode });
+      wc.sendInputEvent({ type: "keyUp", keyCode });
+    } finally {
+      this.releaseAgentDriving(entry);
+    }
+    return true;
+  }
+
+  /** 置位/清除「Agent 正在派发真实输入」标志（页面接管锁据此放行）。失败忽略：页面未就绪时锁也还没注入。 */
+  private async setAgentDriving(entry: TabEntry, on: boolean): Promise<void> {
+    try {
+      await entry.adapter.executeJs(buildAgentDrivingScript(on));
+    } catch {
+      // 页面正在导航/未就绪：锁同样不存在，无需放行
+    }
+  }
+
+  /** 事件是异步派发的：留一个短窗口再恢复锁，避免「事件还没到、遮罩已经盖回来」。 */
+  private releaseAgentDriving(entry: TabEntry): void {
+    setTimeout(() => {
+      void this.setAgentDriving(entry, false);
+    }, 120);
   }
 
   /**

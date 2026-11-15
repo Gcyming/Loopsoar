@@ -28,6 +28,7 @@ import {
   performPressKey,
   performScrollIntoView,
   performSelect,
+  performTargetPoint,
   performType,
   type RefRegistry,
 } from "../browserAdapter/refs.js";
@@ -258,6 +259,17 @@ export interface BrowserToolHooks {
    * 只有 browser_navigate 挂钩子：本片只拦「打开网页」，browser_tabs new 保持原样（面收敛）。
    */
   beforeOpenPage?: (args: { sessionId?: string; url: string }) => Promise<{ proceed: boolean; note?: string }>;
+  /**
+   * Agent 指针覆盖层（主进程里的透明子窗口，压在网页视图之上）。
+   * 动作前把「鼠标」移到目标并画高亮/涟漪/键盘提示；坐标是覆盖层坐标（页面 CSS 像素 × 缩放）。
+   * 调用方只在本会话网页可见时调用——后台会话的动作不能把光标画到前台（会话隔离）。
+   */
+  pointer?: {
+    moveTo(x: number, y: number): void;
+    highlight(rect: { x: number; y: number; width: number; height: number } | null): void;
+    click(x: number, y: number): void;
+    chip(text: string): void;
+  };
 }
 
 /**
@@ -276,6 +288,38 @@ export function registerBrowserTools(
     const host = browserHost();
     if (!host) throw new Error("浏览器未就绪");
     return host;
+  };
+
+  /**
+   * 把覆盖层光标移到目标（带缩放换算），并画高亮框。
+   * 返回 null = 不画（没有覆盖层 / 该会话的网页不在前台）。
+   */
+  const pointPointer = (
+    host: BrowserHost,
+    sessionId: string | undefined,
+    tabId: string | null,
+    point: { x: number; y: number; width?: number; height?: number },
+  ): { pointer: NonNullable<BrowserToolHooks["pointer"]>; x: number; y: number } | null => {
+    const pointer = hooks?.pointer;
+    if (!pointer) return null;
+    if (typeof host.isSessionVisible === "function" && !host.isSessionVisible(sessionId)) return null;
+    const zoom = typeof host.getPageZoom === "function" ? host.getPageZoom(sessionId, tabId ?? undefined) : 1;
+    const x = point.x * zoom;
+    const y = point.y * zoom;
+    pointer.moveTo(x, y);
+    if (typeof point.width === "number" && typeof point.height === "number") {
+      pointer.highlight({
+        x: x - (point.width * zoom) / 2,
+        y: y - (point.height * zoom) / 2,
+        width: point.width * zoom,
+        height: point.height * zoom,
+      });
+    }
+    return { pointer, x, y };
+  };
+  /** 动作完成后让高亮淡出（覆盖层自身在空闲 1.6s 后隐藏整窗）。 */
+  const fadePointerHighlight = (): void => {
+    setTimeout(() => hooks?.pointer?.highlight(null), 700);
   };
 
   registry.register({
@@ -372,28 +416,53 @@ export function registerBrowserTools(
         const binding = bindRefToTab(ctx.sessionId, tabId, target);
         if (!binding.ok) return { ok: false, content: binding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
         const before = readTab(host, ctx.sessionId, tabId);
-        // ref → 注册表句柄；CSS / text= 直接透传。解析、命中验证与错误文案都在 refs.ts。
-        let result = await performClick(registryFor(ctx.sessionId, tabId), target, (script) =>
-          host.executeScript(script, ctx.sessionId, tabId ?? undefined),
-        );
+        const registry = registryFor(ctx.sessionId, tabId);
+        const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
+        // 第一步只定位（不点击）：拿到目标中心坐标，覆盖层才能把「Agent 的鼠标」移过去。
+        // 解析、命中验证与错误文案仍由 refs.ts 单源提供（和旧点击路径同一套）。
+        let point = await performTargetPoint(registry, target, run);
         // 被登录/引导弹窗挡住时先自己关掉再重试一次：模型常常只会「换个页面继续」，不会处理弹窗。
         let autoDismissed: string | null = null;
-        if (!result.ok && result.code === "BLOCKED_BY_OVERLAY") {
+        if (!point.ok && point.code === "BLOCKED_BY_OVERLAY") {
           const dismissed = (await host
             .executeScript(buildDismissOverlayScript(), ctx.sessionId, tabId ?? undefined)
             .catch(() => null)) as { ok?: boolean; action?: string } | null;
           if (dismissed?.ok) {
             autoDismissed = dismissed.action ?? "dismiss";
             await new Promise((resolve) => setTimeout(resolve, 260));
-            result = await performClick(registryFor(ctx.sessionId, tabId), target, (script) =>
-              host.executeScript(script, ctx.sessionId, tabId ?? undefined),
-            );
+            point = await performTargetPoint(registry, target, run);
           }
         }
-        if (!result.ok) return { ok: false, content: result.message ?? `[错误] 点击失败：${target}` };
+        if (!point.ok || typeof point.x !== "number" || typeof point.y !== "number") {
+          return { ok: false, content: point.message ?? `[错误] 点击失败：${target}` };
+        }
+        // 第二步：光标移动 + 高亮 + 涟漪（视觉在覆盖层，网页本身不被注入任何节点）。
+        const shown = pointPointer(host, ctx.sessionId, tabId, {
+          x: point.x,
+          y: point.y,
+          width: point.width,
+          height: point.height,
+        });
+        if (shown) {
+          // 留出移动补间时间：用户能看清「鼠标移过去再点」，而不是瞬移。
+          await new Promise((resolve) => setTimeout(resolve, 190));
+          shown.pointer.click(shown.x, shown.y);
+        }
+        // 第三步：真实鼠标事件（sendInputEvent）。假视图/旧后端不支持时回退到脚本点击。
+        const real = typeof host.agentClick === "function"
+          ? await host.agentClick(ctx.sessionId, tabId ?? undefined, { x: point.x, y: point.y })
+          : false;
+        if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
+          console.log("[browser-click]", JSON.stringify({ ok: point.ok, code: point.code, x: point.x, y: point.y, real }));
+        }
+        if (!real) {
+          const fallback = await performClick(registry, target, run);
+          if (!fallback.ok) return { ok: false, content: fallback.message ?? `[错误] 点击失败：${target}` };
+        }
+        fadePointerHighlight();
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
         const note = autoDismissed ? `（已自动关闭遮挡弹窗：${autoDismissed}）` : "";
-        return { ok: true, content: statusLine(`已点击 ${result.label ?? target}`, settled) + note };
+        return { ok: true, content: statusLine(`已点击 ${point.label ?? target}`, settled) + note };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
@@ -437,10 +506,20 @@ export function registerBrowserTools(
         const binding = bindRefToTab(ctx.sessionId, tabId, params.target);
         if (!binding.ok) return { ok: false, content: binding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
         const before = readTab(host, ctx.sessionId, tabId);
+        const registry = registryFor(ctx.sessionId, tabId);
+        const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
+        // 视觉：光标移到输入框 + 键盘胶囊（输入本身仍走原生 setter，保证 React 受控组件不丢字）。
+        const point = await performTargetPoint(registry, params.target, run);
+        const shown = point.ok && typeof point.x === "number" && typeof point.y === "number"
+          ? pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height })
+          : null;
+        if (shown) {
+          shown.pointer.chip("⌨ 输入中");
+          await new Promise((resolve) => setTimeout(resolve, 170));
+        }
         // 原生 setter + InputEvent + 回读比对（React 受控组件不再「返回成功但页面没变」）
-        const result = await performType(registryFor(ctx.sessionId, tabId), params.target, params.text ?? "", (script) =>
-          host.executeScript(script, ctx.sessionId, tabId ?? undefined),
-        );
+        const result = await performType(registry, params.target, params.text ?? "", run);
+        fadePointerHighlight();
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 输入失败：${params.target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
         return { ok: true, content: statusLine(`已输入 ${result.label ?? params.target}`, settled) };
@@ -627,10 +706,25 @@ export function registerBrowserTools(
           if (!binding.ok) return { ok: false, content: binding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
         }
         const before = readTab(host, ctx.sessionId, tabId);
-        const result = await performPressKey(registryFor(ctx.sessionId, tabId), params.target ?? null, key, (script) =>
-          host.executeScript(script, ctx.sessionId, tabId ?? undefined),
-        );
+        const registry = registryFor(ctx.sessionId, tabId);
+        const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
+        // 有目标时先把光标停到目标上；键盘提示与全局提示同一套胶囊。
+        if (params.target) {
+          const point = await performTargetPoint(registry, params.target, run);
+          if (point.ok && typeof point.x === "number" && typeof point.y === "number") {
+            pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
+          }
+        }
+        if (typeof host.isSessionVisible === "function" && host.isSessionVisible(ctx.sessionId)) {
+          hooks?.pointer?.chip(`⌨ ${key === " " ? "Space" : key}`);
+        }
+        // 真实键盘事件优先：表单默认行为（提交/跳转/关弹窗）只有可信事件才会发生。
+        const real = typeof host.agentKey === "function" ? await host.agentKey(ctx.sessionId, tabId ?? undefined, key) : false;
+        const result = real
+          ? { ok: true, label: params.target ?? "当前焦点", detail: "真实键盘事件" }
+          : await performPressKey(registry, params.target ?? null, key, run);
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 按键失败：${key}` };
+        fadePointerHighlight();
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
         const detail = result.detail ? `（${result.detail}）` : "";
         return { ok: true, content: statusLine(`已按键 ${key} → ${result.label ?? "当前焦点"}${detail}`, settled) };
@@ -662,9 +756,15 @@ export function registerBrowserTools(
         const binding = bindRefToTab(ctx.sessionId, tabId, target);
         if (!binding.ok) return { ok: false, content: binding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
         const before = readTab(host, ctx.sessionId, tabId);
-        const result = await performSelect(registryFor(ctx.sessionId, tabId), target, params.values, (script) =>
-          host.executeScript(script, ctx.sessionId, tabId ?? undefined),
-        );
+        const registry = registryFor(ctx.sessionId, tabId);
+        const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
+        // 下拉框同样先让光标停到目标上（视觉一致；选中动作仍走原生 setter + 回读）。
+        const point = await performTargetPoint(registry, target, run);
+        if (point.ok && typeof point.x === "number" && typeof point.y === "number") {
+          pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
+        }
+        const result = await performSelect(registry, target, params.values, run);
+        fadePointerHighlight();
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 选择失败：${target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
         const detail = result.detail ? `（${result.detail}）` : "";
@@ -691,9 +791,16 @@ export function registerBrowserTools(
         const binding = bindRefToTab(ctx.sessionId, tabId, target);
         if (!binding.ok) return { ok: false, content: binding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
         const before = readTab(host, ctx.sessionId, tabId);
-        const result = await performHover(registryFor(ctx.sessionId, tabId), target, (script) =>
-          host.executeScript(script, ctx.sessionId, tabId ?? undefined),
-        );
+        const registry = registryFor(ctx.sessionId, tabId);
+        const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
+        // 悬停也要看得见：光标移到目标，再派发悬停事件（真实输入不改变 hover 语义）。
+        const point = await performTargetPoint(registry, target, run);
+        if (point.ok && typeof point.x === "number" && typeof point.y === "number") {
+          const shown = pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
+          if (shown) await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        const result = await performHover(registry, target, run);
+        fadePointerHighlight();
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 悬停失败：${target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
         const detail = result.detail ? `（${result.detail}）` : "";
@@ -749,33 +856,8 @@ export function registerBrowserTools(
           if (!located.ok) return { ok: false, content: located.message ?? "[错误] 元素定位失败" };
         }
 
-        // 截图前先隐藏 Agent 浮层（光标/高亮/涟漪）：否则会被 capturePage 拍进证据图（调研 §风险-截图污染）
-        await host
-          .executeScript(
-            `(() => {
-              const root = window.__loopsoarAgentOverlay;
-              const host = root && root.host;
-              if (!host) return false;
-              host.__lsHidden = host.style.display;
-              host.style.display = 'none';
-              return true;
-            })()`,
-            ctx.sessionId,
-          )
-          .catch(() => null);
+        // 光标/高亮现在画在应用级覆盖窗口里，capturePage 只截网页本身，不会被拍进证据图。
         const data = await host.screenshot(ctx.sessionId);
-        await host
-          .executeScript(
-            `(() => {
-              const root = window.__loopsoarAgentOverlay;
-              const host = root && root.host;
-              if (!host) return false;
-              host.style.display = host.__lsHidden || '';
-              return true;
-            })()`,
-            ctx.sessionId,
-          )
-          .catch(() => null);
         if (!data) return { ok: false, content: "[错误] 当前没有打开的网页标签" };
         // 兼容 dataURL（data:image/png;base64,xxx）与裸 base64 两种适配器实现
         const base64 = data.includes(",") ? data.slice(data.indexOf(",") + 1) : data;

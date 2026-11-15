@@ -28,6 +28,8 @@ function scriptResultFor(script: string): unknown {
   if (script.includes("pointerover")) {
     return { ok: true, events: ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"] };
   }
+  // 只定位不点击的脚本：回目标中心（覆盖层光标要用坐标）
+  if (script.includes("loopsoar:target-point")) return { ok: true, x: 120, y: 90, width: 40, height: 20 };
   if (script.includes("const VALUES")) return { ok: true, selected: ["北京"] };
   if (script.includes("const KEY")) return { ok: true, path: "keydown+keypress+keyup" };
   return { ok: true };
