@@ -372,6 +372,66 @@ export function createElectronBrowserHost(
 ): BrowserHost {  // 守卫必须在任何 WebContentsView 创建之前装好（否则首批请求会漏检）；
   // 只在浏览器分区上挂，不影响主窗口（loopsoar://）与下载。
   installBrowserRequestGuard(session.fromPartition(SESSION_PARTITION), options);
+
+  // 原生 WebContentsView 在 Windows 上不会真正裁掉网页内容（setBorderRadius 只影响视图边框），
+  // 四角始终是方的。用一个常驻的透明子窗口把四角盖成外壳色，形状用 radial-gradient 的
+  // 反圆角 mask 抠出四分之一圆；它只覆盖 14px 的角，平时不挡鼠标/输入。
+  let cornerWindow: BrowserWindow | null = null;
+  const cornerCss = "html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}"
+    + ".c{position:absolute;width:14px;height:14px;background:#17191e;pointer-events:none}"
+    + ".tl{left:0;top:0;-webkit-mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px)}"
+    + ".tr{right:0;top:0;-webkit-mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px)}"
+    + ".bl{left:0;bottom:0;-webkit-mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px)}"
+    + ".br{right:0;bottom:0;-webkit-mask:radial-gradient(circle 14px at 0 0,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 0 0,transparent 13.4px,#000 14px)}";
+  const cornerHtml = "<!doctype html><html><head><meta charset='utf-8'><style>" + cornerCss + "</style></head><body>"
+    + "<div class='c tl'></div><div class='c tr'></div><div class='c bl'></div><div class='c br'></div></body></html>";
+
+  const ensureCornerWindow = (): BrowserWindow | null => {
+    const parent = getWindow();
+    if (!parent || parent.isDestroyed()) return null;
+    if (cornerWindow && !cornerWindow.isDestroyed()) return cornerWindow;
+    cornerWindow = new BrowserWindow({
+      parent,
+      show: false,
+      frame: false,
+      transparent: true,
+      backgroundColor: "#00000000",
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    cornerWindow.setIgnoreMouseEvents(true);
+    void cornerWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(cornerHtml));
+    return cornerWindow;
+  };
+
+  const syncCornerWindow = (rect: BrowserViewBounds | null): void => {
+    const win = ensureCornerWindow();
+    if (!win) return;
+    const parent = getWindow();
+    if (!rect || !parent || parent.isDestroyed() || parent.isMinimized()) {
+      win.hide();
+      return;
+    }
+    const content = parent.getContentBounds();
+    win.setBounds({
+      x: content.x + rect.x,
+      y: content.y + rect.y,
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height),
+    });
+    if (!win.isVisible()) {
+      win.showInactive();
+      win.moveTop();
+    }
+  };
+
   return new BrowserHost({
     initialSessionId: options.initialSessionId,
     onSessionStateChanged: options.onSessionStateChanged,
@@ -382,7 +442,10 @@ export function createElectronBrowserHost(
     onTaskCreated: options.onTaskCreated,
     onAgentActing: options.onAgentActing,
     onViewSuppressed: options.onViewSuppressed,
-    onViewLayout: options.onViewLayout,
+    onViewLayout: (rect) => {
+      options.onViewLayout?.(rect);
+      syncCornerWindow(rect);
+    },
     openDevToolsPanel: options.devToolsPanel ? (webContents) => options.devToolsPanel!.open(webContents as Electron.WebContents) : undefined,
     closeDevToolsPanel: options.devToolsPanel ? () => options.devToolsPanel!.close() : undefined,
     isDevToolsPanelOpen: options.devToolsPanel ? () => options.devToolsPanel!.isOpen() : undefined,
