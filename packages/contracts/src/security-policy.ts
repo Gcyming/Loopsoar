@@ -106,7 +106,9 @@ export const BUDGET_HARD = {
  * 循环健康监控阈值（安全模式后备）。
  */
 export const LOOP_HEALTH = {
-  silentTimeoutMs: 90_000, // 静默超时 90 秒
+  silentTimeoutMs: 90_000, // 自定义 loop runner 的静默超时（工具层默认不硬杀）
+  /** 工具长时间无输出只提示、不中止（用户要求把大型任务的决定权交给 Agent）。 */
+  silentWarnMs: 90_000,
   noProgressRounds: 5,     // 无进展轮次 5 轮
 } as const;
 

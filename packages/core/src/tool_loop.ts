@@ -133,7 +133,11 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   /** 长等待工具集合：默认 ask_user（真人回答耗时不可控）。 */
   const longRunningTools = new Set(opts.longRunningTools ?? ["ask_user"]);
   const longRunningTimeoutMs = opts.longRunningTimeoutMs ?? 600_000;
-  const normalSilentTimeoutMs = opts.silentTimeoutMs ?? LOOP_HEALTH.silentTimeoutMs;
+  // 普通工具的「静默超时」默认不再硬杀：大型任务里工具可能长时间无输出（页面/脚本/网络等待），
+  // 用户要求交给 Agent/工具自身决定。显式传 silentTimeoutMs 的调用方（测试/自定义 loop）仍生效。
+  // 90s 只作为慢工具提示（心跳带 slow 标记），不中止本轮。
+  const normalSilentTimeoutMs = opts.silentTimeoutMs ?? 0;
+  const silentWarnMs = LOOP_HEALTH.silentWarnMs;
 
   let finalText = "";
   let seq = 0;
@@ -324,27 +328,38 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               const isLongRunningTool = longRunningTools.has(toolCall.name);
               const silentTimeoutMs = isLongRunningTool ? longRunningTimeoutMs : normalSilentTimeoutMs;
               let silentTimer: NodeJS.Timeout | undefined;
+              let warnTimer: NodeJS.Timeout | undefined;
               let toolResult: ToolResult;
 
               try {
-                // 并发执行：工具调用与超时检测竞争，并与中止信号竞争。
+                // 并发执行：工具调用与（可选的）硬超时/中止信号竞争。
                 // 为什么带中止：MCP/终端工具自身无法可靠取消，但「用户点了停止」不能让循环
                 // 一直卡在工具上（终端命令/子代理可能几分钟）——工具还在跑也要立刻收束本轮。
-                const timeoutRace = Promise.race([
+                const races: Array<Promise<ToolResult>> = [
                   executeTool.invoke(toolCall).catch((err) => ({
                     ok: false,
                     content: "",
                     error: err instanceof Error ? err.message : String(err),
                   } as ToolResult)),
-                  new Promise<ToolResult>((_, reject) => {
+                  waitAbort(),
+                ];
+                if (silentTimeoutMs > 0) {
+                  races.push(new Promise<ToolResult>((_, reject) => {
                     silentTimer = setTimeout(() => {
                       reject(new Error("静默超时：工具执行超过安全静默时间"));
                     }, silentTimeoutMs);
                     // 不阻止进程退出（否则普通工具的 90s 定时器会拖住测试/退出路径）
                     silentTimer.unref?.();
-                  }),
-                  waitAbort(),
-                ]);
+                  }));
+                }
+                // 慢工具提示：只发事件，不中止；让用户看到「Agent 还在等」，而不是被 90s 判死。
+                warnTimer = setTimeout(() => {
+                  if (!abortController.signal.aborted) {
+                    emit("heartbeat", { silentMs: silentTimeoutMs || silentWarnMs, slow: true, tool: toolCall.name });
+                  }
+                }, silentWarnMs);
+                warnTimer.unref?.();
+                const timeoutRace = Promise.race(races);
 
                 toolResult = await timeoutRace;
               } catch (err) {
@@ -374,6 +389,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 };
               } finally {
                 if (silentTimer) clearTimeout(silentTimer);
+                if (warnTimer) clearTimeout(warnTimer);
                 clearInterval(heartbeatInterval);
               }
 
