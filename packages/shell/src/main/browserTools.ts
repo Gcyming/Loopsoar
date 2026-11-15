@@ -804,6 +804,53 @@ export function registerBrowserTools(
   });
 
   registry.register({
+    name: "browser_drag",
+    description:
+      "拖拽元素：从 from 拖到 to（#eN / CSS / text=），真实鼠标按下 → 分帧移动 → 抬起；用于滑块、拖拽排序、画布/编辑器等场景",
+    permissions: { browser: true },
+    schema: z.object({ from: z.string().min(1).max(500), to: z.string().min(1).max(500) }),
+    execute: async (ctx): Promise<ToolResult> => {
+      try {
+        const params = (ctx.params ?? {}) as { from?: string; to?: string };
+        if (!params?.from || !params?.to) return { ok: false, content: "[错误] 缺少 from / to" };
+        const host = needHost();
+        const tabId = activeTabOf(host, ctx.sessionId);
+        const fromBinding = bindRefToTab(ctx.sessionId, tabId, params.from);
+        if (!fromBinding.ok) return { ok: false, content: fromBinding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
+        const toBinding = bindRefToTab(ctx.sessionId, tabId, params.to);
+        if (!toBinding.ok) return { ok: false, content: toBinding.message ?? "[STALE_REF] 引用已过期，请重新 browser_snapshot" };
+        const before = readTab(host, ctx.sessionId, tabId);
+        const registry = registryFor(ctx.sessionId, tabId);
+        const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
+        const fromPoint = await performTargetPoint(registry, params.from, run);
+        if (!fromPoint.ok || typeof fromPoint.x !== "number" || typeof fromPoint.y !== "number") {
+          return { ok: false, content: fromPoint.message ?? `[错误] 拖拽起点定位失败：${params.from}` };
+        }
+        // 终点不再 scrollIntoView：拖拽过程中页面不能被滚动，否则按下位置与目标错位。
+        const toPoint = await performTargetPoint(registry, params.to, run, { scrollIntoView: false });
+        if (!toPoint.ok || typeof toPoint.x !== "number" || typeof toPoint.y !== "number") {
+          return { ok: false, content: toPoint.message ?? `[错误] 拖拽终点定位失败：${params.to}` };
+        }
+        const shown = pointPointer(host, ctx.sessionId, tabId, { x: fromPoint.x, y: fromPoint.y, width: fromPoint.width, height: fromPoint.height });
+        if (shown) {
+          shown.pointer.chip("拖拽");
+          await new Promise((resolve) => setTimeout(resolve, 240));
+        }
+        const real = typeof host.agentDrag === "function"
+          ? await host.agentDrag(ctx.sessionId, tabId ?? undefined, { x: fromPoint.x, y: fromPoint.y }, { x: toPoint.x, y: toPoint.y })
+          : false;
+        if (!real) return { ok: false, content: "[错误] 当前视图不支持真实拖拽（sendInputEvent 不可用）" };
+        pointPointer(host, ctx.sessionId, tabId, { x: toPoint.x, y: toPoint.y });
+        fadePointerHighlight();
+        const settled = await settleTab(host, ctx.sessionId, tabId, before);
+        return { ok: true, content: statusLine(`已拖拽 ${fromPoint.label ?? params.from} → ${toPoint.label ?? params.to}`, settled) };
+      } catch (err) {
+        return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  registry.register({
     name: "browser_hover",
     description:
       "把鼠标悬停到元素上（#eN 或 CSS）：滚进视野并派发 pointerover/pointerenter/mouseover/mouseenter/mousemove，用于展开菜单/悬浮提示",
@@ -827,7 +874,14 @@ export function registerBrowserTools(
           const shown = pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
           if (shown) await new Promise((resolve) => setTimeout(resolve, 200));
         }
-        const result = await performHover(registry, target, run);
+        // 真实鼠标移动优先：CSS :hover、pointerover、mouseover 都由可信鼠标事件驱动。
+        const realHover =
+          point.ok && typeof point.x === "number" && typeof point.y === "number" && typeof host.agentHover === "function"
+            ? await host.agentHover(ctx.sessionId, tabId ?? undefined, { x: point.x, y: point.y })
+            : false;
+        const result = realHover
+          ? { ok: true, label: point.label ?? target }
+          : await performHover(registry, target, run);
         fadePointerHighlight();
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 悬停失败：${target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
@@ -841,7 +895,8 @@ export function registerBrowserTools(
 
   registry.register({
     name: "browser_scroll",
-    description: "滚动当前页面：down / up / top / bottom（长页面分页阅读）",
+    description:
+      "滚动当前页面：down / up 走真实鼠标滚轮（虚拟光标移到页面中间后按 notch 滚动），top / bottom 直达；长页面分页阅读",
     permissions: { browser: true },
     schema: z.object({ direction: z.enum(["down", "up", "top", "bottom"]), amount: z.number().int().min(100).max(5000).optional() }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -849,14 +904,33 @@ export function registerBrowserTools(
         const params = (ctx.params ?? {}) as { direction?: "down" | "up" | "top" | "bottom"; amount?: number };
         const direction = params.direction ?? "down";
         const amount = params.amount ?? 800;
-        const script =
-          direction === "top"
-            ? "window.scrollTo({ top: 0 }); 'ok'"
-            : direction === "bottom"
-              ? "window.scrollTo({ top: document.body.scrollHeight }); 'ok'"
-              : `window.scrollBy({ top: ${direction === "up" ? -amount : amount} }); 'ok'`;
-        await needHost().executeScript(script, ctx.sessionId);
-        return { ok: true, content: `已滚动：${direction}` };
+        const host = needHost();
+        const tabId = activeTabOf(host, ctx.sessionId);
+        const before = readTab(host, ctx.sessionId, tabId);
+        // down/up：真实滚轮（可信事件，滚动监听/吸顶/懒加载都会响应）；光标先滑到页面中间。
+        let scrolled = false;
+        if ((direction === "down" || direction === "up") && typeof host.agentWheel === "function") {
+          const center = await host.getViewportCenter(ctx.sessionId, tabId ?? undefined);
+          if (center) {
+            const shown = pointPointer(host, ctx.sessionId, tabId, { x: center.x, y: center.y });
+            if (shown) {
+              shown.pointer.chip(direction === "down" ? "滚动 ↓" : "滚动 ↑");
+              await new Promise((resolve) => setTimeout(resolve, 200));
+            }
+          }
+          scrolled = await host.agentWheel(ctx.sessionId, tabId ?? undefined, direction === "down" ? amount : -amount);
+        }
+        if (!scrolled) {
+          const script =
+            direction === "top"
+              ? "window.scrollTo({ top: 0 }); 'ok'"
+              : direction === "bottom"
+                ? "window.scrollTo({ top: document.body.scrollHeight }); 'ok'"
+                : `window.scrollBy({ top: ${direction === "up" ? -amount : amount} }); 'ok'`;
+          await host.executeScript(script, ctx.sessionId);
+        }
+        const settled = await settleTab(host, ctx.sessionId, tabId, before);
+        return { ok: true, content: statusLine(`已滚动：${direction}`, settled) };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
@@ -1030,6 +1104,7 @@ export function registerBrowserTools(
     "browser_navigate",
     "browser_click",
     "browser_type",
+    "browser_drag",
     "browser_press_key",
     "browser_scroll",
     "browser_hover",

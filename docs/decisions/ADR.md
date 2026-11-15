@@ -2026,13 +2026,14 @@
 - **验证**：
   - 单测：sessionFork.spec.ts（前缀逐条一致、源会话不变、越界夹紧、非法/不存在 fail-closed、forkedFrom 元信息）；browserTaskTabs.spec.ts（首次动作克隆、原页保留、重复调用复用、空会话空白任务标签、agentBound 随快照恢复）；browserSessionState.spec.ts（agentBound 脏值丢弃）；browserTools.spec.ts（动作工具先 ensureAgentTab、只读快照不触发）。
   - 真机 E2E（node scripts/e2e-p2-run.mjs）：先像用户一样打开页面（userTab），再让 Agent 导航→点击；结束时 userTabs=1、agentTabs=1，页面按钮文案变为「按钮已点击」，证明「原页保留 + 克隆页操作」同时成立。
-  - 基线：typecheck 5/5、全量 vitest **196 文件 / 1639 tests**、pnpm build、pnpm bundle:shell。
+  - 基线：typecheck 5/5、全量 vitest **196 文件 / 1642 tests**、pnpm build、pnpm bundle:shell。
 ### 修订（用户 m03384，2026-11-15 真机反馈）
 
 1. **折叠标签两种关闭**：浮层每行 × 关闭单个网页；折叠 chip 右上角 × 关闭整个 Agent 工作区（等价关闭全部绑定页，任务会话保留）。关页仍然不等于关会话。
 2. **特殊会话真正成立**：会话新增 task 标记（独立于页面是否存在），首次任务化即落库；会话列表显示「任务」徽标（分支会话显示「分支」徽标）；任务会话的页面全部关掉后，**保留最近一次任务页快照**（浏览器状态保存时跳过「无 agentBound 页面」的覆盖），重新打开该会话时折叠工作区按原样恢复。
 3. **虚拟光标常驻 + 平滑移动**：不再只在点击时闪一下。轮次开始/首次克隆出可见页面时 hold(true)，光标固定在页面中央或最后位置常驻；轮次结束 hold(false) 后才按空闲时长隐藏。页面加载完成晚于轮次开始时，由 onViewLayout 补显示。位移改为脚本按距离缓动（easeOutCubic，140–260ms，requestAnimationFrame），不再用 CSS transition；覆盖窗口只在几何变化时 setBounds、只在不可见时 showInactive，避免每个动作都重新显示造成「这里闪一下那里闪一下」。点击/输入前的等待同步覆盖最长缓动时间。
 4. **思考截断修复**：流式过滤器为跨 chunk 匹配保留 20 字符尾巴，但工具调用等非流式事件到达时没有 flush，尾巴被推到工具之后、与下一段思考拼成新段——表现为每段开头缺半句、东一句西一句。现在任何非流式事件（tool/progress/done/error，heartbeat 除外）前按「最近一段是正文还是推理」的顺序 flush 两条过滤器；新增 chat-reasoning-order 回归测试（工具前推理必须完整，工具后推理不得以旧尾巴开头）。历史会话里已存下的碎片不会自动重排，新生成的轮次恢复正常。
+5. **鼠标手势更仿真**：悬停改为真实 mouseMove（CSS :hover 由可信事件驱动）；滚动 down/up 改为 mouseWheel（按 120px notch 分帧派发，滚动监听/吸顶/懒加载都会响应），滚动前光标滑到页面中心并显示「滚动 ↑/↓」；新增 browser_drag（mouseDown → 分帧 mouseMove → mouseUp，用于滑块/拖拽排序/画布）；点击的 mouseDown→mouseUp 之间保留 35ms 按压时间。所有手势都先让光标滑到位再执行，不使用系统鼠标。
 
 - **状态**：✅ 自动化 + 真机 E2E（阶段一）。「用户标签彻底脱离会话（全局用户标签层）」与「任务条跨会话常驻/收起态恢复」列为下一阶段，见风险边界。
 - **风险与边界**：

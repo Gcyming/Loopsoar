@@ -475,11 +475,15 @@ ${locateJs(resolved)}
  * 派发真实鼠标事件」——真实事件只认坐标，所以必须先把目标换算成一个点；
  * 命中验证仍在这里做，BLOCKED_BY_OVERLAY 的语义和文案与旧路径完全一致。
  */
-export function buildTargetPointScript(resolved: ResolvedTarget): string {
+export function buildTargetPointScript(
+  resolved: ResolvedTarget,
+  options: { scrollIntoView?: boolean } = {},
+): string {
   return `/* loopsoar:target-point */
 (() => {
 ${locateJs(resolved)}
-  el.scrollIntoView({ block: 'center' });
+${options.scrollIntoView === false ? "" : "  el.scrollIntoView({ block: 'center' });"}
+
   const describe = (node) => {
     if (!node || node.nodeType !== 1) return null;
     const cls = String(node.getAttribute('class') || '').trim().split(' ').filter(Boolean).slice(0, 3).join('.');
@@ -1092,12 +1096,13 @@ export async function performTargetPoint(
   registry: RefRegistry | null,
   target: string,
   run: ScriptRunner,
+  options: { scrollIntoView?: boolean } = {},
 ): Promise<TargetPointResult> {
   const resolved = resolveTarget(registry, target);
   if (!resolved.ok) return { ok: false, code: resolved.code, message: resolved.message };
   let page: PagePointResult | null = null;
   try {
-    page = (await run(buildTargetPointScript(resolved))) as PagePointResult | null;
+    page = (await run(buildTargetPointScript(resolved, options))) as PagePointResult | null;
   } catch (err) {
     return {
       ok: false,

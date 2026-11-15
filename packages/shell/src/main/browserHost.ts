@@ -952,6 +952,8 @@ export class BrowserHost {
     try {
       wc.sendInputEvent({ type: "mouseMove", x, y });
       wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+      // 真实按压有几十毫秒的停留：立刻 up 会让 :active 一闪而过，部分站点的手势识别也收不到。
+      await new Promise((resolve) => setTimeout(resolve, 35));
       wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
     } finally {
       this.releaseAgentDriving(entry);
@@ -1024,6 +1026,130 @@ export class BrowserHost {
         }
       }
       await flushText();
+    } finally {
+      this.releaseAgentDriving(entry);
+    }
+    return true;
+  }
+
+  /** 真实鼠标移动（悬停）：像用户把鼠标移过去停住，触发 CSS :hover / pointerover / mouseover。 */
+  async agentHover(
+    sessionId: string | undefined,
+    tabId: string | undefined,
+    point: { x: number; y: number },
+  ): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return false;
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || typeof wc.sendInputEvent !== "function") return false;
+    const zoom = this.getPageZoom(sessionId, tabId);
+    const x = Math.round(point.x * zoom);
+    const y = Math.round(point.y * zoom);
+    await this.setAgentDriving(entry, true);
+    try {
+      wc.sendInputEvent({ type: "mouseMove", x, y });
+    } finally {
+      this.releaseAgentDriving(entry);
+    }
+    return true;
+  }
+
+  /** 页面视口中心（CSS 像素）：滚动/悬停前把虚拟光标停到页面中间。 */
+  async getViewportCenter(
+    sessionId: string | undefined,
+    tabId: string | undefined,
+  ): Promise<{ x: number; y: number } | null> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return null;
+    try {
+      const size = (await entry.adapter.executeJs("({ w: window.innerWidth, h: window.innerHeight })")) as
+        | { w?: number; h?: number }
+        | null;
+      const w = typeof size?.w === "number" && size.w > 0 ? size.w : 800;
+      const h = typeof size?.h === "number" && size.h > 0 ? size.h : 600;
+      return { x: Math.round(w / 2), y: Math.round(h / 2) };
+    } catch {
+      return { x: 400, y: 300 };
+    }
+  }
+
+  /**
+   * Agent 拖拽：真实按下 → 分帧移动（像人手拖动）→ 抬起。
+   * 用于滑块、拖拽排序、画布/编辑器等需要按下-移动-抬起序列的场景。
+   */
+  async agentDrag(
+    sessionId: string | undefined,
+    tabId: string | undefined,
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    steps = 10,
+  ): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return false;
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || typeof wc.sendInputEvent !== "function") return false;
+    const zoom = this.getPageZoom(sessionId, tabId);
+    const fx = Math.round(from.x * zoom);
+    const fy = Math.round(from.y * zoom);
+    const tx = Math.round(to.x * zoom);
+    const ty = Math.round(to.y * zoom);
+    const frames = Math.max(3, Math.min(20, Math.round(steps)));
+    await this.setAgentDriving(entry, true);
+    try {
+      wc.sendInputEvent({ type: "mouseMove", x: fx, y: fy });
+      wc.sendInputEvent({ type: "mouseDown", x: fx, y: fy, button: "left", clickCount: 1 });
+      for (let i = 1; i <= frames; i += 1) {
+        const ratio = i / frames;
+        const x = Math.round(fx + (tx - fx) * ratio);
+        const y = Math.round(fy + (ty - fy) * ratio);
+        wc.sendInputEvent({ type: "mouseMove", x, y, button: "left", buttons: 1 });
+        await new Promise((resolve) => setTimeout(resolve, 14));
+      }
+      wc.sendInputEvent({ type: "mouseUp", x: tx, y: ty, button: "left", clickCount: 1 });
+    } finally {
+      this.releaseAgentDriving(entry);
+    }
+    return true;
+  }
+
+  /**
+   * 真实滚轮：按 notch（120px）把滚动量拆成多帧 mouseWheel 派发，页面收到的是可信滚轮事件，
+   * 滚动动画、滚动监听、懒加载、吸顶效果都与用户操作一致（脚本 window.scrollBy 不具备这些）。
+   * 返回 false = 视图不支持 sendInputEvent，调用方回退脚本滚动。
+   */
+  async agentWheel(
+    sessionId: string | undefined,
+    tabId: string | undefined,
+    deltaY: number,
+  ): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
+    if (!entry) return false;
+    const wc = entry.view.webContents as AgentInputWebContents | undefined;
+    if (!wc || typeof wc.sendInputEvent !== "function") return false;
+    const center = (await this.getViewportCenter(sessionId, tabId)) ?? { x: 400, y: 300 };
+    const zoom = this.getPageZoom(sessionId, tabId);
+    const x = Math.round(center.x * zoom);
+    const y = Math.round(center.y * zoom);
+    const total = Math.round(deltaY);
+    if (!Number.isFinite(total) || total === 0) return false;
+    const ticks = Math.min(12, Math.max(1, Math.ceil(Math.abs(total) / 120)));
+    const step = total / ticks;
+    await this.setAgentDriving(entry, true);
+    try {
+      for (let i = 0; i < ticks; i += 1) {
+        wc.sendInputEvent({
+          type: "mouseWheel",
+          x,
+          y,
+          deltaX: 0,
+          deltaY: step,
+          wheelTicksX: 0,
+          wheelTicksY: step / 120,
+          hasPreciseScrollingDeltas: true,
+          canScroll: true,
+        });
+        if (i < ticks - 1) await new Promise((resolve) => setTimeout(resolve, 12));
+      }
     } finally {
       this.releaseAgentDriving(entry);
     }

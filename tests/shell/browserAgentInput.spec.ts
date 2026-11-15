@@ -150,6 +150,41 @@ describe("Agent 真实输入", () => {
     expect(views[0].events.map((event) => event.type)).toEqual(["keyDown", "keyUp", "keyDown", "keyUp"]);
   });
 
+  it("agentHover：派发真实 mouseMove（CSS :hover 由可信事件驱动）", async () => {
+    const { host, views } = makeHost();
+    const created = await host.newTab("https://example.com/", "s1", "agent");
+    expect(await host.agentHover("s1", created.tabId, { x: 20, y: 30 })).toBe(true);
+    expect(views[0].events).toEqual([{ type: "mouseMove", x: 20, y: 30 }]);
+  });
+
+  it("agentWheel：按 notch 拆成多帧 mouseWheel，总量与方向正确", async () => {
+    const { host, views } = makeHost();
+    const created = await host.newTab("https://example.com/", "s1", "agent");
+    expect(await host.agentWheel("s1", created.tabId, 360)).toBe(true);
+    const wheels = views[0].events.filter((event) => event.type === "mouseWheel");
+    expect(wheels.length).toBe(3);
+    expect(wheels.reduce((sum, event) => sum + Number(event.deltaY), 0)).toBeCloseTo(360, 5);
+    expect(wheels.every((event) => event.deltaY > 0)).toBe(true);
+
+    views[0].events.length = 0;
+    await host.agentWheel("s1", created.tabId, -240);
+    const up = views[0].events.filter((event) => event.type === "mouseWheel");
+    expect(up.length).toBe(2);
+    expect(up.every((event) => event.deltaY < 0)).toBe(true);
+  });
+
+  it("agentDrag：按下 → 分帧移动 → 抬起，坐标按缩放换算", async () => {
+    const { host, views } = makeHost();
+    const created = await host.newTab("https://example.com/", "s1", "agent");
+    expect(await host.agentDrag("s1", created.tabId, { x: 10, y: 20 }, { x: 110, y: 120 }, 4)).toBe(true);
+    const events = views[0].events;
+    expect(events[0]).toMatchObject({ type: "mouseMove", x: 10, y: 20 });
+    expect(events[1]).toMatchObject({ type: "mouseDown", x: 10, y: 20, button: "left" });
+    const moves = events.filter((event) => event.type === "mouseMove");
+    expect(moves.length).toBeGreaterThanOrEqual(5); // 起点 + 至少 4 帧
+    expect(events[events.length - 1]).toMatchObject({ type: "mouseUp", x: 110, y: 120, button: "left" });
+  });
+
   it("视图不支持 sendInputEvent：返回 false（调用方回退到脚本点击）", async () => {
     const { host } = makeHost({ input: false });
     const created = await host.newTab("https://example.com/", "s1", "agent");

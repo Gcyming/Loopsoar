@@ -166,6 +166,8 @@ const TOOL_LABELS: Record<string, string> = {
   browser_navigate: "打开网页",
   browser_click: "点击元素",
   browser_type: "输入文本",
+  browser_drag: "拖拽元素",
+  browser_hover: "悬停元素",
   browser_scroll: "滚动页面",
   web_fetch: "抓取网页",
   file_read: "读取文件",
