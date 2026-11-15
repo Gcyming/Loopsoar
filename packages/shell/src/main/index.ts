@@ -1918,6 +1918,7 @@ app.whenReady().then(async () => {
       },
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
+      onViewSuppressed: (suppressed) => pushToRenderer("browser:viewSuppressed", { suppressed }),
       // 网页视图几何（单源）：覆盖指针贴住网页区域；没有可见网页时传 null → 覆盖层隐藏。
       onViewLayout: (rect) => {
         lastViewRect = rect;

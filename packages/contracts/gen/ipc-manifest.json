@@ -169,6 +169,13 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:viewState",
+      "domain": "browser",
+      "method": "viewState",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "browser:listTabs",
       "domain": "browser",
       "method": "listTabs",
@@ -938,6 +945,7 @@
     "perm:request",
     "boot:ready",
     "browser:tabs",
+    "browser:viewSuppressed",
     "browser:downloads",
     "memory:updated",
     "extensions:updated",

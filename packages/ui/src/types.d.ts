@@ -652,6 +652,7 @@ export type LoopsoarEvent =
   | "perm:request"
   | "boot:ready"
   | "browser:tabs"
+  | "browser:viewSuppressed"
   | "browser:downloads"
   | "extensions:updated"
   | "skills:updated"
@@ -835,6 +836,8 @@ export interface LoopsoarAPI {
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[] }>;
+    /** 当前是否处于「切会话后网页收起」的状态（UI 水合）。 */
+    viewState(): Promise<{ suppressed: boolean }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
     /** Agent 工作区接管锁：locked=true 时该会话的网页只拦真实用户事件（放行 Agent 的合成事件）。 */
     setSidebarWidth(payload: { width: number; animate?: boolean }): Promise<{ width: number }>;

@@ -63,9 +63,11 @@ describe("BrowserHost 会话级标签", () => {
     await host.switchSession("sess-a");
     expect(host.listTabs().map((t) => t.url)).toEqual(["https://a.example/"]);
     expect(host.listTabs()[0].active).toBe(true);
-    // 只有 A 会话语义上的视图可见；B 的视图被隐藏
-    expect(created[0].visible).toBe(true);
+    // 切会话先把网页收起来（进会话不被网页拖着），点标签才展开
+    expect(created[0].visible).toBe(false);
     expect(created[1].visible).toBe(false);
+    host.selectTab(host.listTabs()[0].id);
+    expect(created[0].visible).toBe(true);
   });
 
   it("Agent 工具按 sessionId 只操作自己会话的页面（不串到当前可见会话）", async () => {

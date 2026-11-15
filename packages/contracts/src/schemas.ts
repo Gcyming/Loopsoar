@@ -629,6 +629,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: BrowserResolveFaviconSchema,
     sensitive: true,
   },
+  "browser:viewState": {
+    domain: "browser",
+    method: "viewState",
+    request: null,
+    sensitive: true,
+  },
   "browser:listTabs": {
     domain: "browser",
     method: "listTabs",
@@ -1326,6 +1332,7 @@ export const EVENTS = [
   "perm:request",
   "boot:ready",
   "browser:tabs",
+  "browser:viewSuppressed",
   "browser:downloads",
   "memory:updated",
   "extensions:updated",

@@ -97,6 +97,8 @@ export interface BrowserHostDeps {
   onFaviconChanged?: (url: string, favicon: string) => void;
   /** 首次任务化（Agent 拿到自己的克隆页）：壳层据此把会话标记成「浏览器任务」。 */
   onTaskCreated?: (sessionId: string) => void;
+  /** 切换会话时网页被「收起来」的状态变化：UI 据此显示空白页/纯净会话。 */
+  onViewSuppressed?: (suppressed: boolean) => void;
   /** Agent 正在这个会话里动手（克隆页已可见）：壳层据此把虚拟光标切成常驻。 */
   onAgentActing?: (sessionId: string) => void;
   /**
@@ -190,6 +192,11 @@ export class BrowserHost {
   private groups = new Map<string, SessionGroup>();
   private activeSession: string;
   private overlayOpen = false;
+  /**
+   * 切会话时先把网页收起来（不显示原生视图），用户点某个标签才展开。
+   * 目的：进会话不再被网页拖着；纯聊天/纯净 vibecoding 不需要先关网页。
+   */
+  private viewSuppressed = false;
   /** 侧栏当前宽度（用户可拖拽；偏好持久化在 UI 层）。 */
   private sidebarWidth: number = LAYOUT.SIDEBAR_WIDTH;
   /** 侧栏宽度动画的 interval 句柄（同一时刻至多一个；新调用取消旧动画）。 */
@@ -534,6 +541,7 @@ export class BrowserHost {
         // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
         // 加载中/失败也不显示：让 DOM 的加载页/错误页露出来（原生视图只能显示 Chromium 白屏/默认错误页）
         const visible =
+          !this.viewSuppressed &&
           sessionId === this.activeSession &&
           id === group.activeId &&
           !this.overlayOpen &&
@@ -758,6 +766,8 @@ export class BrowserHost {
     sessionId?: string,
     origin: "agent" | "user" = "user",
   ): Promise<NavigateOutcome> {
+    // 导航是明确的「我要看这个页面」：把切会话时收起的网页重新展开。
+    this.setViewSuppressed(false);
     return this.navigateRecorded(rawUrl, tabId, true, sessionId, origin);
   }
 
@@ -829,6 +839,7 @@ export class BrowserHost {
     sessionId?: string,
     origin: "agent" | "user" = "user",
   ): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+    this.setViewSuppressed(false);
     const sid = sessionId ?? this.activeSession;
     const group = this.group(sid);
     if (rawUrl) {
@@ -857,6 +868,7 @@ export class BrowserHost {
   selectTab(tabId: string, sessionId?: string): boolean {
     const group = this.group(sessionId);
     if (!group.tabs.has(tabId)) return false;
+    this.setViewSuppressed(false);
     group.activeId = tabId;
     this.emitTabs(sessionId ?? this.activeSession);
     return true;
@@ -1261,6 +1273,8 @@ export class BrowserHost {
   async ensureAgentTab(sessionId?: string): Promise<string | null> {
     const sid = (sessionId ?? this.activeSession).trim();
     if (!sid) return null;
+    // Agent 要动手：把网页展开，用户能看见它在操作克隆页。
+    this.setViewSuppressed(false);
     const group = this.ensureGroup(sid);
     // 正在使用的 Agent 标签优先，其次任意一个已存在的任务标签（多标签任务不来回跳）。
     const current = group.activeId ? group.tabs.get(group.activeId) : null;
@@ -1297,11 +1311,27 @@ export class BrowserHost {
       this.activeSession = sid;
     }
     const group = this.ensureGroup(sid);
-    if (restore && group.tabs.size === 0 && restore.tabs.length > 0) {
+    const willRestoreTask = Boolean(restore && group.tabs.size === 0 && restore.tabs.length > 0);
+    if (willRestoreTask && restore) {
       await this.restoreInto(sid, restore);
     }
+    // 普通会话：只切对话，网页收起来（用户点标签才展开）；任务会话恢复工作区时直接展开。
+    this.setViewSuppressed(!willRestoreTask);
     this.emitTabs(sid);
     return this.listTabs(sid);
+  }
+
+  /** 收起/展开原生网页视图（切会话时收起；点标签、新建页、Agent 动手时展开）。 */
+  private setViewSuppressed(next: boolean): void {
+    if (this.viewSuppressed === next) return;
+    this.viewSuppressed = next;
+    this.deps.onViewSuppressed?.(next);
+    this.applyLayout();
+  }
+
+  /** 当前是否处于「网页收起、只显示对话/空白页」的状态（UI 水合用）。 */
+  isViewSuppressed(): boolean {
+    return this.viewSuppressed;
   }
 
   private async restoreInto(sessionId: string, restore: PersistedBrowserState): Promise<void> {

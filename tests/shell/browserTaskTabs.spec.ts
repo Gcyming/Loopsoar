@@ -8,6 +8,7 @@ import { BrowserHost, type HostView } from "../../packages/shell/src/main/browse
 interface FakeView extends HostView {
   navigated: string[];
   closed: boolean;
+  visible: boolean;
 }
 
 function makeHost() {
@@ -18,8 +19,11 @@ function makeHost() {
       const view: FakeView = {
         navigated: [],
         closed: false,
+        visible: true,
         setBounds() {},
-        setVisible() {},
+        setVisible(v: boolean) {
+          view.visible = v;
+        },
         webContents: {
           async loadURL(url: string) {
             view.navigated.push(url);
@@ -77,6 +81,28 @@ describe("BrowserHost · Agent 工作区任务化", () => {
     expect(empty).toBeTruthy();
     expect(host.listTabs("sess-empty").length).toBe(1);
     expect(host.listTabs("sess-empty")[0].agentBound).toBe(true);
+  });
+
+  it("切会话收起网页；点标签或 Agent 动手才展开", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://a.example/");
+    expect(created[0].visible).toBe(true);
+
+    await host.switchSession("sess-b");
+    expect(created[0].visible).toBe(false); // 进会话不再被网页拖着
+
+    await host.navigate("https://b.example/", undefined, "sess-b");
+    expect(created[1].visible).toBe(true); // 明确导航 = 要看页面
+
+    await host.switchSession("sess-a");
+    expect(created[1].visible).toBe(false);
+    expect(created[0].visible).toBe(false);
+    host.selectTab(host.listTabs("sess-a")[0].id);
+    expect(created[0].visible).toBe(true); // 点标签才展开
+
+    // Agent 首次动手也会展开（克隆页要可见）
+    await host.ensureAgentTab("sess-a");
+    expect(created[created.length - 1].visible).toBe(true);
   });
 
   it("agentBound 随会话快照持久化并在恢复后保留", async () => {

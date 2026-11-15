@@ -127,6 +127,8 @@ export default function App(): React.JSX.Element {
   const [input, setInput] = useState("");
   const [address, setAddress] = useState("");
   const [currentUrl, setCurrentUrl] = useState<string>("");
+  /** 切会话后网页是否被收起（此时显示空白页/纯净对话，点标签才展开网页）。 */
+  const [viewSuppressed, setViewSuppressed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
   // 待发指令（运行中插入的引导）：按会话保队列（切走再切回不丢），当前会话的队列镜像到 UI。
@@ -868,6 +870,25 @@ export default function App(): React.JSX.Element {
   const [agentBrowserBusy, setAgentBrowserBusy] = React.useState(0);
   /** 正在跑 Agent 的会话（轮次级）：呼吸灯按它点亮，工具执行只在轮次内的一小段。 */
   const [agentTurnSessions, setAgentTurnSessions] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    if (!api) return;
+    const applySuppressed = (suppressed: boolean): void => {
+      setViewSuppressed(suppressed);
+      // 网页收起时把页面区域让给空白页（地址栏也清空，避免「有地址但没网页」的错觉）。
+      if (suppressed) {
+        setCurrentUrl("");
+        setAddress("");
+      }
+    };
+    void api.browser
+      .viewState()
+      .then((state) => applySuppressed(Boolean(state?.suppressed)))
+      .catch(() => undefined);
+    return api.on("browser:viewSuppressed", (payload) => {
+      applySuppressed(Boolean((payload as { suppressed?: boolean } | null)?.suppressed));
+    });
+  }, [api]);
+
   React.useEffect(() => {
     if (!api || miniWindow) return;
     return api.on("chrome:agentTurn", (payload) => {
@@ -2329,7 +2350,7 @@ export default function App(): React.JSX.Element {
               onNotice={setNotice}
             />
             <StartPage
-              currentUrl={currentUrl}
+              currentUrl={viewSuppressed ? "" : currentUrl}
               loading={Boolean(tabs.find((tab) => tab.active)?.loading)}
               failure={tabs.find((tab) => tab.active)?.loadFailure ?? null}
               onRetry={retryActivePage}
