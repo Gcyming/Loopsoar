@@ -70,6 +70,8 @@ export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessio
 export interface HostView extends WebContentsViewLike {
   setBounds(bounds: BrowserViewBounds): void;
   setVisible?(visible: boolean): void;
+  /** 原生视图圆角（Electron 45 View.setBorderRadius；假 View 可不实现）。 */
+  setBorderRadius?(radius: number): void;
   /** 真实视图几何（Electron WebContentsView.getBounds；假 View 可不实现）。 */
   getBounds?(): { x: number; y: number; width: number; height: number };
 }
@@ -545,6 +547,8 @@ export class BrowserHost {
           last.height !== bounds.height
         ) {
           entry.view.setBounds(bounds);
+          // setBounds 之后重新声明圆角：视图重建/重新挂载后半径可能丢，四角会回到直角。
+          entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);
           entry.lastBounds = bounds;
         }
         // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
@@ -559,6 +563,7 @@ export class BrowserHost {
           entry.loadFailure === null;
         if (entry.lastVisible !== visible) {
           entry.view.setVisible?.(visible);
+          entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);
           entry.lastVisible = visible;
         }
       }

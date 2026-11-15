@@ -97,6 +97,12 @@ export function buildPointerHtml(): string {
       transition:opacity 140ms ease;}
     #ripple{position:fixed;left:0;top:0;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
       border:2px solid rgba(217,138,79,.9);opacity:0;pointer-events:none;}
+    /* 页框呼吸灯：画在原生覆盖层里（DOM 的呼吸灯在 WebContentsView 之下，四角会被页面直角盖住）。 */
+    #glow{position:absolute;inset:1px;border-radius:16px;pointer-events:none;opacity:0;
+      box-shadow:0 0 0 3px rgba(217,138,79,.9),0 0 28px 6px rgba(217,138,79,.55);
+      transition:opacity 180ms ease;}
+    #glow.on{opacity:.9;animation:glowPulse 1.6s ease-in-out infinite;}
+    @keyframes glowPulse{0%,100%{opacity:.45}50%{opacity:1}}
     /* 键盘提示与全局提示同一套胶囊：圆角 999 + 中灰微透 + 轻投影。 */
     #chip{position:fixed;left:0;top:0;max-width:240px;padding:7px 14px;border-radius:999px;
       background:rgba(64,68,76,.86);color:#f7f2e8;font:500 12px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -104,6 +110,7 @@ export function buildPointerHtml(): string {
       box-shadow:0 6px 18px rgba(0,0,0,.35);text-shadow:0 1px 2px rgba(0,0,0,.55);
       transition:opacity 120ms ease;}
   </style></head><body>
+    <div id="glow"></div>
     <div id="highlight"></div>
     <div id="ripple"></div>
     <div id="cursor">${CURSOR_NAV_SVG}<span id="busy" style="display:none">${CURSOR_BUSY_SVG}</span></div>
@@ -111,6 +118,7 @@ export function buildPointerHtml(): string {
     <script>
       (() => {
         const cursor = document.getElementById('cursor');
+        const glow = document.getElementById('glow');
         const highlight = document.getElementById('highlight');
         const ripple = document.getElementById('ripple');
         const chip = document.getElementById('chip');
@@ -153,6 +161,10 @@ export function buildPointerHtml(): string {
         };
         window.__lsPointer = (state) => {
           const s = state || {};
+          if (glow) {
+            glow.classList.toggle('on', s.glow === true);
+            if (s.glow !== true) glow.style.opacity = '0';
+          }
           // 光标：热点在左上角，所以整体左移/上移一个偏移量。
           if (typeof s.x === 'number' && typeof s.y === 'number') glideTo(s.x, s.y);
           cursor.style.opacity = s.visible === false ? '0' : '1';
@@ -236,6 +248,7 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
       visible: area !== null,
       highlight,
       ripple,
+      glow: held,
       ...(chip ? { chip } : {}),
     };
     if (!ready) {
