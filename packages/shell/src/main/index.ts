@@ -161,6 +161,17 @@ let deferredBootTasks: (() => void) | null = null;
 let agentWindow: AgentWindowManager | null = null;
 /** Agent 虚拟指针覆盖窗口（应用级；主窗口 closed 时销毁）。 */
 let agentPointer: AgentPointerController | null = null;
+/** 当前把虚拟光标置为常驻的会话（并发会话时只由开启它的那一轮释放）。 */
+let pointerHeldSession: string | null = null;
+/** 正在跑 Agent 轮次、且开启浏览器控制的会话：页面加载完成时据此把光标补成常驻。 */
+const agentTurnSessions = new Set<string>();
+
+/** Agent 在这个会话动手：只要该会话的网页正显示，就把覆盖层光标切成常驻。 */
+function holdPointerForAgent(sessionId: string): void {
+  if (!agentPointer || !browserHost?.isSessionVisible(sessionId)) return;
+  agentPointer.hold(true);
+  pointerHeldSession = sessionId;
+}
 /** 网页视图矩形（主窗口内容坐标）；null = 当前没有可见网页。几何由 BrowserHost.applyLayout 单源推送。 */
 let lastViewRect: { x: number; y: number; width: number; height: number } | null = null;
 
@@ -1816,6 +1827,9 @@ app.whenReady().then(async () => {
       sessionId,
       setTimeout(() => {
         tabSaveTimers.delete(sessionId);
+        // 任务会话把页面关光（或只剩用户页）时，保留上一次的任务页快照：
+        // 用户重新打开这个会话时，折叠工作区还能按原样回来（关页 ≠ 结束任务）。
+        if (sessions.isTask(sessionId) && !state.tabs.some((tab) => tab.agentBound === true)) return;
         sessions.saveBrowserState(sessionId, state);
       }, 400),
     );
@@ -1898,10 +1912,20 @@ app.whenReady().then(async () => {
       onFaviconChanged: (url, favicon) => {
         browserHistory.updateFavicon(url, favicon);
       },
+      // Agent 首次动手 → 会话升级为「浏览器任务」：列表专属标记，关页不退回普通会话。
+      onTaskCreated: (sessionId) => {
+        sessions.setTask(sessionId, true);
+      },
+      // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
+      onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
       // 网页视图几何（单源）：覆盖指针贴住网页区域；没有可见网页时传 null → 覆盖层隐藏。
       onViewLayout: (rect) => {
         lastViewRect = rect;
         syncPointerArea();
+        // 页面加载完成/切到前台时，若这一轮还在跑，把常驻光标补上（克隆页往往晚于轮次开始才可见）。
+        if (rect && browserHost && agentTurnSessions.has(browserHost.currentSessionId())) {
+          holdPointerForAgent(browserHost.currentSessionId());
+        }
       },
       // 广告/追踪拦截开关跟随偏好（默认开；设置里改动即时生效）
       isAdBlockEnabled: () => loadPreferences(dirs.configDir).adBlockEnabled ?? true,
@@ -2010,7 +2034,11 @@ app.whenReady().then(async () => {
     tabSaveTimers.clear();
     for (const meta of sessions.list()) {
       const state = browserHost?.snapshotSession(meta.id);
-      if (state && state.tabs.length > 0) sessions.saveBrowserState(meta.id, state);
+      if (!state || state.tabs.length === 0) continue;
+      // 任务会话把页面关光时保留上一次的任务页快照（与运行时防抖保存同一规则），
+      // 否则退出这一次会把「重新打开任务会话能恢复工作区」的存档覆盖成空。
+      if (sessions.isTask(meta.id) && !state.tabs.some((tab) => tab.agentBound === true)) continue;
+      sessions.saveBrowserState(meta.id, state);
     }
   };
 
@@ -2067,11 +2095,20 @@ app.whenReady().then(async () => {
       if (!browserHost) return;
       // 没有开启浏览器控制的会话本来就没有 Agent 网页：锁了只会挡住用户自己开的页面。
       if (sessions.get(sessionId)?.browserControl !== true) return;
+      agentTurnSessions.add(sessionId);
       void browserHost.lockForSession(sessionId, true, userLockLabel()).catch(() => undefined);
+      // 虚拟光标常驻：本轮开始就亮出来（页面随后才可见时由 setArea 补显示），
+      // 让用户一直能看到「Agent 的鼠标」而不是只闪一下。
+      holdPointerForAgent(sessionId);
     },
     onTurnSettled: (sessionId) => {
       pushToRenderer("chrome:agentTurn", { sessionId, running: false });
+      agentTurnSessions.delete(sessionId);
       void browserHost?.lockForSession(sessionId, false).catch(() => undefined);
+      if (pointerHeldSession === sessionId) {
+        pointerHeldSession = null;
+        agentPointer?.hold(false);
+      }
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
     onSessionOpened: async (sessionId, requestedWorkspaceId) => {
@@ -2095,7 +2132,7 @@ app.whenReady().then(async () => {
       // 唯一例外是「任务会话」（浏览状态里有 Agent 绑定标签）——折叠工作区是任务本体，
       // 打开任务时恢复其页面属于预期；普通会话保持空白，只显示对话。
       const saved = sessions.getBrowserState(sessionId) ?? undefined;
-      const taskState = saved && saved.tabs.some((tab) => tab.agentBound === true) ? saved : undefined;
+      const taskState = sessions.isTask(sessionId) || saved?.tabs.some((tab) => tab.agentBound === true) ? saved : undefined;
       const tabs = await browserHost.switchSession(sessionId, taskState);
       pushToRenderer("browser:tabs", { tabs });
     },
@@ -2119,7 +2156,7 @@ app.whenReady().then(async () => {
       if (nextSessionId) {
         // 同样只恢复任务会话的页面；普通会话只切会话，不拖出网页。
         const nextSaved = sessions.getBrowserState(nextSessionId) ?? undefined;
-        const nextTask = nextSaved && nextSaved.tabs.some((tab) => tab.agentBound === true) ? nextSaved : undefined;
+        const nextTask = sessions.isTask(nextSessionId) || nextSaved?.tabs.some((tab) => tab.agentBound === true) ? nextSaved : undefined;
         await browserHost.switchSession(nextSessionId, nextTask).catch(() => undefined);
       }
       pushToRenderer("browser:tabs", { tabs: browserHost.listTabs() });

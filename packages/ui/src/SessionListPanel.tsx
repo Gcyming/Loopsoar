@@ -192,6 +192,17 @@ export default function SessionListPanel({
           data-testid="session-item"
         >
           {isPinned ? <Icon name="pin" size={11} style={styles.pinMark} /> : null}
+          {session.task ? (
+            <span className="session-task-badge" title={tr("chat.taskSession")}>
+              <Icon name="layers-linked" size={9} />
+              {tr("chat.taskSessionLabel")}
+            </span>
+          ) : null}
+          {session.forkedFrom ? (
+            <span className="session-fork-badge" title={tr("chat.forkSession")}>
+              {tr("chat.forkSessionLabel")}
+            </span>
+          ) : null}
           <span style={styles.itemTitle}>{session.title}</span>
         </button>
         <span className="session-item-time" style={styles.itemTime}>{formatTime(session.updatedAt)}</span>

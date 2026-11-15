@@ -140,6 +140,7 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   },
   "browser.tabsAria": { zh: "标签页", en: "Tabs" },
   "browser.closeTab": { zh: "关闭标签", en: "Close tab" },
+  "browser.closeWorkspace": { zh: "关闭整个 Agent 工作区", en: "Close the whole agent workspace" },
   "browser.historyTitle": { zh: "历史记录（全局）", en: "History (global)" },
   "browser.historyVisits": { zh: "访问 {count} 次", en: "visited {count}×" },
   "browser.historyEmpty": { zh: "暂无历史", en: "No history" },
@@ -224,6 +225,13 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
   "browser.snapshotCloseBtn": { zh: "关闭", en: "Close" },
 
   /* ── 消息列表 / 消息视图 / 侧栏 ── */
+  "chat.taskSession": {
+    zh: "浏览器任务会话：Agent 在这个会话里拥有自己的折叠工作区",
+    en: "Browser task session: the agent owns a folded workspace here",
+  },
+  "chat.taskSessionLabel": { zh: "任务", en: "Task" },
+  "chat.forkSession": { zh: "从另一个会话分支出来的会话", en: "Forked from another session" },
+  "chat.forkSessionLabel": { zh: "分支", en: "Fork" },
   "chat.emptyHint": {
     zh: "和 Loopsoar 说点什么，例如「帮我总结当前网页」。",
     en: "Say something to Loopsoar, e.g. \"summarize the current page\".",

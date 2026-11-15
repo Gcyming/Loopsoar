@@ -1551,6 +1551,11 @@ export default function App(): React.JSX.Element {
   /** 一轮收尾：未注入的改回 queued；当前会话自动续发第一条（slime 的排队续发语义）。 */
   const handleStreamSettled = useCallback(
     (sessionId: string): void => {
+      // 本轮可能刚把会话升级成「浏览器任务」：刷新列表，任务/分支徽标不必等下次切会话。
+      void api?.chat
+        .sessions()
+        .then((r) => setSessions(r.sessions))
+        .catch(() => undefined);
       const current = readPending(sessionId);
       if (current.length === 0) return;
       const requeued = requeueUndelivered(current);
@@ -1714,6 +1719,26 @@ export default function App(): React.JSX.Element {
     },
     [api, tabs.length],
   );
+
+  /** 关闭整个 Agent 工作区：关闭全部绑定页（任务会话本身保留，页面关闭不等于会话结束）。 */
+  const closeAgentWorkspace = useCallback((): void => {
+    if (!api) return;
+    const ids = tabs.filter((tab) => tab.agentBound === true).map((tab) => tab.id);
+    if (ids.length === 0) return;
+    void (async () => {
+      for (const id of ids) {
+        await api.browser.closeTab({ tabId: id }).catch(() => undefined);
+      }
+      const result = await api.browser.listTabs().catch(() => null);
+      if (!result) return;
+      setTabs(result.tabs);
+      const active = result.tabs.find((tab) => tab.active);
+      const url = active?.url ?? "";
+      lastSyncedUrlRef.current = url;
+      setAddress(url);
+      setCurrentUrl(url);
+    })();
+  }, [api, tabs]);
 
   const goBack = useCallback((): void => {
     if (!api) return;
@@ -2268,6 +2293,7 @@ export default function App(): React.JSX.Element {
                     dismissAllPopovers();
                     toggleWorkspacePopover();
                   }}
+                  onCloseWorkspace={closeAgentWorkspace}
                   onSelectTab={selectTab}
                   onCloseTab={closeTab}
                   onNewTab={newTab}

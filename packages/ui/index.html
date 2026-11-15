@@ -2741,6 +2741,63 @@
       opacity: 0.4;
       cursor: not-allowed;
     }
+    /* Agent 工作区 chip：右侧 × 只在悬停/聚焦时出现（与标签关闭同一视觉语言）。 */
+    /* 会话列表：任务/分支会话的专属小标记（不靠标题猜测身份）。 */
+    .session-task-badge,
+    .session-fork-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      flex: none;
+      padding: 1px 5px;
+      border-radius: 5px;
+      font-size: 9.5px;
+      font-weight: 700;
+      line-height: 1.5;
+      letter-spacing: 0.2px;
+    }
+    .session-task-badge {
+      color: var(--ls-accent-strong, #d98a4f);
+      background: rgba(var(--ls-accent-rgb), 0.14);
+    }
+    .session-fork-badge {
+      color: var(--ls-text-faint);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .workspace-chip-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex: none;
+    }
+    .workspace-chip-close {
+      position: absolute;
+      right: -7px;
+      top: -7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 1px solid rgba(var(--ls-accent-rgb), 0.35);
+      border-radius: 50%;
+      background: var(--ls-panel-strong, #24242a);
+      color: var(--ls-text-muted);
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease, background 120ms ease;
+    }
+    .workspace-chip-wrap:hover .workspace-chip-close,
+    .workspace-chip-close:focus-visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .workspace-chip-close:hover {
+      background: rgba(var(--ls-accent-rgb), 0.22);
+      color: var(--ls-text);
+    }
     .chrome-pop-row {
       display: flex;
       align-items: center;

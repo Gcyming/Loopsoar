@@ -250,6 +250,10 @@ export interface SessionMeta {
   workspaceId?: string | null;
   /** 会话级「浏览器控制」开关（缺省 = 关闭）；消息列表/当前会话查询据此水合。 */
   browserControl?: boolean;
+  /** 浏览器任务会话（Agent 工作区）：列表专属标记。 */
+  task?: boolean;
+  /** 分支来源（列表「分支」标记）。 */
+  forkedFrom?: { sessionId: string; keepCount: number; at: number };
 }
 
 export interface WorkspaceRecord {

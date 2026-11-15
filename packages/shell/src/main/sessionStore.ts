@@ -56,6 +56,8 @@ export interface PersistedSession {
   browserControl?: boolean;
   /** 从哪个会话的哪个阶段分支出来（普通会话没有该字段）。 */
   forkedFrom?: { sessionId: string; keepCount: number; at: number };
+  /** 浏览器任务会话（Agent 工作区）：列表里要用专属标记区分，关掉页面也不退回普通会话。 */
+  task?: boolean;
 }
 
 export interface SessionMeta {
@@ -70,6 +72,8 @@ export interface SessionMeta {
   browserControl?: boolean;
   /** 分支来源（UI 列表据此显示「分支」标记）。 */
   forkedFrom?: { sessionId: string; keepCount: number; at: number };
+  /** 浏览器任务会话（Agent 工作区）：列表专属标记；与有没有打开着的页面无关。 */
+  task?: boolean;
 }
 
 interface SessionIndex {
@@ -89,6 +93,9 @@ function sanitizeMeta(item: SessionMeta): SessionMeta {
   if (item && typeof item === "object" && item.browserControl !== undefined && typeof item.browserControl !== "boolean") {
     delete item.browserControl;
   }
+  if (item && typeof item === "object" && item.task !== undefined && item.task !== true) {
+    delete item.task;
+  }
   return item;
 }
 
@@ -96,6 +103,9 @@ function sanitizeMeta(item: SessionMeta): SessionMeta {
 function sanitizeSession(data: PersistedSession): PersistedSession {
   if (data.browserControl !== undefined && typeof data.browserControl !== "boolean") {
     delete data.browserControl;
+  }
+  if (data.task !== undefined && data.task !== true) {
+    delete data.task;
   }
   return data;
 }
@@ -477,6 +487,29 @@ export class SessionStore {
       this.saveIndex(index);
     }
     return true;
+  }
+
+  /** 标记/取消「浏览器任务会话」（Agent 工作区）。任务身份独立于页面是否还开着。 */
+  setTask(sessionId: string, task: boolean): boolean {
+    const file = this.sessionFile(sessionId);
+    if (!file) return false;
+    const data = this.readSession(file);
+    if (!data) return false;
+    if (task) data.task = true;
+    else delete data.task;
+    this.writeJson(file, data);
+    const index = this.index();
+    const meta = index.items.find((item) => item.id === sessionId);
+    if (meta) {
+      if (task) meta.task = true;
+      else delete meta.task;
+      this.saveIndex(index);
+    }
+    return true;
+  }
+
+  isTask(sessionId: string): boolean {
+    return this.get(sessionId)?.task === true;
   }
 
   switchTo(id: string): boolean {

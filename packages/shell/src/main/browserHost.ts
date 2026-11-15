@@ -95,6 +95,10 @@ export interface BrowserHostDeps {
   fetchFavicon?: (url: string) => Promise<string | null>;
   /** 页面图标变化：壳层用它刷新全局历史里同 URL 条目的图标。 */
   onFaviconChanged?: (url: string, favicon: string) => void;
+  /** 首次任务化（Agent 拿到自己的克隆页）：壳层据此把会话标记成「浏览器任务」。 */
+  onTaskCreated?: (sessionId: string) => void;
+  /** Agent 正在这个会话里动手（克隆页已可见）：壳层据此把虚拟光标切成常驻。 */
+  onAgentActing?: (sessionId: string) => void;
   /**
    * 网页视图几何（主窗口内容坐标系）：Agent 覆盖窗口据此严丝合缝地贴住网页区域。
    * 传 null = 当前没有可见网页（无标签 / 加载中 / 浮层打开 / 非活动会话），覆盖层必须隐藏。
@@ -1145,11 +1149,15 @@ export class BrowserHost {
     const entry = this.createTab(sid);
     const id = group.activeId!;
     entry.agentBound = true;
+    // 先标记任务身份，再 emit 落盘：否则第一次保存会因为「还不知道是任务」而丢掉标记。
+    this.deps.onTaskCreated?.(sid);
     if (sourceUrl) {
       const outcome = await this.navigate(sourceUrl, id, sid, "agent");
       if (!outcome.ok) entry.url = sourceUrl;
     }
     this.emitTabs(sid);
+    // 页面此刻才真正可见：把「常驻光标」从现在开始算，而不是等用户看到第一次点击。
+    this.deps.onAgentActing?.(sid);
     return id;
   }
 

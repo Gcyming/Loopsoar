@@ -59,6 +59,11 @@ export interface AgentPointerController {
   click(x?: number, y?: number): void;
   /** 光标旁的键盘/输入提示（胶囊，约 1 秒后淡出）。 */
   chip(text: string): void;
+  /**
+   * 「常驻」开关：Agent 一轮任务开始时 hold(true)——光标一直可见（即使没动作），
+   * 轮次结束后 hold(false) 再按空闲时长隐藏。用户要求 Agent 只用虚拟光标，且要看得见。
+   */
+  hold(active: boolean): void;
   /** 立即隐藏（stop/会话切换）。 */
   hide(): void;
   destroy(): void;
@@ -174,6 +179,8 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
   let ripple = 0;
   let chip: { text: string; seq: number } | null = null;
   let hideTimer: unknown = null;
+  let held = false;
+  let everMoved = false;
   const idleHideMs = deps.idleHideMs ?? 1600;
   const schedule = deps.setTimeoutFn ?? ((cb: () => void, ms: number) => setTimeout(cb, ms));
   const cancel = deps.clearTimeoutFn ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
@@ -259,6 +266,8 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
   };
 
   const armHide = (): void => {
+    // 任务进行中不自动隐藏：光标是「Agent 正在操作」的持续信号，不是一次性动画。
+    if (held) return;
     if (!area) return;
     if (hideTimer) cancel(hideTimer);
     hideTimer = schedule(() => {
@@ -300,9 +309,19 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
           if (ready) target.showInactive();
         }
       }
+      // 常驻期间页面才出现（加载完成/切到可见会话）：立刻把光标亮出来，不等下一次动作。
+      if (held) {
+        if (!everMoved) {
+          x = Math.round(area.width / 2);
+          y = Math.round(area.height / 2);
+        }
+        show();
+        flush();
+      }
     },
 
     moveTo(nextX: number, nextY: number): void {
+      everMoved = true;
       x = Math.round(nextX);
       y = Math.round(nextY);
       show();
@@ -343,7 +362,27 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
       armHide();
     },
 
+    hold(active: boolean): void {
+      held = active;
+      if (active) {
+        if (hideTimer) {
+          cancel(hideTimer);
+          hideTimer = null;
+        }
+        if (!area) return;
+        if (!everMoved) {
+          x = Math.round(area.width / 2);
+          y = Math.round(area.height / 2);
+        }
+        show();
+        flush();
+        return;
+      }
+      armHide();
+    },
+
     hide(): void {
+      held = false;
       if (hideTimer) {
         cancel(hideTimer);
         hideTimer = null;

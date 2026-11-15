@@ -41,6 +41,17 @@ describe("SessionStore.fork", () => {
     expect(store.currentId()).toBe(forked!.sessionId);
   });
 
+  it("任务标记独立于页面：setTask 落库到会话与索引，清掉即恢复普通会话", () => {
+    const store = new SessionStore(tmpDir());
+    const session = store.newSession();
+    expect(store.setTask(session.sessionId, true)).toBe(true);
+    expect(store.isTask(session.sessionId)).toBe(true);
+    expect(store.list().find((item) => item.id === session.sessionId)?.task).toBe(true);
+    expect(store.setTask(session.sessionId, false)).toBe(true);
+    expect(store.isTask(session.sessionId)).toBe(false);
+    expect(store.list().find((item) => item.id === session.sessionId)?.task).toBeUndefined();
+  });
+
   it("keepCount 越界会夹紧；源会话不存在返回 null（不新建）", () => {
     const store = new SessionStore(tmpDir());
     const source = store.newSession();

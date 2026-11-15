@@ -127,6 +127,22 @@ describe("覆盖指针 · 生命周期", () => {
     expect(wins[0].bounds).toEqual({ x: 40, y: 60, width: 400, height: 300 });
   });
 
+  it("hold(true) 常驻：不自动隐藏，页面稍后才出现也立刻显示；hold(false) 恢复空闲隐藏", async () => {
+    const { controller, wins, timers } = makeController();
+    controller.hold(true); // 此时还没有页面几何：不建窗口
+    expect(wins.length).toBe(0);
+    controller.setArea({ x: 0, y: 0, width: 200, height: 100 });
+    await settle();
+    expect(wins.length).toBe(1);
+    expect(wins[0].hidden).toBe(false);
+    expect(timers.size).toBe(0); // 常驻期间不排空闲隐藏
+    controller.hold(false);
+    const pending = [...timers.values()];
+    expect(pending.length).toBeGreaterThan(0);
+    pending[pending.length - 1]();
+    expect(wins[0].hidden).toBe(true);
+  });
+
   it("空闲计时到点隐藏；setArea(null) 立即隐藏", async () => {
     const { controller, wins, timers } = makeController();
     controller.setArea({ x: 0, y: 0, width: 200, height: 100 });

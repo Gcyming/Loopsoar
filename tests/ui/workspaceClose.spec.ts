@@ -25,6 +25,18 @@ describe("Agent 工作区 · 关闭入口", () => {
     expect(source).toContain("closeTab(p.payload.tabId)");
   });
 
+  it("折叠 chip 自身也有整组关闭入口，会话列表有任务/分支标记", () => {
+    const tabs = read(path.join("packages", "ui", "src", "BrowserTabs.tsx"));
+    expect(tabs).toContain("workspace-chip-close");
+    expect(tabs).toContain("onCloseWorkspace");
+    const app = read(path.join("packages", "ui", "src", "App.tsx"));
+    expect(app).toContain("closeAgentWorkspace");
+    expect(app).toContain("onCloseWorkspace={closeAgentWorkspace}");
+    const list = read(path.join("packages", "ui", "src", "SessionListPanel.tsx"));
+    expect(list).toContain("session-task-badge");
+    expect(list).toContain("session-fork-badge");
+  });
+
   it("关闭按钮样式存在，且与标签条关闭同一套视觉语言", () => {
     const html = read(path.join("packages", "ui", "index.html"));
     expect(html).toContain(".chrome-pop-close");

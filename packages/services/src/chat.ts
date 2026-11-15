@@ -411,6 +411,8 @@ export class ChatService {
     const textFilter = createStreamFilter();
     const reasoningFilter = createStreamFilter();
 
+    // 最近一段流是正文还是推理：边界 flush 时按它决定先后，避免把交错的两种流顺序倒过来。
+    let lastStreamKind: "chunk" | "reasoning" | null = null;
     const emit = (type: ChatEventType, data: unknown): void => {
       // chunk/reasoning 的 LoopEvent.data 形如 { text }：取纯文本推出（否则 UI 会显示 JSON 片段）
       let content: string;
@@ -420,7 +422,30 @@ export class ChatService {
         content = filterEnabled ? (type === "chunk" ? textFilter.push(raw) : reasoningFilter.push(raw)) : raw;
         // 过滤后为空 = 本批全在跨 chunk 缓冲里：先不推空内容，收尾 flush 时再补（避免 UI 出现空块）
         if (filterEnabled && content.length === 0) return;
+        lastStreamKind = type;
       } else {
+        // 非流式事件（工具/进度/警告）是这一小段输出结束的边界：
+        // 先把正文/推理过滤器里的跨 chunk 尾巴推出去，否则它会迟到——被拼到下一个工具之后，
+        // 表现为「思考内容东一句西一句、每段开头缺前半句」（用户 m03384 的截图）。
+        if (filterEnabled && type !== "heartbeat") {
+          // 按「最近一段流」的先后 flush：交错输出时不能把正文尾巴插到推理前面。
+          const flushReasoning = (): void => {
+            const tail = reasoningFilter.flush();
+            if (tail) batcher.push({ content: tail, meta: { type: "reasoning" } });
+          };
+          const flushText = (): void => {
+            const tail = textFilter.flush();
+            if (tail) batcher.push({ content: tail, meta: { type: "chunk" } });
+          };
+          if (lastStreamKind === "chunk") {
+            flushText();
+            flushReasoning();
+          } else {
+            flushReasoning();
+            flushText();
+          }
+          lastStreamKind = null;
+        }
         content = typeof data === "string" ? data : JSON.stringify(data);
       }
       batcher.push({ content, meta: { type } });

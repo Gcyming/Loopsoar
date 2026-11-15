@@ -25,6 +25,8 @@ export interface BrowserTabsProps {
   boundTabs: TabState[];
   /** 点 chip：由 App 打开独立浮层（网页既不消失也不被挤）。 */
   onToggleWorkspace: () => void;
+  /** 关掉整个 Agent 工作区（chip 右侧 ×）：关闭全部绑定页，任务会话本身保留。 */
+  onCloseWorkspace: () => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
@@ -34,6 +36,7 @@ export default function BrowserTabs({
   tabs,
   boundTabs,
   onToggleWorkspace,
+  onCloseWorkspace,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -45,21 +48,36 @@ export default function BrowserTabs({
     <div style={styles.wrap}>
       <div style={styles.strip} role="tablist" aria-label={tr("browser.tabsAria")}>
         {boundTabs.length > 0 ? (
-          <button
-            type="button"
-            style={styles.chip}
-            title={tr("browser.agentWorkspace")}
-            aria-label={`${tr("browser.agentWorkspace")} · ${tr("browser.agentWorkspaceCount", { n: boundTabs.length })}`}
-            aria-haspopup="menu"
-            data-chrome-popover-trigger=""
-            data-workspace-chip="1"
-            onClick={onToggleWorkspace}
-          >
-            <Icon name="layers-linked" size={12} style={styles.chipIcon} />
-            <span style={styles.chipLabel}>{tr("browser.agentWorkspace")}</span>
-            <span style={styles.chipCount}>{tr("browser.agentWorkspaceCount", { n: boundTabs.length })}</span>
-            <Icon name="chevron-down" size={10} style={{ flex: "none" }} />
-          </button>
+          <span className="workspace-chip-wrap" style={styles.chipWrap}>
+            <button
+              type="button"
+              style={styles.chip}
+              title={tr("browser.agentWorkspace")}
+              aria-label={`${tr("browser.agentWorkspace")} · ${tr("browser.agentWorkspaceCount", { n: boundTabs.length })}`}
+              aria-haspopup="menu"
+              data-chrome-popover-trigger=""
+              data-workspace-chip="1"
+              onClick={onToggleWorkspace}
+            >
+              <Icon name="layers-linked" size={12} style={styles.chipIcon} />
+              <span style={styles.chipLabel}>{tr("browser.agentWorkspace")}</span>
+              <span style={styles.chipCount}>{tr("browser.agentWorkspaceCount", { n: boundTabs.length })}</span>
+              <Icon name="chevron-down" size={10} style={{ flex: "none" }} />
+            </button>
+            <button
+              type="button"
+              className="workspace-chip-close"
+              title={tr("browser.closeWorkspace")}
+              aria-label={tr("browser.closeWorkspace")}
+              data-workspace-close="1"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCloseWorkspace();
+              }}
+            >
+              <Icon name="close" size={10} />
+            </button>
+          </span>
         ) : null}
         {tabs.map((tab) => (
           <div
@@ -131,6 +149,7 @@ const styles: Record<string, React.CSSProperties> = {
     paddingLeft: 6,
     WebkitAppRegion: "no-drag",
   } as React.CSSProperties,
+  chipWrap: { position: "relative", display: "inline-flex", alignItems: "center", flex: "none" },
   chip: {
     display: "flex",
     alignItems: "center",
