@@ -1775,8 +1775,12 @@ export default function App(): React.JSX.Element {
       lastSyncedUrlRef.current = url;
       setAddress(url);
       setCurrentUrl(url);
+      // 关掉折叠工作区 = 任务结束：离开特殊会话，回到一个新的空白会话。
+      if (tabs.some((tab) => tab.agentBound === true)) {
+        await createFreshSessionAndTab({ newBlankTab: true }).catch(() => undefined);
+      }
     })();
-  }, [api, tabs]);
+  }, [api, tabs, createFreshSessionAndTab]);
 
   const goBack = useCallback((): void => {
     if (!api) return;
@@ -2005,6 +2009,7 @@ export default function App(): React.JSX.Element {
     return api.on("chat:taskForked", (payload) => {
       const to = (payload as { to?: string } | null)?.to;
       if (!to) return;
+      refreshSessions();
       switchSession(to);
       void api.browser
         .showTask({ sessionId: to })

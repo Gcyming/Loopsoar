@@ -619,9 +619,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Field l={tr("settings.general.restoreSession")}><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
           <Field l={tr("settings.general.maxRounds")} h={tr("settings.general.maxRoundsHint")}>
             <In
-              v={String(prefs.agentMaxRounds ?? 40)}
+              v={String(prefs.agentMaxRounds ?? 80)}
               ph="40"
-              on={(x) => setPrefs({ ...prefs, agentMaxRounds: Math.max(1, Math.min(500, Number(x) || 40)) })}
+              on={(x) => setPrefs({ ...prefs, agentMaxRounds: Math.max(1, Math.min(500, Number(x) || 80)) })}
             />
           </Field>
           <Field l={tr("settings.general.maxToolCalls")} h={tr("settings.general.maxToolCallsHint")}>

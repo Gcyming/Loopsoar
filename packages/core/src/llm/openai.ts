@@ -391,9 +391,16 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             // 绝不能重试、也不能转成 error chunk（UI 会当成红色失败并继续显示思考中）。
             if (req.signal?.aborted) throw err;
             if (emitted) throw err; // 已开始输出：不重试，避免重复内容
-            const retryable = err instanceof RetryableError;
+            // fetch failed / ECONNRESET 等网络错误不是 RetryableError，但它们是瞬时的：
+            // 之前直接放弃成「重试 0 次后失败」，长任务里看着就像模型莫名截断。
+            const errText = err instanceof Error
+              ? `${err.message} ${String((err as { cause?: unknown }).cause ?? "")}`
+              : String(err);
+            const networkRetryable = /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|network/i.test(errText);
+            const retryErr = err instanceof RetryableError ? err : null;
+            const retryable = retryErr !== null || networkRetryable;
             // 429 自带更严的重试上限（Lead 要求最多 1~2 次），避免长等待刷屏
-            const retryLimit = retryable && err.maxAttempts !== undefined ? Math.min(maxRetries, err.maxAttempts) : maxRetries;
+            const retryLimit = retryErr && retryErr.maxAttempts !== undefined ? Math.min(maxRetries, retryErr.maxAttempts) : maxRetries;
             if (!retryable || attempt >= retryLimit) {
               yield {
                 kind: "error",
@@ -401,7 +408,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
               };
               return;
             }
-            const waitMs = err.retryAfterMs || DEFAULT_RETRY_BACKOFF[Math.min(attempt, DEFAULT_RETRY_BACKOFF.length - 1)];
+            const waitMs = retryErr?.retryAfterMs || DEFAULT_RETRY_BACKOFF[Math.min(attempt, DEFAULT_RETRY_BACKOFF.length - 1)];
             // 退避等待也要可中止：否则停止后还要空等 1~7s 才轮到下一次（或下一次 invokeOnce）观察信号
             await new Promise<void>((resolve) => {
               const done = (): void => {

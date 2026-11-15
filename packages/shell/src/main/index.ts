@@ -1848,6 +1848,9 @@ app.whenReady().then(async () => {
   const tabSaveTimers = new Map<string, NodeJS.Timeout>();
   /** 本轮首次动作触发任务化：等回合一结束就把任务身份过户给「从操作阶段分出的分支」。 */
   const pendingTaskForks = new Set<string>();
+  /** 本回合开始前的消息数：任务分支必须从这里切，分支点在「浏览器操作之前」。 */
+  const turnStartCounts = new Map<string, number>();
+  const pendingTaskKeep = new Map<string, number>();
   /** 全局用户标签的落盘文件（不属于任何会话）。 */
   const userTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
   const queueBrowserStateSave = (sessionId: string, state: PersistedBrowserState): void => {
@@ -1956,6 +1959,7 @@ app.whenReady().then(async () => {
         // 动作期间先把当前会话临时当任务（折叠页立即出现）；回合结束后再把它过户给分支。
         sessions.setTask(sessionId, true);
         pendingTaskForks.add(sessionId);
+        pendingTaskKeep.set(sessionId, turnStartCounts.get(sessionId) ?? 0);
       },
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
@@ -2152,6 +2156,7 @@ app.whenReady().then(async () => {
      * 结束或用户停止后解锁。锁由壳层下发，因此后台会话、独立小窗、无窗口都成立。
      */
     onTurnStarted: (sessionId) => {
+      turnStartCounts.set(sessionId, sessions.get(sessionId)?.messages.length ?? 0);
       // 呼吸灯也按「轮次」而不是单次工具调用：工具执行只有几百毫秒，用户根本看不到。
       pushToRenderer("chrome:agentTurn", { sessionId, running: true });
       if (!browserHost) return;
@@ -2175,9 +2180,13 @@ app.whenReady().then(async () => {
       // 分支能完整带上「Agent 控制发生时的会话阶段」，原会话则恢复为普通讨论。
       if (pendingTaskForks.delete(sessionId) && browserHost) {
         const source = sessions.get(sessionId);
+        const keep = pendingTaskKeep.get(sessionId) ?? Math.max(0, (source?.messages.length ?? 0) - 2);
+        pendingTaskKeep.delete(sessionId);
         if (source) {
-          const fork = sessions.fork(sessionId, source.messages.length, undefined, { activate: false });
+          // 分支点在操作前：fork 只拿 keep 之前的历史；本轮用户消息+回复搬到分支。
+          const fork = sessions.fork(sessionId, keep, undefined, { activate: false });
           if (fork) {
+            sessions.moveTail(sessionId, fork.sessionId, keep);
             sessions.setTask(sessionId, false);
             sessions.setTask(fork.sessionId, true);
             browserHost.reassignSession(sessionId, fork.sessionId);

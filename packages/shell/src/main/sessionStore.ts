@@ -565,6 +565,23 @@ export class SessionStore {
     return true;
   }
 
+  /** 把 source 从 keep 之后的消息整体搬到 target（首次动作的任务分支：原会话留操作前，分支拿操作回合）。 */
+  moveTail(sourceId: string, targetId: string, keep: number): boolean {
+    const source = this.get(sourceId);
+    const target = this.get(targetId);
+    if (!source || !target) return false;
+    const k = Math.max(0, Math.min(Math.floor(keep), source.messages.length));
+    const tail = source.messages.slice(k);
+    if (tail.length === 0) return false;
+    target.messages.push(...tail);
+    target.updatedAt = Date.now();
+    source.messages = source.messages.slice(0, k);
+    source.updatedAt = Date.now();
+    this.save(target);
+    this.save(source);
+    return true;
+  }
+
   remove(id: string): boolean {
     const file = this.sessionFile(id);
     if (!file) return false;
