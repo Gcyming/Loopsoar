@@ -1103,9 +1103,14 @@ export default function App(): React.JSX.Element {
       setPendingSteers([]);
       setBusy(false);
       setInput("");
+      // 先把可见组切回用户标签，避免在任务工作区里数标签/建标签。
+      await api.browser.showUserTabs().catch(() => undefined);
       let tabs = await api.browser.listTabs();
       if (options?.newBlankTab) {
-        await api.browser.newTab({});
+        // 已经有一个空白用户页就复用它，不再叠加第二个「新建标签页」。
+        const blank = tabs.tabs.find((tab) => !tab.url);
+        if (blank) await api.browser.selectTab({ tabId: blank.id });
+        else await api.browser.newTab({});
         tabs = await api.browser.listTabs();
       } else if (tabs.tabs.length === 0) {
         await api.browser.newTab({});
