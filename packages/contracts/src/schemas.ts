@@ -1351,6 +1351,7 @@ export const EVENTS = [
   "boot:ready",
   "browser:tabs",
   "browser:viewSuppressed",
+  "chat:taskForked",
   "browser:downloads",
   "memory:updated",
   "extensions:updated",

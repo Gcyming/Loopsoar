@@ -33,7 +33,10 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:newTab", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
     const p = (payload ?? {}) as { url?: string };
-    return deps.browser.newTab(p.url, deps.browser.visibleSessionId());
+    // 用户点「+」永远开在全局用户标签里：即使当前正在看任务工作区，也不该把空白页塞进任务组。
+    const result = await deps.browser.newTab(p.url, USER_TABS_SESSION);
+    deps.browser.showUserTabs();
+    return result;
   });
 
   handleTrusted(deps, "browser:closeTab", async (payload) => {

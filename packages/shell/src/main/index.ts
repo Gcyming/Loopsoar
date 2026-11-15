@@ -1846,6 +1846,8 @@ app.whenReady().then(async () => {
     sessions.setWorkspaceId(initialSessionId, workspaces.activeId());
   }
   const tabSaveTimers = new Map<string, NodeJS.Timeout>();
+  /** 本轮首次动作触发任务化：等回合一结束就把任务身份过户给「从操作阶段分出的分支」。 */
+  const pendingTaskForks = new Set<string>();
   /** 全局用户标签的落盘文件（不属于任何会话）。 */
   const userTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
   const queueBrowserStateSave = (sessionId: string, state: PersistedBrowserState): void => {
@@ -1951,11 +1953,9 @@ app.whenReady().then(async () => {
       // Agent 首次动手 → 会话升级为「浏览器任务」：列表专属标记，关页不退回普通会话。
       onTaskCreated: (sessionId) => {
         if (sessions.isTask(sessionId)) return;
+        // 动作期间先把当前会话临时当任务（折叠页立即出现）；回合结束后再把它过户给分支。
         sessions.setTask(sessionId, true);
-        // 首次动作 = 任务阶段：当前会话成为任务；同时复制一份「执行前」的讨论分支（普通会话）。
-        // 分支不激活（当前回合继续留在任务会话里），用户之后可在这个干净分支里纯讨论。
-        const source = sessions.get(sessionId);
-        if (source) sessions.fork(sessionId, source.messages.length, undefined, { activate: false });
+        pendingTaskForks.add(sessionId);
       },
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
@@ -2170,6 +2170,23 @@ app.whenReady().then(async () => {
       if (pointerHeldSession === sessionId) {
         pointerHeldSession = null;
         agentPointer?.hold(false);
+      }
+      // 首次动作的任务化延迟到回合结束：这时 append 刚把本轮回复写进原会话，
+      // 分支能完整带上「Agent 控制发生时的会话阶段」，原会话则恢复为普通讨论。
+      if (pendingTaskForks.delete(sessionId) && browserHost) {
+        const source = sessions.get(sessionId);
+        if (source) {
+          const fork = sessions.fork(sessionId, source.messages.length, undefined, { activate: false });
+          if (fork) {
+            sessions.setTask(sessionId, false);
+            sessions.setTask(fork.sessionId, true);
+            browserHost.reassignSession(sessionId, fork.sessionId);
+            const state = browserHost.snapshotSession(fork.sessionId);
+            if (state && state.tabs.length > 0) sessions.saveBrowserState(fork.sessionId, state);
+            sessions.saveBrowserState(sessionId, { tabs: [], activeIndex: 0 });
+            pushToRenderer("chat:taskForked", { from: sessionId, to: fork.sessionId });
+          }
+        }
       }
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话

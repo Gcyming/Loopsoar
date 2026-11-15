@@ -653,6 +653,7 @@ export type LoopsoarEvent =
   | "boot:ready"
   | "browser:tabs"
   | "browser:viewSuppressed"
+  | "chat:taskForked"
   | "browser:downloads"
   | "extensions:updated"
   | "skills:updated"

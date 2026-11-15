@@ -1385,6 +1385,20 @@ export class BrowserHost {
     this.emitTabs(USER_TABS_SESSION);
   }
 
+  /** 把 from 的标签组整体过户给 to（首次动作结束后，原会话留讨论、任务归分支会话）。 */
+  reassignSession(from: string, to: string): void {
+    const src = from.trim();
+    const dst = to.trim();
+    if (!src || !dst || src === dst) return;
+    const group = this.groups.get(src);
+    if (!group) return;
+    this.groups.delete(src);
+    this.groups.set(dst, group);
+    if (this.activeSession === src) this.activeSession = dst;
+    if (this.visibleSession === src) this.visibleSession = dst;
+    this.emitTabs(dst);
+  }
+
   /** 显示某个任务会话的 Agent 工作区（折叠标签页）。 */
   showTask(sessionId: string): void {
     const sid = sessionId.trim();

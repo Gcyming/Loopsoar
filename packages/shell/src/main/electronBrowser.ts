@@ -378,7 +378,7 @@ export function createElectronBrowserHost(
   // 反圆角 mask 抠出四分之一圆；它只覆盖 14px 的角，平时不挡鼠标/输入。
   let cornerWindow: BrowserWindow | null = null;
   const cornerCss = "html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}"
-    + ".c{position:absolute;width:14px;height:14px;background:#17191e;pointer-events:none}"
+    + ".c{position:absolute;width:14px;height:14px;background:#171B22;pointer-events:none}"
     + ".tl{left:0;top:0;-webkit-mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px)}"
     + ".tr{right:0;top:0;-webkit-mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px)}"
     + ".bl{left:0;bottom:0;-webkit-mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px)}"
@@ -428,10 +428,11 @@ export function createElectronBrowserHost(
     });
     if (!win.isVisible()) {
       win.showInactive();
-      win.moveTop();
     }
   };
 
+  // 先建遮罩窗口（隐藏），保证它排在后续的 Agent 指针/呼吸灯覆盖层之下。
+  ensureCornerWindow();
   return new BrowserHost({
     initialSessionId: options.initialSessionId,
     onSessionStateChanged: options.onSessionStateChanged,
@@ -469,7 +470,7 @@ export function createElectronBrowserHost(
       view.setBorderRadius(LAYOUT.BROWSER_VIEW_RADIUS);
       // 圆角切掉的四个角是「视图背景」而不是窗口背景：默认黑色会在呼吸灯外侧留下黑色方角。
       // 用外壳抬高面的颜色填掉，切角与周围 workRow 融为一体。
-      view.setBackgroundColor("#17191e");
+      view.setBackgroundColor("#171B22");
       view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
       // 点网页区域 = 点到「列表外」：通知主窗口收起按钮展开的浮层（DOM 收不到原生视图的点击）
       if (options.onViewFocused) {

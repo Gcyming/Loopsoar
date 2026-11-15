@@ -1999,6 +1999,25 @@ export default function App(): React.JSX.Element {
     [api, switchSession],
   );
 
+  // 首次动作结束：任务身份过户给新分支，界面跟着进入该任务的折叠工作区。
+  React.useEffect(() => {
+    if (!api) return;
+    return api.on("chat:taskForked", (payload) => {
+      const to = (payload as { to?: string } | null)?.to;
+      if (!to) return;
+      switchSession(to);
+      void api.browser
+        .showTask({ sessionId: to })
+        .then((r) => {
+          setTabs(r.tabs);
+          const active = r.tabs.find((tab) => tab.active);
+          setAddress(active?.url ?? "");
+          setCurrentUrl(active?.url ?? "");
+        })
+        .catch(() => undefined);
+    });
+  }, [api, switchSession]);
+
   const forkFrom = useCallback(
     (targetId: string): void => {
       if (!api) return;
