@@ -363,31 +363,6 @@
         background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
         pointer-events: none;
       }
-      /* Agent 操控中：网页页框四周的呼吸灯（纯视觉，pointer-events:none，不挡操作） */
-      /* Agent 正在操作网页：围着网页四周的呼吸灯。
-         只能画在原生视图外侧的 8px 留白里（WebContentsView 永远盖住 DOM），
-         所以用 1px 定位 + 2px 环 + 外发光，让光晕落在页框留白上。 */
-      .agent-browser-glow {
-        position: absolute;
-        inset: 1px;
-        border-radius: 16px;
-        pointer-events: none;
-        z-index: 6;
-        box-shadow:
-          0 0 0 3px rgba(217, 138, 79, 0.9),
-          0 0 28px 6px rgba(217, 138, 79, 0.55);
-        animation: agentGlowPulse 1.6s ease-in-out infinite;
-      }
-      @keyframes agentGlowPulse {
-        0%, 100% { opacity: 0.45; }
-        50% { opacity: 1; }
-      }
-      html[data-animations="reduced"] .agent-browser-glow,
-      html[data-animations="off"] .agent-browser-glow {
-        animation: none;
-        opacity: 0.85;
-      }
-
       .sidebar-toggle {
         background: var(--ls-accent-soft);
         color: var(--ls-accent-hover);

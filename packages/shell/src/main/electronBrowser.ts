@@ -404,6 +404,9 @@ export function createElectronBrowserHost(
       // 网页面板圆角：与 DOM 页框（StartPage.browserPane）共用同一契约值，
       // 原生视图切掉的四角露出应用底色，不再出现「网页直角顶到边缘」的硬缝。
       view.setBorderRadius(LAYOUT.BROWSER_VIEW_RADIUS);
+      // 圆角切掉的四个角是「视图背景」而不是窗口背景：默认黑色会在呼吸灯外侧留下黑色方角。
+      // 用外壳抬高面的颜色填掉，切角与周围 workRow 融为一体。
+      view.setBackgroundColor("#17191e");
       view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
       // 点网页区域 = 点到「列表外」：通知主窗口收起按钮展开的浮层（DOM 收不到原生视图的点击）
       if (options.onViewFocused) {

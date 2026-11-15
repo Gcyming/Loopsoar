@@ -98,8 +98,9 @@ export function buildPointerHtml(): string {
     #ripple{position:fixed;left:0;top:0;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
       border:2px solid rgba(217,138,79,.9);opacity:0;pointer-events:none;}
     /* 页框呼吸灯：画在原生覆盖层里（DOM 的呼吸灯在 WebContentsView 之下，四角会被页面直角盖住）。 */
-    #glow{position:absolute;inset:1px;border-radius:16px;pointer-events:none;opacity:0;
-      box-shadow:0 0 0 3px rgba(217,138,79,.9),0 0 28px 6px rgba(217,138,79,.55);
+    #glow{position:absolute;inset:0;border-radius:14px;pointer-events:none;opacity:0;
+      border:2px solid rgba(217,138,79,.9);
+      box-shadow:inset 0 0 18px rgba(217,138,79,.28),0 0 24px 4px rgba(217,138,79,.45);
       transition:opacity 180ms ease;}
     #glow.on{opacity:.9;animation:glowPulse 1.6s ease-in-out infinite;}
     @keyframes glowPulse{0%,100%{opacity:.45}50%{opacity:1}}

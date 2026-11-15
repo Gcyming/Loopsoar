@@ -2368,10 +2368,7 @@ export default function App(): React.JSX.Element {
       <div style={styles.workRow}>
         {miniWindow ? null : (
           <div style={{ ...styles.pageColumn, position: "relative" }}>
-            {/* Agent 正在操控本会话浏览器：页框四周呼吸灯（会话隔离，仅当前会话显示） */}
-            {(agentTurnSessions.includes(currentSession ?? "") && boundTabs.length > 0) || agentBrowserBusy > 0 ? (
-              <span className="agent-browser-glow" aria-hidden="true" data-testid="agent-browser-glow" />
-            ) : null}
+            {/* 呼吸灯已移到 Agent 覆盖窗口（原生视图之上）：DOM 层再画一圈会和它叠成双环。 */}
             <BrowserChrome
               tabs={tabs}
               address={address}
