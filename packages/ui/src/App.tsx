@@ -884,6 +884,14 @@ export default function App(): React.JSX.Element {
 
   React.useEffect(() => {
     if (!api) return;
+    return api.on("browser:tabs", (payload) => {
+      const visible = (payload as { visibleSession?: string } | null)?.visibleSession;
+      if (visible) setBrowserVisibleSession(visible);
+    });
+  }, [api]);
+
+  React.useEffect(() => {
+    if (!api) return;
     const refreshTasks = (): void => {
       void api.browser
         .listTasks()

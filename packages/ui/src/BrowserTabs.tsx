@@ -50,13 +50,16 @@ export default function BrowserTabs({
   onOpenTask,
 }: BrowserTabsProps): React.ReactElement {
   const tr = useT();
+  const boundTabIds = new Set(boundTabs.map((tab) => tab.id));
   return (
     // wrap 才是绝对定位面板的包含块：strip 自己 overflow:hidden（标签超宽裁切），
     // 面板必须挂在 strip 之外，否则会被一起裁掉。
     <div style={styles.wrap}>
       <div style={styles.strip} role="tablist" aria-label={tr("browser.tabsAria")}>
         {agentTasks
-          .filter((task) => task.sessionId !== (currentSessionId ?? null))
+          // 可见组的任务由 boundTabs 那条 chip 代表；即使 sessionId 还没对齐，
+          // 只要它包含当前工作区的标签，也不能再画第二个「任务工作区」。
+          .filter((task) => task.sessionId !== (currentSessionId ?? null) && !task.tabs.some((tab) => boundTabIds.has(tab.id)))
           .map((task) => (
             <button
               key={task.sessionId}

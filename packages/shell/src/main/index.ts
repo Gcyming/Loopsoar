@@ -2067,7 +2067,7 @@ app.whenReady().then(async () => {
     const tabs = await browserHost.switchSession(initialSessionId, bootTaskState).catch(() => []);
     // 普通会话启动时显示用户全局标签；任务会话显示自己的工作区。
     if (!sessions.isTask(initialSessionId)) browserHost.showUserTabs();
-    pushToRenderer("browser:tabs", { tabs });
+    pushToRenderer("browser:tabs", { tabs, visibleSession: browserHost?.visibleSessionId() });
   })();
   bootTrace.mark("browser-host");
   // 注：全局历史补记（browser-history.json 的同步落盘）已移到首帧后的 deferred 启动任务里，见 runDeferredBootTasks。
@@ -2315,7 +2315,7 @@ app.whenReady().then(async () => {
         ? { ...saved, tabs: saved.tabs.filter((tab) => tab.agentBound === true) }
         : undefined;
       const tabs = await browserHost.switchSession(sessionId, taskState);
-      pushToRenderer("browser:tabs", { tabs });
+      pushToRenderer("browser:tabs", { tabs, visibleSession: browserHost?.visibleSessionId() });
     },
     onSessionDeleting: async (sessionId) => {
       terminals.closeSession(sessionId);
@@ -2341,7 +2341,7 @@ app.whenReady().then(async () => {
         const nextTask = sessions.isTask(nextSessionId) || nextSaved?.tabs.some((tab) => tab.agentBound === true) ? nextSaved : undefined;
         await browserHost.switchSession(nextSessionId, nextTask).catch(() => undefined);
       }
-      pushToRenderer("browser:tabs", { tabs: browserHost.listTabs() });
+      pushToRenderer("browser:tabs", { tabs: browserHost.listTabs(), visibleSession: browserHost.visibleSessionId() });
     },
   });
   registerMemoryDomain({ ...deps, memory, push: pushToRenderer });

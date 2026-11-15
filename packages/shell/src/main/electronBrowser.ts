@@ -448,7 +448,8 @@ export function createElectronBrowserHost(
 
   // 先建遮罩窗口（隐藏），保证它排在后续的 Agent 指针/呼吸灯覆盖层之下。
   ensureCornerWindow();
-  return new BrowserHost({
+  let hostRef: BrowserHost | null = null;
+  const host = new BrowserHost({
     initialSessionId: options.initialSessionId,
     onSessionStateChanged: options.onSessionStateChanged,
     onVisited: options.onVisited,
@@ -523,10 +524,13 @@ export function createElectronBrowserHost(
     },
     onTabsChanged: (tabs) => {
       const win = getWindow();
-      win?.webContents.send("loopsoar:browser:tabs", { tabs });
+      // 带上可见组：启动恢复/切任务时 UI 需要它去重「任务工作区」和「Agent 工作区」两个 chip。
+      win?.webContents.send("loopsoar:browser:tabs", { tabs, visibleSession: hostRef?.visibleSessionId() });
     },
     openInNewTab,
   });
+  hostRef = host;
+  return host;
 }
 
 /* ────────────────────────────── 下载桥 ────────────────────────────── */
