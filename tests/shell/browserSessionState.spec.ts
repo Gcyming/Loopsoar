@@ -33,6 +33,18 @@ describe("浏览器会话状态净化", () => {
     expect(state?.tabs[0].index).toBe(49);
   });
 
+  it("折叠标签归属只认布尔 true（脏值丢弃）", () => {
+    const state = sanitizeBrowserState({
+      tabs: [
+        { url: "https://a.example/", agentBound: true },
+        { url: "https://b.example/", agentBound: "yes" },
+        { url: "https://c.example/" },
+      ],
+      activeIndex: 0,
+    });
+    expect(state?.tabs.map((tab) => tab.agentBound)).toEqual([true, undefined, undefined]);
+  });
+
   it("保留标题并兜底活动索引", () => {
     const state = sanitizeBrowserState({
       tabs: [

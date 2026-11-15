@@ -84,6 +84,15 @@ export const ChatRollbackSchema = z.object({
   keepCount: z.number().int().min(0).max(10_000),
   sessionId: SessionIdSchema.optional(),
 });
+/**
+ * 会话分支：把源会话的前 keepCount 条消息复制成一个新会话（从指定阶段另开一方向）。
+ * 不继承运行态（allow-session 白名单、流、压缩状态），消息前缀逐条一致。
+ */
+export const ChatForkSchema = z.object({
+  sessionId: SessionIdSchema.optional(),
+  keepCount: z.number().int().min(0).max(10_000),
+  title: z.string().min(1).max(80).optional(),
+});
 export const ChatStopSchema = z.object({ sessionId: SessionIdSchema });
 export const ChatSendSchema = z.object({ message: z.string(), sessionId: SessionIdSchema.optional() });
 /**
@@ -498,6 +507,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "rollback",
     request: ChatRollbackSchema,
+    sensitive: true,
+  },
+  "chat:forkSession": {
+    domain: "chat",
+    method: "forkSession",
+    request: ChatForkSchema,
     sensitive: true,
   },
   "fs:readImage": {

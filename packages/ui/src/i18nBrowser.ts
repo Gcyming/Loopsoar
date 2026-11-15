@@ -233,6 +233,10 @@ export const BROWSER_I18N: Record<string, { zh: string; en: string }> = {
     zh: "回滚：撤销此消息及之后的对话（内容放回输入框）",
     en: "Rollback: undo this message and everything after it (content goes back to the composer)",
   },
+  "chat.forkTitle": {
+    zh: "从此分支：复制到这条消息为止的对话到新会话（原会话不变）",
+    en: "Branch from here: copy the conversation up to this message into a new session",
+  },
   "chat.copyMessageTitle": { zh: "复制消息", en: "Copy message" },
   "chat.copyReplyTitle": { zh: "复制回复", en: "Copy reply" },
   "chat.regenerateTitle": {

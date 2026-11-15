@@ -29,6 +29,13 @@
       "hasRequest": true
     },
     {
+      "channel": "chat:forkSession",
+      "domain": "chat",
+      "method": "forkSession",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "fs:readImage",
       "domain": "fs",
       "method": "readImage",

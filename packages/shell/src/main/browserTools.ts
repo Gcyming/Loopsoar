@@ -326,7 +326,7 @@ export function registerBrowserTools(
   registry.register({
     name: "browser_snapshot",
     description:
-      "读取当前标签页的地址、标题、可见正文与可交互元素（元素以 #eN 编号，可直接用于 browser_click/browser_type；Agent 浏览网页的首选：先快照再决策）。#eN 绑定到标签：切换标签后需在该标签重新快照",
+      "读取当前标签页的地址、标题、可见正文与可交互元素（元素以 #eN 编号，可直接用于 browser_click/browser_type；Agent 浏览网页的首选：先快照再决策）。像用户一样操作：搜索/输入框用 browser_type 点进去逐字输入，提交用 browser_press_key（Enter），不要用脚本直接改值或 el.click()。#eN 绑定到标签：切换标签后需在该标签重新快照",
     permissions: { read: true },
     schema: z.object({ maxChars: z.number().int().min(200).max(30000).optional() }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -403,7 +403,7 @@ export function registerBrowserTools(
   registry.register({
     name: "browser_click",
     description:
-      "点击页面元素：优先用快照里的 #eN（如 e5 或 5），也支持 CSS 选择器或 'text=登录'。点前做命中验证（被浮层遮挡返回 BLOCKED_BY_OVERLAY），点后返回地址/标题/加载态状态行",
+      "点击页面元素（真实鼠标事件，像用户一样移动光标并按下去）：优先用快照里的 #eN（如 e5 或 5），也支持 CSS 选择器或 'text=登录'。点前做命中验证（被浮层遮挡返回 BLOCKED_BY_OVERLAY），点后返回地址/标题/加载态状态行",
     permissions: { browser: true },
     schema: z.object({ target: z.string().min(1).max(500) }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -1017,4 +1017,43 @@ export function registerBrowserTools(
       }
     },
   });
+
+  /**
+   * 动作类工具执行前先做「任务化准备」：首次动手时把当前用户页克隆进 Agent 工作区
+   * （`BrowserHost.ensureAgentTab`），原页保持不动。
+   *
+   * 只读工具（snapshot/screenshot/wait/tabs 读取）不包装：看页面不是工作，不该克隆。
+   * 用 force 重注册同一个工具定义，执行链不变，只是在最前面加一步幂等准备。
+   */
+  const ACTION_TOOL_NAMES = [
+    "browser_navigate",
+    "browser_click",
+    "browser_type",
+    "browser_press_key",
+    "browser_scroll",
+    "browser_hover",
+    "browser_select",
+    "browser_dismiss_popup",
+    "browser_back",
+    "browser_forward",
+    "browser_reload",
+  ];
+  for (const name of ACTION_TOOL_NAMES) {
+    const def = registry.get(name);
+    if (!def) continue;
+    const execute = def.execute;
+    registry.register(
+      {
+        ...def,
+        execute: async (ctx) => {
+          const host = browserHost();
+          if (host && typeof host.ensureAgentTab === "function") {
+            await host.ensureAgentTab(ctx.sessionId).catch(() => null);
+          }
+          return execute(ctx);
+        },
+      },
+      { force: true },
+    );
+  }
 }

@@ -28,6 +28,7 @@ export interface MessageListProps {
   onToggleThinking: (id: string) => void;
   onRollback: (id: string) => void;
   onRegenerate: (id: string) => void;
+  onFork: (id: string) => void;
   onOpenUrl: (url: string) => void;
 }
 
@@ -43,6 +44,7 @@ export default function MessageList({
   onToggleThinking,
   onRollback,
   onRegenerate,
+  onFork,
   onOpenUrl,
 }: MessageListProps): React.ReactElement {
   const tr = useT();
@@ -221,6 +223,7 @@ export default function MessageList({
               onToggleThinking={() => onToggleThinking(message.id)}
               onRollback={onRollback}
               onRegenerate={onRegenerate}
+              onFork={onFork}
               onOpenUrl={onOpenUrl}
             />
           ))

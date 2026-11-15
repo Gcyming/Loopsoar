@@ -54,6 +54,8 @@ export interface PersistedSession {
    * 缺省（旧会话 / 新会话）= 关闭（fail-closed）；非布尔脏值在读取/写入时一律丢弃。
    */
   browserControl?: boolean;
+  /** 从哪个会话的哪个阶段分支出来（普通会话没有该字段）。 */
+  forkedFrom?: { sessionId: string; keepCount: number; at: number };
 }
 
 export interface SessionMeta {
@@ -66,6 +68,8 @@ export interface SessionMeta {
   workspaceId?: string | null;
   /** 会话级「浏览器控制」开关（缺省 = 关闭）；列表/当前会话查询据此给 UI 水合初值。 */
   browserControl?: boolean;
+  /** 分支来源（UI 列表据此显示「分支」标记）。 */
+  forkedFrom?: { sessionId: string; keepCount: number; at: number };
 }
 
 interface SessionIndex {
@@ -360,6 +364,46 @@ export class SessionStore {
     index.currentId = index.currentId ?? safeId;
     this.saveIndex(index);
     return trimmed;
+  }
+
+  /**
+   * 从指定会话的第 keepCount 条消息处分支：复制前缀消息到一个新会话。
+   *
+   * 只复制「对话前缀」——运行态（allow-session 权限、进行中的流、压缩状态、浏览器标签）
+   * 一律不继承；浏览器任务态由调用方显式决定。分支会话与原会话从此各自演进。
+   */
+  fork(sessionId: string, keepCount: number, title?: string): PersistedSession | null {
+    const sourceId = sanitizeSessionId(sessionId);
+    if (!sourceId) return null;
+    const source = this.get(sourceId);
+    if (!source) return null;
+    const keep = Math.max(0, Math.min(Math.floor(keepCount), source.messages.length));
+    const forkedAt = Date.now();
+    const base = this.newSession(source.workspaceId ?? null);
+    const file = this.sessionFile(base.sessionId);
+    if (!file) return null;
+    const forked: PersistedSession = {
+      ...base,
+      updatedAt: forkedAt,
+      messages: source.messages.slice(0, keep).map((message) => ({ ...message })),
+      forkedFrom: { sessionId: sourceId, keepCount: keep, at: forkedAt },
+      ...(source.browserControl !== undefined ? { browserControl: source.browserControl } : {}),
+    };
+    this.writeJson(file, forked);
+    const index = this.index();
+    const item = index.items.find((i) => i.id === base.sessionId);
+    if (item) {
+      const sourceTitle = index.items.find((i) => i.id === sourceId)?.title ?? "会话";
+      item.title = (title ?? `分支 · ${sourceTitle}`).slice(0, 40);
+      item.messageCount = forked.messages.length;
+      item.preview = forked.messages[forked.messages.length - 1]?.text?.slice(0, 80) ?? "";
+      item.updatedAt = forkedAt;
+      item.forkedFrom = { ...forked.forkedFrom! };
+      if (forked.browserControl !== undefined) item.browserControl = forked.browserControl;
+      index.currentId = base.sessionId;
+      this.saveIndex(index);
+    }
+    return forked;
   }
 
   newSession(workspaceId?: string | null): PersistedSession {

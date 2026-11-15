@@ -697,6 +697,13 @@ export interface LoopsoarAPI {
     }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId?: string }): Promise<{ stopped: boolean }>;
     rollback(payload: { keepCount: number; sessionId?: string }): Promise<{ ok: boolean; session: unknown }>;
+    /** 从源会话第 keepCount 条消息处分支：复制前缀到新会话并切过去（不继承运行态/浏览器任务）。 */
+    forkSession(payload: { sessionId?: string; keepCount: number; title?: string }): Promise<{
+      ok: boolean;
+      session: { sessionId: string; messages: ChatHistoryMessage[] } | null;
+      sessions: SessionMeta[];
+      currentId: string | null;
+    }>;
     /** 投递一条「待发指令」（运行中插入）：accepted=false 时看 reason（no-running/full/empty/duplicate）。 */
     steer(payload: { message: string; sessionId?: string; steerId?: string }): Promise<{
       accepted: boolean;

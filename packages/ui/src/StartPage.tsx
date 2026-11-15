@@ -69,6 +69,7 @@ export interface StartPageProps {
   onToggleThinking: (id: string) => void;
   onRollback: (id: string) => void;
   onRegenerate: (id: string) => void;
+  onFork: (id: string) => void;
   /** Vibecoding 第一次发送：App 负责「必要时新建会话 + 发送」并切到会话态。 */
   onStartVibe: (text: string) => void;
   /** 会话页内继续发送。 */
@@ -499,6 +500,7 @@ function VibeChatView({
   onToggleThinking,
   onRollback,
   onRegenerate,
+  onFork,
   modelLabel,
   modelGroups,
   onChooseModel,
@@ -551,6 +553,7 @@ function VibeChatView({
             onToggleThinking={onToggleThinking}
             onRollback={onRollback}
             onRegenerate={onRegenerate}
+            onFork={onFork}
             onOpenUrl={onOpenUrl}
           />
         )}

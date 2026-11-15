@@ -2091,7 +2091,12 @@ app.whenReady().then(async () => {
         workspaces.select(boundWorkspaceId);
       }
       if (!browserHost) return;
-      const tabs = await browserHost.switchSession(sessionId, sessions.getBrowserState(sessionId) ?? undefined);
+      // 打开会话不再自动恢复它上次的网页（用户 m03744：进会话不该被网页拖住）。
+      // 唯一例外是「任务会话」（浏览状态里有 Agent 绑定标签）——折叠工作区是任务本体，
+      // 打开任务时恢复其页面属于预期；普通会话保持空白，只显示对话。
+      const saved = sessions.getBrowserState(sessionId) ?? undefined;
+      const taskState = saved && saved.tabs.some((tab) => tab.agentBound === true) ? saved : undefined;
+      const tabs = await browserHost.switchSession(sessionId, taskState);
       pushToRenderer("browser:tabs", { tabs });
     },
     onSessionDeleting: async (sessionId) => {
@@ -2112,9 +2117,10 @@ app.whenReady().then(async () => {
       if (!browserHost) return;
       await browserHost.deleteSession(sessionId).catch(() => undefined);
       if (nextSessionId) {
-        await browserHost
-          .switchSession(nextSessionId, sessions.getBrowserState(nextSessionId) ?? undefined)
-          .catch(() => undefined);
+        // 同样只恢复任务会话的页面；普通会话只切会话，不拖出网页。
+        const nextSaved = sessions.getBrowserState(nextSessionId) ?? undefined;
+        const nextTask = nextSaved && nextSaved.tabs.some((tab) => tab.agentBound === true) ? nextSaved : undefined;
+        await browserHost.switchSession(nextSessionId, nextTask).catch(() => undefined);
       }
       pushToRenderer("browser:tabs", { tabs: browserHost.listTabs() });
     },

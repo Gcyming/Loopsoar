@@ -1113,9 +1113,44 @@ export class BrowserHost {
         ...(entry.title ? { title: entry.title } : {}),
         history: entry.history.slice(),
         index: entry.index,
+        ...(entry.agentBound ? { agentBound: true } : {}),
       });
     }
     return { tabs, activeIndex };
+  }
+
+  /**
+   * Agent 首次「动手」前的任务化准备：确保这个会话有一个 Agent 专属标签。
+   *
+   * 规则（用户 m02991 后续补充）：不接管用户当前页，而是用它的 URL **新开**一个同地址标签，
+   * 原页保持不变；新标签标 agentBound，折叠进「Agent 工作区」。之后这个会话的所有动作都在
+   * 这个克隆页上进行（同一任务可再开多个 agent 标签）。
+   *
+   * 只应在「动作类」工具执行前调用：只读（快照/截图）不算工作，不该克隆页面。
+   */
+  async ensureAgentTab(sessionId?: string): Promise<string | null> {
+    const sid = (sessionId ?? this.activeSession).trim();
+    if (!sid) return null;
+    const group = this.ensureGroup(sid);
+    // 正在使用的 Agent 标签优先，其次任意一个已存在的任务标签（多标签任务不来回跳）。
+    const current = group.activeId ? group.tabs.get(group.activeId) : null;
+    if (current?.agentBound) return group.activeId;
+    for (const [id, entry] of group.tabs) {
+      if (!entry.agentBound) continue;
+      group.activeId = id;
+      return id;
+    }
+    const source = group.activeId ? group.tabs.get(group.activeId) : null;
+    const sourceUrl = source?.url ?? "";
+    const entry = this.createTab(sid);
+    const id = group.activeId!;
+    entry.agentBound = true;
+    if (sourceUrl) {
+      const outcome = await this.navigate(sourceUrl, id, sid, "agent");
+      if (!outcome.ok) entry.url = sourceUrl;
+    }
+    this.emitTabs(sid);
+    return id;
   }
 
   /** 切换到某个会话；restore 只在该会话还没有任何标签时使用（不覆盖内存里的活页面）。 */
@@ -1146,6 +1181,8 @@ export class BrowserHost {
       const id = group.activeId!;
       ids.push(id);
       entry.title = tab.title ?? this.hostnameOf(tab.url);
+      // 折叠标签页的归属必须跟着页面一起恢复：否则重启后 Agent 工作区凭空消失。
+      entry.agentBound = tab.agentBound === true;
       entry.history = Array.isArray(tab.history) && tab.history.length > 0 ? tab.history.slice() : [tab.url];
       entry.index =
         typeof tab.index === "number" ? Math.max(0, Math.min(tab.index, entry.history.length - 1)) : entry.history.length - 1;

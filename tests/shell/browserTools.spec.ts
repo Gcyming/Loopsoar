@@ -29,6 +29,7 @@ function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = 
   const scripts: string[] = [];
   const executed: { script: string; tabId?: string }[] = [];
   const tab = createTabRegistry();
+  const taskPrep: string[] = [];
   const state: FakePage = { url: "https://example.com/", title: "示例页", loading: false };
   /** 加载计时：命中 0 后自动落定为「已就绪」（避免测试真的等 1.5s）。 */
   const loadingPlan = { ticks: 0 };
@@ -75,6 +76,11 @@ function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = 
       state.title = "新页面";
       return { ok: true, url, tabId: "tab-1" };
     },
+    // 动作类工具的任务化准备（真实实现会克隆当前页；这里只记录调用顺序）
+    ensureAgentTab: async (sessionId?: string) => {
+      taskPrep.push(sessionId ?? "");
+      return "tab-1";
+    },
     executeScript: async (script: string, _sessionId?: string, tabId?: string) => {
       calls.push("script");
       scripts.push(script);
@@ -93,6 +99,7 @@ function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = 
     executed,
     state,
     loadingPlan,
+    taskPrep,
     setScriptHook: (hook: ((script: string) => void) | null) => {
       scriptHook = hook;
     },
@@ -305,6 +312,14 @@ describe("浏览器工具集", () => {
     expect(click.content).toContain("标题 下一页");
     expect(click.content).toContain("发生导航");
     expect(click.content).toContain("browser_snapshot 查看新页面");
+  });
+
+  it("动作类工具执行前先任务化（ensureAgentTab）；只读快照不触发", async () => {
+    const { registry, taskPrep } = makeRegistry();
+    await run(registry, "browser_snapshot", {}, "task-1");
+    expect(taskPrep).toEqual([]);
+    await run(registry, "browser_click", { target: "#submit" }, "task-1");
+    expect(taskPrep).toEqual(["task-1"]);
   });
 
   it("动作后状态行：加载未落定 → 仍在加载（不阻塞超过 1.5s 上限）", async () => {

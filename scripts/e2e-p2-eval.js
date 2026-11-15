@@ -46,6 +46,10 @@
       })();
     });
 
+    // 先像用户一样打开一个页面：Agent 首次动手时应克隆它（原页保留），而不是接管它。
+    const opened = await api.browser.navigate({ url: "http://127.0.0.1:19443/" });
+    out.steps.push({ step: "userTab", ok: opened?.ok ?? null });
+
     const accepted = await api.chat.stream({
       message: "打开 http://127.0.0.1:19443/ ，点击「点我」按钮，然后告诉我结果",
       sessionId: sid,
@@ -68,13 +72,27 @@
     out.historyText = joined.slice(-900);
     out.askSeen = askSeen;
     // 布局询问已在 Slice E 之后取消：默认 docked（设置·通用里可选），所以不再要求 ask 证据。
+    // 任务化证据：用户页 + Agent 克隆页并存（原页必须还在，且只有克隆页带 agentBound）。
+    let tabs = [];
+    try {
+      tabs = (await api.browser.listTabs())?.tabs ?? [];
+    } catch {
+      // 浏览器未就绪：证据为空即可
+    }
     out.evidence = {
       navigated: joined.includes("127.0.0.1:19443") || joined.includes("Loopsoar E2E 本地页"),
       snapshotWithRefs: /快照 #\d+/.test(joined) && joined.includes("#e"),
       // 关键证据：真实鼠标事件（sendInputEvent）点中了页面按钮，页面文案随之变化。
       clickedMarker: joined.includes("按钮已点击"),
+      userTabs: tabs.filter((tab) => tab.agentBound !== true).length,
+      agentTabs: tabs.filter((tab) => tab.agentBound === true).length,
     };
-    out.ok = out.evidence.navigated && out.evidence.snapshotWithRefs && out.evidence.clickedMarker;
+    out.ok =
+      out.evidence.navigated &&
+      out.evidence.snapshotWithRefs &&
+      out.evidence.clickedMarker &&
+      out.evidence.userTabs >= 1 &&
+      out.evidence.agentTabs >= 1;
     return out;
   } catch (err) {
     return { ...out, error: err && err.message ? err.message : String(err) };

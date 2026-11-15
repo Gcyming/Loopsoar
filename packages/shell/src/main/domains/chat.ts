@@ -246,6 +246,21 @@ export function registerChatDomain(deps: ChatDeps): void {
     return { ok: session !== null, session };
   });
 
+  handleTrusted(deps, "chat:forkSession", async (payload) => {
+    const p = payload as { sessionId?: string; keepCount: number; title?: string };
+    const sourceId = p.sessionId ?? deps.sessions?.currentId() ?? null;
+    if (!sourceId) return { ok: false, session: null, sessions: deps.sessions?.list() ?? [], currentId: null };
+    const session = deps.sessions?.fork(sourceId, p.keepCount, p.title) ?? null;
+    // 分支会话同样走「打开会话」链路：切工作区/浏览器组，但不继承旧会话的标签页。
+    if (session?.sessionId) await deps.onSessionOpened?.(session.sessionId);
+    return {
+      ok: session !== null,
+      session,
+      sessions: deps.sessions?.list() ?? [],
+      currentId: session?.sessionId ?? null,
+    };
+  });
+
   handleTrusted(deps, "chat:stop", (payload) => {
     const p = payload as { sessionId: string };
     // 只调用 stop：ChatService 的 stream 收尾会 emit 唯一的 done（aborted）。

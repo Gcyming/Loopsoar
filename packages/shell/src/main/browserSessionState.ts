@@ -12,6 +12,11 @@ export interface PersistedBrowserTab {
   title?: string;
   history?: string[];
   index?: number;
+  /**
+   * 由 Agent 打开/导航过的标签（折叠进「Agent 工作区」）。
+   * 必须持久化：否则重启后折叠标签页全丢（用户实测反馈），只剩普通标签。
+   */
+  agentBound?: boolean;
 }
 
 export interface PersistedBrowserState {
@@ -36,7 +41,7 @@ export function sanitizeBrowserState(input: unknown): PersistedBrowserState | nu
   const tabs: PersistedBrowserTab[] = [];
   for (const item of raw.tabs.slice(0, MAX_PERSISTED_TABS)) {
     if (!item || typeof item !== "object") continue;
-    const tab = item as { url?: unknown; title?: unknown; history?: unknown; index?: unknown };
+    const tab = item as { url?: unknown; title?: unknown; history?: unknown; index?: unknown; agentBound?: unknown };
     if (typeof tab.url !== "string" || !isHttpUrl(tab.url)) continue;
     const history = Array.isArray(tab.history)
       ? tab.history.filter((url): url is string => typeof url === "string" && isHttpUrl(url)).slice(-MAX_PERSISTED_HISTORY)
@@ -51,6 +56,7 @@ export function sanitizeBrowserState(input: unknown): PersistedBrowserState | nu
       ...(typeof tab.title === "string" && tab.title.trim() ? { title: tab.title.trim().slice(0, 80) } : {}),
       history: safeHistory,
       index,
+      ...(tab.agentBound === true ? { agentBound: true } : {}),
     });
   }
   if (tabs.length === 0) return null;

@@ -1692,21 +1692,20 @@ export default function App(): React.JSX.Element {
   const closeTab = useCallback(
     (tabId: string): void => {
       if (!api) return;
-      // 浏览器惯例：关掉最后一个标签页 = 关闭浏览器窗口（本应用即退出主窗口）。
-      // 但必须先真正关闭标签并等持久化落盘：否则下次启动会从旧会话状态恢复出刚关掉的网页。
-      if (tabs.length <= 1) {
-        void api.browser
-          .closeTab({ tabId })
-          .catch(() => undefined)
-          // 主进程对标签状态落盘有 400ms 防抖：等它写完再退出，否则下次启动会恢复出刚关掉的网页。
-          .then(() => new Promise((resolve) => window.setTimeout(resolve, 560)))
-          .then(() => api.window.close())
-          .catch(() => undefined);
-        return;
-      }
-      void api.browser.closeTab({ tabId }).then(() => {
-        void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
-      });
+      // 关掉最后一个网页 = 回到空白搜索页（会话与侧栏保持原样），**绝不退出程序**。
+      // 退出只认窗口关闭/菜单退出这类显式手势；「关网页顺手关掉整个应用」是用户明确反馈的痛点。
+      void api.browser
+        .closeTab({ tabId })
+        .then(() => api.browser.listTabs())
+        .then((r) => {
+          setTabs(r.tabs);
+          const active = r.tabs.find((tab) => tab.active);
+          const url = active?.url ?? "";
+          lastSyncedUrlRef.current = url;
+          setAddress(url);
+          setCurrentUrl(url);
+        })
+        .catch(() => undefined);
     },
     [api, tabs.length],
   );
@@ -1908,6 +1907,37 @@ export default function App(): React.JSX.Element {
         .catch(() => undefined);
     });
   }, [api, metaFor, readPending, writeSessionMessages]);
+
+  /**
+   * 从某条消息分支：把「到这条为止」的历史复制成新会话并切过去。
+   * 为什么需要：Agent 浏览器操作会把会话绑在任务上，用户之后可能只想纯讨论——
+   * 分支给出一条干净的对话线，原会话完全不动（浏览器任务也不被复制）。
+   */
+  const forkFrom = useCallback(
+    (targetId: string): void => {
+      if (!api) return;
+      const idx = messages.findIndex((m) => m.id === targetId);
+      if (idx < 0) return;
+      const keepCount = messages
+        .slice(0, idx + 1)
+        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      void api.chat
+        .forkSession({ sessionId: sid, keepCount })
+        .then((r) => {
+          if (!r.ok || !r.session) {
+            setNotice("分支失败：源会话不存在");
+            return;
+          }
+          setSessions(r.sessions);
+          switchSession(r.session.sessionId);
+          setNotice("已从此消息分支；原会话保持不变");
+        })
+        .catch((err: unknown) => setNotice(`分支失败：${err instanceof Error ? err.message : String(err)}`));
+    },
+    [api, messages, switchSession],
+  );
 
   /**
    * 打开「Agent 工作区」浮层：独立子窗口，压在网页之上。
@@ -2295,6 +2325,7 @@ export default function App(): React.JSX.Element {
               onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
               onRollback={rollbackTo}
               onRegenerate={regenerate}
+              onFork={forkFrom}
               onStartVibe={startVibe}
               onSendMessage={(text) => sendText(text)}
               onStop={stop}
@@ -2400,6 +2431,7 @@ export default function App(): React.JSX.Element {
             onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
             onRollback={rollbackTo}
             onRegenerate={regenerate}
+            onFork={forkFrom}
             onOpenUrl={(url) => void api?.browser.newTab({ url }).catch(() => {})}
           />
           <PendingSteers

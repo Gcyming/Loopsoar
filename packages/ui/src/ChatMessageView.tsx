@@ -32,6 +32,7 @@ export interface ChatMessageViewProps {
   onToggleThinking: () => void;
   onRollback: (id: string) => void;
   onRegenerate: (id: string) => void;
+  onFork: (id: string) => void;
   onOpenUrl: (url: string) => void;
 }
 
@@ -47,6 +48,7 @@ export default function ChatMessageView({
   onToggleThinking,
   onRollback,
   onRegenerate,
+  onFork,
   onOpenUrl,
 }: ChatMessageViewProps): React.ReactElement {
   const tr = useT();
@@ -95,6 +97,9 @@ export default function ChatMessageView({
           <span style={styles.msgTime}>· {timeText}</span>
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
             <Icon name="reload" size={12} />
+          </button>
+          <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.forkTitle")} onClick={() => onFork(m.id)}>
+            <Icon name="layers-linked" size={12} />
           </button>
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}>
             <Icon name="copy" size={12} />
@@ -201,6 +206,9 @@ export default function ChatMessageView({
           ) : null}
           <span style={styles.msgTime}>· {timeText}</span>
           <span style={styles.msgHoverActions}>
+            <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.forkTitle")} onClick={() => onFork(m.id)}>
+              <Icon name="layers-linked" size={12} />
+            </button>
             <button
               type="button"
               className="msg-action"
