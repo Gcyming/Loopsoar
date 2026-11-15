@@ -58,6 +58,11 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     tabs: deps.browser?.listTabs(deps.browser.visibleSessionId()) ?? [],
     visibleSession: deps.browser?.visibleSessionId() ?? USER_TABS_SESSION,
   }));
+  handleTrusted(deps, "browser:setCornerColor", (payload) => {
+    const color = (payload as { color?: string } | null)?.color;
+    if (color) deps.browser?.setCornerColor(color);
+    return { ok: Boolean(color) };
+  });
   handleTrusted(deps, "browser:listTasks", () => {
     const merged = new Map<string, { sessionId: string; tabs: unknown[] }>();
     for (const task of deps.browser?.listTasks() ?? []) merged.set(task.sessionId, task);

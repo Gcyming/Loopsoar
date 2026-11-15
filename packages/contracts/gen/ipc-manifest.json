@@ -169,6 +169,13 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:setCornerColor",
+      "domain": "browser",
+      "method": "setCornerColor",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:listTasks",
       "domain": "browser",
       "method": "listTasks",

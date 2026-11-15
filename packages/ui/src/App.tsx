@@ -871,6 +871,19 @@ export default function App(): React.JSX.Element {
    */
   React.useEffect(() => {
     if (!api) return;
+    const sendCornerColor = (): void => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue("--ls-surface-raised").trim();
+      const color = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "#17191e";
+      void api.browser.setCornerColor({ color }).catch(() => undefined);
+    };
+    sendCornerColor();
+    const observer = new MutationObserver(sendCornerColor);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, [api]);
+
+  React.useEffect(() => {
+    if (!api) return;
     const refreshTasks = (): void => {
       void api.browser
         .listTasks()
@@ -1990,7 +2003,7 @@ export default function App(): React.JSX.Element {
       if (!to) return;
       refreshSessions();
       // 用户回合中途切去看别的会话：只刷新列表，不把他强行拽到任务分支。
-      if (p?.from && sessionIdRef.current !== p.from) {
+      if (p?.from && sessionIdRef.current && sessionIdRef.current !== p.from) {
         return;
       }
       switchSession(to);

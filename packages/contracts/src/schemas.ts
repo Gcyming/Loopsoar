@@ -123,6 +123,7 @@ export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
 /** 删除会话时一并关闭该会话名下的全部网页（工作区 > 会话 > 网页）。 */
 export const BrowserSessionIdSchema = z.object({ sessionId: z.string().min(1).max(128) });
+export const BrowserCornerColorSchema = z.object({ color: z.string().regex(/^#[0-9a-fA-F]{6}$/) });
 export const BrowserSetOverlaySchema = z.object({ open: z.boolean() });
 export const BrowserTabRefSchema = z.object({ tabId: z.string().optional() });
 /** 开发者工具开关（缺省作用于当前会话活动标签）。 */
@@ -627,6 +628,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "resolveFavicon",
     request: BrowserResolveFaviconSchema,
+    sensitive: true,
+  },
+  "browser:setCornerColor": {
+    domain: "browser",
+    method: "setCornerColor",
+    request: BrowserCornerColorSchema,
     sensitive: true,
   },
   "browser:listTasks": {

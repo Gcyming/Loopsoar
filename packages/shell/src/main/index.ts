@@ -37,6 +37,7 @@ import { SESSION_PARTITION } from "../shared/brand.js";
 import { withProviderDefaults } from "./providerDefaults.js";
 import { createDebouncedRunner, USER_TABS_SESSION, type BrowserHost } from "./browserHost.js";
 import { sanitizeBrowserState } from "./browserSessionState.js";
+import { BrowserStateStore } from "./browserStateStore.js";
 import { BrowserHistoryStore } from "./browserHistoryStore.js";
 import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
@@ -1840,7 +1841,7 @@ app.whenReady().then(async () => {
 
   // 浏览器宿主：会话级标签组；WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
   // 初始会话 = 最近一次使用的会话（重启后左右两侧一起恢复）；没有会话时建一个，保证"文件夹"存在。
-  const initialSessionId = sessions.currentId() ?? sessions.newSession().sessionId;
+  let initialSessionId = sessions.currentId() ?? sessions.newSession().sessionId;
   // 启动即把当前会话补绑活动工作区（旧会话/首启会话都落进"文件夹"）
   if (!sessions.get(initialSessionId)?.workspaceId && workspaces.activeId()) {
     sessions.setWorkspaceId(initialSessionId, workspaces.activeId());
@@ -1851,8 +1852,31 @@ app.whenReady().then(async () => {
   /** 本回合开始前的消息数：任务分支必须从这里切，分支点在「浏览器操作之前」。 */
   const turnStartCounts = new Map<string, number>();
   const pendingTaskKeep = new Map<string, number>();
-  /** 全局用户标签的落盘文件（不属于任何会话）。 */
-  const userTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
+  /** 用户标签 + 任务快照统一落盘（旧 browser-user-tabs.json 仅作迁移读取）。 */
+  const browserStates = new BrowserStateStore(path.join(dirs.dataDir, "browser-state.json"));
+  type PendingFork = { sourceId: string; keep: number; forkId?: string };
+  const pendingForkFile = path.join(dirs.dataDir, "pending-task-forks.json");
+  const pendingForkRecords = new Map<string, PendingFork>();
+  try {
+    if (fs.existsSync(pendingForkFile)) {
+      const raw = JSON.parse(fs.readFileSync(pendingForkFile, "utf8")) as PendingFork[];
+      for (const item of Array.isArray(raw) ? raw : []) {
+        if (item && typeof item.sourceId === "string" && Number.isFinite(item.keep)) {
+          pendingForkRecords.set(item.sourceId, item);
+        }
+      }
+    }
+  } catch {
+    // 标记文件损坏：忽略
+  }
+  const persistPendingForks = (): void => {
+    try {
+      fs.writeFileSync(pendingForkFile, JSON.stringify([...pendingForkRecords.values()]), "utf8");
+    } catch {
+      // 恢复标记落盘失败不阻断运行
+    }
+  };
+  const legacyUserTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
   const cancelBrowserStateSave = (sessionId: string): void => {
     const timer = tabSaveTimers.get(sessionId);
     if (timer) clearTimeout(timer);
@@ -1866,17 +1890,13 @@ app.whenReady().then(async () => {
       setTimeout(() => {
         tabSaveTimers.delete(sessionId);
         if (sessionId === USER_TABS_SESSION) {
-          try {
-            fs.writeFileSync(userTabsFile, JSON.stringify(state), "utf8");
-          } catch {
-            // 用户标签落盘失败不阻断浏览
-          }
+          browserStates.set(USER_TABS_SESSION, state);
           return;
         }
         // 任务会话把页面关光（或只剩用户页）时，保留上一次的任务页快照：
         // 用户重新打开这个会话时，折叠工作区还能按原样回来（关页 ≠ 结束任务）。
         if (sessions.isTask(sessionId) && !state.tabs.some((tab) => tab.agentBound === true)) return;
-        sessions.saveBrowserState(sessionId, state);
+        browserStates.set(sessionId, state);
       }, 400),
     );
   };
@@ -1963,8 +1983,11 @@ app.whenReady().then(async () => {
         if (sessions.isTask(sessionId)) return;
         // 动作期间先把当前会话临时当任务（折叠页立即出现）；回合结束后再把它过户给分支。
         sessions.setTask(sessionId, true);
+        const keep = turnStartCounts.get(sessionId) ?? 0;
         pendingTaskForks.add(sessionId);
-        pendingTaskKeep.set(sessionId, turnStartCounts.get(sessionId) ?? 0);
+        pendingTaskKeep.set(sessionId, keep);
+        pendingForkRecords.set(sessionId, { sourceId: sessionId, keep });
+        persistPendingForks();
       },
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
@@ -1986,16 +2009,49 @@ app.whenReady().then(async () => {
       },
     },
   );
+  // 崩溃/中途退出恢复：首次动作后没来得及 fork 的任务，在启动时补完或清掉孤儿任务标记。
+  for (const [sourceId, record] of [...pendingForkRecords]) {
+    const source = sessions.get(sourceId);
+    if (!source) {
+      pendingForkRecords.delete(sourceId);
+      continue;
+    }
+    let fork = record.forkId ? sessions.get(record.forkId) : null;
+    if (!fork && source.messages.length > record.keep) {
+      fork = sessions.fork(sourceId, record.keep, undefined, { activate: false });
+      if (fork) {
+        record.forkId = fork.sessionId;
+        persistPendingForks();
+      }
+    }
+    if (fork) {
+      if (source.messages.length > record.keep) sessions.moveTail(sourceId, fork.sessionId, record.keep);
+      sessions.setTask(sourceId, false);
+      sessions.setTask(fork.sessionId, true);
+      const state = browserStates.get(sourceId) ?? sessions.getBrowserState(sourceId);
+      if (state) browserStates.set(fork.sessionId, state);
+      browserStates.delete(sourceId);
+      if (initialSessionId === sourceId) initialSessionId = fork.sessionId;
+    } else {
+      // 没有可搬的操作回合：不留任务身份，也不留只剩任务页的孤儿存档。
+      sessions.setTask(sourceId, false);
+      browserStates.delete(sourceId);
+    }
+    pendingForkRecords.delete(sourceId);
+    persistPendingForks();
+  }
+
   // 启动恢复：全局用户标签独立于会话；会话只恢复 Agent 工作区（agentBound 标签）。
   let bootUserState: PersistedBrowserState | null = null;
   try {
-    if (fs.existsSync(userTabsFile)) {
-      bootUserState = sanitizeBrowserState(JSON.parse(fs.readFileSync(userTabsFile, "utf8")));
+    bootUserState = browserStates.get(USER_TABS_SESSION);
+    if (!bootUserState && fs.existsSync(legacyUserTabsFile)) {
+      bootUserState = sanitizeBrowserState(JSON.parse(fs.readFileSync(legacyUserTabsFile, "utf8")));
     }
   } catch {
     // 文件损坏：当作没有用户标签
   }
-  const bootBrowserState = sessions.getBrowserState(initialSessionId);
+  const bootBrowserState = browserStates.get(initialSessionId) ?? sessions.getBrowserState(initialSessionId);
   const bootTaskState = bootBrowserState && bootBrowserState.tabs.some((tab) => tab.agentBound === true)
     ? { ...bootBrowserState, tabs: bootBrowserState.tabs.filter((tab) => tab.agentBound === true) }
     : undefined;
@@ -2100,16 +2156,10 @@ app.whenReady().then(async () => {
       // 任务会话把页面关光时保留上一次的任务页快照（与运行时防抖保存同一规则），
       // 否则退出这一次会把「重新打开任务会话能恢复工作区」的存档覆盖成空。
       if (sessions.isTask(meta.id) && !state.tabs.some((tab) => tab.agentBound === true)) continue;
-      sessions.saveBrowserState(meta.id, state);
+      browserStates.set(meta.id, state);
     }
     const userState = browserHost?.snapshotSession(USER_TABS_SESSION);
-    if (userState && userState.tabs.length > 0) {
-      try {
-        fs.writeFileSync(userTabsFile, JSON.stringify(userState), "utf8");
-      } catch {
-        // 退出落盘失败不阻断退出
-      }
-    }
+    if (userState) browserStates.set(USER_TABS_SESSION, userState);
   };
 
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
@@ -2190,6 +2240,11 @@ app.whenReady().then(async () => {
           // 分支点在操作前：fork 只拿 keep 之前的历史；本轮用户消息+回复搬到分支。
           const fork = sessions.fork(sessionId, keep, undefined, { activate: false });
           if (fork) {
+            const record = pendingForkRecords.get(sessionId);
+            if (record) {
+              record.forkId = fork.sessionId;
+              persistPendingForks();
+            }
             if (!sessions.moveTail(sessionId, fork.sessionId, keep)) {
               sessions.remove(fork.sessionId);
               return;
@@ -2198,12 +2253,19 @@ app.whenReady().then(async () => {
             sessions.setTask(fork.sessionId, true);
             browserHost.reassignSession(sessionId, fork.sessionId);
             const state = browserHost.snapshotSession(fork.sessionId);
-            if (state && state.tabs.length > 0) sessions.saveBrowserState(fork.sessionId, state);
+            if (state && state.tabs.length > 0) browserStates.set(fork.sessionId, state);
             // 过户后旧会话可能还有防抖保存队列：先取消，避免 400ms 后把任务页又写回普通会话。
             cancelBrowserStateSave?.(sessionId);
-            sessions.saveBrowserState(sessionId, { tabs: [], activeIndex: 0 });
+            browserStates.delete(sessionId);
+            pendingForkRecords.delete(sessionId);
+            persistPendingForks();
             pushToRenderer("chat:taskForked", { from: sessionId, to: fork.sessionId });
           }
+        } else {
+          // 回合没落库（异常/退出）：不留「任务但没有分支」的孤儿状态。
+          sessions.setTask(sessionId, false);
+          pendingForkRecords.delete(sessionId);
+          persistPendingForks();
         }
       }
     },
@@ -2233,7 +2295,7 @@ app.whenReady().then(async () => {
       // 打开会话不再自动恢复它上次的网页（用户 m03744：进会话不该被网页拖住）。
       // 唯一例外是「任务会话」（浏览状态里有 Agent 绑定标签）——折叠工作区是任务本体，
       // 打开任务时恢复其页面属于预期；普通会话保持空白，只显示对话。
-      const saved = sessions.getBrowserState(sessionId) ?? undefined;
+      const saved = browserStates.get(sessionId) ?? sessions.getBrowserState(sessionId) ?? undefined;
       const taskState = sessions.isTask(sessionId) || saved?.tabs.some((tab) => tab.agentBound === true) ? saved : undefined;
       const tabs = await browserHost.switchSession(sessionId, taskState);
       pushToRenderer("browser:tabs", { tabs });
@@ -2253,11 +2315,12 @@ app.whenReady().then(async () => {
       sessions.setWorktree(sessionId, null);
     },
     onSessionDeleted: async (sessionId, nextSessionId) => {
+      browserStates.delete(sessionId);
       if (!browserHost) return;
       await browserHost.deleteSession(sessionId).catch(() => undefined);
       if (nextSessionId) {
         // 同样只恢复任务会话的页面；普通会话只切会话，不拖出网页。
-        const nextSaved = sessions.getBrowserState(nextSessionId) ?? undefined;
+        const nextSaved = browserStates.get(nextSessionId) ?? sessions.getBrowserState(nextSessionId) ?? undefined;
         const nextTask = sessions.isTask(nextSessionId) || nextSaved?.tabs.some((tab) => tab.agentBound === true) ? nextSaved : undefined;
         await browserHost.switchSession(nextSessionId, nextTask).catch(() => undefined);
       }
@@ -2279,7 +2342,7 @@ app.whenReady().then(async () => {
         .list()
         .filter((meta) => sessions.isTask(meta.id))
         .map((meta) => {
-          const state = sessions.getBrowserState(meta.id);
+          const state = browserStates.get(meta.id) ?? sessions.getBrowserState(meta.id);
           const tabs = (state?.tabs ?? [])
             .map((tab, index) => ({ tab, index }))
             .filter(({ tab }) => tab.agentBound === true)

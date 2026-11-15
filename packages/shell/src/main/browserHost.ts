@@ -70,6 +70,7 @@ export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessio
 export interface HostView extends WebContentsViewLike {
   setBounds(bounds: BrowserViewBounds): void;
   setVisible?(visible: boolean): void;
+  setBackgroundColor?(color: string): void;
   /** 原生视图圆角（Electron 45 View.setBorderRadius；假 View 可不实现）。 */
   setBorderRadius?(radius: number): void;
   /** 真实视图几何（Electron WebContentsView.getBounds；假 View 可不实现）。 */
@@ -110,6 +111,8 @@ export interface BrowserHostDeps {
    * 传 null = 当前没有可见网页（无标签 / 加载中 / 浮层打开 / 非活动会话），覆盖层必须隐藏。
    */
   onViewLayout?: (rect: BrowserViewBounds | null) => void;
+  /** 主题外壳色变化：四角遮罩/视图切角跟着换色。 */
+  onCornerColor?: (color: string) => void;
   /** 底部开发者工具面板：打开指定 WebContents 的调试前端（返回是否成功）。 */
   openDevToolsPanel?: (webContents: unknown) => boolean;
   /** 关闭底部开发者工具面板。 */
@@ -1430,6 +1433,15 @@ export class BrowserHost {
     if (isTask || willRestore) this.showTask(sid);
     else this.showUserTabs();
     return this.listTabs(sid);
+  }
+
+  /** 主题外壳色：同步给四角遮罩与所有网页视图的切角背景。 */
+  setCornerColor(color: string): void {
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
+    this.deps.onCornerColor?.(color);
+    for (const group of this.groups.values()) {
+      for (const entry of group.tabs.values()) entry.view.setBackgroundColor?.(color);
+    }
   }
 
   /** 启动恢复全局用户标签（不属于任何会话）。 */

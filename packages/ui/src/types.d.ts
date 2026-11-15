@@ -835,6 +835,8 @@ export interface LoopsoarAPI {
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[]; visibleSession: string }>;
+    /** 主题外壳色：四角遮罩/网页切角跟随。 */
+    setCornerColor(payload: { color: string }): Promise<{ ok: boolean }>;
     /** 所有任务（跨会话任务条）。 */
     listTasks(): Promise<{ tasks: { sessionId: string; tabs: TabState[] }[]; visibleSession: string }>;
     /** 进入某个任务的折叠工作区（同时应切到该会话）。 */

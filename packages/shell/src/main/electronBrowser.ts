@@ -376,8 +376,19 @@ export function createElectronBrowserHost(
   // 四角始终是方的。用一个常驻的透明子窗口把四角盖成外壳色，形状用 radial-gradient 的
   // 反圆角 mask 抠出四分之一圆；它只覆盖 14px 的角，平时不挡鼠标/输入。
   let cornerWindow: BrowserWindow | null = null;
+  let cornerColor = "#171B22";
+  const applyCornerColor = (color: string): void => {
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
+    cornerColor = color;
+    if (cornerWindow && !cornerWindow.isDestroyed()) {
+      void cornerWindow.webContents
+        .executeJavaScript(`document.documentElement.style.setProperty('--corner', '${color}')`)
+        .catch(() => undefined);
+    }
+  };
   const cornerCss = "html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}"
-    + ".c{position:absolute;width:14px;height:14px;background:#171B22;pointer-events:none}"
+    + `:root{--corner:${cornerColor}}`
+    + ".c{position:absolute;width:14px;height:14px;background:var(--corner);pointer-events:none}"
     + ".tl{left:0;top:0;-webkit-mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px)}"
     + ".tr{right:0;top:0;-webkit-mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px)}"
     + ".bl{left:0;bottom:0;-webkit-mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px)}"
@@ -446,6 +457,7 @@ export function createElectronBrowserHost(
     onFaviconChanged: options.onFaviconChanged,
     onTaskCreated: options.onTaskCreated,
     onAgentActing: options.onAgentActing,
+    onCornerColor: applyCornerColor,
     onViewLayout: (rect) => {
       options.onViewLayout?.(rect);
       syncCornerWindow(rect);
@@ -472,8 +484,8 @@ export function createElectronBrowserHost(
       // 原生视图切掉的四角露出应用底色，不再出现「网页直角顶到边缘」的硬缝。
       view.setBorderRadius(LAYOUT.BROWSER_VIEW_RADIUS);
       // 圆角切掉的四个角是「视图背景」而不是窗口背景：默认黑色会在呼吸灯外侧留下黑色方角。
-      // 用外壳抬高面的颜色填掉，切角与周围 workRow 融为一体。
-      view.setBackgroundColor("#171B22");
+      // 颜色跟随主题（UI 通过 browser:setCornerColor 下发），避免 soft 主题色差。
+      view.setBackgroundColor(cornerColor);
       view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
       // 点网页区域 = 点到「列表外」：通知主窗口收起按钮展开的浮层（DOM 收不到原生视图的点击）
       if (options.onViewFocused) {
