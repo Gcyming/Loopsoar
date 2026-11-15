@@ -835,6 +835,8 @@ export interface LoopsoarAPI {
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
     listTabs(): Promise<{ tabs: TabState[]; visibleSession: string }>;
+    /** 结束任务工作区：关页 + 清任务快照/标记（不再复活）。 */
+    endTask(payload: { sessionId: string }): Promise<{ ok: boolean }>;
     /** 主题外壳色：四角遮罩/网页切角跟随。 */
     setCornerColor(payload: { color: string }): Promise<{ ok: boolean }>;
     /** 所有任务（跨会话任务条）。 */

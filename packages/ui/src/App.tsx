@@ -1741,12 +1741,15 @@ export default function App(): React.JSX.Element {
           setCurrentUrl(url);
           // 关掉任务工作区的最后一个绑定页：离开特殊会话，回到空白会话。
           if (closedBound && !r.tabs.some((tab) => tab.agentBound === true)) {
-            void createFreshSessionAndTab({ newBlankTab: true }).catch(() => undefined);
+            void Promise.resolve(currentSession ? api.browser.endTask({ sessionId: currentSession }) : undefined)
+              .catch(() => undefined)
+              .then(() => createFreshSessionAndTab({ newBlankTab: true }))
+              .catch(() => undefined);
           }
         })
         .catch(() => undefined);
     },
-    [api, tabs, createFreshSessionAndTab],
+    [api, tabs, currentSession, createFreshSessionAndTab],
   );
 
   /** 关闭整个 Agent 工作区：关闭全部绑定页（任务会话本身保留，页面关闭不等于会话结束）。 */
@@ -1755,8 +1758,13 @@ export default function App(): React.JSX.Element {
     const ids = tabs.filter((tab) => tab.agentBound === true).map((tab) => tab.id);
     if (ids.length === 0) return;
     void (async () => {
-      for (const id of ids) {
-        await api.browser.closeTab({ tabId: id }).catch(() => undefined);
+      if (currentSession) {
+        // 任务确实结束：关页 + 清任务快照/标记，避免点回会话时旧页面复活。
+        await api.browser.endTask({ sessionId: currentSession }).catch(() => undefined);
+      } else {
+        for (const id of ids) {
+          await api.browser.closeTab({ tabId: id }).catch(() => undefined);
+        }
       }
       const result = await api.browser.listTabs().catch(() => null);
       if (!result) return;
@@ -1771,7 +1779,7 @@ export default function App(): React.JSX.Element {
         await createFreshSessionAndTab({ newBlankTab: true }).catch(() => undefined);
       }
     })();
-  }, [api, tabs, createFreshSessionAndTab]);
+  }, [api, tabs, currentSession, createFreshSessionAndTab]);
 
   const goBack = useCallback((): void => {
     if (!api) return;

@@ -41,6 +41,20 @@ describe("SessionStore.fork", () => {
     expect(store.currentId()).toBe(forked!.sessionId);
   });
 
+  it("后续 append/save 不会抹掉 task/forkedFrom/分支标题", () => {
+    const store = new SessionStore(tmpDir());
+    const source = store.newSession();
+    store.save({ ...source, messages: [msg("user", "u1"), msg("assistant", "a1")] });
+    const forked = store.fork(source.sessionId, 1, "分支 · 测试");
+    expect(forked).not.toBeNull();
+    store.setTask(forked!.sessionId, true);
+    store.append(forked!.sessionId, "u2", "a2");
+    const meta = store.list().find((item) => item.id === forked!.sessionId);
+    expect(meta?.task).toBe(true);
+    expect(meta?.forkedFrom?.sessionId).toBe(source.sessionId);
+    expect(meta?.title).toBe("分支 · 测试");
+  });
+
   it("任务标记独立于页面：setTask 落库到会话与索引，清掉即恢复普通会话", () => {
     const store = new SessionStore(tmpDir());
     const session = store.newSession();

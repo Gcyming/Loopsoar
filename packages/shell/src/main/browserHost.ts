@@ -998,7 +998,7 @@ export class BrowserHost {
     const x = Math.round(point.x * zoom);
     const y = Math.round(point.y * zoom);
     if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    await this.setAgentDriving(entry, true);
+    const drivingToken = await this.beginAgentDriving(entry);
     try {
       if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseMove", x, y });
@@ -1008,7 +1008,7 @@ export class BrowserHost {
       if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
     } finally {
-      this.releaseAgentDriving(entry);
+      this.endAgentDriving(entry, drivingToken);
     }
     if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
       console.log("[agent-click]", JSON.stringify({ zoom, x, y }));
@@ -1042,11 +1042,13 @@ export class BrowserHost {
     const normalized = text.replace(/\r\n?/g, "\n");
     const body = multiline ? normalized : normalized.replace(/\n/g, " ");
     if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    await this.setAgentDriving(entry, true);
+    const drivingToken = await this.beginAgentDriving(entry);
     try {
       // 全选 + 退格 = 清空当前内容（和用户「点进来、全选、重输」完全一致）。
-      wc.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
-      wc.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+      // macOS 全选是 Command+A，Control+A 只会把光标移到行首。
+      const selectAll = process.platform === "darwin" ? ["meta"] : ["control"];
+      wc.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: selectAll });
+      wc.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: selectAll });
       wc.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
       wc.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
       const chars = Array.from(body);
@@ -1083,7 +1085,7 @@ export class BrowserHost {
       }
       await flushText();
     } finally {
-      this.releaseAgentDriving(entry);
+      this.endAgentDriving(entry, drivingToken);
     }
     return true;
   }
@@ -1104,12 +1106,12 @@ export class BrowserHost {
     const x = Math.round(point.x * zoom);
     const y = Math.round(point.y * zoom);
     if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    await this.setAgentDriving(entry, true);
+    const drivingToken = await this.beginAgentDriving(entry);
     try {
       if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseMove", x, y });
     } finally {
-      this.releaseAgentDriving(entry);
+      this.endAgentDriving(entry, drivingToken);
     }
     return true;
   }
@@ -1157,7 +1159,7 @@ export class BrowserHost {
     const ty = Math.round(to.y * zoom);
     const frames = Math.max(3, Math.min(20, Math.round(steps)));
     if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    await this.setAgentDriving(entry, true);
+    const drivingToken = await this.beginAgentDriving(entry);
     try {
       if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseMove", x: fx, y: fy });
@@ -1173,7 +1175,7 @@ export class BrowserHost {
       if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "mouseUp", x: tx, y: ty, button: "left", clickCount: 1 });
     } finally {
-      this.releaseAgentDriving(entry);
+      this.endAgentDriving(entry, drivingToken);
     }
     return true;
   }
@@ -1201,9 +1203,9 @@ export class BrowserHost {
     const total = Math.round(deltaY);
     if (!Number.isFinite(total) || total === 0) return false;
     const dir = total > 0 ? 1 : -1;
-    const ticks = Math.min(12, Math.max(1, Math.ceil(Math.abs(total) / 120)));
+    const ticks = Math.min(42, Math.max(1, Math.ceil(Math.abs(total) / 120)));
     if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    await this.setAgentDriving(entry, true);
+    const drivingToken = await this.beginAgentDriving(entry);
     try {
       for (let i = 0; i < ticks; i += 1) {
         if (!this.inputAlive(entry, sid, tid)) return false;
@@ -1222,7 +1224,7 @@ export class BrowserHost {
         if (i < ticks - 1) await new Promise((resolve) => setTimeout(resolve, 12));
       }
     } finally {
-      this.releaseAgentDriving(entry);
+      this.endAgentDriving(entry, drivingToken);
     }
     return true;
   }
@@ -1241,31 +1243,43 @@ export class BrowserHost {
     const keyCode = ELECTRON_KEY_CODES[key] ?? (key.length === 1 ? key : null);
     if (!keyCode) return false;
     if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    await this.setAgentDriving(entry, true);
+    const drivingToken = await this.beginAgentDriving(entry);
     try {
       if (!this.inputAlive(entry, sid, tid)) return false;
       wc.sendInputEvent({ type: "keyDown", keyCode });
       if (key.length === 1) wc.sendInputEvent({ type: "char", keyCode });
       wc.sendInputEvent({ type: "keyUp", keyCode });
     } finally {
-      this.releaseAgentDriving(entry);
+      this.endAgentDriving(entry, drivingToken);
     }
     return true;
   }
 
-  /** 置位/清除「Agent 正在派发真实输入」标志（页面接管锁据此放行）。失败忽略：页面未就绪时锁也还没注入。 */
-  private async setAgentDriving(entry: TabEntry, on: boolean): Promise<void> {
+  /** 每次开始输入都递增的 epoch：旧的 120ms 释放定时器不能清掉新一次输入的放行。 */
+  private drivingTokens = new Map<TabEntry, number>();
+
+  /** 置位「Agent 正在派发真实输入」并返回本次 epoch，页面接管锁据此放行。 */
+  private async beginAgentDriving(entry: TabEntry): Promise<number> {
+    const token = (this.drivingTokens.get(entry) ?? 0) + 1;
+    this.drivingTokens.set(entry, token);
     try {
-      await entry.adapter.executeJs(buildAgentDrivingScript(on));
+      await entry.adapter.executeJs(buildAgentDrivingScript(true));
     } catch {
       // 页面正在导航/未就绪：锁同样不存在，无需放行
     }
+    return token;
   }
 
-  /** 事件是异步派发的：留一个短窗口再恢复锁，避免「事件还没到、遮罩已经盖回来」。 */
-  private releaseAgentDriving(entry: TabEntry): void {
+  /** 只释放自己那次放行；事件异步派发，留 120ms 窗口，但不能把后续输入的一起清掉。 */
+  private endAgentDriving(entry: TabEntry, token: number): void {
     setTimeout(() => {
-      void this.setAgentDriving(entry, false);
+      if (this.drivingTokens.get(entry) !== token) return;
+      this.drivingTokens.delete(entry);
+      try {
+        void entry.adapter.executeJs(buildAgentDrivingScript(false));
+      } catch {
+        // 页面已销毁/未就绪
+      }
     }, 120);
   }
 

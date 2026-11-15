@@ -29,6 +29,8 @@ import {
   performScrollIntoView,
   performSelect,
   performTargetPoint,
+  performFocusCheck,
+  performFocus,
   performType,
   performTypeReadback,
   type RefRegistry,
@@ -447,23 +449,40 @@ export function registerBrowserTools(
         if (shown) {
           // 留出移动补间时间（覆盖层最长 260ms）：用户能看清「鼠标滑过去再点」，而不是瞬移。
           await new Promise((resolve) => setTimeout(resolve, 280));
-          shown.pointer.click(shown.x, shown.y);
+          // 光标滑行期间页面可能因动画/图片/字体变化移动：点击前重新测一次，避免点错。
+          const refreshed = await performTargetPoint(registry, target, run, { scrollIntoView: false });
+          if (!refreshed.ok || typeof refreshed.x !== "number" || typeof refreshed.y !== "number") {
+            return { ok: false, content: refreshed.message ?? "[TARGET_MOVED] 目标位置在光标移动期间发生变化，请重新快照" };
+          }
+          point = refreshed;
+          if (typeof point.x !== "number" || typeof point.y !== "number") {
+            return { ok: false, content: "[TARGET_MOVED] 目标位置无效，请重新快照" };
+          }
+          shown.pointer.click(point.x, point.y);
         }
         // 第三步：真实鼠标事件（sendInputEvent）。假视图/旧后端不支持时回退到脚本点击。
+        const clickX = point.x;
+        const clickY = point.y;
+        if (typeof clickX !== "number" || typeof clickY !== "number") {
+          return { ok: false, content: "[TARGET_MOVED] 目标位置无效，请重新快照" };
+        }
         const real = typeof host.agentClick === "function"
-          ? await host.agentClick(ctx.sessionId, tabId ?? undefined, { x: point.x, y: point.y })
+          ? await host.agentClick(ctx.sessionId, tabId ?? undefined, { x: clickX, y: clickY })
           : false;
         if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
           console.log("[browser-click]", JSON.stringify({ ok: point.ok, code: point.code, x: point.x, y: point.y, real }));
         }
+        let degraded = false;
         if (!real) {
           const fallback = await performClick(registry, target, run);
           if (!fallback.ok) return { ok: false, content: fallback.message ?? `[错误] 点击失败：${target}` };
+          degraded = true;
         }
         fadePointerHighlight();
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
         const note = autoDismissed ? `（已自动关闭遮挡弹窗：${autoDismissed}）` : "";
-        return { ok: true, content: statusLine(`已点击 ${point.label ?? target}`, settled) + note };
+        const degradedNote = degraded ? "（视图不可用，已降级为脚本点击）" : "";
+        return { ok: true, content: statusLine(`已点击 ${point.label ?? target}`, settled) + note + degradedNote };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
@@ -511,7 +530,7 @@ export function registerBrowserTools(
         const run = (script: string) => host.executeScript(script, ctx.sessionId, tabId ?? undefined);
         const text = params.text ?? "";
         // 视觉：光标移到输入框 + 键盘胶囊（真实键盘输入时用户能看到「光标停在输入框上」）。
-        const point = await performTargetPoint(registry, params.target, run);
+        let point = await performTargetPoint(registry, params.target, run);
         const shown = point.ok && typeof point.x === "number" && typeof point.y === "number"
           ? pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height })
           : null;
@@ -519,12 +538,19 @@ export function registerBrowserTools(
           shown.pointer.chip("⌨ 输入中");
           // 等光标滑到位再开始敲键盘（输入本身是即时注入，视觉上要同步）。
           await new Promise((resolve) => setTimeout(resolve, 240));
+          const refreshed = await performTargetPoint(registry, params.target, run, { scrollIntoView: false });
+          if (refreshed.ok && typeof refreshed.x === "number" && typeof refreshed.y === "number") point = refreshed;
         }
         // 真实键盘优先：点进输入框 → Ctrl+A → 逐字输入 → 回读校验。
         // 不成立（不支持 sendInputEvent / 受控组件拒收 / 非文本元素）时回退原生 setter。
         let result: Awaited<ReturnType<typeof performType>> | null = null;
+        let formatNote = "";
         if (point.ok && point.editable === true && typeof point.x === "number" && typeof point.y === "number") {
           const focused = await host.agentClick(ctx.sessionId, tabId ?? undefined, { x: point.x, y: point.y });
+          if (focused) {
+            const focus = await performFocusCheck(registry, params.target, run);
+            if (!focus.ok) return { ok: false, content: focus.message ?? "[FOCUS_MISMATCH] 焦点不在目标输入框" };
+          }
           const typed = focused && typeof host.agentType === "function"
             ? await host.agentType(ctx.sessionId, tabId ?? undefined, text, { multiline: point.multiline === true })
             : false;
@@ -541,16 +567,30 @@ export function registerBrowserTools(
               }
               await new Promise((resolve) => setTimeout(resolve, 60));
             }
+            if (!result) {
+              // maxlength 截断、受控组件大写/去空格、contenteditable 丢换行：输入其实已生效，
+              // 不能再走 setter 重写一遍（会重复触发 input/change/搜索/自动保存）。
+              const finalRead = await performTypeReadback(registry, params.target, run);
+              const got = finalRead.ok ? String(finalRead.value ?? "") : "";
+              const norm = (value: string) => value.replace(/\s+/g, " ").trim();
+              if (got && (norm(got) === norm(expected) || norm(expected).startsWith(norm(got)))) {
+                result = { ok: true, label: point.label ?? params.target };
+                formatNote = "（页面按自身规则格式化/截断，未重复输入）";
+              }
+            }
           }
         }
+        let degraded = false;
         if (!result) {
           // 原生 setter + InputEvent + 回读比对（React 受控组件不再「返回成功但页面没变」）
           result = await performType(registry, params.target, text, run);
+          degraded = true;
         }
         fadePointerHighlight();
         if (!result.ok) return { ok: false, content: result.message ?? `[错误] 输入失败：${params.target}` };
         const settled = await settleTab(host, ctx.sessionId, tabId, before);
-        return { ok: true, content: statusLine(`已输入 ${result.label ?? params.target}`, settled) };
+        const degradedNote = degraded ? "（真实按键不可用/未生效，已降级为原生 setter）" : "";
+        return { ok: true, content: statusLine(`已输入 ${result.label ?? params.target}`, settled) + formatNote + degradedNote };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
@@ -741,6 +781,8 @@ export function registerBrowserTools(
           const point = await performTargetPoint(registry, params.target, run);
           if (point.ok && typeof point.x === "number" && typeof point.y === "number") {
             pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
+            const focus = await performFocus(registry, params.target, run);
+            if (!focus.ok) return { ok: false, content: focus.message ?? "[FOCUS_MISMATCH] 目标无法聚焦" };
           }
         }
         if (typeof host.isSessionVisible === "function" && host.isSessionVisible(ctx.sessionId)) {
@@ -1124,7 +1166,20 @@ export function registerBrowserTools(
         execute: async (ctx) => {
           const host = browserHost();
           if (host && typeof host.ensureAgentTab === "function") {
-            await host.ensureAgentTab(ctx.sessionId).catch(() => null);
+            const fromTab = activeTabOf(host, ctx.sessionId);
+            const fromKey = tokenKey(ctx.sessionId, fromTab);
+            const token = fromTab ? snapshotTokens.get(fromKey) : undefined;
+            const adopted = await host.ensureAgentTab(ctx.sessionId).catch(() => null);
+            // 首次动作会把用户页克隆成任务页；把快照令牌迁到克隆页，避免第一次点击必 STALE_REF。
+            if (adopted && fromTab && adopted !== fromTab) {
+              if (token) {
+                snapshotTokens.set(tokenKey(ctx.sessionId, adopted), token);
+                snapshotTokens.delete(fromKey);
+              }
+              if (lastSnapshotTab.get(ctx.sessionId ?? "") === fromTab) {
+                lastSnapshotTab.set(ctx.sessionId ?? "", adopted);
+              }
+            }
           }
           return execute(ctx);
         },

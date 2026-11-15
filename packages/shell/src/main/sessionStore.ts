@@ -369,6 +369,14 @@ export class SessionStore {
     const index = this.index();
     const meta = this.metaOf(safeId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId, trimmed.browserControl);
     const at = index.items.findIndex((i) => i.id === safeId);
+    const old = at >= 0 ? index.items[at] : undefined;
+    // metaOf 只算派生字段；task / forkedFrom / 自定义分支标题必须从旧索引项保留，
+    // 否则 append/moveTail 一次 save 就会把徽标和「分支 · X」抹掉（UI 读索引）。
+    if (old?.task || trimmed.task === true) meta.task = true;
+    if (trimmed.forkedFrom ?? old?.forkedFrom) meta.forkedFrom = trimmed.forkedFrom ?? old!.forkedFrom;
+    if (old?.forkedFrom && old.title && (trimmed.forkedFrom ?? old.forkedFrom)) meta.title = old.title;
+    if (old?.workspaceId && !meta.workspaceId) meta.workspaceId = old.workspaceId;
+    if (typeof old?.browserControl === "boolean" && trimmed.browserControl === undefined) meta.browserControl = old.browserControl;
     if (at >= 0) index.items[at] = meta;
     else index.items.push(meta);
     index.currentId = index.currentId ?? safeId;

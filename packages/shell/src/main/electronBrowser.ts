@@ -417,7 +417,7 @@ export function createElectronBrowserHost(
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
     cornerWindow.setIgnoreMouseEvents(true);
-    void cornerWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(cornerHtml));
+    void cornerWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(cornerHtml) + "#loopsoar-corner");
     // 子窗口不会自动随父窗口销毁；不手动收掉会让 app.quit 一直等它（E2E/退出卡住）。
     parent.once("closed", () => {
       if (cornerWindow && !cornerWindow.isDestroyed()) cornerWindow.destroy();

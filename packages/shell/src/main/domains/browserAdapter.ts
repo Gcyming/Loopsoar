@@ -16,6 +16,8 @@ export interface BrowserDeps extends TrustedIpcDeps {
   history?: BrowserHistoryStore;
   /** 浏览器扩展宿主（未装配时列表为空、安装返回错误）。 */
   browserExtensions?: BrowserExtensionHost;
+  /** 结束任务：关掉工作区全部页面、清任务快照与任务标记（关工作区 ≠ 留旧快照复活）。 */
+  endTask?: (sessionId: string) => Promise<void> | void;
   /** 跨会话任务条：已落盘但尚未打开的任务会话（live listTasks 之外的持久化部分）。 */
   listTaskSessions?: () => { sessionId: string; tabs: Array<{ id: string; url: string; title: string; active: boolean; agentBound?: boolean }> }[];
   /** 历史/快捷入口缺图标时按页面 URL 回抓（主进程实现，含 HTML link 解析）。 */
@@ -58,6 +60,12 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     tabs: deps.browser?.listTabs(deps.browser.visibleSessionId()) ?? [],
     visibleSession: deps.browser?.visibleSessionId() ?? USER_TABS_SESSION,
   }));
+  handleTrusted(deps, "browser:endTask", async (payload) => {
+    const sessionId = (payload as { sessionId?: string } | null)?.sessionId;
+    if (!sessionId || !deps.endTask) return { ok: false };
+    await deps.endTask(sessionId);
+    return { ok: true };
+  });
   handleTrusted(deps, "browser:setCornerColor", (payload) => {
     const color = (payload as { color?: string } | null)?.color;
     if (color) deps.browser?.setCornerColor(color);

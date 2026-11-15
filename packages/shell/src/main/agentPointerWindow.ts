@@ -367,7 +367,8 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
         if (target) {
           target.setBounds(area);
           appliedArea = { ...area };
-          if (ready) {
+          // 空闲隐藏后拖窗/缩放只更新几何，不能把光标重新显示出来（否则会留一个幽灵光标）。
+          if (ready && (held || windowVisible)) {
             target.showInactive();
             windowVisible = true;
           }

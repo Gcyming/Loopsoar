@@ -612,6 +612,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: BrowserTabIdSchema,
     sensitive: true,
   },
+  "browser:endTask": {
+    domain: "browser",
+    method: "endTask",
+    request: BrowserSessionIdSchema,
+    sensitive: true,
+  },
   "browser:closeSessionTabs": {
     domain: "browser",
     method: "closeSessionTabs",

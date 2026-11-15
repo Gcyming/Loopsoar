@@ -480,9 +480,9 @@ export function buildTargetPointScript(
   options: { scrollIntoView?: boolean } = {},
 ): string {
   return `/* loopsoar:target-point */
-(() => {
+(async () => {
 ${locateJs(resolved)}
-${options.scrollIntoView === false ? "" : "  el.scrollIntoView({ block: 'center' });"}
+${options.scrollIntoView === false ? "" : "  el.scrollIntoView({ block: 'center', behavior: 'instant' });\n  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));\n  let prev = null;\n  for (let i = 0; i < 3; i += 1) { const now = JSON.stringify(el.getBoundingClientRect()); if (now === prev) break; prev = now; await new Promise((r) => requestAnimationFrame(r)); }"}
 
   const describe = (node) => {
     if (!node || node.nodeType !== 1) return null;
@@ -508,6 +508,60 @@ ${options.scrollIntoView === false ? "" : "  el.scrollIntoView({ block: 'center'
   const multiline = tag === 'textarea' || Boolean(el.isContentEditable);
   return { ok: true, x: cx, y: cy, width: Math.max(rect.width, 2), height: Math.max(rect.height, 2), tag, type: inputType, editable, multiline };
 })()`;
+}
+
+/** 点击后的焦点校验：目标（或其子节点）必须是 activeElement，否则停止输入，避免写进验证码/登录框。 */
+export function buildFocusCheckScript(resolved: ResolvedTarget): string {
+  return `/* loopsoar:focus-check */
+(() => {
+${locateJs(resolved)}
+  const active = document.activeElement;
+  if (!active) return { ok: false };
+  return { ok: active === el || el.contains(active), tag: active.tagName ? active.tagName.toLowerCase() : '' };
+})()`;
+}
+
+/** 直接把目标 focus() 到页面焦点（press_key 的 target 用；不点击，避免误触按钮）。 */
+export async function performFocus(
+  registry: RefRegistry | null,
+  target: string,
+  run: ScriptRunner,
+): Promise<{ ok: boolean; message?: string }> {
+  const resolved = resolveTarget(registry, target);
+  if (!resolved.ok) return { ok: false, message: resolved.message };
+  try {
+    const page = (await run(`(() => {
+${locateJs(resolved)}
+  if (typeof el.focus === 'function') el.focus();
+  const active = document.activeElement;
+  return { ok: Boolean(active && (active === el || el.contains(active))) };
+})()`)) as { ok?: boolean } | null;
+    return page?.ok === true
+      ? { ok: true }
+      : { ok: false, message: "[FOCUS_MISMATCH] 目标无法获得焦点（可能是不可聚焦元素或被弹层遮住）" };
+  } catch (err) {
+    return { ok: false, message: `[FOCUS_MISMATCH] 聚焦失败：${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/** 点击后校验焦点是否落在目标元素（含其子树）。 */
+export async function performFocusCheck(
+  registry: RefRegistry | null,
+  target: string,
+  run: ScriptRunner,
+): Promise<{ ok: boolean; message?: string }> {
+  const resolved = resolveTarget(registry, target);
+  if (!resolved.ok) return { ok: false, message: resolved.message };
+  try {
+    const page = (await run(buildFocusCheckScript(resolved))) as { ok?: boolean } | null;
+    if (page?.ok === true) return { ok: true };
+    return {
+      ok: false,
+      message: "[FOCUS_MISMATCH] 点击后焦点不在目标元素，已停止输入（页面可能弹出登录/验证码/自动聚焦层）",
+    };
+  } catch (err) {
+    return { ok: false, message: `[FOCUS_MISMATCH] 焦点校验失败：${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 

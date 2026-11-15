@@ -148,6 +148,13 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:endTask",
+      "domain": "browser",
+      "method": "endTask",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:closeSessionTabs",
       "domain": "browser",
       "method": "closeSessionTabs",

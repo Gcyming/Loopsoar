@@ -558,7 +558,9 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           if (process.env.LOOPSOAR_E2E_POINTER_SHOT) {
             const pointerWin = BrowserWindow.getAllWindows().find((w) => {
               try {
-                return w.webContents.getURL().startsWith("data:text/html");
+                const url = w.webContents.getURL();
+      // 四角遮罩也是 data:text/html；排除它，否则 E2E 拍到的是遮罩而不是指针覆盖层。
+      return url.startsWith("data:text/html") && !url.includes("loopsoar-corner");
               } catch {
                 return false;
               }
@@ -1895,7 +1897,12 @@ app.whenReady().then(async () => {
         }
         // 任务会话把页面关光（或只剩用户页）时，保留上一次的任务页快照：
         // 用户重新打开这个会话时，折叠工作区还能按原样回来（关页 ≠ 结束任务）。
-        if (sessions.isTask(sessionId) && !state.tabs.some((tab) => tab.agentBound === true)) return;
+        if (sessions.isTask(sessionId) && !state.tabs.some((tab) => tab.agentBound === true)) {
+          // 任务工作区没有绑定页了：删快照并结束任务，避免下次打开/重启把旧页复活。
+          browserStates.delete(sessionId);
+          sessions.setTask(sessionId, false);
+          return;
+        }
         browserStates.set(sessionId, state);
       }, 400),
     );
@@ -2155,7 +2162,11 @@ app.whenReady().then(async () => {
       if (!state || state.tabs.length === 0) continue;
       // 任务会话把页面关光时保留上一次的任务页快照（与运行时防抖保存同一规则），
       // 否则退出这一次会把「重新打开任务会话能恢复工作区」的存档覆盖成空。
-      if (sessions.isTask(meta.id) && !state.tabs.some((tab) => tab.agentBound === true)) continue;
+      if (sessions.isTask(meta.id) && !state.tabs.some((tab) => tab.agentBound === true)) {
+        browserStates.delete(meta.id);
+        sessions.setTask(meta.id, false);
+        continue;
+      }
       browserStates.set(meta.id, state);
     }
     const userState = browserHost?.snapshotSession(USER_TABS_SESSION);
@@ -2247,6 +2258,9 @@ app.whenReady().then(async () => {
             }
             if (!sessions.moveTail(sessionId, fork.sessionId, keep)) {
               sessions.remove(fork.sessionId);
+              sessions.setTask(sessionId, false);
+              pendingForkRecords.delete(sessionId);
+              persistPendingForks();
               return;
             }
             sessions.setTask(sessionId, false);
@@ -2296,7 +2310,10 @@ app.whenReady().then(async () => {
       // 唯一例外是「任务会话」（浏览状态里有 Agent 绑定标签）——折叠工作区是任务本体，
       // 打开任务时恢复其页面属于预期；普通会话保持空白，只显示对话。
       const saved = browserStates.get(sessionId) ?? sessions.getBrowserState(sessionId) ?? undefined;
-      const taskState = sessions.isTask(sessionId) || saved?.tabs.some((tab) => tab.agentBound === true) ? saved : undefined;
+      const isTaskSession = sessions.isTask(sessionId) || saved?.tabs.some((tab) => tab.agentBound === true) === true;
+      const taskState = isTaskSession && saved
+        ? { ...saved, tabs: saved.tabs.filter((tab) => tab.agentBound === true) }
+        : undefined;
       const tabs = await browserHost.switchSession(sessionId, taskState);
       pushToRenderer("browser:tabs", { tabs });
     },
@@ -2336,6 +2353,12 @@ app.whenReady().then(async () => {
     browserExtensions,
     devtoolsPanel: devToolsPanel ?? undefined,
     resolveFavicon: resolveFaviconForPage,
+    endTask: async (sessionId) => {
+      await browserHost?.closeSessionTabs(sessionId).catch(() => undefined);
+      browserStates.delete(sessionId);
+      sessions.setTask(sessionId, false);
+      browserHost?.showUserTabs();
+    },
     // 任务条持久化：已落盘、尚未打开的任务会话也要出现（否则重启后任务条是空的）。
     listTaskSessions: () =>
       sessions
