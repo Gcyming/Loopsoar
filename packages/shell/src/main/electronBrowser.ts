@@ -40,7 +40,6 @@ export interface ElectronBrowserHostOptions {
   /** Agent 正在该会话动手（克隆页已可见）：壳层把虚拟光标切成常驻。 */
   onAgentActing?: (sessionId: string) => void;
   /** 切会话时网页收起/展开：UI 据此显示空白页或网页。 */
-  onViewSuppressed?: (suppressed: boolean) => void;
   /** 网页视图几何（主窗口内容坐标）变化：Agent 覆盖指针据此贴住网页区域（null = 无可见网页）。 */
   onViewLayout?: (rect: BrowserViewBounds | null) => void;
   /** 底部开发者工具面板（由 index 创建；未装配时平台上仍保持旧 detach 行为）。 */
@@ -447,7 +446,6 @@ export function createElectronBrowserHost(
     onFaviconChanged: options.onFaviconChanged,
     onTaskCreated: options.onTaskCreated,
     onAgentActing: options.onAgentActing,
-    onViewSuppressed: options.onViewSuppressed,
     onViewLayout: (rect) => {
       options.onViewLayout?.(rect);
       syncCornerWindow(rect);

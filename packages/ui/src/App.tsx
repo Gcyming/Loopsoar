@@ -127,8 +127,6 @@ export default function App(): React.JSX.Element {
   const [input, setInput] = useState("");
   const [address, setAddress] = useState("");
   const [currentUrl, setCurrentUrl] = useState<string>("");
-  /** 切会话后网页是否被收起（此时显示空白页/纯净对话，点标签才展开网页）。 */
-  const [viewSuppressed, setViewSuppressed] = useState(false);
   /** 跨会话任务条：所有带 Agent 工作区的会话（浏览器控制触发的折叠工作区）。 */
   const [agentTasks, setAgentTasks] = useState<{ sessionId: string; tabs: TabState[] }[]>([]);
   /** 浏览器当前可见组（USER 或某个任务会话）：任务 chip 去重必须用它，不能用聊天会话。 */
@@ -871,9 +869,6 @@ export default function App(): React.JSX.Element {
    * Agent 浏览器活动（会话隔离）：只让「当前会话」的浏览器显示呼吸灯；
    * 动作发生在当前会话时，把它正在操作的标签切到可见；其它会话一概不动界面。
    */
-  const [agentBrowserBusy, setAgentBrowserBusy] = React.useState(0);
-  /** 正在跑 Agent 的会话（轮次级）：呼吸灯按它点亮，工具执行只在轮次内的一小段。 */
-  const [agentTurnSessions, setAgentTurnSessions] = React.useState<string[]>([]);
   React.useEffect(() => {
     if (!api) return;
     const refreshTasks = (): void => {
@@ -892,37 +887,6 @@ export default function App(): React.JSX.Element {
     };
   }, [api, currentSession]);
 
-  React.useEffect(() => {
-    if (!api) return;
-    const applySuppressed = (suppressed: boolean): void => {
-      setViewSuppressed(suppressed);
-      // 网页收起时把页面区域让给空白页（地址栏也清空，避免「有地址但没网页」的错觉）。
-      if (suppressed) {
-        setCurrentUrl("");
-        setAddress("");
-      }
-    };
-    void api.browser
-      .viewState()
-      .then((state) => applySuppressed(Boolean(state?.suppressed)))
-      .catch(() => undefined);
-    return api.on("browser:viewSuppressed", (payload) => {
-      applySuppressed(Boolean((payload as { suppressed?: boolean } | null)?.suppressed));
-    });
-  }, [api]);
-
-  React.useEffect(() => {
-    if (!api || miniWindow) return;
-    return api.on("chrome:agentTurn", (payload) => {
-      const p = payload as { sessionId?: string; running?: boolean };
-      if (!p.sessionId) return;
-      setAgentTurnSessions((prev) => {
-        const has = prev.includes(p.sessionId as string);
-        if (p.running === true) return has ? prev : [...prev, p.sessionId as string];
-        return has ? prev.filter((id) => id !== p.sessionId) : prev;
-      });
-    });
-  }, [api, miniWindow]);
   const agentActivityRef = React.useRef<Map<string, number>>(new Map());
   React.useEffect(() => {
     if (!api || miniWindow) return;
@@ -935,7 +899,6 @@ export default function App(): React.JSX.Element {
       if (next === 0) counts.delete(sid);
       else counts.set(sid, next);
       const mine = sid === (sessionIdRef.current || null);
-      setAgentBrowserBusy(mine ? next : 0);
       if (mine && p.phase === "start") {
         // 跟随宿主的活动标签：用户手动切走了标签时，把它切回 Agent 正在操作的那一个
         void api.browser
@@ -1750,6 +1713,7 @@ export default function App(): React.JSX.Element {
   const closeTab = useCallback(
     (tabId: string): void => {
       if (!api) return;
+      const closedBound = tabs.find((tab) => tab.id === tabId)?.agentBound === true;
       // 关掉最后一个网页 = 回到空白搜索页（会话与侧栏保持原样），**绝不退出程序**。
       // 退出只认窗口关闭/菜单退出这类显式手势；「关网页顺手关掉整个应用」是用户明确反馈的痛点。
       void api.browser
@@ -1762,10 +1726,14 @@ export default function App(): React.JSX.Element {
           lastSyncedUrlRef.current = url;
           setAddress(url);
           setCurrentUrl(url);
+          // 关掉任务工作区的最后一个绑定页：离开特殊会话，回到空白会话。
+          if (closedBound && !r.tabs.some((tab) => tab.agentBound === true)) {
+            void createFreshSessionAndTab({ newBlankTab: true }).catch(() => undefined);
+          }
         })
         .catch(() => undefined);
     },
-    [api, tabs.length],
+    [api, tabs, createFreshSessionAndTab],
   );
 
   /** 关闭整个 Agent 工作区：关闭全部绑定页（任务会话本身保留，页面关闭不等于会话结束）。 */
@@ -2017,9 +1985,14 @@ export default function App(): React.JSX.Element {
   React.useEffect(() => {
     if (!api) return;
     return api.on("chat:taskForked", (payload) => {
-      const to = (payload as { to?: string } | null)?.to;
+      const p = payload as { from?: string; to?: string } | null;
+      const to = p?.to;
       if (!to) return;
       refreshSessions();
+      // 用户回合中途切去看别的会话：只刷新列表，不把他强行拽到任务分支。
+      if (p?.from && sessionIdRef.current !== p.from) {
+        return;
+      }
       switchSession(to);
       void api.browser
         .showTask({ sessionId: to })
@@ -2419,7 +2392,7 @@ export default function App(): React.JSX.Element {
               onNotice={setNotice}
             />
             <StartPage
-              currentUrl={viewSuppressed ? "" : currentUrl}
+              currentUrl={currentUrl}
               loading={Boolean(tabs.find((tab) => tab.active)?.loading)}
               failure={tabs.find((tab) => tab.active)?.loadFailure ?? null}
               onRetry={retryActivePage}

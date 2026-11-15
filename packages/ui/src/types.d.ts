@@ -652,7 +652,6 @@ export type LoopsoarEvent =
   | "perm:request"
   | "boot:ready"
   | "browser:tabs"
-  | "browser:viewSuppressed"
   | "chat:taskForked"
   | "browser:downloads"
   | "extensions:updated"
@@ -678,7 +677,6 @@ export type LoopsoarEvent =
   | "chrome:applyLayout"
   /** Agent 浏览器活动（{ sessionId?, tool, phase }）：当前会话显示呼吸灯，并切到操作中的标签。 */
   | "chrome:agentActivity"
-  | "chrome:agentTurn"
   | "chat:compacted";
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
@@ -843,8 +841,6 @@ export interface LoopsoarAPI {
     showTask(payload: { sessionId: string }): Promise<{ ok: boolean; tabs: TabState[] }>;
     /** 回到全局用户标签。 */
     showUserTabs(): Promise<{ ok: boolean; tabs: TabState[] }>;
-    /** 当前是否处于「切会话后网页收起」的状态（UI 水合）。 */
-    viewState(): Promise<{ suppressed: boolean }>;
     setOverlay(payload: { open: boolean }): Promise<{ open: boolean }>;
     /** Agent 工作区接管锁：locked=true 时该会话的网页只拦真实用户事件（放行 Agent 的合成事件）。 */
     setSidebarWidth(payload: { width: number; animate?: boolean }): Promise<{ width: number }>;

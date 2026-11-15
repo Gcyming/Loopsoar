@@ -54,9 +54,6 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     return { selected: deps.browser.selectTab((payload as { tabId: string }).tabId, deps.browser.visibleSessionId()) };
   });
 
-  handleTrusted(deps, "browser:viewState", () => ({
-    suppressed: deps.browser?.isViewSuppressed() ?? false,
-  }));
   handleTrusted(deps, "browser:listTabs", () => ({
     tabs: deps.browser?.listTabs(deps.browser.visibleSessionId()) ?? [],
     visibleSession: deps.browser?.visibleSessionId() ?? USER_TABS_SESSION,

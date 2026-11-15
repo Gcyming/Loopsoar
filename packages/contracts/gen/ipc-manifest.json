@@ -169,13 +169,6 @@
       "hasRequest": true
     },
     {
-      "channel": "browser:viewState",
-      "domain": "browser",
-      "method": "viewState",
-      "sensitive": true,
-      "hasRequest": false
-    },
-    {
       "channel": "browser:listTasks",
       "domain": "browser",
       "method": "listTasks",
@@ -966,7 +959,6 @@
     "perm:request",
     "boot:ready",
     "browser:tabs",
-    "browser:viewSuppressed",
     "chat:taskForked",
     "browser:downloads",
     "memory:updated",
@@ -984,7 +976,6 @@
     "chrome:dismissPopovers",
     "chrome:devToolsPanel",
     "chrome:agentActivity",
-    "chrome:agentTurn",
     "chrome:agentWindowClosed",
     "chrome:agentWindowIconMode",
     "chrome:agentWindowTransition",

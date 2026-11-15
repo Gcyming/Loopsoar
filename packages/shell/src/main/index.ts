@@ -1853,6 +1853,11 @@ app.whenReady().then(async () => {
   const pendingTaskKeep = new Map<string, number>();
   /** 全局用户标签的落盘文件（不属于任何会话）。 */
   const userTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
+  const cancelBrowserStateSave = (sessionId: string): void => {
+    const timer = tabSaveTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    tabSaveTimers.delete(sessionId);
+  };
   const queueBrowserStateSave = (sessionId: string, state: PersistedBrowserState): void => {
     const prev = tabSaveTimers.get(sessionId);
     if (prev) clearTimeout(prev);
@@ -1963,7 +1968,6 @@ app.whenReady().then(async () => {
       },
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
-      onViewSuppressed: (suppressed) => pushToRenderer("browser:viewSuppressed", { suppressed }),
       // 网页视图几何（单源）：覆盖指针贴住网页区域；没有可见网页时传 null → 覆盖层隐藏。
       onViewLayout: (rect) => {
         lastViewRect = rect;
@@ -2158,7 +2162,6 @@ app.whenReady().then(async () => {
     onTurnStarted: (sessionId) => {
       turnStartCounts.set(sessionId, sessions.get(sessionId)?.messages.length ?? 0);
       // 呼吸灯也按「轮次」而不是单次工具调用：工具执行只有几百毫秒，用户根本看不到。
-      pushToRenderer("chrome:agentTurn", { sessionId, running: true });
       if (!browserHost) return;
       // 没有开启浏览器控制的会话本来就没有 Agent 网页：锁了只会挡住用户自己开的页面。
       if (sessions.get(sessionId)?.browserControl !== true) return;
@@ -2169,7 +2172,7 @@ app.whenReady().then(async () => {
       holdPointerForAgent(sessionId);
     },
     onTurnSettled: (sessionId) => {
-      pushToRenderer("chrome:agentTurn", { sessionId, running: false });
+      turnStartCounts.delete(sessionId);
       agentTurnSessions.delete(sessionId);
       void browserHost?.lockForSession(sessionId, false).catch(() => undefined);
       if (pointerHeldSession === sessionId) {
@@ -2182,16 +2185,22 @@ app.whenReady().then(async () => {
         const source = sessions.get(sessionId);
         const keep = pendingTaskKeep.get(sessionId) ?? Math.max(0, (source?.messages.length ?? 0) - 2);
         pendingTaskKeep.delete(sessionId);
-        if (source) {
+        turnStartCounts.delete(sessionId);
+        if (source && source.messages.length > keep) {
           // 分支点在操作前：fork 只拿 keep 之前的历史；本轮用户消息+回复搬到分支。
           const fork = sessions.fork(sessionId, keep, undefined, { activate: false });
           if (fork) {
-            sessions.moveTail(sessionId, fork.sessionId, keep);
+            if (!sessions.moveTail(sessionId, fork.sessionId, keep)) {
+              sessions.remove(fork.sessionId);
+              return;
+            }
             sessions.setTask(sessionId, false);
             sessions.setTask(fork.sessionId, true);
             browserHost.reassignSession(sessionId, fork.sessionId);
             const state = browserHost.snapshotSession(fork.sessionId);
             if (state && state.tabs.length > 0) sessions.saveBrowserState(fork.sessionId, state);
+            // 过户后旧会话可能还有防抖保存队列：先取消，避免 400ms 后把任务页又写回普通会话。
+            cancelBrowserStateSave?.(sessionId);
             sessions.saveBrowserState(sessionId, { tabs: [], activeIndex: 0 });
             pushToRenderer("chat:taskForked", { from: sessionId, to: fork.sessionId });
           }

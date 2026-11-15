@@ -629,12 +629,6 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: BrowserResolveFaviconSchema,
     sensitive: true,
   },
-  "browser:viewState": {
-    domain: "browser",
-    method: "viewState",
-    request: null,
-    sensitive: true,
-  },
   "browser:listTasks": {
     domain: "browser",
     method: "listTasks",
@@ -1350,7 +1344,6 @@ export const EVENTS = [
   "perm:request",
   "boot:ready",
   "browser:tabs",
-  "browser:viewSuppressed",
   "chat:taskForked",
   "browser:downloads",
   "memory:updated",
@@ -1374,7 +1367,6 @@ export const EVENTS = [
    */
   "chrome:agentActivity",
   /** 一轮对话开始/结束（Agent 接管网页的窗口期）：呼吸灯与接管锁共用这个生命周期。 */
-  "chrome:agentTurn",
   "chrome:agentWindowClosed",
   "chrome:agentWindowIconMode",
   "chrome:agentWindowTransition",
