@@ -2741,6 +2741,35 @@
       opacity: 0.4;
       cursor: not-allowed;
     }
+    .chrome-pop-row {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      min-width: 0;
+    }
+    .chrome-pop-row > .chrome-pop-item {
+      flex: 1;
+      min-width: 0;
+    }
+    .chrome-pop-close {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ls-text-faint);
+      cursor: pointer;
+    }
+    .chrome-pop-close:hover,
+    .chrome-pop-close:focus-visible {
+      background: rgba(var(--ls-accent-rgb), 0.14);
+      color: var(--ls-text);
+      outline: none;
+    }
     .chrome-pop-item-two-line {
       align-items: flex-start;
     }

@@ -271,21 +271,31 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
         {bound.length === 0
           ? emptyView(tr("browser.agentWorkspaceEmpty"))
           : bound.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="menuitem"
-                className="chrome-pop-item"
-                title={tab.url || tab.title}
-                onClick={() => void dispatch("selectTab", { tabId: tab.id })}
-              >
-                {tab.active ? (
-                  <Icon name="check" size={14} className="chrome-pop-icon" />
-                ) : (
-                  <Icon name="globe" size={14} className="chrome-pop-icon" />
-                )}
-                <span className="chrome-pop-label">{tab.title || tab.url}</span>
-              </button>
+              <div className="chrome-pop-row" key={tab.id}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="chrome-pop-item"
+                  title={tab.url || tab.title}
+                  onClick={() => void dispatch("selectTab", { tabId: tab.id })}
+                >
+                  {tab.active ? (
+                    <Icon name="check" size={14} className="chrome-pop-icon" />
+                  ) : (
+                    <Icon name="globe" size={14} className="chrome-pop-icon" />
+                  )}
+                  <span className="chrome-pop-label">{tab.title || tab.url}</span>
+                </button>
+                <button
+                  type="button"
+                  className="chrome-pop-close"
+                  title={tr("browser.closeTab")}
+                  aria-label={tr("browser.closeTab")}
+                  onClick={() => void dispatch("closeTab", { tabId: tab.id })}
+                >
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
             ))}
       </div>
     );

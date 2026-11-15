@@ -1653,6 +1653,11 @@ export default function App(): React.JSX.Element {
         selectTab(p.payload.tabId);
         return;
       }
+      // Agent 工作区浮层里的「关闭此网页」：与标签条上的关闭同一条链路（关页不等于关会话）。
+      if (p?.action === "closeTab" && p.payload?.tabId) {
+        closeTab(p.payload.tabId);
+        return;
+      }
       if (p?.action === "selectWorkspace") {
         const id = (p.payload as { id?: unknown } | undefined)?.id;
         if (typeof id === "string") bindWorkspaceToCurrentSession(id);

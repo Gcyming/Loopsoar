@@ -2019,14 +2019,14 @@
   1. **关最后一个网页不再退出程序**：关页只关页，回到空白搜索页；退出只认窗口关闭/菜单退出等显式手势。此前 UI 在最后一个标签时调用 api.window.close()，是「关网页=退程序」的直接原因。
   2. **打开会话不再自动拖出网页**：chat:switchSession 只在「任务会话」（持久化浏览器状态里含 agentBound 标签）时才恢复页面；普通会话打开后只显示对话。任务会话恢复自己的 Agent 工作区属于预期。
   3. **首次动作克隆任务页**：动作类工具（navigate/click/type/press_key/scroll/hover/select/dismiss_popup/back/forward/reload）执行前，BrowserHost.ensureAgentTab 用当前用户页 URL **新开**一个标签并标 agentBound，原页完全不动；同一会话复用同一个 Agent 标签。只读工具（snapshot/screenshot/wait/tabs 读取）不触发克隆——「看」不是「工作」。克隆发生在权限闸放行之后、真正执行之前，且是幂等的。
-  4. **折叠标签持久化**：PersistedBrowserTab 增加 agentBound（只认布尔 true），随会话浏览器状态落盘；恢复时写回 TabEntry.agentBound，重启后 Agent 工作区不会凭空消失。
+  4. **折叠标签持久化 + 可关闭**：PersistedBrowserTab 增加 agentBound（只认布尔 true），随会话浏览器状态落盘；恢复时写回 TabEntry.agentBound，重启后 Agent 工作区不会凭空消失。Agent 工作区浮层每行新增关闭按钮（chrome-pop-close → closeTab 动作 → 与标签条同一条关闭链路），关掉最后一个绑定页后 chip 自然消失；关页仍然不等于关会话。
   5. **会话分支（手动）**：新增 chat:forkSession（sessionId? / keepCount / title?）。SessionStore.fork 把源会话前 keepCount 条消息**逐条复制**成新会话：新 id、forkedFrom {sessionId, keepCount, at}、继承 workspaceId/browserControl，不继承运行态（allow-session、流、压缩状态、浏览器标签）。消息悬停行新增「从此分支」按钮（用户/助手消息都有），分支后自动切到新会话，原会话一条消息都不动。
   6. **分支会话是「特殊会话」而不是隐形工作区**：仍在原工作区、列表可见，标题默认「分支 · 原会话标题」。理由：隐形工作区会破坏工作区作用域与可发现性（用户方案一），而「特殊标记 + 同工作区」成本低、可检索、可继续分支（用户方案二）。
   7. **Agent 默认像用户一样操作**：工具描述明确「搜索/输入框用 browser_type 点进去逐字输入、提交用 browser_press_key（Enter），不要用脚本改值或 el.click()」；配合真实鼠标/键盘注入，Agent 不需要用户额外叮嘱就能完成「点搜索框→输入→回车」。
 - **验证**：
   - 单测：sessionFork.spec.ts（前缀逐条一致、源会话不变、越界夹紧、非法/不存在 fail-closed、forkedFrom 元信息）；browserTaskTabs.spec.ts（首次动作克隆、原页保留、重复调用复用、空会话空白任务标签、agentBound 随快照恢复）；browserSessionState.spec.ts（agentBound 脏值丢弃）；browserTools.spec.ts（动作工具先 ensureAgentTab、只读快照不触发）。
   - 真机 E2E（node scripts/e2e-p2-run.mjs）：先像用户一样打开页面（userTab），再让 Agent 导航→点击；结束时 userTabs=1、agentTabs=1，页面按钮文案变为「按钮已点击」，证明「原页保留 + 克隆页操作」同时成立。
-  - 基线：typecheck 5/5、全量 vitest **194 文件 / 1632 tests**、pnpm build、pnpm bundle:shell。
+  - 基线：typecheck 5/5、全量 vitest **195 文件 / 1635 tests**、pnpm build、pnpm bundle:shell。
 - **状态**：✅ 自动化 + 真机 E2E（阶段一）。「用户标签彻底脱离会话（全局用户标签层）」与「任务条跨会话常驻/收起态恢复」列为下一阶段，见风险边界。
 - **风险与边界**：
   - 当前标签仍按会话分组（BrowserHost.groups）；阶段一只做到「普通会话开关不恢复页面 + 动作时克隆」，**还没有**把用户标签移出会话。因此：同一运行期切回某会话时，它内存里仍开着的标签会照常显示（页面确实还开着）；重启后普通会话的页面不再自动恢复。彻底的「网页 ＜ 折叠标签页 ＜ 会话」层级（用户标签全局、任务标签独立）是下一阶段的主改造。
