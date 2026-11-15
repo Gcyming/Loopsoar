@@ -445,8 +445,8 @@ export function registerBrowserTools(
           height: point.height,
         });
         if (shown) {
-          // 留出移动补间时间：用户能看清「鼠标移过去再点」，而不是瞬移。
-          await new Promise((resolve) => setTimeout(resolve, 190));
+          // 留出移动补间时间（覆盖层最长 260ms）：用户能看清「鼠标滑过去再点」，而不是瞬移。
+          await new Promise((resolve) => setTimeout(resolve, 280));
           shown.pointer.click(shown.x, shown.y);
         }
         // 第三步：真实鼠标事件（sendInputEvent）。假视图/旧后端不支持时回退到脚本点击。
@@ -517,7 +517,8 @@ export function registerBrowserTools(
           : null;
         if (shown) {
           shown.pointer.chip("⌨ 输入中");
-          await new Promise((resolve) => setTimeout(resolve, 170));
+          // 等光标滑到位再开始敲键盘（输入本身是即时注入，视觉上要同步）。
+          await new Promise((resolve) => setTimeout(resolve, 240));
         }
         // 真实键盘优先：点进输入框 → Ctrl+A → 逐字输入 → 回读校验。
         // 不成立（不支持 sendInputEvent / 受控组件拒收 / 非文本元素）时回退原生 setter。
@@ -824,7 +825,7 @@ export function registerBrowserTools(
         const point = await performTargetPoint(registry, target, run);
         if (point.ok && typeof point.x === "number" && typeof point.y === "number") {
           const shown = pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
-          if (shown) await new Promise((resolve) => setTimeout(resolve, 150));
+          if (shown) await new Promise((resolve) => setTimeout(resolve, 200));
         }
         const result = await performHover(registry, target, run);
         fadePointerHighlight();

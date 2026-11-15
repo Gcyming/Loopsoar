@@ -2112,6 +2112,11 @@ app.whenReady().then(async () => {
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
     onSessionOpened: async (sessionId, requestedWorkspaceId) => {
+      // 用户切走正在操作的会话：覆盖层光标不该停在新会话的网页上（Agent 仍在后台跑）。
+      if (pointerHeldSession && pointerHeldSession !== sessionId) {
+        pointerHeldSession = null;
+        agentPointer?.hold(false);
+      }
       const sessionData = sessions.get(sessionId);
       if (requestedWorkspaceId === undefined) {
         // 旧会话补绑工作区：首次打开时归属当前活动工作区

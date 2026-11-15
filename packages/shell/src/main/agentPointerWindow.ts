@@ -88,7 +88,8 @@ export function buildPointerHtml(): string {
     /* 光标：位置用 transform（GPU 合成，不触发布局）；位移做 150ms 补间，像人手移动。 */
     #cursor{position:fixed;left:0;top:0;width:${CURSOR_SIZE}px;height:${CURSOR_SIZE}px;pointer-events:none;
       opacity:0;will-change:transform;
-      transition:transform 150ms cubic-bezier(.2,0,.2,1),opacity 120ms ease;
+      /* 位移由脚本按距离做缓动（CSS transition 会在远距离时显得像瞬移/闪烁）。 */
+      transition:opacity 120ms ease;
       filter:drop-shadow(0 0 1.5px rgba(255,255,255,.95)) drop-shadow(0 3px 6px rgba(0,0,0,.45));}
     /* 目标高亮：与页面内旧样式同源（品牌色描边 + 10% 填充），只画在覆盖层。 */
     #highlight{position:fixed;left:0;top:0;pointer-events:none;opacity:0;box-sizing:border-box;
@@ -116,13 +117,44 @@ export function buildPointerHtml(): string {
         let rippleSeq = 0;
         let chipSeq = 0;
         let chipTimer = 0;
+        let animFrame = 0;
+        let curX = null;
+        let curY = null;
         const place = (node, x, y) => { node.style.left = x + 'px'; node.style.top = y + 'px'; };
+        /**
+         * 平滑移动：按距离取 180–420ms 的缓动（easeOutCubic），跨页长距离也不会「瞬移」。
+         * 第一次定位直接落点（页面刚出现时不该从左上角飞过来）。
+         */
+        const glideTo = (targetX, targetY) => {
+          const tx = targetX - ${CURSOR_OFFSET};
+          const ty = targetY - ${CURSOR_OFFSET};
+          if (curX === null || curY === null) {
+            curX = tx; curY = ty;
+            cursor.style.transform = 'translate3d(' + tx + 'px,' + ty + 'px,0)';
+            return;
+          }
+          const fromX = curX;
+          const fromY = curY;
+          const dist = Math.hypot(tx - fromX, ty - fromY);
+          if (dist < 1) { curX = tx; curY = ty; return; }
+          if (animFrame) cancelAnimationFrame(animFrame);
+          const duration = Math.min(260, Math.max(140, dist * 0.35));
+          const startedAt = performance.now();
+          const step = (now) => {
+            const t = Math.min(1, (now - startedAt) / duration);
+            const eased = 1 - Math.pow(1 - t, 3);
+            curX = fromX + (tx - fromX) * eased;
+            curY = fromY + (ty - fromY) * eased;
+            cursor.style.transform = 'translate3d(' + curX + 'px,' + curY + 'px,0)';
+            if (t < 1) animFrame = requestAnimationFrame(step);
+            else { animFrame = 0; curX = tx; curY = ty; }
+          };
+          animFrame = requestAnimationFrame(step);
+        };
         window.__lsPointer = (state) => {
           const s = state || {};
           // 光标：热点在左上角，所以整体左移/上移一个偏移量。
-          if (typeof s.x === 'number' && typeof s.y === 'number') {
-            cursor.style.transform = 'translate3d(' + (s.x - ${CURSOR_OFFSET}) + 'px,' + (s.y - ${CURSOR_OFFSET}) + 'px,0)';
-          }
+          if (typeof s.x === 'number' && typeof s.y === 'number') glideTo(s.x, s.y);
           cursor.style.opacity = s.visible === false ? '0' : '1';
           const nav = cursor.querySelector('svg');
           const busy = document.getElementById('busy');
@@ -181,6 +213,11 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
   let hideTimer: unknown = null;
   let held = false;
   let everMoved = false;
+  /** 窗口当前是否可见 / 上次应用的几何：避免每次动作都 showInactive + setBounds（会闪）。 */
+  let windowVisible = false;
+  let appliedArea: PointerRect | null = null;
+  const sameRect = (a: PointerRect, b: PointerRect): boolean =>
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
   const idleHideMs = deps.idleHideMs ?? 1600;
   const schedule = deps.setTimeoutFn ?? ((cb: () => void, ms: number) => setTimeout(cb, ms));
   const cancel = deps.clearTimeoutFn ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
@@ -259,9 +296,15 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
       cancel(hideTimer);
       hideTimer = null;
     }
-    target.setBounds(area);
-    target.setIgnoreMouseEvents(true);
-    target.showInactive();
+    if (!appliedArea || !sameRect(appliedArea, area)) {
+      target.setBounds(area);
+      appliedArea = { ...area };
+    }
+    if (!windowVisible) {
+      target.setIgnoreMouseEvents(true);
+      target.showInactive();
+      windowVisible = true;
+    }
     target.moveTop?.();
   };
 
@@ -273,6 +316,7 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
     hideTimer = schedule(() => {
       hideTimer = null;
       alive()?.hide();
+      windowVisible = false;
     }, idleHideMs);
   };
 
@@ -299,6 +343,7 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
         highlight = null;
         chip = null;
         alive()?.hide();
+        windowVisible = false;
         return;
       }
       // setArea 只对齐几何，不创建窗口：真正的动作（moveTo/click/chip）才需要「鼠标」。
@@ -306,7 +351,11 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
         const target = alive();
         if (target) {
           target.setBounds(area);
-          if (ready) target.showInactive();
+          appliedArea = { ...area };
+          if (ready) {
+            target.showInactive();
+            windowVisible = true;
+          }
         }
       }
       // 常驻期间页面才出现（加载完成/切到可见会话）：立刻把光标亮出来，不等下一次动作。
@@ -390,6 +439,7 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
       highlight = null;
       chip = null;
       alive()?.hide();
+      windowVisible = false;
     },
 
     destroy(): void {
@@ -404,6 +454,8 @@ export function createAgentPointerWindow(deps: AgentPointerWindowDeps): AgentPoi
       }
       win = null;
       ready = false;
+      windowVisible = false;
+      appliedArea = null;
     },
   };
 }

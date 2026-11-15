@@ -88,6 +88,10 @@ describe("覆盖指针 · 文档与素材", () => {
     expect(html).toContain("M146.928 122.768");
     expect(html).toContain("#cursor");
     expect(html).toContain("border-radius:999px");
+    // 平滑移动：按距离缓动（requestAnimationFrame），而不是 CSS 瞬移/闪烁
+    expect(html).toContain("requestAnimationFrame");
+    expect(html).toContain("glideTo");
+    expect(html).toContain("eased");
   });
 });
 
