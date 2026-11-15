@@ -131,6 +131,8 @@ export default function App(): React.JSX.Element {
   const [viewSuppressed, setViewSuppressed] = useState(false);
   /** 跨会话任务条：所有带 Agent 工作区的会话（浏览器控制触发的折叠工作区）。 */
   const [agentTasks, setAgentTasks] = useState<{ sessionId: string; tabs: TabState[] }[]>([]);
+  /** 浏览器当前可见组（USER 或某个任务会话）：任务 chip 去重必须用它，不能用聊天会话。 */
+  const [browserVisibleSession, setBrowserVisibleSession] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
   // 待发指令（运行中插入的引导）：按会话保队列（切走再切回不丢），当前会话的队列镜像到 UI。
@@ -877,7 +879,10 @@ export default function App(): React.JSX.Element {
     const refreshTasks = (): void => {
       void api.browser
         .listTasks()
-        .then((r) => setAgentTasks(r.tasks))
+        .then((r) => {
+          setAgentTasks(r.tasks);
+          setBrowserVisibleSession(r.visibleSession ?? null);
+        })
         .catch(() => undefined);
     };
     refreshTasks();
@@ -2380,7 +2385,7 @@ export default function App(): React.JSX.Element {
                   }}
                   onCloseWorkspace={closeAgentWorkspace}
                   agentTasks={agentTasks}
-                  currentSessionId={currentSession}
+                  currentSessionId={browserVisibleSession ?? currentSession}
                   onOpenTask={openAgentTask}
                   onSelectTab={selectTab}
                   onCloseTab={closeTab}
