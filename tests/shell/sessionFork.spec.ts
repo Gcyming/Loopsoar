@@ -66,6 +66,27 @@ describe("SessionStore.fork", () => {
     expect(store.list().find((item) => item.id === session.sessionId)?.task).toBeUndefined();
   });
 
+  it("旧索引丢失 task/forkedFrom 时，启动按会话文件修复", () => {
+    const dir = tmpDir();
+    const store = new SessionStore(dir);
+    const source = store.newSession();
+    store.save({ ...source, messages: [msg("user", "u1")] });
+    const forked = store.fork(source.sessionId, 1, "分支 · 旧数据");
+    store.setTask(forked!.sessionId, true);
+    // 模拟旧版本 save() 把索引字段抹掉
+    const indexPath = path.join(dir, "index.json");
+    const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+    for (const item of index.items) {
+      delete item.task;
+      delete item.forkedFrom;
+    }
+    fs.writeFileSync(indexPath, JSON.stringify(index), "utf8");
+    const reopened = new SessionStore(dir);
+    const meta = reopened.list().find((item) => item.id === forked!.sessionId);
+    expect(meta?.task).toBe(true);
+    expect(meta?.forkedFrom?.sessionId).toBe(source.sessionId);
+  });
+
   it("keepCount 越界会夹紧；源会话不存在返回 null（不新建）", () => {
     const store = new SessionStore(tmpDir());
     const source = store.newSession();

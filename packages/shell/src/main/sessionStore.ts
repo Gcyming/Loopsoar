@@ -119,6 +119,43 @@ export class SessionStore {
     this.indexFile = path.join(dir, "index.json");
     this.ensureDirs();
     this.migrateLegacy();
+    this.repairIndexMetadata();
+  }
+
+  /**
+   * 用会话文件里的真实字段修复索引：旧版本 save() 会抹掉 task/forkedFrom，
+   * 已有用户数据只修代码不会自愈，必须在启动时按文件回填一次。
+   */
+  private repairIndexMetadata(): void {
+    const index = this.index();
+    let changed = false;
+    for (const item of index.items) {
+      const data = this.get(item.id);
+      if (!data) continue;
+      if (data.task === true && item.task !== true) { item.task = true; changed = true; }
+      if (data.task !== true && item.task) { delete item.task; changed = true; }
+      if (data.forkedFrom) {
+        const previous = item.forkedFrom;
+        if (!previous || previous.sessionId !== data.forkedFrom.sessionId || previous.keepCount !== data.forkedFrom.keepCount) {
+          item.forkedFrom = { ...data.forkedFrom };
+          changed = true;
+        }
+        if (!item.title.startsWith("分支 · ")) {
+          const sourceTitle = index.items.find((entry) => entry.id === data.forkedFrom!.sessionId)?.title ?? "会话";
+          item.title = `分支 · ${sourceTitle}`.slice(0, 40);
+          changed = true;
+        }
+      } else if (item.forkedFrom) {
+        delete item.forkedFrom;
+        changed = true;
+      }
+      if (data.workspaceId && !item.workspaceId) { item.workspaceId = data.workspaceId; changed = true; }
+      if (typeof data.browserControl === "boolean" && item.browserControl === undefined) {
+        item.browserControl = data.browserControl;
+        changed = true;
+      }
+    }
+    if (changed) this.saveIndex(index);
   }
 
   private ensureDirs(): void {

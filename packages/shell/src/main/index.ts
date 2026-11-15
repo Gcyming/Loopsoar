@@ -1856,6 +1856,15 @@ app.whenReady().then(async () => {
   const pendingTaskKeep = new Map<string, number>();
   /** 用户标签 + 任务快照统一落盘（旧 browser-user-tabs.json 仅作迁移读取）。 */
   const browserStates = new BrowserStateStore(path.join(dirs.dataDir, "browser-state.json"));
+  // 旧版本可能把 task 标记写丢，但任务工作区快照还在：有 agentBound 页的会话必然曾是任务，
+  // 启动时补回标记，避免「有折叠工作区但会话列表没有任务徽标」。
+  for (const [taskSessionId, state] of browserStates.entries()) {
+    if (taskSessionId === USER_TABS_SESSION) continue;
+    if (!state.tabs.some((tab) => tab.agentBound === true)) continue;
+    if (sessions.get(taskSessionId) && !sessions.isTask(taskSessionId)) {
+      sessions.setTask(taskSessionId, true);
+    }
+  }
   type PendingFork = { sourceId: string; keep: number; forkId?: string };
   const pendingForkFile = path.join(dirs.dataDir, "pending-task-forks.json");
   const pendingForkRecords = new Map<string, PendingFork>();
