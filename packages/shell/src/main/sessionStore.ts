@@ -150,10 +150,6 @@ export class SessionStore {
         changed = true;
       }
       if (data.workspaceId && !item.workspaceId) { item.workspaceId = data.workspaceId; changed = true; }
-      if (typeof data.browserControl === "boolean" && item.browserControl === undefined) {
-        item.browserControl = data.browserControl;
-        changed = true;
-      }
     }
     if (changed) this.saveIndex(index);
   }
