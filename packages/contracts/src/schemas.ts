@@ -442,6 +442,8 @@ export const RuleEntrySchema = z.object({
   scope: z.enum(["global", "workspace"]),
   enabled: z.boolean(),
   content: z.string().max(32768),
+  /** 项目规则所属工作区（未给 = 旧行为：settings.workspaceRoot）。 */
+  workspaceId: z.string().min(1).max(80).optional(),
 });
 
 export const RulesPayloadSchema = z.object({
@@ -880,6 +882,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "settings",
     method: "setRules",
     request: RulesPayloadSchema,
+    sensitive: true,
+  },
+  "settings:getWorkspaceRule": {
+    domain: "settings",
+    method: "getWorkspaceRule",
+    request: z.object({ workspaceId: z.string().min(1).max(80) }),
     sensitive: true,
   },
   "settings:diagnostics": {

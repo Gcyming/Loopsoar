@@ -69,7 +69,7 @@ export interface ChatServiceOptions {
   /** Agent 工具白名单（undefined=全部；[]=全禁；非空=仅名单内；先于沙箱判定）。 */
   toolAllowlist?: string[];
   /** 规则文件注入（AGENTS.md 合并文本）；每次 stream 时调用，保存规则后即时生效。 */
-  getSystemRules?: () => string;
+  getSystemRules?: (sessionId?: string) => string;
   /** 记忆召回注入（按用户消息取相关记忆，放进 volatile 段）。 */
   getMemoryFor?: (userText: string, sessionId?: string) => string;
   /** 每次工具调用（E-M1）：用于记录 tool/session 使用事件，不改变循环行为。 */
@@ -486,7 +486,7 @@ export class ChatService {
       volatile: "",
     });
     // 规则文件（AGENTS.md）作为稳定段的补充：每次调用重新取，设置面板保存后即时生效
-    const rulesText = this.opts.getSystemRules?.() ?? "";
+    const rulesText = this.opts.getSystemRules?.(sessionId) ?? "";
     const stableContent = rulesText.trim()
       ? `${segments.stable}\n\n${rulesText}`
       : segments.stable;

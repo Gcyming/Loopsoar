@@ -2554,3 +2554,19 @@
 - **补充（2026-11-16，第二版）**：提交/保存按钮并入行内右侧（路径行：输入框 + 浏览 + 保存；表单末行：标签 + 工作区 + 添加），减少「按钮孤零零挂在下面」的距离感；`S.input` 补 `box-sizing: border-box`，修复宽度 100% + padding 造成的 4px 横向溢出（页面可横向滚动、左缘被裁）。
 - **补充（2026-11-16，第三版）**：分类改为「规范 key + 本地化标签」：新增只读 `settings.memory.category.<key>` 文案（general/convention/lesson/fact/preference/episode/demo/project），下拉与列表徽标显示当前语言下的标签，选择/失焦时还原成规范 key 入库；自定义分类原样保存。语言切换后标签即时更新（未聚焦时直接按当前语言渲染）。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。
+
+## ADR-0131 规则按项目隔离与注入
+
+- **背景**：规则页只有一个「项目规则」卡片，固定读取全局偏好 `workspaceRoot` 下的 AGENTS.md；没有项目选择器。Agent 侧 `getSystemRules` 也不接收会话，所有会话都拿到同一份项目规则——即使用户在侧栏切换了工作区。
+- **修正**：
+  1. **数据模型**：`RuleEntry` 增加 `workspaceId`/`workspaceRoot`；项目规则按工作区解析为 `<workspace.root>/AGENTS.md`（无则 CLAUDE.md），entry id 为 `workspace:<workspaceId>:AGENTS.md`；未挂载工作区时保留旧的 `workspace:AGENTS.md` 行为。
+  2. **注入按会话**：`currentRulesPrompt(deps, workspaceId?)`；`ChatService.getSystemRules(sessionId?)` 把会话 id 传给壳层，壳层用 `sessions.get(sessionId)?.workspaceId` 解析项目规则；全局规则始终合并。未绑定工作区的会话回退活动工作区。
+  3. **保存按项目**：`settings:setRules` 的 workspace 条目可带 `workspaceId`，只接受 `WorkspaceStore` 里已挂载的工作区（防任意路径写入）；写入选定项目的 AGENTS.md；禁用状态按 `workspace:<id>:AGENTS.md` 独立记录；未知工作区整单拒绝。
+  4. **按需读取**：新增 `settings:getWorkspaceRule`（workspaceId → 内容/路径/文件名/是否停用/该项目的合并预览），设置页切换项目时只拉这一份，不刷新整页。
+  5. **UI**：项目规则卡片用原生下拉选择已挂载项目，显示项目名、文件名与根路径；切换项目即加载对应 AGENTS.md，合并预览跟随所选项目（否则会误显示活动项目的规则）；保存后保留当前项目选择。
+- **理由**：项目规则本质是「仓库共享的文件」，必须和会话绑定到的工作区一致；用 id 而非任意 root 作为参数，避免规则写入越权。
+- **替代方案**：① 只让「项目规则」改全局 workspaceRoot——切换项目会改掉所有会话的根，语义错误；② 允许输入任意路径——越权写文件；③ 一次展示所有工作区的项目规则卡片——项目多时页面噪声大，且多数时候只编辑当前项目。
+- **验证方式**：`tests/services/chat-rules.spec.ts`（3 条：规则进 system、空串不注入、按 session 区分）；`tests/shell/settings-domain.spec.ts` 新增 3 条（A/B 各读各的、保存写入选定工作区且停用只影响该区、未知工作区拒绝）；全量 vitest 全绿；E2E `e2e-evidence/rules-projects.png`（项目 B → 70 字节合并预览 → 保存成功，选择未跳回）。
+- **状态**：✅ 已验证（2026-11-16）
+- **已知取舍**：一个项目规则卡片同一时间只编辑一个项目；多项目批量编辑留给后续。Claude 兼容文件仍受支持，但保存统一写 AGENTS.md。
+

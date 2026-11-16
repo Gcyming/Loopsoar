@@ -433,6 +433,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "No rules yet. Create entries below, e.g. “code style”, “build command”, “prohibited actions”.",
   },
   "settings.rules.newGlobal": { zh: "新建全局规则", en: "New global rule" },
+  "settings.rules.noWorkspaces": { zh: "还没有挂载工作区", en: "No workspaces yet" },
   "settings.rules.newWorkspace": { zh: "新建项目规则", en: "New project rule" },
   "settings.rules.merged": { zh: "合并结果", en: "Merged result" },
   "settings.rules.effective": { zh: "生效 {count} 份 · {bytes} / {max} 字节", en: "{count} active · {bytes} / {max} bytes" },

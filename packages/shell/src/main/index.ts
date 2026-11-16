@@ -69,7 +69,7 @@ import { BookmarksStore } from "./bookmarksStore.js";
 import { registerBookmarksDomain } from "./domains/bookmarks.js";
 import { registerPageSaveDomain } from "./domains/pageSave.js";
 import { registerMemoryDomain } from "./domains/memory.js";
-import { reviewTitles } from "./memoryReview.js";
+import { reviewMemory } from "./memoryReview.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
 import { WorkspaceStore } from "./workspaceStore.js";
@@ -1784,6 +1784,7 @@ app.whenReady().then(async () => {
   const settingsDeps = {
     ...deps,
     platform,
+    workspaces,
     dataDir: dirs.dataDir,
     configDir: dirs.configDir,
     workspaceRoot,
@@ -1836,8 +1837,12 @@ app.whenReady().then(async () => {
     runLoop: (input) => loopRuntime.run(input),
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
-    // 规则文件（AGENTS.md）：每次 stream 重新读取，设置面板保存后即时生效
-    getSystemRules: () => currentRulesPrompt(settingsDeps),
+    // 规则文件（AGENTS.md）：每次 stream 重新读取；项目规则按会话所属工作区解析。
+    getSystemRules: (sessionId?: string) =>
+      currentRulesPrompt(
+        settingsDeps,
+        sessionId ? sessions.get(sessionId)?.workspaceId ?? undefined : undefined,
+      ),
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
     onToolCall: (toolName: string, sessionId: string) => memory.recordToolUsage(toolName, sessionId),
@@ -2483,7 +2488,7 @@ app.whenReady().then(async () => {
     sessions,
     push: pushToRenderer,
     // 回顾命名：运行时才解析当前模型（设置里换供应商后立即生效）；无模型时返回 null，按钮提示不可用。
-    review: (facts) => reviewTitles(buildLlmFromActive() ?? llmRef, facts),
+    review: (facts) => reviewMemory(buildLlmFromActive() ?? llmRef, facts),
   });
   registerBrowserDomain({
     ...deps,

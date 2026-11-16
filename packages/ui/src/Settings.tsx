@@ -79,6 +79,7 @@ const SEARCH_ENGINE_OPTIONS: { id: Preferences["searchEngine"]; name: string; ho
 interface DraftRule {
   key: string; name: string; scope: "global" | "workspace";
   enabled: boolean; content: string; persisted: boolean; path: string;
+  workspaceId?: string; workspaceName?: string; workspaceRoot?: string;
 }
 
 /** 取翻译；key 缺失（词典未覆盖）时回退到调用方给的原文，绝不显示裸 key。 */
@@ -259,7 +260,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
 
   const applyRules = useCallback((r: RulesSnapshot) => {
     setRules(r);
-    setDrafts(r.entries.map((x) => ({ key: x.id, name: x.name, scope: x.scope, enabled: x.enabled, content: x.content, persisted: true, path: x.path })));
+    setDrafts(r.entries.map((x) => ({
+      key: x.id, name: x.name, scope: x.scope, enabled: x.enabled, content: x.content, persisted: true, path: x.path,
+      workspaceId: x.workspaceId,
+      workspaceName: r.workspaces.find((w) => w.id === x.workspaceId)?.name,
+      workspaceRoot: x.workspaceRoot,
+    })));
     setDeleted([]);
   }, []);
 
@@ -443,19 +449,87 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     catch (e) { bad(e); }
   }, [api, perms, ok, bad, tr]);
 
+  const loadRuleWorkspace = useCallback(async (key: string, workspaceId: string) => {
+    if (!api) return;
+    try {
+      const r = await api.settings.getWorkspaceRule({ workspaceId });
+      setDrafts((v) => v.map((d) => d.key === key ? {
+        ...d,
+        workspaceId: r.workspaceId,
+        workspaceName: r.workspaceName,
+        workspaceRoot: r.workspaceRoot,
+        name: r.name,
+        path: r.path,
+        content: r.content,
+        enabled: r.enabled,
+        persisted: r.exists,
+      } : d));
+      setRules((prev) => prev ? { ...prev, merged: r.merged } : prev);
+    } catch (e) { bad(e); }
+  }, [api, bad]);
+
   const saveRules = useCallback(async () => {
     if (!api) return;
     try {
-      const r = await api.settings.setRules({ entries: drafts.map((d) => ({ name: d.name.trim(), scope: d.scope, enabled: d.enabled, content: d.content })), deleted });
-      applyRules(await api.settings.getRules());
+      const r = await api.settings.setRules({
+        entries: drafts.map((d) => ({
+          name: d.name.trim(),
+          scope: d.scope,
+          enabled: d.enabled,
+          content: d.content,
+          ...(d.workspaceId ? { workspaceId: d.workspaceId } : {}),
+        })),
+        deleted,
+      });
+      // getRules 只带活动工作区；全局条目取最新的，项目草稿保留「当前选中的项目」再各自刷新，
+      // 否则保存后面板会跳回活动项目。
+      const fresh = await api.settings.getRules();
+      const globals = fresh.entries.filter((x) => x.scope === "global").map((x) => ({
+        key: x.id, name: x.name, scope: x.scope, enabled: x.enabled, content: x.content, persisted: true, path: x.path,
+      }));
+      const projectDrafts = drafts.filter((d) => d.scope === "workspace");
+      const loaded = projectDrafts.length > 0
+        ? await Promise.all(projectDrafts.map((d) => d.workspaceId ? api.settings.getWorkspaceRule({ workspaceId: d.workspaceId }) : Promise.resolve(null)))
+        : [];
+      const projects = projectDrafts.map((d, index) => {
+        const hit = loaded[index];
+        return hit ? {
+          ...d,
+          workspaceName: hit.workspaceName,
+          workspaceRoot: hit.workspaceRoot,
+          name: hit.name,
+          path: hit.path,
+          content: hit.content,
+          enabled: hit.enabled,
+          persisted: hit.exists,
+        } : d;
+      });
+      setDrafts([...globals, ...projects]);
+      setDeleted([]);
+      const preview = loaded.find((x) => x !== null)?.merged ?? fresh.merged;
+      setRules({ ...fresh, merged: preview });
       ok(tr("settings.rules.saved", { count: r.merged.included.length }));
     } catch (e) { bad(e); }
   }, [api, drafts, deleted, applyRules, ok, bad, tr]);
 
-  const addDraft = (scope: "global" | "workspace") => setDrafts((v) => [...v, {
-    key: `new-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-    name: scope === "global" ? tr("settings.rules.defaultGlobalName") : "AGENTS.md", scope, enabled: true, content: "", persisted: false, path: "",
-  }]);
+  const addDraft = (scope: "global" | "workspace") => {
+    const key = `new-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    if (scope === "global") {
+      setDrafts((v) => [...v, {
+        key,
+        name: tr("settings.rules.defaultGlobalName"), scope, enabled: true, content: "", persisted: false, path: "",
+      }]);
+      return;
+    }
+    const workspaceId = rules?.activeWorkspaceId ?? rules?.workspaces[0]?.id ?? "";
+    const workspace = rules?.workspaces.find((w) => w.id === workspaceId);
+    setDrafts((v) => [...v, {
+      key, name: "AGENTS.md", scope: "workspace", enabled: true, content: "", persisted: false, path: "",
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(workspace ? { workspaceName: workspace.name, workspaceRoot: workspace.root } : {}),
+    }]);
+    if (workspaceId) void loadRuleWorkspace(key, workspaceId);
+  };
 
   const removeDraft = (d: DraftRule) => {
     setDrafts((v) => v.filter((x) => x.key !== d.key));
@@ -1362,8 +1436,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         return rules ? (<div>
           <Head t={tr("settings.rules.head")} h={tr("settings.rules.headHint")} />
           {drafts.length === 0 ? <div style={S.dashed}>{tr("settings.rules.empty")}</div> : null}
-          {drafts.map((d) => <RuleCard key={d.key} d={d} max={rules.maxFileBytes}
-            on={(p) => setDrafts((v) => v.map((x) => x.key === d.key ? { ...x, ...p } : x))} onDel={() => removeDraft(d)} />)}
+          {drafts.map((d) => <RuleCard key={d.key} d={d} max={rules.maxFileBytes} workspaces={rules.workspaces}
+            on={(p) => setDrafts((v) => v.map((x) => x.key === d.key ? { ...x, ...p } : x))} onDel={() => removeDraft(d)}
+            onPick={(workspaceId) => { if (d.workspaceId !== workspaceId) void loadRuleWorkspace(d.key, workspaceId); }} />)}
           <div style={S.btns}>
             <Btn label={tr("settings.rules.newGlobal")} onClick={() => addDraft("global")} />
             <Btn label={tr("settings.rules.newWorkspace")} onClick={() => addDraft("workspace")} />
@@ -2339,7 +2414,14 @@ function Btn({ label, onClick, primary, small }: { label: string; onClick: () =>
 function SaveBtn({ onClick, label }: { onClick: () => void; label: string }) {
   return <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 14 }}><Btn label={label} primary onClick={onClick} /></div>;
 }
-function RuleCard({ d, max, on, onDel }: { d: DraftRule; max: number; on: (p: Partial<DraftRule>) => void; onDel: () => void }) {
+function RuleCard({ d, max, workspaces, on, onDel, onPick }: {
+  d: DraftRule;
+  max: number;
+  workspaces: { id: string; name: string; root: string }[];
+  on: (p: Partial<DraftRule>) => void;
+  onDel: () => void;
+  onPick: (workspaceId: string) => void;
+}) {
   const tr = useT();
   const bytes = new TextEncoder().encode(d.content).length;
   return (<div className="panel-card" style={S.card}>
@@ -2347,7 +2429,25 @@ function RuleCard({ d, max, on, onDel }: { d: DraftRule; max: number; on: (p: Pa
       <span style={S.meta}><span style={BADGE.neutral}>{d.scope === "workspace" ? tr("settings.rules.scopeWorkspace") : tr("settings.rules.scopeGlobal")}</span><span style={bytes > max ? S.errText : S.tag}>{tr("settings.bytesOf", { bytes, max })}</span></span>
       <span style={S.icons}><Toggle v={d.enabled} on={(next) => on({ enabled: next })} /><Btn label={tr("settings.delete")} small onClick={onDel} /></span>
     </div>
-    <input style={S.ruleName} value={d.name} disabled={d.scope === "workspace"} onChange={(e) => on({ name: e.target.value })} />
+    {d.scope === "workspace" ? (
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 280px) 1fr", gap: 8, alignItems: "center" }}>
+        <select
+          style={{ ...S.input, maxWidth: "none", paddingRight: 8 }}
+          value={d.workspaceId ?? ""}
+          onChange={(event) => onPick(event.target.value)}
+          title={d.workspaceRoot ?? ""}
+        >
+          {workspaces.length === 0 ? <option value="">{tr("settings.rules.noWorkspaces")}</option> : null}
+          {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+        <span style={S.meta}>
+          <span style={BADGE.neutral}>{d.name}</span>
+          <span style={{ ...S.tag, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.workspaceRoot ?? ""}>{d.workspaceRoot ?? ""}</span>
+        </span>
+      </div>
+    ) : (
+      <input style={S.ruleName} value={d.name} onChange={(e) => on({ name: e.target.value })} />
+    )}
     <textarea style={S.rulesArea} rows={4} spellCheck={false} value={d.content} placeholder={tr("settings.rules.namePlaceholder")} onChange={(e) => on({ content: e.target.value })} />
   </div>);
 }

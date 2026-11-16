@@ -86,12 +86,16 @@ export interface RuleEntry {
   path: string;
   bytes: number;
   content: string;
+  workspaceId?: string;
+  workspaceRoot?: string;
 }
 
 export interface RulesSnapshot {
   maxFileBytes: number;
   maxTotalBytes: number;
   entries: RuleEntry[];
+  workspaces: { id: string; name: string; root: string }[];
+  activeWorkspaceId: string | null;
   merged: {
     text: string;
     included: { scope: string; path: string; bytes: number }[];
@@ -1048,9 +1052,27 @@ export interface LoopsoarAPI {
     setPermissions(payload: PermissionsState["permissions"]): Promise<{ saved: boolean; permissions: PermissionsState["permissions"] }>;
     getRules(): Promise<RulesSnapshot>;
     setRules(payload: {
-      entries: { name?: string; scope: "global" | "workspace"; enabled: boolean; content: string }[];
+      entries: {
+        name?: string;
+        scope: "global" | "workspace";
+        enabled: boolean;
+        content: string;
+        workspaceId?: string;
+      }[];
       deleted?: string[];
     }): Promise<{ saved: boolean; entries: RuleEntry[]; merged: RulesSnapshot["merged"] }>;
+    getWorkspaceRule(payload: { workspaceId: string }): Promise<{
+      workspaceId: string;
+      workspaceName: string;
+      workspaceRoot: string;
+      id: string;
+      name: string;
+      path: string;
+      exists: boolean;
+      enabled: boolean;
+      content: string;
+      merged: RulesSnapshot["merged"];
+    }>;
     diagnostics(): Promise<DiagnosticsInfo>;
     about(): Promise<AboutInfo>;
   };

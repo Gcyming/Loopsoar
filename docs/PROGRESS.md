@@ -1298,4 +1298,5 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 保存/添加按钮并入行内右侧；输入框补 border-box，消除 4px 横向溢出导致的页面横滚与左缘裁切。
 - 新增记忆改三列网格（1fr 1fr auto），四个输入框等宽，添加按钮占末列。
 - 分类改为规范 key + 本地化标签：下拉/列表显示中文（通用/约定/事实/经验/偏好/片段/演示/项目），切语言即时更新，入库仍是稳定 key。
+- 规则按项目隔离（ADR-0131）：项目规则卡片可选已挂载工作区，读写该项目的 AGENTS.md，注入按会话所属工作区解析；新增 settings:getWorkspaceRule。
 

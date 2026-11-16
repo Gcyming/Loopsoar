@@ -210,6 +210,73 @@ describe("settings 域：规则条目（逐条增删）", () => {
   });
 });
 
+describe("settings 域：项目规则按工作区隔离", () => {
+  function workspacesOf() {
+    const a = path.join(root, "proj-a");
+    const b = path.join(root, "proj-b");
+    mkdirSync(a, { recursive: true });
+    mkdirSync(b, { recursive: true });
+    return {
+      a,
+      b,
+      list: [
+        { id: "a", name: "项目 A", root: a },
+        { id: "b", name: "项目 B", root: b },
+      ],
+    };
+  }
+
+  it("每个工作区读自己的 AGENTS.md，按会话工作区注入", async () => {
+    const ws = workspacesOf();
+    const { deps } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+    });
+    writeFileSync(path.join(ws.a, "AGENTS.md"), "# A\n- A 规则：中文回答", "utf8");
+    writeFileSync(path.join(ws.b, "AGENTS.md"), "# B\n- B 规则：只改 apps/b", "utf8");
+
+    expect(currentRulesPrompt(deps, "a")).toContain("A 规则");
+    expect(currentRulesPrompt(deps, "a")).not.toContain("B 规则");
+    expect(currentRulesPrompt(deps, "b")).toContain("B 规则");
+    expect(currentRulesPrompt(deps, "b")).not.toContain("A 规则");
+
+    const entry = readRuleEntries(deps, "b").find((e) => e.scope === "workspace")!;
+    expect(entry.workspaceId).toBe("b");
+    expect(entry.path).toContain(ws.b);
+    expect(entry.id).toBe("workspace:b:AGENTS.md");
+  });
+
+  it("保存项目规则写入选定工作区；停用只影响该工作区", async () => {
+    const ws = workspacesOf();
+    const { deps, handlers } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+    });
+    await invoke(handlers, "settings:setRules", {
+      entries: [{ scope: "workspace", workspaceId: "b", enabled: true, content: "B 规则：只改 apps/b" }],
+    });
+    expect(readFileSync(path.join(ws.b, "AGENTS.md"), "utf8")).toContain("apps/b");
+    expect(existsSync(path.join(ws.a, "AGENTS.md"))).toBe(false);
+
+    await invoke(handlers, "settings:setRules", {
+      entries: [{ scope: "workspace", workspaceId: "b", enabled: false, content: "B 规则：只改 apps/b" }],
+    });
+    expect(currentRulesPrompt(deps, "b")).not.toContain("apps/b");
+    expect(readRuleEntries(deps, "b").find((e) => e.scope === "workspace")?.enabled).toBe(false);
+  });
+
+  it("未挂载的工作区 → 拒绝保存，不写任何文件", async () => {
+    const ws = workspacesOf();
+    const { handlers } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+    });
+    await expect(
+      invoke(handlers, "settings:setRules", {
+        entries: [{ scope: "workspace", workspaceId: "ghost", enabled: true, content: "x" }],
+      }),
+    ).rejects.toThrow(/不存在或未挂载/);
+    expect(existsSync(path.join(ws.a, "AGENTS.md"))).toBe(false);
+  });
+});
+
 describe("settings 域：API Key 加密保存", () => {
   it("setApiKey → getProvider 只回传掩码与来源，不回传明文", async () => {
     const { deps, handlers } = makeEnv(root);

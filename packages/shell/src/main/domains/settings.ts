@@ -63,6 +63,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   configDir: string;
   /** 工作区根（项目规则的查找起点）；可在设置里改，改后由装配层回调更新。 */
   workspaceRoot: string;
+  /** 已挂载工作区：项目规则按工作区选择、按会话注入；未注入时退回 workspaceRoot 单项目。 */
+  workspaces?: { list(): { id: string; name: string; root: string }[]; activeId(): string | null };
   env: Record<string, string | undefined>;
   appVersion: string;
   diagnosticsExtra?: () => Record<string, unknown>;
@@ -168,6 +170,9 @@ export interface RuleEntryState {
   path: string;
   bytes: number;
   content: string;
+  /** 项目规则所属工作区（缺省 = 旧行为：settings.workspaceRoot）。 */
+  workspaceId?: string;
+  workspaceRoot?: string;
 }
 
 interface RulesStateFile {
@@ -182,7 +187,7 @@ function loadRulesState(configDir: string): RulesStateFile {
 /** 全局规则文件名安全校验（防路径穿越；允许中文名）。 */
 export const RULE_FILE_RE = /^[A-Za-z0-9\u4e00-\u9fa5._-]{1,56}\.md$/;
 
-export function readRuleEntries(deps: SettingsDeps): RuleEntryState[] {
+export function readRuleEntries(deps: SettingsDeps, workspaceId?: string): RuleEntryState[] {
   const paths = settingsPaths(deps);
   const state = loadRulesState(deps.configDir);
   const entries: RuleEntryState[] = [];
@@ -218,9 +223,11 @@ export function readRuleEntries(deps: SettingsDeps): RuleEntryState[] {
     // 目录不可读时返回空列表（UI 可新建）
   }
 
-  // 项目规则：AGENTS.md（无则 CLAUDE.md 兼容）
-  const agents = paths.workspaceRules;
-  const claude = path.join(deps.workspaceRoot, CLAUDE_COMPAT_FILE_NAME);
+  // 项目规则：AGENTS.md（无则 CLAUDE.md 兼容）；按工作区解析，缺省退回 workspaceRoot
+  const workspace = workspaceId ? deps.workspaces?.list().find((item) => item.id === workspaceId) ?? null : null;
+  const root = workspace?.root ?? deps.workspaceRoot;
+  const agents = path.join(root, RULES_FILE_NAME);
+  const claude = path.join(root, CLAUDE_COMPAT_FILE_NAME);
   const wsFile = fs.existsSync(agents) ? agents : fs.existsSync(claude) ? claude : agents;
   let wsContent = "";
   try {
@@ -228,7 +235,7 @@ export function readRuleEntries(deps: SettingsDeps): RuleEntryState[] {
   } catch {
     wsContent = "";
   }
-  const wsId = `workspace:${RULES_FILE_NAME}`;
+  const wsId = workspace ? `workspace:${workspace.id}:${RULES_FILE_NAME}` : `workspace:${RULES_FILE_NAME}`;
   entries.push({
     id: wsId,
     name:
@@ -240,6 +247,8 @@ export function readRuleEntries(deps: SettingsDeps): RuleEntryState[] {
     path: wsFile,
     bytes: byteLength(wsContent),
     content: wsContent,
+    workspaceId: workspace?.id,
+    workspaceRoot: root,
   });
 
   return entries;
@@ -257,8 +266,8 @@ export function ruleSourcesFromEntries(entries: RuleEntryState[]): RuleSource[] 
     .sort((a, b) => (a.scope === b.scope ? 0 : a.scope === "global" ? -1 : 1));
 }
 
-export function currentRulesPrompt(deps: SettingsDeps): string {
-  return rulesForPrompt(mergeRules(ruleSourcesFromEntries(readRuleEntries(deps))));
+export function currentRulesPrompt(deps: SettingsDeps, workspaceId?: string): string {
+  return rulesForPrompt(mergeRules(ruleSourcesFromEntries(readRuleEntries(deps, workspaceId))));
 }
 
 /* ───────────────────────── 供应商探测目标校验（SSRF） ───────────────────────── */
@@ -621,20 +630,61 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
 
   // ── 规则（逐条增删） ──
   handleTrusted(deps, "settings:getRules", () => {
-    const entries = readRuleEntries(deps);
+    const activeWorkspaceId = deps.workspaces?.activeId() ?? undefined;
+    const entries = readRuleEntries(deps, activeWorkspaceId);
     return {
       maxFileBytes: RULES_MAX_FILE_BYTES,
       maxTotalBytes: RULES_MAX_TOTAL_BYTES,
       entries,
       merged: mergeRules(ruleSourcesFromEntries(entries)),
-      claudeCompat: fs.existsSync(path.join(deps.workspaceRoot, CLAUDE_COMPAT_FILE_NAME)),
+      claudeCompat: entries.some((entry) => entry.scope === "workspace" && entry.name === CLAUDE_COMPAT_FILE_NAME),
+      workspaces: deps.workspaces?.list() ?? [],
+      activeWorkspaceId: activeWorkspaceId ?? null,
       guardrail: rulesForPrompt({ text: "…", included: [], skipped: [], totalBytes: 0 }).split("\n")[0],
+    };
+  });
+
+  /** 读取某个工作区的项目规则（设置页切换项目时按需加载）。 */
+  handleTrusted(deps, "settings:getWorkspaceRule", (payload) => {
+    const workspaceId = (payload as { workspaceId?: string }).workspaceId ?? "";
+    const workspace = deps.workspaces?.list().find((item) => item.id === workspaceId);
+    if (!workspace) throw new Error("工作区不存在或未挂载");
+    const agents = path.join(workspace.root, RULES_FILE_NAME);
+    const claude = path.join(workspace.root, CLAUDE_COMPAT_FILE_NAME);
+    const file = fs.existsSync(agents) ? agents : fs.existsSync(claude) ? claude : agents;
+    let content = "";
+    try {
+      if (fs.existsSync(file)) content = fs.readFileSync(file, "utf8");
+    } catch {
+      content = "";
+    }
+    const id = `workspace:${workspace.id}:${RULES_FILE_NAME}`;
+    const state = loadRulesState(deps.configDir);
+    const entries = readRuleEntries(deps, workspace.id);
+    return {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      workspaceRoot: workspace.root,
+      id,
+      name: file.endsWith(CLAUDE_COMPAT_FILE_NAME) ? CLAUDE_COMPAT_FILE_NAME : RULES_FILE_NAME,
+      path: file,
+      exists: fs.existsSync(file),
+      enabled: !state.disabled.includes(id),
+      content,
+      // 合并预览跟随所选项目，否则切换项目后下方仍显示活动项目的规则。
+      merged: mergeRules(ruleSourcesFromEntries(entries)),
     };
   });
 
   handleTrusted(deps, "settings:setRules", (payload) => {
     const data = payload as {
-      entries: { name?: string; scope: "global" | "workspace"; enabled: boolean; content: string }[];
+      entries: {
+        name?: string;
+        scope: "global" | "workspace";
+        enabled: boolean;
+        content: string;
+        workspaceId?: string;
+      }[];
       deleted?: string[];
     };
     const state = loadRulesState(deps.configDir);
@@ -653,6 +703,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
 
       let file: string;
       let name: string;
+      let entryId: string | null = null;
       if (entry.scope === "global") {
         name = (entry.name ?? "").trim();
         if (!RULE_FILE_RE.test(name)) {
@@ -661,10 +712,20 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         }
         file = path.join(paths.globalRulesDir, name);
       } else {
+        const workspace = entry.workspaceId
+          ? deps.workspaces?.list().find((item) => item.id === entry.workspaceId)
+          : null;
+        if (entry.workspaceId && !workspace) {
+          errors.push(`项目规则的工作区「${entry.workspaceId}」不存在或未挂载`);
+          continue;
+        }
         name = RULES_FILE_NAME;
-        file = paths.workspaceRules;
+        file = path.join(workspace?.root ?? deps.workspaceRoot, RULES_FILE_NAME);
+        entryId = workspace
+          ? `workspace:${workspace.id}:${name}`
+          : `workspace:${name}`;
       }
-      const id = `${entry.scope}:${name}`;
+      const id = entryId ?? `${entry.scope}:${name}`;
       if (entry.enabled) disabled.delete(id);
       else disabled.add(id);
       pendingWrites.push({ file, content });
@@ -682,7 +743,9 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
           errors.push(`删除全局规则「${name}」失败`);
         }
       } else if (scope === "workspace") {
-        pendingWrites.push({ file: paths.workspaceRules, content: "" });
+        const workspace = rest.length >= 2 ? deps.workspaces?.list().find((item) => item.id === rest[0]) : undefined;
+        const root = workspace?.root ?? deps.workspaceRoot;
+        pendingWrites.push({ file: path.join(root, RULES_FILE_NAME), content: "" });
       }
       disabled.delete(key);
     }
@@ -701,7 +764,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     }
     writeJsonFile(paths.rulesState, { disabled: [...disabled] });
 
-    const entries = readRuleEntries(deps);
+    const entries = readRuleEntries(deps, deps.workspaces?.activeId() ?? undefined);
     return { saved: true, entries, merged: mergeRules(ruleSourcesFromEntries(entries)) };
   });
 
