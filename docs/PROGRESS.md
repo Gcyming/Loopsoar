@@ -1100,3 +1100,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 核心判断：记忆的难点在「写什么、何时写、怎么改（冲突/时效）、怎么忘、怎么注进上下文」；业界三条主线（OS 分页、抽取-巩固、时序图谱）都承认「记忆是上下文工程的一部分」。
 - 与现状对照：我们缺 **workspace 隔离、provenance、冲突/时效、使用信号写回、后台巩固、质量评测** 六项；建议按 D1（隔离+溯源）→ D2（冲突+时效）→ D3（巩固+使用信号）→ D4（质量评测）推进，D1 前先写三条 ADR（归属维度/迁移策略/冲突判据）。
 
+
+### slime 记忆系统复盘（同日）
+
+- 产出 [docs/research/slime-memory-review.md](docs/research/slime-memory-review.md)：读 core/memory.py、core/memory_global.py、core-ts/src/memory/*、sidecar/retrieve_api.py、docs/slime-agent-loop-design.md 与 docs/Intelligence.md §十二，逐条对照 Loopsoar 现状。
+- 结论：Loopsoar 记忆是 slime 的瘦身移植（五闸/召回门控/遗忘因子同源），但丢了六块——读取侧格式、访问语义、RRF 融合、link_walk、跨 agent 指针、崩溃安全写入。
+- 三条修正上一份调研：写入侧才是瓶颈（LongMemEval ChatGPT 0.5773 vs 全文 0.9184）；图不是默认架构（Mem0ᵍ 单跳/多跳双降）；遗忘无实证增益，矛盾软失效才是唯一有数字的形态（Zep 45.1→62.4）。
+- 实测我们自己的 hash embedding：相关对 0.4328、无关对最高 0.3042（中文单字制造假相似）→ 建议 bigram 加权，而不是照搬 slime 删 hash 回退（它删的是字符码位伪嵌入）。
+- 给出 D1 可立即动手的八件事（workspaceId、provenance、原子写入、阈值进偏好、注入头归属、面板过滤、跨区不召回、四个 spec）。
+
