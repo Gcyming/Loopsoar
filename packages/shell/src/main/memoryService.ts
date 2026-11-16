@@ -337,6 +337,16 @@ export class MemoryService {
    * 索引只是缓存，任何不一致都以磁盘为准。
    */
   private async reconcileAll(): Promise<void> {
+    try {
+      await this.reconcileAllInner();
+    } catch (err) {
+      console.warn("[Loopsoar] 记忆后台核对失败（下次启动会重试）", err);
+    } finally {
+      this.reconcilePromise = null;
+    }
+  }
+
+  private async reconcileAllInner(): Promise<void> {
     const factsDir = path.join(this.vaultPath, "facts");
     const archiveDir = path.join(this.vaultPath, "archive");
     const byPath = new Map<string, { id: string; entry: IndexEntry }>();
@@ -402,7 +412,6 @@ export class MemoryService {
       }
     }
     await this.flushIndex();
-    this.reconcilePromise = null;
   }
 
   /** vault 监听：外部编辑实时同步（Windows/macOS 支持递归；失败则退化为重启生效）。 */
@@ -416,7 +425,9 @@ export class MemoryService {
         if (!rel.endsWith(".md") || rel === "index.md") return;
         this.pendingPaths.add(rel);
         if (this.watcherTimer) clearTimeout(this.watcherTimer);
-        this.watcherTimer = setTimeout(() => void this.flushWatcher(), 400);
+        this.watcherTimer = setTimeout(() => {
+          void this.flushWatcher().catch((err) => console.warn("[Loopsoar] 外部编辑同步失败", err));
+        }, 400);
         this.watcherTimer.unref?.();
       });
     } catch (err) {
@@ -605,7 +616,15 @@ export class MemoryService {
         console.warn(`[Loopsoar] 记忆索引分片损坏，已忽略：${path.basename(shard.file)}`);
         continue;
       }
-      for (const [id, entry] of Object.entries(shard.parsed.entries)) this.indexEntries.set(id, entry);
+      for (const [id, entry] of Object.entries(shard.parsed.entries)) {
+        // 索引是可被外部改写的本地文件：路径必须落在 vault 的 facts/ 或 archive/
+        const rel = entry.path.replace(/\\/g, "/");
+        if (rel.startsWith("/") || rel.split("/").includes("..") || (!rel.startsWith("facts/") && !rel.startsWith("archive/"))) {
+          console.warn(`[Loopsoar] 忽略索引里的异常路径：${entry.path}`);
+          continue;
+        }
+        this.indexEntries.set(id, entry);
+      }
     }
   }
 

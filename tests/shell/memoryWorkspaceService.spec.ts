@@ -252,6 +252,28 @@ describe("MemoryService · 内容哈希索引（可丢弃缓存）", () => {
     service.dispose();
   });
 
+  it("索引里的越界路径被忽略（防止坏索引导致误删/误读库外文件）", async () => {
+    const filePath = tempFilePath();
+    const first = makeService(filePath);
+    await first.add({ content: "索引路径测试", category: "fact", workspaceId: "ws-a" });
+    const indexDir = path.join(path.dirname(filePath), "vault", ".loopsoar", "index");
+    const shard = fs.readdirSync(indexDir).find((name) => name.endsWith(".json")) as string;
+    const shardPath = path.join(indexDir, shard);
+    const parsed = JSON.parse(fs.readFileSync(shardPath, "utf8")) as { entries: Record<string, unknown> };
+    parsed.entries["evil"] = {
+      path: "../../outside.md",
+      hash: "x",
+      fact: { id: "evil", content: "库外文件", category: "fact", tags: [], importance: 5, timestamp: Date.now(), links: [], backlinks: [], repeated: 0, layer: "working", accessCount: 0, confidence: 0.6, source: "vault", status: "active", mergeTrail: [], workspaceId: "default" },
+    };
+    fs.writeFileSync(shardPath, JSON.stringify(parsed), "utf8");
+
+    const second = makeService(filePath);
+    await second.load();
+    await second.whenSettled();
+    expect(second.list().map((fact) => fact.id)).not.toContain("evil");
+    second.dispose();
+  });
+
   it("文件被外部删除后，索引里的条目不会复活", async () => {
     const filePath = tempFilePath();
     const first = makeService(filePath);

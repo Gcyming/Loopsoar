@@ -1269,3 +1269,10 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 新增 docs/记忆模块.md：数据布局、字段、写入/读取、一致性、回顾、图谱、备份/迁移/恢复、性能与限制。
 - 收口验证：209 文件 / 1709 用例全绿；typecheck/build/gen-check 全过；未用符号 0；E2E 正常。
 
+
+### 记忆模块复核修正（ADR-0128）
+
+- 索引越界路径：只接受 facts/、archive/ 下且无 .. 的相对路径，其余忽略并告警；新增用例。
+- reconcileAll 外层 try/finally，失败复位 reconciling，不再卡死；watcher flush 显式 catch。
+- 验证：210 文件 / 1710 用例全绿；typecheck/build/gen-check 全过。
+
