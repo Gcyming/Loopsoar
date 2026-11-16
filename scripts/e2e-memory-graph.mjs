@@ -72,7 +72,6 @@ const evalJs = `(async () => {
   await sleep(2200);
   return { navClicked: Boolean(nav), hasCanvas: Boolean(document.querySelector('canvas')) };
 })()`;
-writeFileSync(path.join(ROOT, ".tmp-memory-graph-eval.js"), evalJs);
 
 const log = createWriteStream(path.join(OUT, "memory-graph.log"), { flags: "w" });
 const child = spawn(process.execPath, [path.join(ROOT, "scripts/dev-gui.mjs")], {
