@@ -142,3 +142,21 @@ describe("MemoryService · D1 持久化与隔离", () => {
     expect(fact?.workspaceId).toBe("ws-a");
   });
 });
+
+describe("MemoryService · Markdown 导出（只读投影）", () => {
+  it("导出到同目录 memory.md：内容可读、计数一致、不残留 .tmp、不改主库", async () => {
+    const filePath = tempFilePath();
+    const service = makeService(filePath);
+    await service.add({ content: "导出测试：项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-a" });
+    const result = await service.exportMarkdown();
+    expect(result.path).toBe(path.join(path.dirname(filePath), "memory.md"));
+    const md = fs.readFileSync(result.path, "utf8");
+    expect(md).toContain("# Loopsoar 记忆库");
+    expect(md).toContain("导出测试：项目使用 pnpm 管理依赖");
+    expect(md).toContain("## ws-a");
+    expect(result.count).toBe(1);
+    expect(fs.existsSync(`${result.path}.tmp`)).toBe(false);
+    const json = JSON.parse(fs.readFileSync(filePath, "utf8")) as { facts: unknown[] };
+    expect(json.facts).toHaveLength(1);
+  });
+});

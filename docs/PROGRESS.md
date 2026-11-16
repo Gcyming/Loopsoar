@@ -1193,3 +1193,10 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - E2E 增加 replay 模式；合成 input 会被 React 值追踪丢弃，改由主进程发受信鼠标点击 range 轨道（LOOPSOAR_E2E_RANGE_CLICK）。
 - 验证：新增 10 条用例；203 文件 / 1673 用例全绿；typecheck/build/gen-check 全过。
 
+
+### 记忆存储格式：JSON 为准 + Markdown 导出（ADR-0119）
+
+- 存储保持 `memory.json`（facts / archived / usage，tmp→fsync→rename→.bak）；新增只读 `memory.md` 导出，工作区→分类分组、固定排序、失效/归档标注。
+- 新增 IPC memory:export + 设置页「导出 Markdown」按钮；导出不解析、不回写，文件头注明写入以 JSON 为准。
+- 验证：markdown 5 条 + service 1 条；204 文件 / 1679 用例全绿；typecheck/build/gen-check 全过；通道 143。
+

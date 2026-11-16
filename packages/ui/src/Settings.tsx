@@ -1453,6 +1453,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 })
               }
             />
+            <Btn
+              label={tr("settings.memory.exportMd")}
+              onClick={() =>
+                void api.memory
+                  .exportMarkdown()
+                  .then((r) => ok(tr("settings.memory.exported", { count: r.count, path: r.path })))
+                  .catch(bad)
+              }
+            />
             <Btn label={tr("settings.memory.clearAll")} onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} />
           </div>
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;

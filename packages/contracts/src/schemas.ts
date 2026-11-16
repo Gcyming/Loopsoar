@@ -762,6 +762,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "memory:export": {
+    domain: "memory",
+    method: "export",
+    request: null,
+    sensitive: true,
+  },
   "chat:history": {
     domain: "chat",
     method: "history",

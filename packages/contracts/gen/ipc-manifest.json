@@ -316,6 +316,13 @@
       "hasRequest": false
     },
     {
+      "channel": "memory:export",
+      "domain": "memory",
+      "method": "export",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "chat:history",
       "domain": "chat",
       "method": "history",

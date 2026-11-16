@@ -19,6 +19,7 @@ import {
   MemoryStore,
   extractMemoryCandidates,
   hashEmbedding,
+  renderMemoryMarkdown,
   retrieveMemory,
   shouldRecall,
   type MemoryCandidate,
@@ -249,6 +250,21 @@ export class MemoryService {
     } catch {
       // .bak 失败只影响可恢复性，不影响本次写入
     }
+  }
+
+  /**
+   * 导出 Markdown 快照（只读投影）：默认写到 memory.json 同目录的 memory.md。
+   * 不写 .bak：它是派生文件，随时可重导；写入仍以 JSON 为准。
+   */
+  async exportMarkdown(targetPath?: string): Promise<{ path: string; bytes: number; count: number }> {
+    const target = targetPath ?? this.opts.filePath.replace(/\.json$/i, ".md");
+    const facts = this.store.list({ includeArchived: true, includeInvalidated: true });
+    const text = renderMemoryMarkdown(facts, { generatedAt: Date.now() });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const tmp = `${target}.tmp`;
+    await this.opts.platform.fs.writeFileUtf8(tmp, text);
+    fs.renameSync(tmp, target);
+    return { path: target, bytes: Buffer.byteLength(text), count: facts.length };
   }
 
   /** 后台巩固（D3 后半）：合并近似重复 + 归档长期未用条目；返回报告。 */

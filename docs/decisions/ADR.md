@@ -2350,4 +2350,18 @@
 - **状态**：✅ 已验证（2026-11-16）
 - **回退条件**：真实数据回放卡顿 → 只按 at 过滤、激活一律用 now；空心节点被认为干扰 → 加「显示已失效」开关，默认关。
 - **复核时间**：真实语料评测接入后。
+
+## ADR-0119 记忆存储格式：JSON 为准，Markdown 只读导出
+
+- **背景**：用户问「记忆存的是什么格式？JSON 吗？我觉得 md 会好些」。需要回答格式选择，并给出一条既能人读/进 git、又不破坏写入不变量的路。
+- **决策**：
+  1. **存储仍以 JSON 为准**：`<dataDir>/memory/memory.json`（可配置），结构 `{ facts: MemoryFact[], archived: MemoryFact[], usage: Record<string, UsageEvent[]> }`，2 空格缩进；写入仍是 tmp → fsync → rename → `.bak`（D1）。
+  2. **新增只读 Markdown 导出**：`MemoryService.exportMarkdown()` 把整库渲染为同目录 `memory.md`，经 IPC `memory:export` 由设置页「导出 Markdown」触发。单向投影：不解析、不回写；文件头明确写「写入仍以 memory.json 为准」。
+  3. **导出格式固定**：工作区 → 分类 → 条目，条目形如 `- [YYYY-MM-DD] 正文 — 重要度 N · 信任 x · 会话 s · 标签 · 关联 · id`；失效/归档带日期标记，归档单独成段；正文换行压成单行；排序固定，同一份数据两次导出逐字节一致（可进 git diff）。
+- **理由**：JSON 承载的是机器不变量——provenance、usage 事件（ACT-R 激活）、mergeTrail、supersede 指针、按工作区隔离；这些字段用 Markdown 表达需要自定义语法 + 解析器 + 转义/往返测试，且「两种可写格式」必然漂移。Markdown 的价值在「人读、diff、备份」，用导出满足即可。
+- **替代方案**：① 全面改成 Markdown（Letta / Claude Code 风格）——被否（它们是 prose memory block，没有 usage 事件与逐条 provenance；我们换成 md 会丢掉可计算性）；② 一条记忆一个 .md 文件——被否（2000 条即 2000 文件，扫描与原子写成本高）；③ Markdown 可编辑并可导入——暂缓（需要 id 稳定性、冲突合并、来源归属三件事的规则，属于独立切片）。
+- **验证方式**：新增 tests/core/memoryMarkdown.spec.ts **5 条**（分组、单行化、失效/归档标记、空库、逐字节稳定）与 MemoryService 导出用例 **1 条**（写到同目录 memory.md、计数一致、不残留 .tmp、不改 JSON 主库）；全量 vitest **204 文件 / 1679 用例全绿**；typecheck 5/5、build 5/5、gen/check 一致；IPC 通道 **143**。
+- **状态**：✅ 已验证（2026-11-16）
+- **回退条件**：若用户明确要「md 为主、json 为索引」，再单独做双向同步（需要 id 与冲突规则），不要直接改现有写入路径。
+- **复核时间**：用户实际使用导出后。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。

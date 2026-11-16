@@ -65,6 +65,9 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
     return { ...model, points };
   });
 
+  /** Markdown 导出（只读投影）：写给人和 git 看，写入仍以 JSON 为准。 */
+  handleTrusted(deps, "memory:export", async () => deps.memory.exportMarkdown());
+
   handleTrusted(deps, "memory:add", async (payload) => {
     const p = payload as {
       content: string;

@@ -463,6 +463,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Drag the timeline to watch memories appear and get superseded.",
   },
   "settings.memory.superseded": { zh: "已失效", en: "Superseded" },
+  "settings.memory.exportMd": { zh: "导出 Markdown", en: "Export Markdown" },
+  "settings.memory.exported": {
+    zh: "已导出 {count} 条到 {path}",
+    en: "Exported {count} entries to {path}",
+  },
   "settings.memory.nodeOrigin": { zh: "原点", en: "Origin" },
   "settings.memory.nodeSession": { zh: "会话", en: "Session" },
   "settings.memory.nodeFact": { zh: "记忆", en: "Memory" },

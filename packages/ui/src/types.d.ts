@@ -972,6 +972,8 @@ export interface LoopsoarAPI {
     list(): Promise<MemoryListResult>;
     /** M4：at = 回放时刻（缺省 = 现在）。 */
   graph(req?: { at?: number }): Promise<MemoryGraphResult>;
+  /** 导出 Markdown 快照（只读投影，写到 memory.json 同目录的 memory.md）。 */
+  exportMarkdown(): Promise<{ path: string; bytes: number; count: number }>;
     stats(): Promise<MemoryStats>;
     consolidate(): Promise<{ merged: number; archived: string[]; scanned: number }>;
     add(payload: { content: string; category: string; tags?: string[]; importance?: number }): Promise<{ added: boolean; id: string }>;
