@@ -45,6 +45,40 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [width, setWidth] = React.useState(720);
+  /** E-M2：激活值上升的节点脉冲 700ms；用 rAF 驱动重绘，动画结束即停。 */
+  const pulsesRef = React.useRef(new Map<string, number>());
+  const prevActivationRef = React.useRef(new Map<string, number>());
+  const [tick, setTick] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!data) return;
+    const now = performance.now();
+    const prev = prevActivationRef.current;
+    const next = new Map<string, number>();
+    let started = false;
+    for (const node of data.nodes) {
+      next.set(node.id, node.activation);
+      const before = prev.get(node.id);
+      if (before !== undefined && node.activation - before > 0.02) {
+        pulsesRef.current.set(node.id, now);
+        started = true;
+      }
+    }
+    prevActivationRef.current = next;
+    if (!started) return;
+    let raf = 0;
+    const loop = (): void => {
+      const t = performance.now();
+      for (const [id, at] of pulsesRef.current) {
+        if (t - at > 750) pulsesRef.current.delete(id);
+      }
+      setTick((value) => value + 1);
+      if (pulsesRef.current.size === 0) return;
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [data]);
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -182,7 +216,20 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
         }
       }
     }
-  }, [data, height, hovered, neighbors, pointById, width]);
+    // E-M2：召回/使用反馈——激活上升的节点画一圈外扩光晕
+    const nowMs = performance.now();
+    for (const [id, at] of pulsesRef.current) {
+      const point = pointById.get(id);
+      if (!point) continue;
+      const progress = Math.min(1, (nowMs - at) / 700);
+      const { x, y } = project(point);
+      ctx.strokeStyle = `rgba(200,118,60,${(1 - progress) * 0.75})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(6, point.radius * scale * 2.2) + 4 + progress * 18, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }, [data, height, hovered, neighbors, pointById, width, tick]);
 
   const handleMove = React.useCallback(
     (event: React.MouseEvent<HTMLCanvasElement>): void => {

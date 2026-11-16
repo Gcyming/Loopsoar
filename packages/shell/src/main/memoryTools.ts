@@ -82,7 +82,11 @@ function factAfterAdd(memory: MemoryService, saved: MemoryFact, content: string)
 export function registerMemoryTools(
   registry: ToolRegistry,
   memory: MemoryService,
-  opts: { workspaceIdForSession?: (sessionId?: string) => string | undefined } = {},
+  opts: {
+    workspaceIdForSession?: (sessionId?: string) => string | undefined;
+    /** 检索命中后的回调（E-M2）：壳层据此推送 memory:updated，让图谱刷新并脉冲。 */
+    onSearchUsed?: (ids: string[], sessionId?: string) => void;
+  } = {},
 ): void {
   const workspaceOf = (sessionId?: string): string | undefined => opts.workspaceIdForSession?.(sessionId);
   registry.register({
@@ -108,6 +112,7 @@ export function registerMemoryTools(
           content: `未找到与「${query}」相关的记忆（记忆库当前 ${memory.stats().active} 条）。可以换个关键词，或用 memory_add 记录新信息。`,
         };
       }
+      opts.onSearchUsed?.(hits.map((hit) => hit.fact.id), ctx.sessionId);
       const lines = hits.map(
         ({ fact, score }, index) =>
           `${index + 1}. [${fact.category}] ${fact.content}（id: ${fact.id}，相关度 ${score.toFixed(2)}）`,

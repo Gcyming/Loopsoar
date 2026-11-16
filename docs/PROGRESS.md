@@ -1159,3 +1159,10 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 删除会话 → buildSessionEpisode 生成 episode（≤400 字，幂等，失败不阻断）；启动时把 90 天未用的 episode 降级为 ghost（≤120 字 + ghost 标签，不删除）。
 - 验证：新增 8 条用例；197 文件 / 1653 用例全绿；typecheck/build/gen-check 全过。
 
+
+### E-M2：召回反馈动画（ADR-0115）
+
+- memory_search 命中 → onSearchUsed → 壳层 push memory:updated → 设置页重拉列表与图谱。
+- 图组件比较激活值增量（>0.02）触发 750ms 外扩光晕（rAF，结束即停）。
+- 验证：197 文件 / 1653 用例全绿；typecheck/build 全过。
+

@@ -2230,6 +2230,8 @@ app.whenReady().then(async () => {
   registerMemoryTools(registry, memory, {
     workspaceIdForSession: (sessionId?: string) =>
       (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default",
+    // E-M2：命中即刷新面板/图谱，节点激活上升后由图组件做脉冲反馈。
+    onSearchUsed: () => pushToRenderer("memory:updated", { action: "used" }),
   });
   // 联网搜索工具：走注入的 platform.net.request（SSRF/DNS 钉扎），引擎来自偏好
   registerSearchTools(registry, {

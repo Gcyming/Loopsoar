@@ -188,6 +188,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api || !mem) return;
     void api.memory.graph().then(setMemGraph).catch(() => setMemGraph(null));
   }, [api, mem]);
+  // E-M2：记忆使用事件（工具检索命中 / 新增 / 删除）→ 刷新面板与图谱，图组件据此做脉冲反馈。
+  useEffect(() => {
+    if (!api) return;
+    return api.on("memory:updated", () => {
+      void api.memory
+        .list()
+        .then(setMem)
+        .catch(() => undefined);
+    });
+  }, [api]);
   const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
   /** Agent-Loop：可运行 loop 列表 + 当前选择 + 回退历史（设置 · 通用）。 */
