@@ -1479,16 +1479,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={memoryBlock}>
             <div style={S.meta}>{tr("settings.memory.store")}</div>
             <div style={S.fieldHint}>{tr("settings.memory.storeHint")}</div>
-            <div style={S.col}>
+            <div style={S.rowEnd}>
               <In
                 v={prefs?.memoryStorePath ?? ""}
                 ph={locations?.defaultMemoryFile ?? ""}
-                style={{ maxWidth: "none" }}
+                style={{ maxWidth: "none", flex: 1 }}
                 on={(x) => {
                   if (prefs) setPrefs({ ...prefs, memoryStorePath: x });
                 }}
               />
-              <div style={S.rowEnd}>
               <Btn
                 label={tr("settings.browse")}
                 small
@@ -1515,7 +1514,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   });
                 }}
               />
-              </div>
             </div>
           </div>
           <div style={S.note}>{tr("settings.memory.vaultHint")}</div>
@@ -1619,13 +1617,13 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <div style={S.fieldHint}>{tr("settings.memory.addHint")}</div>
             <div style={S.col}>
               <Area v={mForm.content} rows={2} full ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
-              <div style={memoryFormGrid}>
-                <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
-                <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
-                <Combo v={mForm.tags} ph={tr("settings.memory.addTagsPh")} on={(x) => setMForm({ ...mForm, tags: x })} options={tagOptions} />
-                <Combo v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} on={(x) => setMForm({ ...mForm, workspaceId: x })} options={workspaceOptions} />
+              <div style={memoryFormRow}>
+                <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
+                <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
               </div>
-              <div style={S.rowEnd}>
+              <div style={memoryFormRow}>
+                <Combo v={mForm.tags} ph={tr("settings.memory.addTagsPh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, tags: x })} options={tagOptions} />
+                <Combo v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, workspaceId: x })} options={workspaceOptions} />
                 <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
               </div>
             </div>
@@ -2126,10 +2124,10 @@ function Toggle({ v, on, title, testId }: { v: boolean; on: (x: boolean) => void
     </button>
   );
 }
-function Combo({ v, ph, on, options }: { v: string; ph?: string; on: (x: string) => void; options: string[] }) {
+function Combo({ v, ph, on, options, style }: { v: string; ph?: string; on: (x: string) => void; options: string[]; style?: React.CSSProperties }) {
   const [open, setOpen] = React.useState(false);
   return (
-    <div style={comboWrap}>
+    <div style={{ ...comboWrap, ...style }}>
       <input
         style={{ ...S.input, paddingRight: 22 }}
         value={v}
@@ -2185,6 +2183,7 @@ const memoryFormGrid: React.CSSProperties = {
   gap: 8,
   width: "100%",
 };
+const memoryFormRow: React.CSSProperties = { display: "flex", gap: 8, width: "100%", alignItems: "center" };
 const comboWrap: React.CSSProperties = { position: "relative", minWidth: 0 };
 const comboArrow: React.CSSProperties = {
   position: "absolute",
@@ -2304,7 +2303,7 @@ const S: Record<string, React.CSSProperties> = {
   fieldLabel: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, color: BRAND.linen, minWidth: 140, maxWidth: 400 },
   fieldHint: { fontSize: 10.5, color: BRAND.linenFaint, lineHeight: 1.5, overflowWrap: "anywhere" },
   fieldCtl: { flex: 1, display: "flex", justifyContent: "flex-end", alignItems: "center", minWidth: 0 },
-  input: { width: "100%", maxWidth: 380, height: 30, padding: "0 10px", borderRadius: 7, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 12.5, outline: "none" },
+  input: { width: "100%", maxWidth: 380, height: 30, padding: "0 10px", borderRadius: 7, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 12.5, outline: "none", boxSizing: "border-box" },
   area: { width: "100%", maxWidth: 380, borderRadius: 7, border: `1px solid ${BRAND.border}`, background: BRAND.ink, color: BRAND.linen, fontSize: 12, padding: 8, resize: "vertical", outline: "none", boxSizing: "border-box" },
   col: { display: "flex", flexDirection: "column", gap: 6, width: "100%", alignItems: "flex-end" },
   rowEnd: { display: "flex", gap: 6, width: "100%", justifyContent: "flex-end" },
