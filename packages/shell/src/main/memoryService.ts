@@ -12,18 +12,24 @@
  *   · 默认 flat 的裁决依据：docs/research/memory-bench-ADR-0007.md §8（10 万条实测 sqlite-vec 无优势，
  *     且原生依赖带来 Electron ABI 重建/打包复杂度；小容量（≤2000）flat 更快更稳）。
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_EMBED_DIM,
   MemoryStore,
   extractMemoryCandidates,
+  factToMarkdown,
   hashEmbedding,
+  markdownToFact,
   renderMemoryMarkdown,
+  renderVaultIndex,
   retrieveMemory,
   shouldRecall,
+  vaultFileName,
   type MemoryCandidate,
   type MemoryFact,
+  type UsageEvent,
   type VectorLookup,
 } from "loopsoar-core/memory";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
@@ -84,6 +90,26 @@ export interface MemoryVectorStats {
 
 const DEFAULT_EMBED_TIMEOUT_MS = 3_000;
 
+/** sidecar（usage.json）版本：只放易变字段与使用事件，随时可删可重建。 */
+const SIDECAR_VERSION = 1;
+
+interface RuntimeEntry {
+  accessCount: number;
+  lastAccessed: number;
+  confidence: number;
+}
+
+interface Sidecar {
+  version: number;
+  runtime: Record<string, RuntimeEntry>;
+  usage: Record<string, UsageEvent[]>;
+}
+
+/** 内容指纹：用于增量写，避免每次召回/捕获都重写全部 md。 */
+function hashText(text: string): string {
+  return createHash("sha1").update(text).digest("hex");
+}
+
 /** 从平台适配层解析 embed 能力；缺失/未实现时返回 null（不抛，交由 hash 降级）。 */
 function resolvePlatformEmbedder(platform: LoopsoarPlatform | undefined): MemoryEmbedder | null {
   const adapter = platform?.embed as { embed?: unknown } | undefined;
@@ -142,8 +168,11 @@ export class MemoryService {
   private externalDisabled = false;
   private readonly embedFn: MemoryEmbedder | null;
   private readonly embedTimeoutMs: number;
-  /** 使用事件写入很频繁：合并成一次落盘，避免每次工具调用都写 JSON。 */
+  /** 使用事件写入很频繁：合并成一次落盘，避免每次工具调用都写文件。 */
   private saveTimer: NodeJS.Timeout | null = null;
+  /** vault 内容指纹（id → 路径 + hash）：save 只写变化的那几个文件。 */
+  private lastWritten = new Map<string, string>();
+  private lastIndexHash = "";
 
   constructor(private opts: MemoryServiceOptions) {
     this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
@@ -169,6 +198,8 @@ export class MemoryService {
   async relocate(filePath: string): Promise<void> {
     await this.save();
     this.opts = { ...this.opts, filePath };
+    this.lastWritten = new Map();
+    this.lastIndexHash = "";
     this.store = new MemoryStore({ capacity: this.opts.capacity, agentId: this.opts.agentId });
     this.loaded = false;
     // 换库时重新给本地模型一次机会（可能刚启动）
@@ -178,44 +209,44 @@ export class MemoryService {
     await this.load();
   }
 
+  /** vault 根目录：<记忆目录>/vault，一条记忆一个 md（Obsidian 可直接打开）。 */
+  get vaultPath(): string {
+    return path.join(path.dirname(this.opts.filePath), "vault");
+  }
+
+  private get sidecarPath(): string {
+    return path.join(path.dirname(this.opts.filePath), "usage.json");
+  }
+
   async load(): Promise<void> {
     if (this.loaded) return;
-    let migrated = false;
-    const apply = (raw: string): boolean => {
-      const parsed = JSON.parse(raw) as { facts?: MemoryFact[]; archived?: MemoryFact[] };
-      // 迁移检测（D1）：旧数据没有 workspaceId / provenance → 归一后回写一次。
-      const legacy = [...(parsed.facts ?? []), ...(parsed.archived ?? [])].some(
-        (f) => !f.workspaceId || !f.provenance,
-      );
+    const factsDir = path.join(this.vaultPath, "facts");
+    const archiveDir = path.join(this.vaultPath, "archive");
+    const legacyPath = this.opts.filePath;
+    const legacyExists =
+      (await this.opts.platform.fs.exists(legacyPath)) || (await this.opts.platform.fs.exists(`${legacyPath}.bak`));
+
+    if (this.hasVaultNotes(factsDir, archiveDir)) {
+      const loaded = this.readVault(factsDir, archiveDir);
+      const sidecar = await this.readSidecar();
+      this.applyRuntime(loaded.facts, loaded.archived, sidecar.runtime);
+      this.store.restore({ facts: loaded.facts, archived: loaded.archived, usage: sidecar.usage });
+      this.lastWritten = this.fingerprint(loaded.facts, loaded.archived);
+      console.warn(`[Loopsoar] 记忆仓库：${this.vaultPath}（${loaded.facts.length} 活跃 / ${loaded.archived.length} 归档）`);
+    } else if (legacyExists) {
+      // 一次性迁移：旧 JSON（含 .bak 兜底）→ Markdown 仓库；原文件改名 .migrated 以便回滚。
+      const parsed = await this.readLegacyJson(legacyPath);
       this.store.restore(parsed);
-      return legacy;
-    };
-    try {
-      const exists = await this.opts.platform.fs.exists(this.opts.filePath);
-      if (exists) {
-        migrated = apply(await this.opts.platform.fs.readFileUtf8(this.opts.filePath));
-      } else {
-        const bak = `${this.opts.filePath}.bak`;
-        if (await this.opts.platform.fs.exists(bak)) {
-          migrated = apply(await this.opts.platform.fs.readFileUtf8(bak));
-          console.warn("[Loopsoar] 记忆主文件缺失，已从 .bak 恢复");
-        }
-      }
-    } catch {
-      // 主文件损坏 → 尝试 .bak；两者都坏则以空库启动（不阻断应用）
+      console.warn(`[Loopsoar] 记忆已迁移到 Markdown 仓库：${this.vaultPath}`);
+      await this.save();
       try {
-        const bak = `${this.opts.filePath}.bak`;
-        if (await this.opts.platform.fs.exists(bak)) {
-          migrated = apply(await this.opts.platform.fs.readFileUtf8(bak));
-          console.warn("[Loopsoar] 记忆主文件损坏，已从 .bak 恢复");
-        } else {
-          this.store.restore({});
-        }
+        if (await this.opts.platform.fs.exists(legacyPath)) fs.renameSync(legacyPath, `${legacyPath}.migrated`);
       } catch {
-        this.store.restore({});
+        // 改名失败不影响使用：vault 已存在，下次加载优先 vault
       }
+    } else {
+      this.store.restore({});
     }
-    if (migrated) await this.save();
     // E-M1：长期未用的 episode 降级为 ghost（失真层），随启动做一次维护。
     if (this.store.demoteGhosts().length > 0) await this.save();
     // 索引在 load 后立即维护：hash 索引同步重建（毫秒级）；外部向量尽力而为（超时/失败降级 hash）
@@ -223,17 +254,166 @@ export class MemoryService {
     this.loaded = true;
   }
 
+  private hasVaultNotes(factsDir: string, archiveDir: string): boolean {
+    return this.listMarkdown(factsDir).length > 0 || this.listMarkdown(archiveDir).length > 0;
+  }
+
+  private listMarkdown(dir: string): string[] {
+    try {
+      return fs
+        .readdirSync(dir)
+        .filter((name) => name.toLowerCase().endsWith(".md"))
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+  /** 读取 vault：facts/ 为活跃条目，archive/ 为归档（缺 archivedAt 用文件 mtime 兜底）。 */
+  private readVault(factsDir: string, archiveDir: string): { facts: MemoryFact[]; archived: MemoryFact[] } {
+    const facts: MemoryFact[] = [];
+    const archived: MemoryFact[] = [];
+    for (const [dir, isArchive] of [
+      [factsDir, false],
+      [archiveDir, true],
+    ] as const) {
+      for (const name of this.listMarkdown(dir)) {
+        const file = path.join(dir, name);
+        try {
+          const parsed = markdownToFact(fs.readFileSync(file, "utf8"), name);
+          if (!parsed) {
+            console.warn(`[Loopsoar] 跳过无法解析的记忆文件：${name}`);
+            continue;
+          }
+          if (parsed.warnings.length > 0) console.warn(`[Loopsoar] 记忆 ${name}：${parsed.warnings.join("；")}`);
+          const fact = parsed.fact;
+          if (isArchive && fact.archivedAt === undefined) fact.archivedAt = fs.statSync(file).mtimeMs;
+          if (isArchive && fact.status === "active") fact.status = "archived";
+          (isArchive ? archived : facts).push(fact);
+        } catch (err) {
+          console.warn(`[Loopsoar] 读取记忆文件失败：${name}`, err);
+        }
+      }
+    }
+    return { facts, archived };
+  }
+
+  private async readLegacyJson(legacyPath: string): Promise<{ facts?: MemoryFact[]; archived?: MemoryFact[] }> {
+    for (const candidate of [legacyPath, `${legacyPath}.bak`]) {
+      try {
+        if (!(await this.opts.platform.fs.exists(candidate))) continue;
+        return JSON.parse(await this.opts.platform.fs.readFileUtf8(candidate)) as {
+          facts?: MemoryFact[];
+          archived?: MemoryFact[];
+        };
+      } catch {
+        console.warn(`[Loopsoar] 记忆文件损坏，尝试下一个：${candidate}`);
+      }
+    }
+    return {};
+  }
+
+  private async readSidecar(): Promise<{ runtime: Record<string, RuntimeEntry>; usage: Record<string, UsageEvent[]> }> {
+    try {
+      if (!(await this.opts.platform.fs.exists(this.sidecarPath))) return { runtime: {}, usage: {} };
+      const parsed = JSON.parse(await this.opts.platform.fs.readFileUtf8(this.sidecarPath)) as Partial<Sidecar>;
+      return { runtime: parsed.runtime ?? {}, usage: parsed.usage ?? {} };
+    } catch {
+      console.warn("[Loopsoar] usage.json 损坏，已忽略（遥测可重建）");
+      return { runtime: {}, usage: {} };
+    }
+  }
+
+  /** 易变字段（访问次数/最后访问/置信度）从 sidecar 覆盖回来，md 里不写它们。 */
+  private applyRuntime(facts: MemoryFact[], archived: MemoryFact[], runtime: Record<string, RuntimeEntry>): void {
+    for (const fact of [...facts, ...archived]) {
+      const entry = runtime[fact.id];
+      if (!entry) continue;
+      if (Number.isFinite(entry.accessCount)) fact.accessCount = entry.accessCount;
+      if (Number.isFinite(entry.lastAccessed)) fact.lastAccessed = entry.lastAccessed;
+      if (Number.isFinite(entry.confidence)) fact.confidence = entry.confidence;
+    }
+  }
+
+  /** 载入后建立「id → 路径 + 内容指纹」基线，后续 save 只写变化的那几个文件。 */
+  private fingerprint(facts: readonly MemoryFact[], archived: readonly MemoryFact[]): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const [list, dir] of [
+      [facts, "facts"],
+      [archived, "archive"],
+    ] as const) {
+      for (const fact of list) {
+        const file = path.join(this.vaultPath, dir, vaultFileName(fact.id));
+        map.set(fact.id, `${file}\u0000${hashText(factToMarkdown(fact))}`);
+      }
+    }
+    return map;
+  }
+
   /**
-   * 崩溃安全写入（D1）：tmp → fsync → rename → .bak。
-   * 为什么需要：rename 是元数据操作，可能先于数据落盘；断电/强杀后会留下「文件名在、内容空或半截」的
-   * 记忆文件。记忆是用户不可重建的数据，宁可多一次 fsync 与一份 .bak。
+   * 增量落盘：内容没变的文件不重写（读取/召回只改 sidecar 里的遥测）；
+   * 写入仍是 tmp → fsync → rename，单文件原子。
    */
   async save(): Promise<void> {
-    const dir = path.dirname(this.opts.filePath);
-    fs.mkdirSync(dir, { recursive: true });
-    const data = JSON.stringify(this.store.snapshot(), null, 2);
-    const tmp = `${this.opts.filePath}.tmp`;
-    await this.opts.platform.fs.writeFileUtf8(tmp, data);
+    const snapshot = this.store.snapshot();
+    await this.writeVault(snapshot.facts, snapshot.archived);
+    await this.writeSidecar(snapshot);
+  }
+
+  private async writeVault(facts: readonly MemoryFact[], archived: readonly MemoryFact[]): Promise<void> {
+    const seen = new Map<string, string>();
+    for (const [list, dir] of [
+      [facts, "facts"],
+      [archived, "archive"],
+    ] as const) {
+      for (const fact of list) {
+        const file = path.join(this.vaultPath, dir, vaultFileName(fact.id));
+        const text = factToMarkdown(fact);
+        const token = `${file}\u0000${hashText(text)}`;
+        seen.set(fact.id, token);
+        if (this.lastWritten.get(fact.id) === token) continue;
+        await this.writeAtomic(file, text);
+      }
+    }
+    // 库里已不存在的条目（删除 / 归档移动后的旧位置）要清理，否则会「复活」
+    for (const [id, previous] of this.lastWritten) {
+      if (seen.has(id)) continue;
+      try {
+        fs.unlinkSync(previous.split("\u0000")[0]);
+      } catch {
+        // 文件已不存在
+      }
+    }
+    this.lastWritten = seen;
+
+    const idsHash = hashText([...seen.keys()].sort().join(","));
+    if (idsHash !== this.lastIndexHash) {
+      await this.writeAtomic(path.join(this.vaultPath, "index.md"), renderVaultIndex(facts, archived));
+      this.lastIndexHash = idsHash;
+    }
+  }
+
+  private async writeSidecar(snapshot: {
+    facts: readonly MemoryFact[];
+    archived: readonly MemoryFact[];
+    usage?: Record<string, UsageEvent[]>;
+  }): Promise<void> {
+    const runtime: Record<string, RuntimeEntry> = {};
+    for (const fact of [...snapshot.facts, ...snapshot.archived]) {
+      runtime[fact.id] = {
+        accessCount: fact.accessCount,
+        lastAccessed: fact.lastAccessed,
+        confidence: fact.confidence,
+      };
+    }
+    const sidecar: Sidecar = { version: SIDECAR_VERSION, runtime, usage: snapshot.usage ?? {} };
+    await this.writeAtomic(this.sidecarPath, JSON.stringify(sidecar, null, 2));
+  }
+
+  private async writeAtomic(file: string, text: string): Promise<void> {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    await this.opts.platform.fs.writeFileUtf8(tmp, text);
     try {
       const fd = fs.openSync(tmp, "r+");
       try {
@@ -244,12 +424,7 @@ export class MemoryService {
     } catch {
       // 某些文件系统不支持 fsync：继续 rename，不让写记忆失败
     }
-    fs.renameSync(tmp, this.opts.filePath);
-    try {
-      fs.copyFileSync(this.opts.filePath, `${this.opts.filePath}.bak`);
-    } catch {
-      // .bak 失败只影响可恢复性，不影响本次写入
-    }
+    fs.renameSync(tmp, file);
   }
 
   /**
@@ -257,7 +432,7 @@ export class MemoryService {
    * 不写 .bak：它是派生文件，随时可重导；写入仍以 JSON 为准。
    */
   async exportMarkdown(targetPath?: string): Promise<{ path: string; bytes: number; count: number }> {
-    const target = targetPath ?? this.opts.filePath.replace(/\.json$/i, ".md");
+    const target = targetPath ?? path.join(path.dirname(this.opts.filePath), "memory.md");
     const facts = this.store.list({ includeArchived: true, includeInvalidated: true });
     const text = renderMemoryMarkdown(facts, { generatedAt: Date.now() });
     fs.mkdirSync(path.dirname(target), { recursive: true });

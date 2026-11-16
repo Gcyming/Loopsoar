@@ -1415,6 +1415,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Stat l={tr("settings.memory.invalidated")} v={mem.stats.invalidated ?? 0} />
           </div>
           <div style={S.note}>{tr("settings.memory.store")}<code style={S.code}>{mem.filePath}</code></div>
+          <div style={S.note}>{tr("settings.memory.vaultHint")}</div>
           {workspaceIds.length > 1 ? (
             <div style={S.btns}>
               <Btn label={tr("settings.memory.wsAll")} small primary={memWs === "all"} onClick={() => setMemWs("all")} />

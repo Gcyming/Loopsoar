@@ -1200,3 +1200,14 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 新增 IPC memory:export + 设置页「导出 Markdown」按钮；导出不解析、不回写，文件头注明写入以 JSON 为准。
 - 验证：markdown 5 条 + service 1 条；204 文件 / 1679 用例全绿；typecheck/build/gen-check 全过；通道 143。
 
+
+### 记忆改为 Markdown 仓库（ADR-0120）
+
+- vault/facts/<id>.md + vault/archive/<id>.md + index.md；frontmatter（schema:1）+ 正文 + wikilink；Obsidian 可直接打开该目录。
+- 遥测（accessCount/lastAccessed/confidence、usage 事件）移到 usage.json；召回不重写笔记。
+- save 改为增量：id→(路径, 内容 hash)，只写变化的文件；删除/归档移动清理旧路径；单文件 tmp→fsync→rename。
+- 旧 memory.json 首次加载自动迁移并改名 .migrated；坏 md 跳过并告警；缺 id 用文件名兜底。
+- 自研 yamlLite 取代第三方 yaml（后者在 esbuild ESM bundle 里 require('process') 崩溃）。
+- 本机未发现既有记忆库（%APPDATA%/loopsoar 不存在），无可删除的历史数据；E2E 演示数据每次重建。
+- 验证：206 文件 / 1690 用例全绿；typecheck/build 全过；E2E 真机迁移成功。
+

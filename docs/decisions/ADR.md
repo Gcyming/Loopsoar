@@ -2364,4 +2364,25 @@
 - **状态**：✅ 已验证（2026-11-16）
 - **回退条件**：若用户明确要「md 为主、json 为索引」，再单独做双向同步（需要 id 与冲突规则），不要直接改现有写入路径。
 - **复核时间**：用户实际使用导出后。
+- **更新（2026-11-16）**：用户确认本机没有重要记忆、要求「长远、跨环境、不被淘汰」的方案，已改为 **Markdown 仓库为唯一真相**（ADR-0120）。本文保留为决策历史，Markdown 单文件导出仍可用。
+
+## ADR-0120 记忆改为 Obsidian 风格的 Markdown 仓库（唯一真相）
+
+- **背景**：ADR-0119 保留 JSON 为主、Markdown 只做导出；用户指出「本地没有重要记忆，直接删掉，用最长远的眼光做适用各环境、不会被淘汰的方案」，并认可 Obsidian 的存储模型。
+- **决策**：
+  1. **文件即真相**：`<记忆目录>/vault/facts/<id>.md` 为活跃条目，`vault/archive/<id>.md` 为归档，`vault/index.md` 是自动生成目录（Obsidian 可直接「打开文件夹作为仓库」）。一条记忆一个文件，frontmatter 存结构化字段，正文只放内容。
+  2. **frontmatter schema 版本化**：`schema: 1`，字段含 id/title/category/workspace/importance/created/tags/links/repeated/layer/source/status/valid_from/invalidated_at/superseded_by/supersedes/conflicts_with/archived_at/merge_trail/agent/cross_agent_links/provenance（trust/session/message/tool_call/url/file/captured_by）。
+  3. **链接用 wikilink**：`links: ["[[m2]]", "[[m3]]"]`，Obsidian 图谱与反链直接可用；解析同时接受纯 id。文件名就是 `<id>.md`，所以链接不会因为改标题而断。
+  4. **易变字段不进 md**：accessCount / lastAccessed / confidence 与 usage 事件写 `<记忆目录>/usage.json`（sidecar）。召回不重写任何笔记；sidecar 可删可重建。
+  5. **增量落盘**：内存里维护 `id → (路径, 内容 hash)`；save() 只写变化的文件，删除/归档移动会清理旧路径；index.md 仅在条目集合变化时重建。单文件写仍是 tmp → fsync → rename。
+  6. **迁移**：加载时若 vault 为空而旧 `memory.json` 存在 → 一次性导入并改名 `memory.json.migrated`；旧 `.bak` 作为兜底来源。
+  7. **容错**：坏文件跳过并告警（不阻断启动）；缺 id 用文件名兜底；缺字段用默认值；**不回写解析失败的文件**。
+  8. **零依赖 YAML**：自研 `yamlLite`（约 250 行）替代第三方 `yaml`——后者在 Electron 主进程 esbuild bundle 里触发 `Dynamic require of "process" is not supported`（真机崩溃截图在案）。子集覆盖 frontmatter 需要的四种形状（标量 / 标量列表 / 嵌套 map / map 列表），有 round-trip 与容错测试。
+- **理由**：文件是唯一真相 → 任何环境都能读（Obsidian / git / 任意编辑器）、工具挂了数据仍在；sidecar 把「读一次就写文件」的写放大隔离掉；增量写让 2000 条规模下每次对话只写 0–1 个文件。
+- **替代方案**：① 单 JSON（ADR-0007 起用）——不可读、diff 差、复制/迁移只能整库；② 用第三方 YAML 做 frontmatter——打包期崩溃，且为一个字段引入运行时依赖；③ SQLite 为主存——查询强但锁定工具、用户不可直接编辑。
+- **验证方式**：新增 tests/core/memoryVault.spec.ts **6 条**（round-trip、wikilink、文件名兜底、坏文件、索引）与 tests/core/yamlLite.spec.ts **5 条**；MemoryService 持久化用例改为 vault 语义（一条记忆一个 md、sidecar、坏文件跳过、旧 JSON 迁移改名）；全量 vitest **206 文件 / 1690 用例全绿**；typecheck 5/5、build 5/5；E2E 真机跑通迁移（`memory.json.migrated` + `vault/facts/*.md` + `usage.json` + `index.md`），设置页路径已指向 vault。
+- **状态**：✅ 已验证（2026-11-16）
+- **已知代价**：加载要扫全量 md（当前 2000 条以内可接受；规模再大时加 mtime 索引）；文件名是 id，可读性靠 frontmatter title 与 Obsidian 别名；手写 YAML 超出子集会被跳过并告警。
+- **回退条件**：若文件数导致启动明显变慢，加「按目录 mtime 增量扫描 + 启动后台校验」，而不是退回单 JSON；若用户需要 md 与工具双向编辑冲突处理，再加 watcher 与 mtime/hash 合并规则（独立切片）。
+- **复核时间**：真实使用一周后；用户若在 Obsidian 里编辑，重点复核 watcher 与冲突策略。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。

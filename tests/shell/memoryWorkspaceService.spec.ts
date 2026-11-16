@@ -19,6 +19,19 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
+function listTmpFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (current: string): void => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".tmp")) out.push(full);
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out;
+}
+
 function fakePlatform(): LoopsoarPlatform {
   return {
     fs: {
@@ -52,30 +65,42 @@ function makeService(filePath: string, opts: { recallGate?: boolean } = {}): Mem
 }
 
 describe("MemoryService · D1 持久化与隔离", () => {
-  it("写入采用 tmp + rename + .bak，且不残留 .tmp", async () => {
+  it("写入落地为 vault：一条记忆一个 md + sidecar，且不残留 .tmp", async () => {
     const filePath = tempFilePath();
     const service = makeService(filePath);
     await service.add({ content: "项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-a" });
 
-    expect(fs.existsSync(filePath)).toBe(true);
-    expect(fs.existsSync(`${filePath}.bak`)).toBe(true);
-    expect(fs.existsSync(`${filePath}.tmp`)).toBe(false);
+    const root = path.dirname(filePath);
+    const factsDir = path.join(root, "vault", "facts");
+    const notes = fs.readdirSync(factsDir);
+    expect(notes).toHaveLength(1);
+    const note = fs.readFileSync(path.join(factsDir, notes[0] as string), "utf8");
+    expect(note.startsWith("---\n")).toBe(true);
+    expect(note).toContain("category: fact");
+    expect(note).toContain("workspace: ws-a");
+    expect(note).toContain("项目使用 pnpm 管理依赖");
+    expect(fs.existsSync(path.join(root, "usage.json"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "vault", "index.md"))).toBe(true);
+    expect(listTmpFiles(path.join(root, "vault"))).toEqual([]);
+    // md 是唯一真相：旧的 memory.json 不再被写
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 
-  it("主文件损坏时从 .bak 恢复，不丢记忆", async () => {
+  it("vault 里坏文件被跳过，其余记忆照常加载", async () => {
     const filePath = tempFilePath();
     const first = makeService(filePath);
     await first.add({ content: "项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-a" });
-    fs.writeFileSync(filePath, "{ 这不是合法 JSON", "utf8");
+    const factsDir = path.join(path.dirname(filePath), "vault", "facts");
+    fs.writeFileSync(path.join(factsDir, "broken.md"), "这不是 frontmatter", "utf8");
 
     const second = makeService(filePath);
     await second.load();
     const facts = second.list({ workspaceId: "ws-a" });
     expect(facts).toHaveLength(1);
-    expect(facts[0].content).toContain("pnpm");
+    expect(facts[0]?.content).toContain("pnpm");
   });
 
-  it("旧数据（无 workspaceId / provenance）加载后补齐并回写", async () => {
+  it("旧 JSON 一次性迁移到 vault，原文件改名 .migrated 且字段补齐", async () => {
     const filePath = tempFilePath();
     const legacy = {
       facts: [
@@ -104,11 +129,15 @@ describe("MemoryService · D1 持久化与隔离", () => {
 
     const service = makeService(filePath);
     await service.load();
-    expect(service.list()[0].workspaceId).toBe("default");
+    expect(service.list()[0]?.workspaceId).toBe("default");
 
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { facts: Array<{ workspaceId?: string; provenance?: { trust?: string } }> };
-    expect(raw.facts[0].workspaceId).toBe("default");
-    expect(raw.facts[0].provenance?.trust).toBe("user");
+    const factsDir = path.join(path.dirname(filePath), "vault", "facts");
+    const notes = fs.readdirSync(factsDir);
+    expect(notes).toHaveLength(1);
+    const note = fs.readFileSync(path.join(factsDir, notes[0] as string), "utf8");
+    expect(note).toContain("workspace: default");
+    expect(note).toContain("旧版本留下的记忆");
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 
   it("召回按工作区隔离：A 区记忆绝不进入 B 区", async () => {
@@ -156,7 +185,8 @@ describe("MemoryService · Markdown 导出（只读投影）", () => {
     expect(md).toContain("## ws-a");
     expect(result.count).toBe(1);
     expect(fs.existsSync(`${result.path}.tmp`)).toBe(false);
-    const json = JSON.parse(fs.readFileSync(filePath, "utf8")) as { facts: unknown[] };
-    expect(json.facts).toHaveLength(1);
+    // 导出不改主库：vault 里仍是一条，memory.json 不再是存储格式
+    expect(fs.readdirSync(path.join(path.dirname(filePath), "vault", "facts"))).toHaveLength(1);
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 });

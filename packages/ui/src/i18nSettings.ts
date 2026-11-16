@@ -463,6 +463,10 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Drag the timeline to watch memories appear and get superseded.",
   },
   "settings.memory.superseded": { zh: "已失效", en: "Superseded" },
+  "settings.memory.vaultHint": {
+    zh: "这个目录本身就是 Obsidian vault：可直接「打开文件夹作为仓库」，一条记忆一个 .md，frontmatter 就是属性。",
+    en: "This folder is itself an Obsidian vault: open it as a vault; each memory is one .md file and its frontmatter is the properties.",
+  },
   "settings.memory.exportMd": { zh: "导出 Markdown", en: "Export Markdown" },
   "settings.memory.exported": {
     zh: "已导出 {count} 条到 {path}",

@@ -14,3 +14,4 @@ export * from "./retrieval.js";
 export * from "./graph.js";
 export * from "./supersede.js";
 export * from "./markdown.js";
+export * from "./vault.js";
