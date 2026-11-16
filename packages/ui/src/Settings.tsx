@@ -2154,7 +2154,7 @@ function CategoryCombo({
   return (
     <div style={comboWrap}>
       <input
-        style={{ ...S.input, paddingRight: 22 }}
+        style={{ ...S.input, maxWidth: "none", paddingRight: 22 }}
         value={draft ?? labelOf(value)}
         placeholder={placeholder}
         onFocus={() => {
@@ -2206,7 +2206,7 @@ function Combo({ v, ph, on, options, style }: { v: string; ph?: string; on: (x: 
   return (
     <div style={{ ...comboWrap, ...style }}>
       <input
-        style={{ ...S.input, paddingRight: 22 }}
+        style={{ ...S.input, maxWidth: "none", paddingRight: 22 }}
         value={v}
         placeholder={ph}
         onChange={(event) => on(event.target.value)}
