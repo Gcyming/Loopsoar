@@ -97,6 +97,15 @@ export class MemoryStore {
     return { facts: [...this.facts], archived: [...this.archived], usage };
   }
 
+  /** 外部编辑同步：按 id 覆盖或插入（归档态由 fact 自身决定）。 */
+  upsert(fact: MemoryFact): void {
+    this.facts = this.facts.filter((item) => item.id !== fact.id);
+    this.archived = this.archived.filter((item) => item.id !== fact.id);
+    const archived = Boolean(fact.archivedAt) || fact.status !== "active";
+    (archived ? this.archived : this.facts).push(fact);
+    this.seq = Math.max(this.seq, this.facts.length + this.archived.length);
+  }
+
   /** 从持久化状态恢复（文件损坏时由壳层保证传入空状态）。 */
   restore(state: Partially<MemoryStoreState>): void {
     this.facts = Array.isArray(state?.facts) ? state.facts : [];
@@ -406,6 +415,14 @@ export class MemoryStore {
     if (patch.importance !== undefined) fact.importance = Math.max(1, Math.min(10, patch.importance));
     fact.lastAccessed = this.now();
     return fact;
+  }
+
+  /** 外部删除同步（活跃或归档都移除）；不清理 links，悬空链接交由建链规则处理。 */
+  removeAnywhere(id: string): boolean {
+    const before = this.facts.length + this.archived.length;
+    this.facts = this.facts.filter((f) => f.id !== id);
+    this.archived = this.archived.filter((f) => f.id !== id);
+    return this.facts.length + this.archived.length < before;
   }
 
   remove(id: string): boolean {

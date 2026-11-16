@@ -188,6 +188,12 @@ export class MemoryService {
   private indexEntries = new Map<string, IndexEntry>();
   /** 本次改动过的分片：只重写这些文件。 */
   private touchedShards = new Set<number>();
+  /** 后台核对（索引快路径）：启动后与磁盘逐文件对哈希。 */
+  private reconcilePromise: Promise<void> | null = null;
+  /** vault 监听：外部编辑（Obsidian 等）实时同步，不必重启。 */
+  private watcher: fs.FSWatcher | null = null;
+  private watcherTimer: NodeJS.Timeout | null = null;
+  private pendingPaths = new Set<string>();
 
   constructor(private opts: MemoryServiceOptions) {
     this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
@@ -211,6 +217,8 @@ export class MemoryService {
 
   /** 切换存储路径（设置里改了记忆库位置后调用）：先保存旧库，再指向新库并加载。 */
   async relocate(filePath: string): Promise<void> {
+    this.stopWatcher();
+    if (this.reconcilePromise) await this.reconcilePromise;
     await this.save();
     this.opts = { ...this.opts, filePath };
     this.lastWritten = new Map();
@@ -249,14 +257,18 @@ export class MemoryService {
       (await this.opts.platform.fs.exists(legacyPath)) || (await this.opts.platform.fs.exists(`${legacyPath}.bak`));
 
     await this.loadIndex();
+    let fromIndex = false;
     if (this.hasVaultNotes(factsDir, archiveDir)) {
-      const loaded = await this.readVaultIndexed(factsDir, archiveDir);
+      // 有索引 → 先用索引秒开，再后台逐文件核对；无索引（首次/损坏）→ 全量解析。
+      const loaded =
+        this.indexEntries.size > 0 ? this.loadFromIndex() : await this.readVaultIndexed(factsDir, archiveDir);
       const sidecar = await this.readSidecar();
       this.applyRuntime(loaded.facts, loaded.archived, sidecar.runtime);
       this.store.restore({ facts: loaded.facts, archived: loaded.archived, usage: sidecar.usage });
       this.lastWritten = this.fingerprint(loaded.facts, loaded.archived, loaded.paths);
-      await this.persistIndex(loaded.facts, loaded.archived, loaded.written);
+      if (!loaded.fromIndex) await this.persistIndex(loaded.facts, loaded.archived, loaded.written);
       console.warn(`[Loopsoar] 记忆仓库：${this.vaultPath}（${loaded.facts.length} 活跃 / ${loaded.archived.length} 归档）`);
+      fromIndex = loaded.fromIndex;
     } else if (legacyExists) {
       // 一次性迁移：旧 JSON（含 .bak 兜底）→ Markdown 仓库；原文件改名 .migrated 以便回滚。
       const parsed = await this.readLegacyJson(legacyPath);
@@ -276,6 +288,175 @@ export class MemoryService {
     // 索引在 load 后立即维护：hash 索引同步重建（毫秒级）；外部向量尽力而为（超时/失败降级 hash）
     await this.rebuildVectorIndex();
     this.loaded = true;
+    this.startWatcher();
+    // 先把索引状态服务起来，再后台逐文件核对（外部编辑/删除会在核对后生效）
+    if (fromIndex) this.reconcilePromise = this.reconcileAll();
+  }
+
+  /** 测试/退出用：等待后台核对完成。 */
+  async whenSettled(): Promise<void> {
+    if (this.reconcilePromise) await this.reconcilePromise;
+  }
+
+  /** 有索引时直接构造内存状态（不读文件）；正确性交给后台 reconcileAll 用哈希核对。 */
+  private loadFromIndex(): {
+    facts: MemoryFact[];
+    archived: MemoryFact[];
+    paths: Map<string, string>;
+    written: Map<string, { file: string; hash: string }>;
+    fromIndex: boolean;
+  } {
+    const facts: MemoryFact[] = [];
+    const archived: MemoryFact[] = [];
+    const paths = new Map<string, string>();
+    const written = new Map<string, { file: string; hash: string }>();
+    for (const [id, entry] of this.indexEntries) {
+      const fact = { ...entry.fact };
+      const file = path.join(this.vaultPath, entry.path);
+      const archivedFlag = Boolean(fact.archivedAt) || fact.status !== "active" || entry.path.startsWith("archive/");
+      (archivedFlag ? archived : facts).push(fact);
+      paths.set(id, file);
+      written.set(id, { file, hash: entry.hash });
+    }
+    return { facts, archived, paths, written, fromIndex: true };
+  }
+
+  /**
+   * 后台核对：逐文件算哈希，与索引比对；变化的重新解析并 upsert，删除的移除。
+   * 索引只是缓存，任何不一致都以磁盘为准。
+   */
+  private async reconcileAll(): Promise<void> {
+    const factsDir = path.join(this.vaultPath, "facts");
+    const archiveDir = path.join(this.vaultPath, "archive");
+    const byPath = new Map<string, { id: string; entry: IndexEntry }>();
+    for (const [id, entry] of this.indexEntries) byPath.set(entry.path, { id, entry });
+    const presentPaths = new Set<string>();
+    let changed = false;
+
+    for (const [dir, relDir, isArchive] of [
+      [factsDir, "facts", false],
+      [archiveDir, "archive", true],
+    ] as const) {
+      const names = this.listMarkdown(dir);
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        while (cursor < names.length) {
+          const name = names[cursor++] as string;
+          const file = path.join(dir, name);
+          const rel = `${relDir}/${name}`;
+          presentPaths.add(rel);
+          try {
+            const text = await fs.promises.readFile(file, "utf8");
+            const hash = hashText(text);
+            const cached = byPath.get(rel);
+            if (cached && cached.entry.hash === hash) continue;
+            const parsed = markdownToFact(text, name);
+            if (!parsed) continue;
+            const fact = parsed.fact;
+            if (isArchive) {
+              fact.archivedAt ??= Date.now();
+              if (fact.status === "active") fact.status = "archived";
+            }
+            this.store.upsert(fact);
+            this.indexEntries.set(fact.id, { path: rel, hash, fact: stableFact(fact) });
+            this.touchedShards.add(shardOf(fact.id));
+            this.lastWritten.set(fact.id, `${file}\u0000${hash}`);
+            changed = true;
+          } catch (err) {
+            console.warn(`[Loopsoar] 后台核对读取失败：${rel}`, err);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(8, Math.max(1, names.length)) }, worker));
+    }
+
+    for (const [id, entry] of [...this.indexEntries]) {
+      if (presentPaths.has(entry.path)) continue;
+      this.store.removeAnywhere(id);
+      this.indexEntries.delete(id);
+      this.touchedShards.add(shardOf(id));
+      this.lastWritten.delete(id);
+      changed = true;
+    }
+    if (changed) {
+      await this.rebuildVectorIndex();
+    }
+    await this.flushIndex();
+    this.reconcilePromise = null;
+  }
+
+  /** vault 监听：外部编辑实时同步（Windows/macOS 支持递归；失败则退化为重启生效）。 */
+  private startWatcher(): void {
+    if (this.watcher) return;
+    try {
+      fs.mkdirSync(this.vaultPath, { recursive: true });
+      this.watcher = fs.watch(this.vaultPath, { recursive: true }, (_event, filename) => {
+        if (!filename) return;
+        const rel = filename.toString().replace(/\\/g, "/");
+        if (!rel.endsWith(".md") || rel === "index.md") return;
+        this.pendingPaths.add(rel);
+        if (this.watcherTimer) clearTimeout(this.watcherTimer);
+        this.watcherTimer = setTimeout(() => void this.flushWatcher(), 400);
+        this.watcherTimer.unref?.();
+      });
+    } catch (err) {
+      console.warn("[Loopsoar] 记忆目录监听不可用（外部编辑需重启生效）", err);
+    }
+  }
+
+  private async flushWatcher(): Promise<void> {
+    const paths = [...this.pendingPaths];
+    this.pendingPaths.clear();
+    if (paths.length === 0) return;
+    let changed = false;
+    for (const rel of paths) changed = (await this.reconcilePath(rel)) || changed;
+    if (changed) {
+      await this.rebuildVectorIndex();
+      await this.flushIndex();
+    }
+  }
+
+  /** 单个文件的外部变更：改/新建 → 解析并 upsert；删除 → 移除。 */
+  private async reconcilePath(rel: string): Promise<boolean> {
+    const file = path.join(this.vaultPath, rel);
+    try {
+      const text = await fs.promises.readFile(file, "utf8");
+      const hash = hashText(text);
+      const entry = [...this.indexEntries.entries()].find(([, item]) => item.path === rel);
+      if (entry && entry[1].hash === hash) return false;
+      const parsed = markdownToFact(text, path.basename(file));
+      if (!parsed) return false;
+      const fact = parsed.fact;
+      if (rel.startsWith("archive/")) {
+        fact.archivedAt ??= Date.now();
+        if (fact.status === "active") fact.status = "archived";
+      }
+      this.store.upsert(fact);
+      this.indexEntries.set(fact.id, { path: rel, hash, fact: stableFact(fact) });
+      this.touchedShards.add(shardOf(fact.id));
+      this.lastWritten.set(fact.id, `${file}\u0000${hash}`);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.warn(`[Loopsoar] 同步外部编辑失败：${rel}`, err);
+        return false;
+      }
+      const entry = [...this.indexEntries.entries()].find(([, item]) => item.path === rel);
+      if (!entry) return false;
+      this.store.removeAnywhere(entry[0]);
+      this.indexEntries.delete(entry[0]);
+      this.touchedShards.add(shardOf(entry[0]));
+      this.lastWritten.delete(entry[0]);
+      return true;
+    }
+  }
+
+  /** 停止监听（换库时先调用，避免旧库事件串到新库）。 */
+  private stopWatcher(): void {
+    if (this.watcherTimer) clearTimeout(this.watcherTimer);
+    this.watcherTimer = null;
+    this.watcher?.close();
+    this.watcher = null;
   }
 
   private hasVaultNotes(factsDir: string, archiveDir: string): boolean {
@@ -309,6 +490,7 @@ export class MemoryService {
     paths: Map<string, string>;
     /** 本次读到的 id → 文件 + 内容哈希，供索引持久化。 */
     written: Map<string, { file: string; hash: string }>;
+    fromIndex: boolean;
   }> {
     const facts: MemoryFact[] = [];
     const archived: MemoryFact[] = [];
@@ -367,7 +549,7 @@ export class MemoryService {
       this.indexEntries.delete(id);
       this.touchedShards.add(shardOf(id));
     }
-    return { facts, archived, paths, written };
+    return { facts, archived, paths, written, fromIndex: false };
   }
 
   /** 读索引分片；缺失/损坏都只是「没有缓存」，绝不影响正库加载。 */
@@ -413,6 +595,11 @@ export class MemoryService {
       this.indexEntries.delete(id);
       this.touchedShards.add(shardOf(id));
     }
+    await this.flushIndex();
+  }
+
+  /** 把改动过的分片落盘；分片互相独立，单条记忆只重写一个文件。 */
+  private async flushIndex(): Promise<void> {
     if (this.touchedShards.size === 0) return;
     const shards = new Map<number, Record<string, IndexEntry>>();
     for (const index of this.touchedShards) shards.set(index, {});
@@ -676,6 +863,7 @@ export class MemoryService {
 
   /** 释放向量后端资源（sqlite-vec 的连接；flat 无操作）。应用退出/测试清理时调用。 */
   dispose(): void {
+    this.stopWatcher();
     this.hashIndex.close();
   }
 

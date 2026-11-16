@@ -1228,3 +1228,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 实测：2000 条冷 303ms → 热 208ms；10000 条冷 1368ms → 热 955ms（热启动下限 = 读全部文件算哈希）。
 - 验证：新增 4 条索引用例；208 文件 / 1697 用例全绿；typecheck/build/gen-check 全过。
 
+
+### 索引快路径 + 后台核对 + 文件监听（ADR-0123）
+
+- 索引非空时直接由索引构造内存状态，加载即服务；后台 reconcileAll 用内容哈希核对磁盘，变化才解析/更新，删除则移除。
+- fs.watch 递归监听 vault，400ms 防抖，按路径增量同步；删除事件移除；自身写入哈希一致不会自激；监听不可用则告警并退回重启生效。
+- MemoryStore 增 upsert / removeAnywhere；测试用 whenSettled() 等待后台核对。
+- 实测：2k 热启动 208→83ms（后台核对 124ms）；10k 955→467ms（后台核对 713ms）。
+- 验证：新增 1 条运行期监听用例；208 文件 / 1698 用例全绿；typecheck/build/gen-check 全过；E2E 正常。
+

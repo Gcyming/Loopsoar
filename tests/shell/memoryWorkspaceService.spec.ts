@@ -215,6 +215,8 @@ describe("MemoryService · 内容哈希索引（可丢弃缓存）", () => {
 
     const second = makeService(filePath);
     await second.load();
+    // 索引快路径先返回旧值，后台按内容哈希核对后再更新
+    await second.whenSettled();
     expect(second.list({ workspaceId: "ws-a" })[0]?.content).toContain("外部改过的新内容");
   });
 
@@ -230,6 +232,24 @@ describe("MemoryService · 内容哈希索引（可丢弃缓存）", () => {
     expect(second.list({ workspaceId: "ws-a" })).toHaveLength(1);
   });
 
+  it("运行期外部编辑由 fs.watch 同步，不必重启", async () => {
+    const filePath = tempFilePath();
+    const service = makeService(filePath);
+    await service.load();
+    await service.add({ content: "监听测试：旧内容", category: "fact", workspaceId: "ws-a" });
+    const factsDir = path.join(path.dirname(filePath), "vault", "facts");
+    const note = fs.readdirSync(factsDir)[0] as string;
+    const notePath = path.join(factsDir, note);
+    fs.writeFileSync(notePath, fs.readFileSync(notePath, "utf8").replaceAll("旧内容", "运行期新内容"), "utf8");
+
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline && !(service.list({ workspaceId: "ws-a" })[0]?.content ?? "").includes("运行期新内容")) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(service.list({ workspaceId: "ws-a" })[0]?.content).toContain("运行期新内容");
+    service.dispose();
+  });
+
   it("文件被外部删除后，索引里的条目不会复活", async () => {
     const filePath = tempFilePath();
     const first = makeService(filePath);
@@ -239,6 +259,7 @@ describe("MemoryService · 内容哈希索引（可丢弃缓存）", () => {
 
     const second = makeService(filePath);
     await second.load();
+    await second.whenSettled();
     expect(second.list()).toHaveLength(0);
   });
 });
