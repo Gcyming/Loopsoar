@@ -147,6 +147,8 @@ export interface MemoryGraphNodeView {
   activation: number;
   createdAt: number;
   lastUsedAt: number;
+  /** M4 回放：该时刻已失效（被取代），渲染成空心节点。 */
+  superseded?: boolean;
   size: number;
 }
 
@@ -968,7 +970,8 @@ export interface LoopsoarAPI {
   };
   memory: LoopsoarDomain & {
     list(): Promise<MemoryListResult>;
-    graph(): Promise<MemoryGraphResult>;
+    /** M4：at = 回放时刻（缺省 = 现在）。 */
+  graph(req?: { at?: number }): Promise<MemoryGraphResult>;
     stats(): Promise<MemoryStats>;
     consolidate(): Promise<{ merged: number; archived: string[]; scanned: number }>;
     add(payload: { content: string; category: string; tags?: string[]; importance?: number }): Promise<{ added: boolean; id: string }>;

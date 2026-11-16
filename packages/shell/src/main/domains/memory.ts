@@ -44,15 +44,23 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
    * 记忆图谱（E-M0）：事实 + 会话 → 节点/边 → 确定性环带布局（1000×1000 画布坐标系）。
    * 布局放在壳层算：渲染层不需要依赖 core，且同一份数据在任何窗口得到同一张图。
    */
-  handleTrusted(deps, "memory:graph", () => {
-    const facts = deps.memory.list({ includeArchived: false });
+  handleTrusted(deps, "memory:graph", (payload) => {
+    // M4：at = 回放时刻；此时把已失效条目也取出来，由 buildMemoryGraph 按时间戳判定
+    // 「当时还活着」还是「当时已失效」，图才有演化感。缺省仍然只取存活条目。
+    const at = (payload as { at?: number } | undefined)?.at;
+    const facts = deps.memory.list({ includeArchived: false, includeInvalidated: at !== undefined });
     const sessions = (deps.sessions?.list() ?? []).map((session) => ({
       sessionId: session.id,
       title: session.title,
       workspaceId: session.workspaceId ?? null,
       updatedAt: session.updatedAt,
     }));
-    const model = buildMemoryGraph({ facts, sessions, usage: deps.memory.usageSnapshot() });
+    const model = buildMemoryGraph({
+      facts,
+      sessions,
+      usage: deps.memory.usageSnapshot(),
+      ...(at !== undefined ? { at } : {}),
+    });
     const points = layoutMemoryGraph(model, { width: 1000, height: 1000, padding: 24 });
     return { ...model, points };
   });

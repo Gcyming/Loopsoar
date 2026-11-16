@@ -214,7 +214,7 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
     }
 
     // 标签收集后按优先级单独放置，遇到重叠就跳过，避免节点密集时糊成一片
-    const labelCandidates: { id: string; kind: string; text: string; x: number; y: number; radius: number; dim: boolean; visible: boolean; priority: number }[] = [];
+    const labelCandidates: { id: string; kind: string; text: string; x: number; y: number; radius: number; dim: boolean; visible: boolean; priority: number; superseded: boolean }[] = [];
     // 节点按深度从远到近画（3D 画家算法；2D 保持稳定顺序）
     const ordered = [...data.nodes].sort((a, b) => {
       if (mode !== "3d") return a.id.localeCompare(b.id);
@@ -231,11 +231,19 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
       const baseRadius = Math.max(node.kind === "origin" ? 8 : node.kind === "session" ? 4.5 : 3.5, point.radius * projected.scale * 2.2);
       const depthAlpha = mode === "3d" ? Math.max(0.35, Math.min(1, 1 + projected.depth / 5000)) : 1;
       const dim = Boolean(hovered) && !activeSet.has(node.id);
-      ctx.globalAlpha = (dim ? 0.18 : alphaOf(node)) * depthAlpha;
+      // M4 回放：当时已失效的条目画成空心环，仍留在图上，能看出「它曾经存在过」。
+      const ghost = node.superseded === true;
+      ctx.globalAlpha = (dim ? 0.18 : alphaOf(node)) * depthAlpha * (ghost ? 0.55 : 1);
       ctx.fillStyle = colorOf(node);
       ctx.beginPath();
       ctx.arc(x, y, baseRadius, 0, Math.PI * 2);
-      ctx.fill();
+      if (ghost) {
+        ctx.strokeStyle = colorOf(node);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        ctx.fill();
+      }
       if (node.kind === "origin") {
         ctx.globalAlpha = dim ? 0.2 : 0.5;
         ctx.strokeStyle = colorOf(node);
@@ -260,6 +268,7 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
           (node.kind === "session" && projected.scale > 0.22) ||
           (Boolean(hovered) && activeSet.has(node.id) && node.kind !== "fact"),
         priority: node.kind === "origin" ? 0 : node.kind === "session" ? 1 : hovered === node.id ? 1.5 : 3,
+        superseded: node.superseded === true,
       });
     }
 
@@ -268,7 +277,9 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
     labelCandidates.sort((a, b) => a.priority - b.priority);
     for (const candidate of labelCandidates) {
       if (!candidate.visible) continue;
-      const label = candidate.kind === "fact" ? candidate.text.slice(0, 22) : candidate.text.slice(0, 18);
+      const label =
+        (candidate.kind === "fact" ? candidate.text.slice(0, 22) : candidate.text.slice(0, 18)) +
+        (candidate.superseded ? " · 已失效" : "");
       ctx.font = candidate.kind === "origin" ? "600 12px system-ui, sans-serif" : "11px system-ui, sans-serif";
       const anchorAngle = Math.atan2(candidate.y - center.y, candidate.x - center.x);
       const offset = candidate.radius + 14;

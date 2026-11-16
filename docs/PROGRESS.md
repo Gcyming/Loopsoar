@@ -1184,3 +1184,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - E2E 脚本支持 2d/3d 两种截图：node scripts/e2e-memory-graph.mjs 3d。
 - 验证：201 文件 / 1663 用例全绿；评测台 60/60；typecheck 5/5、build 5/5、gen-check 一致。
 
+
+### M4：时间回放（ADR-0118）
+
+- buildMemoryGraph 增 at：只收当时已存在的事实，激活值也按 at 算；使用事件晚于 at 的不计入（防止未来召回提前生效）。
+- 失效条目不隐藏，标 superseded 渲染成空心环 + 「已失效」；壳层带 at 时 includeInvalidated=true。
+- IPC memory:graph 改为可选 { at }，负数被契约拒绝；设置页时间轴滑块（1 小时步进、120ms 防抖）+「回到现在」+ 详情卡徽标。
+- E2E 增加 replay 模式；合成 input 会被 React 值追踪丢弃，改由主进程发受信鼠标点击 range 轨道（LOOPSOAR_E2E_RANGE_CLICK）。
+- 验证：新增 10 条用例；203 文件 / 1673 用例全绿；typecheck/build/gen-check 全过。
+

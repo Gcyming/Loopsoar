@@ -38,6 +38,8 @@ export interface MemoryGraphNode {
   activation: number;
   createdAt: number;
   lastUsedAt: number;
+  /** M4 回放：在回放时刻已经失效（被取代），渲染成空心节点。 */
+  superseded?: boolean;
   /** 展示半径（CSS 像素）。 */
   size: number;
 }
@@ -70,6 +72,8 @@ export interface BuildMemoryGraphInput {
   /** 每个会话最多上图多少条事实（其余靠点开查看）。 */
   maxFactsPerSession?: number;
   now?: number;
+  /** M4 时间回放：只显示该时刻之前产生的事实，并用该时刻计算激活值（缺省 = 现在）。 */
+  at?: number;
 }
 
 const DAY = 86_400_000;
@@ -91,6 +95,8 @@ export function activationFromEvents(events: readonly UsageEvent[], now: number,
   if (events.length === 0) return 0;
   let r = 0;
   for (const event of events) {
+    // M4 回放：晚于回放时刻的使用事件还没发生，不能计入激活（否则未来会「提前回忆」）。
+    if (event.at > now) continue;
     const days = Math.max(0, (now - event.at) / DAY);
     r += event.w * Math.exp(-days / tauDays);
   }
@@ -140,6 +146,7 @@ function factNodesOf(
         createdAt: fact.timestamp,
         lastUsedAt: fact.lastAccessed,
         size: 4 + Math.round(fact.importance / 2.5),
+        ...(fact.invalidatedAt !== undefined && fact.invalidatedAt <= now ? { superseded: true } : {}),
       };
     });
 }
@@ -151,9 +158,12 @@ function factNodesOf(
  *  - 事实之间的 links → semantic 边（只连两端都在图上的）。
  */
 export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel {
-  const now = input.now ?? Date.now();
+  const now = input.at ?? input.now ?? Date.now();
   const max = input.maxFactsPerSession ?? DEFAULT_MAX_FACTS_PER_SESSION;
   const sessionIds = new Set(input.sessions.map((s) => s.sessionId));
+  // M4：回放时只保留「当时已经存在」的事实；还没发生的条目不上图，图才有生长感。
+  const facts = input.at === undefined ? input.facts : input.facts.filter((f) => f.timestamp <= now);
+  const isSuperseded = (f: MemoryFact): boolean => f.invalidatedAt !== undefined && f.invalidatedAt <= now;
 
   const nodes: MemoryGraphNode[] = [
     {
@@ -195,7 +205,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel
       strength: 1,
     });
 
-    const children = factNodesOf(input.facts, session.sessionId, max, now, input.usage);
+    const children = factNodesOf(facts, session.sessionId, max, now, input.usage);
     for (const child of children) {
       nodes.push(child);
       edges.push({
@@ -209,7 +219,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel
   }
 
   // 游离层：没有存活会话的事实（被删除的会话留下的条目 / 旧数据）
-  const orphans = input.facts
+  const orphans = facts
     .filter((f) => !f.provenance?.sessionId || !sessionIds.has(f.provenance.sessionId))
     .sort((a, b) => b.importance - a.importance || b.lastAccessed - a.lastAccessed)
     .slice(0, max * 4);
@@ -227,13 +237,14 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel
       createdAt: fact.timestamp,
       lastUsedAt: fact.lastAccessed,
       size: 4 + Math.round(fact.importance / 2.5),
+      ...(isSuperseded(fact) ? { superseded: true } : {}),
     });
   }
 
   // 语义边：两端都在图上才连
   const byFactId = new Map(nodes.filter((n) => n.factId).map((n) => [n.factId as string, n.id]));
   let semanticLinks = 0;
-  for (const fact of input.facts) {
+  for (const fact of facts) {
     const from = byFactId.get(fact.id);
     if (!from) continue;
     for (const linkId of fact.links) {

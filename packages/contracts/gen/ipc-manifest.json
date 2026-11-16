@@ -292,7 +292,7 @@
       "domain": "memory",
       "method": "graph",
       "sensitive": true,
-      "hasRequest": false
+      "hasRequest": true
     },
     {
       "channel": "memory:stats",

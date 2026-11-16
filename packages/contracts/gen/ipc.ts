@@ -51,7 +51,7 @@ export const IPC_CHANNELS = {
   "memory:add": { domain: "memory", method: "add", sensitive: true, hasRequest: true },
   "memory:update": { domain: "memory", method: "update", sensitive: true, hasRequest: true },
   "memory:delete": { domain: "memory", method: "delete", sensitive: true, hasRequest: true },
-  "memory:graph": { domain: "memory", method: "graph", sensitive: true, hasRequest: false },
+  "memory:graph": { domain: "memory", method: "graph", sensitive: true, hasRequest: true },
   "memory:stats": { domain: "memory", method: "stats", sensitive: true, hasRequest: false },
   "memory:clear": { domain: "memory", method: "clear", sensitive: true, hasRequest: false },
   "memory:consolidate": { domain: "memory", method: "consolidate", sensitive: true, hasRequest: false },

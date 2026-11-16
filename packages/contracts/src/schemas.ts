@@ -469,6 +469,9 @@ export const MemoryUpdateSchema = z.object({
 });
 export const MemoryDeleteSchema = z.object({ id: z.string().min(1) });
 
+/** M4 时间回放：at = 回放时刻（毫秒时间戳）；缺省 = 现在。 */
+export const MemoryGraphSchema = z.object({ at: z.number().int().nonnegative().optional() }).optional();
+
 /**
  * ChannelBinding defines the structure of a communication channel.
  * domain: The domain/category of the channel (e.g., "chat", "perm")
@@ -738,7 +741,7 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
   "memory:graph": {
     domain: "memory",
     method: "graph",
-    request: null,
+    request: MemoryGraphSchema,
     sensitive: true,
   },
   "memory:stats": {

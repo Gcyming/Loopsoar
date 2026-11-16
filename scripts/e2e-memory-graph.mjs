@@ -1,13 +1,14 @@
 /**
  * E2E：记忆图谱（E-M0）截图——种一份演示记忆 + 会话，启动 GUI，自动打开「设置 · 记忆」并截图。
- * 用法：node scripts/e2e-memory-graph.mjs [2d|3d]
- * 产物：e2e-evidence/memory-graph.png（2d）、e2e-evidence/memory-graph-3d.png（3d）、memory-graph.log
+ * 用法：node scripts/e2e-memory-graph.mjs [2d|3d|replay]
+ * 产物：memory-graph.png（2d）、memory-graph-3d.png（3d）、memory-graph-replay.png（时间回放）
  */
 import { spawn } from "node:child_process";
 import { createWriteStream, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const MODE = process.argv[2] === "3d" ? "3d" : "2d";
+const ARG = process.argv[2];
+const MODE = ARG === "3d" || ARG === "replay" ? ARG : "2d";
 const ROOT = process.cwd();
 const DATA = path.join(ROOT, ".loopsoar-data-graph-e2e");
 const OUT = path.join(ROOT, "e2e-evidence");
@@ -56,6 +57,11 @@ const facts = [
   fact("m9", "旧版本遗留：没有会话归属的记忆会落到游离层", undefined, 5, 20, "fact"),
   fact("m10", "另一条旧记忆：端口 19444 是本地调试页", undefined, 4, 40, "project"),
 ];
+if (MODE === "replay") {
+  // 回放演示：让 m10 在 12 天前失效，回放到 10 天前时它会以空心环出现。
+  const retired = facts.find((f) => f.id === "m10");
+  if (retired) retired.invalidatedAt = NOW - 12 * DAY;
+}
 writeFileSync(path.join(DATA, "memory", "memory.json"), JSON.stringify({ facts, archived: [] }, null, 2));
 
 const evalJs = `(async () => {
@@ -82,15 +88,16 @@ const evalJs = `(async () => {
   return { navClicked: Boolean(nav), hasCanvas: Boolean(canvas), clicked3d, canvasSize: canvas ? [canvas.width, canvas.height] : null };
 })()`;
 
-const log = createWriteStream(path.join(OUT, MODE === "3d" ? "memory-graph-3d.log" : "memory-graph.log"), { flags: "w" });
+const log = createWriteStream(path.join(OUT, MODE === "3d" ? "memory-graph-3d.log" : MODE === "replay" ? "memory-graph-replay.log" : "memory-graph.log"), { flags: "w" });
 const child = spawn(process.execPath, [path.join(ROOT, "scripts/dev-gui.mjs")], {
   cwd: ROOT,
   env: {
     ...process.env,
     LOOPSOAR_DATA_DIR: DATA,
-    LOOPSOAR_E2E_SHOT: path.join(OUT, MODE === "3d" ? "memory-graph-3d.png" : "memory-graph.png"),
+    LOOPSOAR_E2E_SHOT: path.join(OUT, MODE === "3d" ? "memory-graph-3d.png" : MODE === "replay" ? "memory-graph-replay.png" : "memory-graph.png"),
     LOOPSOAR_E2E_HOLD_MS: "2500",
     LOOPSOAR_E2E_EVAL: evalJs,
+    ...(MODE === "replay" ? { LOOPSOAR_E2E_RANGE_CLICK: "input[type=range]:0.8" } : {}),
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

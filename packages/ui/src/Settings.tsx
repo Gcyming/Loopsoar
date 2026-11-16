@@ -184,10 +184,29 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   /** 记忆图谱（E-M0）：随 mem 刷新一起更新（增删改后自动重画）。 */
   const [memGraph, setMemGraph] = useState<MemoryGraphResult | null>(null);
   const [graphSel, setGraphSel] = useState<MemoryGraphNodeView | null>(null);
+  /** M4 时间回放：null = 现在；否则显示该时刻的图谱（事实按诞生时间上桌，已失效的变空心）。 */
+  const [replayAt, setReplayAt] = useState<number | null>(null);
+  /** 时间轴范围：最早条目的时间 → 现在。 */
+  const [replayDomain, setReplayDomain] = useState<{ from: number; to: number } | null>(null);
   useEffect(() => {
     if (!api || !mem) return;
-    void api.memory.graph().then(setMemGraph).catch(() => setMemGraph(null));
-  }, [api, mem]);
+    // 拖动时间轴时 120ms 防抖，避免每帧都过 IPC；回到「现在」立即刷新。
+    const timer = setTimeout(() => {
+      void api.memory
+        .graph(replayAt === null ? undefined : { at: replayAt })
+        .then(setMemGraph)
+        .catch(() => setMemGraph(null));
+    }, replayAt === null ? 0 : 120);
+    return () => clearTimeout(timer);
+  }, [api, mem, replayAt]);
+  useEffect(() => {
+    if (!mem) {
+      setReplayDomain(null);
+      return;
+    }
+    const times = mem.facts.map((f) => f.updatedAt).filter((t) => Number.isFinite(t));
+    setReplayDomain(times.length > 0 ? { from: Math.min(...times), to: Date.now() } : null);
+  }, [mem]);
   // E-M2：记忆使用事件（工具检索命中 / 新增 / 删除）→ 刷新面板与图谱，图组件据此做脉冲反馈。
   useEffect(() => {
     if (!api) return;
@@ -1328,6 +1347,32 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
           <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
+          {replayDomain ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 2px" }}>
+              <span style={S.tag}>
+                {replayAt === null
+                  ? tr("settings.memory.replayNow")
+                  : tr("settings.memory.replayAt", { time: new Date(replayAt).toLocaleString() })}
+              </span>
+              <input
+                type="range"
+                data-testid="memory-replay"
+                min={replayDomain.from}
+                max={replayDomain.to}
+                step={3_600_000}
+                value={replayAt ?? replayDomain.to}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  setReplayAt(next >= replayDomain.to - 3_600_000 ? null : next);
+                }}
+                style={{ flex: 1, accentColor: "#c8763c" }}
+                title={tr("settings.memory.replayHint")}
+              />
+              {replayAt !== null ? (
+                <Btn label={tr("settings.memory.replayReset")} small onClick={() => setReplayAt(null)} />
+              ) : null}
+            </div>
+          ) : null}
           {graphSel ? (
             (() => {
               const detail = graphSel.factId ? mem.facts.find((f) => f.id === graphSel.factId) ?? null : null;
@@ -1340,6 +1385,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       <span style={S.tag}>{graphSel.workspaceId}</span>
                       {detail ? <span style={S.tag}>{tr("settings.memory.importance", { value: detail.importance })}</span> : null}
                       {graphSel.band !== "L1" ? <span style={S.tag}>{graphSel.band}</span> : null}
+                      {graphSel.superseded ? <span style={S.tag}>{tr("settings.memory.superseded")}</span> : null}
                     </span>
                     <Btn label={tr("settings.close")} small onClick={() => setGraphSel(null)} />
                   </div>

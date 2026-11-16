@@ -434,6 +434,28 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             console.log("E2E_EVAL", JSON.stringify(result));
           }
 
+          // E2E：受信鼠标点击 range 轨道（合成 input 会被 React 的值追踪丢弃；原生事件才改得动受控滑块）。
+          if (process.env.LOOPSOAR_E2E_RANGE_CLICK) {
+            const [selector, ratioRaw] = process.env.LOOPSOAR_E2E_RANGE_CLICK.split(":");
+            const ratio = Number.isFinite(Number(ratioRaw)) ? Number(ratioRaw) : 0.5;
+            const rect = await win.webContents
+              .executeJavaScript(
+                `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`,
+                true,
+              )
+              .catch(() => null);
+            if (rect) {
+              const x = Math.round(rect.x + rect.w * ratio);
+              const y = Math.round(rect.y + rect.h / 2);
+              win.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+              win.webContents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+              await new Promise((r) => setTimeout(r, 900));
+              console.log("E2E_RANGE_CLICK", JSON.stringify({ x, y }));
+            } else {
+              console.log("E2E_RANGE_CLICK", JSON.stringify({ error: "not-found" }));
+            }
+          }
+
           // E2E：浮层窗口清单（验证「点击已展开的按钮收起到 0 个子窗口」等交互）
           if (process.env.LOOPSOAR_E2E_WINDOWS) {
             console.log(
