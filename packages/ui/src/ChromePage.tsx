@@ -386,7 +386,7 @@ export default function ChromePage({
               <StateBox kind="empty" text={tr("chromePage.filter.noMatch")} />
             ) : (
               <div style={styles.list}>
-                {visibleHistory.map((item, index) => {
+                {visibleHistory.map((item) => {
                   const selected = historySelected.has(item.url);
                   return (
                     <button

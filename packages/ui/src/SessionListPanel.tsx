@@ -14,7 +14,6 @@ import { createPortal } from "react-dom";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
-import { usePopover } from "./popover.js";
 import type { SessionMeta, WorkspaceRecord } from "./types.js";
 import { sessionMatchScore } from "./sessionSearch.js";
 

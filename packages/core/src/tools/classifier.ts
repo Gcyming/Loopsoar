@@ -2,11 +2,10 @@
  * 安全分类器（§4.3 S4）
  */
 import { SENSITIVE_FILES, PROTECTED_SOURCE_DIRS } from "loopsoar-contracts/security-policy";
-import { DANGEROUS_COMMAND_RE, hardRuleCheck } from "./hard_rules.js";
+import { hardRuleCheck } from "./hard_rules.js";
 
 export function isSensitivePath(p: string): boolean {
   const basename = p.split(/[\/]/).pop() ?? "";
-  const lower = basename.toLowerCase();
   for (const s of SENSITIVE_FILES) {
     if (s.includes("*") || s.includes("?")) {
       // 简化通配符匹配：将通配符转换为正则

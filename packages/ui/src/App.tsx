@@ -7,7 +7,6 @@ import type {
   BootStatus,
   BrowserSnapshotResult,
   DownloadItem,
-  HistoryEntry,
   PermissionsState,
   Preferences,
   ProviderStatus,
@@ -30,7 +29,7 @@ import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
 const TerminalPanel = React.lazy(() => import("./TerminalPanel.js"));
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
-import { setLanguage, getLanguage, t, useT } from "./i18n.js";
+import { setLanguage, getLanguage, t } from "./i18n.js";
 import { splitAgentTabs } from "./agentWorkspace.js";
 import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
 import AskUserDialog from "./AskUserDialog.js";
@@ -348,8 +347,6 @@ export default function App(): React.JSX.Element {
     }
     return 3 * (1 - x) * (1 - x) * x * 0 + 3 * (1 - x) * x * x * 1 + x * x * x;
   }, []);
-  /** 侧栏宽度动画进行中：AgentSidebar 内容先隐藏，避免逐帧重排文字（有网页时尤其卡）。 */
-  const [sidebarWidthAnimating, setSidebarWidthAnimating] = React.useState(false);
     /** 原生视图宽度是否已完成启动水合：首次同步必须瞬时落位（不播动画），之后才允许 320ms 过渡。 */
   const nativeSidebarReadyRef = React.useRef(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -763,18 +760,15 @@ export default function App(): React.JSX.Element {
     nativeSidebarReadyRef.current = true;
     // 宽度没变（只是其它偏好更新导致 effect 重跑）：不能重播动画/重抓截图，否则会留下静态快照遮住网页。
     if (previous === target) {
-      setSidebarWidthAnimating(false);
       return;
     }
     nativeSidebarWidthRef.current = target;
     if (!animate) {
-      setSidebarWidthAnimating(false);
       void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
       return;
     }
     // 左右同拍：DOM 侧栏 CSS 过渡 320ms；原生网页视图由渲染层 rAF 逐帧驱动
     // （主进程 setInterval 在 Windows 上实际只有 ~40fps，rAF 跟随合成器，通常 60/120Hz）。
-    setSidebarWidthAnimating(true);
     const from = typeof previous === "number" ? previous : target;
     const startedAt = performance.now();
     if (sidebarRafRef.current !== null) cancelAnimationFrame(sidebarRafRef.current);
@@ -788,7 +782,6 @@ export default function App(): React.JSX.Element {
       } else {
         sidebarRafRef.current = null;
         void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
-        setSidebarWidthAnimating(false);
       }
     };
     sidebarRafRef.current = requestAnimationFrame(step);
@@ -851,7 +844,6 @@ export default function App(): React.JSX.Element {
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleDevtools]);
 
-  const tr = useT();
   // Agent 工作区：Agent 打开/导航过的标签折叠进一个 chip，其余仍是普通标签条
   // （分组规则在 agentWorkspace.ts，纯函数可单测；这里只负责渲染与副作用）。
   const { user: userTabs, bound: boundTabs } = useMemo(() => splitAgentTabs(tabs), [tabs]);
@@ -1118,26 +1110,6 @@ export default function App(): React.JSX.Element {
   );
 
   /** 新建标签页 = 新会话（每次都进入一个新的搜索页，不再和当前会话共用标签组）。 */
-  /** 新标签页/整页会话的「+ 工作区」：选择已有工作区（影响之后新建的会话归属）。 */
-  const selectWorkspaceForChat = useCallback(
-    (id: string): void => {
-      if (!api) return;
-      void api.workspace
-        .select({ id })
-        .then((r) => {
-          if (!r.ok) {
-            setNotice(r.error ?? "切换工作区失败");
-            return;
-          }
-          setWorkspaces(r.workspaces);
-          setActiveWorkspaceId(r.activeId);
-          setNotice(`工作区：${r.workspace?.name ?? ""}`);
-        })
-        .catch((err: unknown) => setNotice(`切换工作区失败：${err instanceof Error ? err.message : String(err)}`));
-    },
-    [api],
-  );
-
   /** 输入框下方工作区选择器：草稿态只设后续活动工作区；已有会话才绑定。 */
   const bindWorkspaceToCurrentSession = useCallback(
     (workspaceId: string): void => {
@@ -2537,7 +2509,6 @@ export default function App(): React.JSX.Element {
           // 侧栏列宽就是内容宽：之前传 sidebarWidth-16（为左右各 8px 的旧 padding 预留）叠加
           // wrapper 左 padding，实际把内容压窄 16–24px；现在 padding 归零，内容铺满整列。
           width={miniWindow ? 0 : vibeModeActive ? activeVibeWidth : sidebarWidth}
-          liveWidth={sidebarDragging || miniWindow}
           embeddedInAgentWindow={miniWindow}
           mode={miniWindow ? "docked" : sidebarMode}
           onModeChange={
@@ -2554,7 +2525,6 @@ export default function App(): React.JSX.Element {
           currentSession={currentSession}
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
-          compactUi={compactUi}
           sessionOpen={sessionOpen}
           onToggleSession={toggleSessionMenu}
           onCloseSession={() => setSessionOpen(false)}

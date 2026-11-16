@@ -1055,3 +1055,24 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **验证**：typecheck 5/5、vitest **187 文件 / 1604 tests**、gen/check 逐字节一致、build 5/5、bundle 通过；真机 chip + 展开面板（`e2e-evidence/p2-agent-workspace.png`）；锁的像素证据 **27 → 19 → 27**。ADR-0105。
 
 **E3 修订（同日，用户 m01968）**：接管锁去掉整页压暗（改为透明拦截 + 网页四周呼吸灯，按轮次亮，事件 `chrome:agentTurn`）；工作区展开改为 `browser:setTopInset` 让位、网页不再消失；提示改独立透明子窗口（`ui:toast`，无边框胶囊 + 径向渐隐、下方居中、压在网页之上）；chip/面板去边框只用高亮。验证：typecheck 5/5、vitest 187/1607、gen 一致、build/bundle 通过；页面截图 908→848 证明让位生效。
+
+
+---
+
+## 第二阶段收口 → 第三阶段开工（2026-11-16）
+
+> 第二阶段（Agent 与浏览器打通）以 ADR-0107 收口：会话/网页解耦阶段一、折叠工作区、接管锁、应用级虚拟鼠标键盘、会话分支全部落地。
+
+### 本轮：全仓代码审计 + 死代码清理 + P0 修复（ADR-0108）
+
+- **审计方式**：三维并行只读审计（contracts/IPC 接线 138 通道逐个对账、core 引擎 52 文件、扩展与 Loop 体系）＋ 自审（浏览器子系统、UI、壳层装配、文档一致性）＋ 机器化扫描（module graph 找零引用模块、`tsc --noUnusedLocals` 找死声明）。报告见 `docs/AUDIT-STAGE3-PREP.md`。
+- **删除 9 个死文件 + 5 个只测死代码的 spec（−1,162 行）**：`core/audit.ts`、`core/router.ts`、`shell/routerLlm.ts`（ADR-0043 已裁决不做降级链）、`core/tools/policy.ts`、`services/engine.ts`（全占位）、`core/platform/web.ts`（全 throw）、`shell/shared/ipc.ts`（0 importer）、`browserAdapter/backends/webview.ts`（只有 throw）、`packages/sidecar/`（无 package.json 的占位包）；同步清理 barrel、`package.json` exports、README。
+- **修复 3 个 P0**：① 声称核验的 URL 残片正则把 `report.md` 判成域名 → 「已保存到 report.md」永不核验；② 沙箱 target 只取 `args.path` → `terminal_run` 危险命令硬规则与浏览器越界判定永不触发；③ Anthropic 只累加 `output_tokens` → Token 闸可无限突破。
+- **修复 3 个 P1 / 2 个 P2**：loop 重新扫描会把选中 loop 静默切回 builtin；记忆归档返回近似 id；无进度停止原因写在 UI 不读的 `message` 字段；`skill.ts` 的 `\Z` 伪正则；`enabled ?? true` 死分支与 `platform/index` 重复导出。
+- **UI 死代码**：`App.tsx` 的 `selectWorkspaceForChat`（旧工作区切换路径）、只写不读的 `sidebarWidthAnimating` 与 4 处 setter、`AgentSidebar` 的 `compactUi`/`liveWidth` 死 props 与两处死 state、`PlusControl` 的 dead 透传、`PlanStepLite` 与 5 处未用 import。
+- **验证基线**：typecheck 5/5、vitest **191 文件 / 1602 用例全绿**（净删 5 个 spec，新增 claims 2 条 + loop reload 1 条回归）、`pnpm build` 5/5、`pnpm gen && pnpm check` 逐字节一致。
+
+### 第三阶段（已立项，待逐片执行）
+
+计划见 `docs/规划/第三阶段-可自定义性与长期连续性.md`，四条主线：**可自定义性补齐**（扩展权限交集 + loop/theme 贡献点 + 作用域逆序撤下）、**长期连续性**（工作区级记忆）、**可观测与可接管**（trace/回放、浏览器局部检索与控制台/网络、L3 逃生舱）、**工程硬化**（E2E 钩子出主进程、超大文件拆分、契约瘦身、core 出口可加载、守卫补强）。切片 A（安全与正确性硬化）为下一步起点。
+

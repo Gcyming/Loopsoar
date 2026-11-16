@@ -54,7 +54,7 @@ export class ExtensionRegistry {
     const item: InstalledExtension = {
       manifest,
       dir,
-      enabled: enabled ?? true,
+      enabled,
       installedAt: existing?.installedAt ?? installedAt,
     };
     this.items.set(manifest.id, item);

@@ -6,7 +6,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { IMAGE_MIME } from "./imageRead.js";
 
 const MAX_PASTED_BYTES = 6 * 1024 * 1024;
 

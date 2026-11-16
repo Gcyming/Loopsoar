@@ -986,8 +986,6 @@ function PlusControl({
   onSelectWorkspace,
   onAddWorkspace,
   onAttach,
-  browserControl,
-  onToggleBrowserControl,
 }: VibeControlsProps): React.JSX.Element {
   const tr = useT();
   const menu = useFloatingMenu(240);

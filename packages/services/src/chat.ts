@@ -294,9 +294,20 @@ export class InternalToolExecutor {
     if (policyDecision === "deny") {
       return { ok: false, content: `[错误] 权限设置拒绝该类别工具（${category}）`, error: "policy-denied" };
     }
-    const target = typeof (toolCall.args as { path?: unknown })?.path === "string"
-      ? String((toolCall.args as { path?: unknown }).path)
-      : undefined;
+    // 沙箱 target 按类别取不同参数：文件类看 path，终端类看 command（危险命令硬规则），
+    // 网络/浏览器类不传（SSRF 由 net 层逐跳钉扎、浏览器走 browserRequestGuard）。
+    // 旧实现只认 args.path → terminal_run 的命令串与 browser_* 的 url 全部取不到，
+    // 越界判定与「危险命令」硬规则对真实调用空转（八步决策链②③形同注释）。
+    const argOf = (key: string): string | undefined => {
+      const value = (toolCall.args as Record<string, unknown> | undefined)?.[key];
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    };
+    const target =
+      kind === "terminal"
+        ? (argOf("command") ?? argOf("cmd"))
+        : kind === "write" || kind === "read"
+          ? argOf("path")
+          : undefined;
 
     // 敏感步骤闸（登录 / 支付 / 不可撤销）：位置在「类别策略」之后、「沙箱」之前。
     // 为什么在这：类别策略是长期授权，而敏感动作必须每次单独确认；deny 仍然优先（下一段先返回），

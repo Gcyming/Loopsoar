@@ -28,8 +28,6 @@ import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, MOTION, NO_DRAG_REGION, RADIUS, SHADOW } from "./theme.js";
 import { Icon } from "./Icon.js";
-import { menuStyles } from "./BrowserMenus.js";
-import Popover from "./AnchoredPopover.js";
 import { usePopover } from "./popover.js";
 import SessionListPanel from "./SessionListPanel.js";
 import { getLanguage, useT } from "./i18n.js";
@@ -60,7 +58,6 @@ export interface AgentSidebarProps {
   currentSession: string | null;
   workspaces: WorkspaceRecord[];
   activeWorkspaceId: string | null;
-  compactUi: boolean;
   sessionOpen: boolean;
   /** 点会话 chip：刷新列表并切换下拉开合（App 侧组合两个动作）。 */
   onToggleSession: () => void;
@@ -83,7 +80,6 @@ export interface AgentSidebarProps {
    * 宽度是否处于「拖拽/铺满」等实时跟随状态（true 时内容宽度立即跟手）。
    * false（模式/模式切换的 320ms 过渡）时内容宽度冻结到过渡结束，避免文字在过渡中被挤到换行。
    */
-  liveWidth?: boolean;
   /** Agent 独立小窗口内嵌：隐藏「小窗化」这类只属于主窗口的入口。 */
   embeddedInAgentWindow?: boolean;
   /** 消息列表 / 终端抽屉 / 输入区（保留在 App 装配）。 */
@@ -120,7 +116,6 @@ export default function AgentSidebar({
   currentSession,
   workspaces,
   activeWorkspaceId,
-  compactUi,
   sessionOpen,
   onToggleSession,
   onCloseSession,
@@ -137,7 +132,6 @@ export default function AgentSidebar({
   onNotice,
   vibeMode = false,
   onExpandFromRail,
-  liveWidth = false,
   embeddedInAgentWindow = false,
   children,
 }: AgentSidebarProps): React.JSX.Element {
@@ -178,8 +172,6 @@ export default function AgentSidebar({
     [tr],
   );
 
-  /** 会话下拉的锚点：展开态在会话 chip 上（Portal 按实际位置定位）。 */
-  const sessionAnchorRef = React.useRef<HTMLSpanElement | null>(null);
   /** 记住收起前的非收起态（expand 时回到 docked 或 float，而不是永远 docked）。 */
   const lastExpandedModeRef = React.useRef<Exclude<SidebarMode, "collapsed">>("docked");
   React.useEffect(() => {
@@ -200,7 +192,6 @@ export default function AgentSidebar({
 
   const activeSession = sessions.find((x) => x.id === currentSession) ?? null;
   const currentWorkspaceId = activeSession?.workspaceId ?? activeWorkspaceId;
-  const workspaceName = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.name ?? tr("chat.workspaceFallback");
 
   const collapseLabel = localized("chat.sidebarCollapse", "收起会话栏", "Collapse sidebar");
   const expandLabel = localized("chat.sidebarExpand", "展开会话栏", "Expand sidebar");

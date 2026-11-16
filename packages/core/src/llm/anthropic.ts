@@ -227,6 +227,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
       const decoder = new TextDecoder();
       let buffer = "";
       let done = false;
+      let inputTokens = 0;
       let outputTokens = 0;
       let stopReason: string | undefined;
       const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
@@ -237,7 +238,8 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           index?: number;
           content_block?: { type?: string; id?: string; name?: string };
           delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
-          usage?: { output_tokens?: number };
+          usage?: { input_tokens?: number; output_tokens?: number };
+          message?: { usage?: { input_tokens?: number; output_tokens?: number } };
           error?: { message?: string };
         };
         try {
@@ -246,6 +248,11 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           return;
         }
         switch (evt.type) {
+          case "message_start":
+            // Anthropic 的 prompt token 只在 message_start.message.usage.input_tokens 里出现，
+            // 旧实现只累加 output_tokens → 长上下文永远不会触发 Token 闸（可无限突破预算）。
+            inputTokens = evt.message?.usage?.input_tokens ?? 0;
+            break;
           case "content_block_start":
             if (evt.content_block?.type === "tool_use" && typeof evt.index === "number") {
               toolBlocks.set(evt.index, { id: evt.content_block.id ?? `call-${evt.index}`, name: evt.content_block.name ?? "", json: "" });
@@ -342,7 +349,8 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           buffer = "";
           yield* emitEvent(trailing);
         }
-        if (outputTokens > 0) yield { kind: "usage", tokens: outputTokens };
+        const totalTokens = inputTokens + outputTokens;
+        if (totalTokens > 0) yield { kind: "usage", tokens: totalTokens };
         yield stopReason ? { kind: "done", finishReason: anthropicFinishReason(stopReason) } : { kind: "done" };
       } catch (err) {
         // 用户主动停止：把 AbortError 上抛（tool_loop 归一为 aborted），不伪装成「请求超时」错误块

@@ -10,7 +10,7 @@
 import { BudgetUsage, budgetReason, clampLimits } from "./budget.js";
 import { LoopEvent, EventSink } from "./events.js";
 import { LOOP_HEALTH, HEARTBEAT_MS } from "loopsoar-contracts/security-policy";
-import { LlmClient, LlmRequest, LlmChunk, type LlmMessage } from "./llm/index.js";
+import { LlmClient, LlmRequest, type LlmMessage } from "./llm/index.js";
 import { SteerBus } from "./steerBus.js";
 import type { ToolResult } from "./tools/registry.js";
 export type { ToolResult } from "./tools/registry.js";
@@ -117,7 +117,6 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   const repeatStopAt = Math.max(repeatWarnAt + 1, Math.floor(opts.repeatToolStopAt ?? 30));
   const maxRounds = clamped.maxRounds;
   const maxToolCalls = clamped.maxToolCalls;
-  const maxTotalTokens = clamped.maxTotalTokens;
   const maxWallClockMs = clamped.maxWallClockMs;
 
   const usage: BudgetUsage = { ...initialBudget };
@@ -712,7 +711,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       } else {
         roundsWithoutProgress += 1;
         if (roundsWithoutProgress >= npr) {
-          emit("progress", { message: `连续 ${npr} 轮无实质进度，触发安全停止` });
+          // 字段名必须是 note：渲染层只读 note（旧写 message 会让用户看不到停止原因）。
+          emit("progress", { note: `连续 ${npr} 轮无实质进度，触发安全停止` });
           return {
             status: "no-progress",
             reason: `连续 ${npr} 轮无实质进度（无文本输出或工具结果变化），触发安全停止。已收集信息。`,

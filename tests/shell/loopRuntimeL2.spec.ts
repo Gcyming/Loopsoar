@@ -333,4 +333,22 @@ describe("LoopRuntime：reload 与 L3", () => {
     expect(pushes.some((item) => item.event === "loop:fallback")).toBe(true);
     expect(runtime.list().fallbacks[0]!.reason).toContain("worker 崩了");
   });
+
+  it("reload 不会把用户选中的 loop 静默切回 builtin（被删才回落）", () => {
+    // 回归：scan() 先 remove 已扫描 loop，而 remove() 会把 currentId 重置为 builtin，
+    // 旧实现注册完不再还原 → 设置页点「重新扫描」就把选择冲掉（还会写回偏好）。
+    const { dataDir, loopsDir } = makeDataDir();
+    writeLoop(loopsDir, "alpha");
+    const { runtime } = createRuntime(dataDir);
+
+    runtime.setActive("alpha");
+    expect(runtime.list().activeId).toBe("alpha");
+
+    runtime.reload();
+    expect(runtime.list().activeId).toBe("alpha");
+
+    fs.rmSync(path.join(loopsDir, "alpha.json"));
+    runtime.reload();
+    expect(runtime.list().activeId).toBe(CORE_LOOP_ID);
+  });
 });

@@ -57,7 +57,8 @@ export interface ParsedSkill {
 /** 从正文提取描述（借鉴 slime：优先 `## 功能`，其次首个标题/首段；去 Markdown；截断）。 */
 export function extractSkillDescription(body: string): string {
   const cleaned = body.replace(/^\uFEFF/, "");
-  const section = /^##\s*功能\s*\n+([\s\S]*?)(?=\n##|\Z)/m.exec(cleaned);
+  // 注意 JS 没有 \Z：旧写法把 \Z 当字面量 Z，导致「## 功能」位于正文末尾时匹配失败。
+  const section = /^##\s*功能\s*\n+([\s\S]*?)(?=\n##|(?![\s\S]))/m.exec(cleaned);
   const raw = section
     ? section[1]
     : (() => {

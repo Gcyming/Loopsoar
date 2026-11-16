@@ -19,11 +19,11 @@ import { SandboxManager } from "loopsoar-core/sandbox";
 import { ChatService, resolveToolSurface } from "loopsoar-services/chat";
 import { createAnthropicClient, createOpenAiClient, inferApiFormat, type LlmClient } from "loopsoar-core/llm";
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
-import { resolveApiKeyFromEnv, providerUsability } from "loopsoar-core/provider";
+import { resolveApiKeyFromEnv } from "loopsoar-core/provider";
 import { loadPreferences, loadPermissions } from "./domains/settings.js";
 import { resolveDataDir } from "./dataDir.js";
 import { APP_ID, APP_NAME, PROTOCOL } from "../shared/brand.js";
-import { handleTrusted, type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
+import { type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import {
   createBootTrace,
   ensureLoopsoarDirs,

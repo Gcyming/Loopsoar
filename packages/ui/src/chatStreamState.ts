@@ -38,12 +38,6 @@ export interface ChatMessage {
   timeline?: TimelineStep[];
 }
 
-/** 计划类工具参数解析的中间形态。 */
-interface PlanStepLite {
-  content: string;
-  status: "pending" | "in_progress" | "done";
-}
-
 export interface DoneInfo {
   usage: { rounds?: number; toolCalls?: number; totalTokens?: number };
   interrupted?: { status: string; reason: string };

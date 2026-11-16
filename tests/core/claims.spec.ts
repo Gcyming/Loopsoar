@@ -37,4 +37,18 @@ describe("声称核验", () => {
     const findings = await auditClaims("今天天气不错。", async () => false);
     expect(findings).toEqual([]);
   });
+
+  it("纯文件名不被当成 URL 残片（report.md 必须进入核验）", async () => {
+    // 回归：旧正则把 report.md / README.md 当域名残片跳过，
+    // 导致最常见的「已保存到 report.md」声称永远不核验（诚实协议闭环失效）。
+    const findings = await auditClaims("已保存到 report.md", async () => false);
+    expect(findings.filter((f) => f.verified && !f.exists).length).toBe(1);
+    expect(findings[0].path).toContain("report.md");
+  });
+
+  it("带路径的域名残片仍被跳过（example.com/out.txt）", async () => {
+    const findings = await auditClaims("已保存到 example.com/out.txt", async () => false);
+    expect(findings.filter((f) => f.verified)).toEqual([]);
+    expect(findings[0]?.reason).toContain("URL");
+  });
 });

@@ -2044,6 +2044,22 @@
   - 克隆 = 同 URL 新开标签，不是页面状态克隆（表单/滚动/SPA 页内状态不迁移；登录态靠共享 partition 天然带过去）。
   - 自动分支（首次动作时把会话也 fork 并迁移本轮输出）未做：它需要在流式回合中切换消息归属，风险高；当前用「同会话 + 手动从此分支」覆盖讨论诉求。
   - 分支不继承 allow-session 权限、进行中的流、压缩状态与浏览器任务页（符合分支语义，但用户若期望「连任务一起复制」需要下一阶段显式设计）。
+## ADR-0108 第三阶段开工前：死代码清理、P0 修复与结构裁决
+
+- **背景**：用户要求「从代码层面全面扫一遍：架构是否稳固、可自定义性高、有无 bug、功能是否连接正常；删去冗余结构、精简无用占位与早期弃用代码；为上一阶段收尾后正式进入第三阶段」。为此做了三维并行只读审计 + 机器化死代码扫描（module graph、`tsc --noUnusedLocals`），产出 `docs/AUDIT-STAGE3-PREP.md`。
+- **决策**：
+  1. **删除死代码，不做「留作参考」**：`core/audit.ts`（与壳层 `trustedIpc.AuditEntry`+`auditFile` 重复）、`core/router.ts`+`shell/routerLlm.ts`（ADR-0043 已裁决不做跨供应商降级）、`core/tools/policy.ts`（与 `permissions.decisionFor` 重复）、`services/engine.ts`（全占位、0 引用）、`core/platform/web.ts`（11 个方法全 throw、0 引用）、`shell/shared/ipc.ts`（0 importer）、`browserAdapter/backends/webview.ts`（只有 throw）、`packages/sidecar/`（无 package.json 的占位包）及 5 个只测死代码的 spec。合计 −1,162 行。
+  2. **结构裁决（与 ADR-0011 对齐后的现状）**：**扩展（子进程 + tools 贡献）是唯一的插件系统**，PluginHost / 多贡献点仍后置；本 ADR 不改变这一点，只把「占位但零引用」的旧实现清掉，避免误以为已具备 web 平台 / 降级链 / 审计队列能力。
+  3. **P0 修复（安全承诺空转）**：① 声称核验的 URL 残片正则把 `report.md` 判成域名 → 「已保存到 report.md」永不核验；收紧为「协议头 / www. 前缀 / 域名后跟路径」。② 沙箱 target 只取 `args.path`，导致 `terminal_run` 的危险命令硬规则与浏览器/网络的越界判定永不触发；改为按工具类别取参（terminal→command，read/write→path，network/browser 不传）。③ Anthropic 只累加 `output_tokens`，prompt token 从不计入 → Token 闸可被无限突破；改为解析 `message_start.message.usage.input_tokens` 并与 OpenAI `total_tokens` 口径统一。
+  4. **P1/P2 修复**：loop 重新扫描不再把用户选择静默切回 builtin；记忆归档 id 由真实归档结果给出；无进度停止原因改用 UI 认识的 `note` 字段；技能描述提取的 `\Z` 伪正则修正；删除 `enabled ?? true` 死分支与 `platform/index` 重复导出。
+  5. **第三阶段范围**：见 `docs/规划/第三阶段-可自定义性与长期连续性.md`（可自定义性 / 工作区记忆 / 观测与回放 / 工程硬化四条主线，S0 已完成，A~H 待执行）。
+- **理由**：死代码不是「资产」而是**误导面**——审计中多次出现「看起来已有某能力，实际零引用」的误判（web 平台、降级链、审计队列、精简工具集）。三个 P0 的共同点是「安全机制写了但没有在真实调用路径上生效」，属于必须当轮修掉的回归，而不是留到后续。
+- **替代方案**：① 保留死代码并标注 `@deprecated`——被否（仍会被人 import，且 dist 里已有过期编译产物复活旧设计）；② 只出报告不改代码——被否（用户明确要求「删去冗余结构」）；③ 修复时顺手重写权限模型——被否（超出本片范围，且三道闸不允许一次动）。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **191 文件 / 1602 用例全绿**（净删 5 个死代码 spec，新增 claims 2 条 + loop reload 1 条回归）；`pnpm build` 5/5；`pnpm gen && pnpm check` 逐字节一致。
+- **状态**：✅ 已验证（2026-11-16）
+- **回退条件**：任一删除项若被证明仍被外部脚本/插件依赖（`import "loopsoar-core/router"` 等），从 git 历史恢复该文件并重开 ADR；dead-code 清单以 `tsc --noUnusedLocals` 与 import 图为准，不靠人工记忆。
+- **复核时间**：第三阶段 S0 出口（本阶段首次全量验收）与 S5（工程硬化）各复核一次。
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |
@@ -2155,3 +2171,4 @@
 | ADR-0105 | Agent 工作区（折叠标签组，agentBound）+ 运行期接管锁（按轮次由壳层下发，只拦真实输入） | ✅ 真机验证 |
 | ADR-0106 | 虚拟鼠标/键盘改应用级覆盖层 + sendInputEvent 真实输入（点击 + 逐字键盘）+ 锁放行 + 关 Windows 遮挡检测（后台也可交互） | ✅ 自动化 + 真机 E2E |
 | ADR-0107 | 会话/网页解耦（阶段一）：关最后页不退出、开会话不拖网页、首次动作克隆任务页、agentBound 持久化、会话分支（特殊会话） | ✅ 自动化 + 真机 E2E（阶段二待做：全局用户标签层） |
+| ADR-0108 | 第三阶段开工前：死代码清理（−1,162 行）+ 3 个 P0 修复（声称核验旁路 / 沙箱 target 空转 / Anthropic Token 闸）+ 结构裁决（扩展=唯一插件系统） | ✅ 已验证（191 文件 / 1602 用例全绿） |

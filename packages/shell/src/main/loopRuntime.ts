@@ -254,6 +254,9 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
    * 坏文件只进 scanErrors，不影响 builtin 可用——安全模式底线。
    */
   const scan = (seedExample: boolean): void => {
+    // 记住当前选择：remove() 会把 currentId 重置为 builtin，注册完必须还原，
+    // 否则「重新扫描」（设置页按钮）会把用户选中的自定义 loop 静默切回 core-loop。
+    const activeBefore = registry.current();
     for (const id of [...scannedKinds.keys()]) {
       try {
         registry.remove(id);
@@ -296,6 +299,15 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
           id: def.id,
           error: `注册失败：${err instanceof Error ? err.message : String(err)}`,
         });
+      }
+    }
+
+    // 还原选择：目标 loop 仍存在才切回；已被删除则安全回落 builtin（fail-safe）。
+    if (activeBefore && activeBefore !== registry.current()) {
+      try {
+        registry.switchTo(activeBefore);
+      } catch {
+        // 该 loop 已被删除：保持 builtin
       }
     }
   };

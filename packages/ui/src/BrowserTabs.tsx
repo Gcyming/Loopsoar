@@ -13,7 +13,7 @@
  * 纯展示：选择/关闭/新建/展开全部由 App 注入，组件不碰浏览器状态。
  */
 import * as React from "react";
-import { BRAND, MOTION, RADIUS, SHADOW } from "./theme.js";
+import { BRAND, MOTION, RADIUS } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
 import type { TabState } from "./types.js";

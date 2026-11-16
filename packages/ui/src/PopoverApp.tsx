@@ -18,7 +18,6 @@
  * 窗口尺寸/位置/悬停进出/失焦关闭由主进程 chromePopover.ts 负责；本层只铺满窗口。
  */
 import * as React from "react";
-import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";

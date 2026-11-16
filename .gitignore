@@ -10,6 +10,9 @@ out/
 # 本地运行数据（受限会话降级目录，不入库）
 .loopsoar-data/
 
+# 本地草稿/一次性脚本产物（不入库）
+.tmp/
+
 # E2E 临时数据目录
 .loopsoar-data*/
 .loopsoar-data-empty/

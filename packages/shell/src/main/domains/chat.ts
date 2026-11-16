@@ -110,8 +110,6 @@ export function startStream(
       deps.sessions?.newSession(null).sessionId ?? `sess-${Date.now()}`;
     deps.onSessionOpened?.(sessionId, null);
   }
-  // 新标签页/新会话默认不认领工作区：首次真正对话时自动落到「默认工作区」（用户 m08041 规则）。
-  const sessionBeforeSend = deps.sessions?.get(sessionId) ?? null;
   // 用户规则（m09384）：只有完全没选工作区的新用户直接对话才落到「未归属工作区」；
   // 不再自动绑定默认工作区（工作区由输入框/左侧下拉选择，新建页不创建会话）。
   let assistantText = "";

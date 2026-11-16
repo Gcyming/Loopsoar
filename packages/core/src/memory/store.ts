@@ -164,18 +164,24 @@ export class MemoryStore {
     }
 
     // ⑤ 容量治理（软归档，不物理删除）
+    // archivedIds 只收「本次真正归档」的 id：旧实现用 slice(-(added.length+1)) 近似，
+    // 返回的 id 与真实归档无关（可能 0 条或多条历史归档），审计与 UI 都会读到错数据。
+    const archivedIds: string[] = [];
     const cap = this.opts.capacity ?? THRESHOLD_CAPACITY_MAX;
     if (this.facts.length > cap) {
       const result = gateCapacity(this.facts, cap);
       this.facts = result.keep;
-      for (const fact of result.archived) this.archived.push(fact);
+      for (const fact of result.archived) {
+        this.archived.push(fact);
+        archivedIds.push(fact.id);
+      }
     }
 
     return {
       added,
       merged,
       deduped,
-      archived: this.archived.slice(-(added.length + 1)).map((f) => f.id),
+      archived: archivedIds,
       linked,
       crossAgent,
     };

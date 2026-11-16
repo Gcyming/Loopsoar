@@ -44,7 +44,6 @@ interface StoredSecret extends SecretRecord {
 }
 
 const KEY_LENGTH = 32;
-const SECRETS_VERSION = 1;
 
 /** 掩码：保留前 3 位与后 4 位；太短的密钥全掩码。 */
 export function maskSecret(secret: string): string {

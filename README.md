@@ -12,10 +12,9 @@
 |---|---|---|
 | `loopsoar-contracts` | 契约单源（schema / security-policy / 生成器） | S2 |
 | `loopsoar-core` | 纯逻辑引擎（零 electron 依赖） | S3 / S4 |
-| `loopsoar-services` | 域服务（chat / engine / 工具循环） | S5 |
+| `loopsoar-services` | 域服务（chat / events / 工具循环） | S5 |
 | `loopsoar-shell` | Electron 壳（反 God file，域拆分） | S6 |
 | `loopsoar-ui` | React 19 渲染层（Vite 构建） | S7 |
-| `loopsoar-sidecar` | 二进制侧车打包装配（P9 实现） | S1 |
 
 ---
 

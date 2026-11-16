@@ -3,5 +3,3 @@
 export * from "./types.js";
 export * from "./errors.js";
 export { createNodePlatform } from "./node.js";
-export { createWebPlatformStub } from "./web.js";
-export { LoopsoarNotImplementedError } from "./errors.js";

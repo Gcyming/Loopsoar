@@ -230,7 +230,7 @@ export function toolVisual(name: string): ToolVisual {
 }
 
 /** 从工具参数里抽出最值得展示的一行（网址 / 路径 / 命令 / 查询）。 */
-export function extractToolDetail(name: string, args: unknown, result?: string): string {
+export function extractToolDetail(_name: string, args: unknown, result?: string): string {
   const record = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
   const url = record.url ?? record.href;
   if (typeof url === "string" && url) return url;

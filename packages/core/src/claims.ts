@@ -65,9 +65,13 @@ function inFencedCodeBlock(text: string, index: number): boolean {
 // 判断字符串是否像 URL/域名残片（含协议头或典型顶级域格式）。
 // 为什么：模型输出中常出现「已保存到 https://example.com/file」这类残片，不应被当作真实本地路径核验。
 function looksLikeUrlFragment(candidate: string): boolean {
+  // 不能把「report.md / README.md」这类纯文件名当 URL 残片：否则最常见的
+  // 「已保存到 report.md」声称永远被跳过，诚实协议的核验闭环直接失效。
+  // 只有带协议头、带 www. 前缀、或域名后确实跟着路径分隔符，才按 URL 残片处理。
   return (
     /^https?:\/\//i.test(candidate) ||
-    /(?:^|[\s])(?:www\.)?[A-Za-z0-9-]+\.[A-Za-z]{2,}(?:\/|$)/.test(candidate)
+    /^www\./i.test(candidate) ||
+    /(?:^|\s)(?:www\.)?[A-Za-z0-9-]+\.[A-Za-z]{2,}\//.test(candidate)
   );
 }
 

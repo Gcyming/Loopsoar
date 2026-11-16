@@ -22,7 +22,6 @@ import {
   describeMcpError,
   encodeHeaderFrame,
   hasCapability,
-  mcpToolName,
   sanitizeMcpEnv,
   uniqueToolName,
   type JsonRpcMessage,
