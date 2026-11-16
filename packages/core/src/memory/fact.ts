@@ -66,6 +66,8 @@ export interface MemoryFact {
   supersedes?: string[];
   /** 待裁决的冲突：无法判定新旧时两边都保留，检索时提示存在冲突版本。 */
   conflictsWith?: string[];
+  /** 归档原因（D3）：容量替换 / 长期未用 / 手动清理；可查回时展示。 */
+  archivedReason?: string;
 }
 
 /** 工厂：从部分字段构造完整 MemoryFact（缺失字段给默认值，保持钢筋结构不塌）。 */

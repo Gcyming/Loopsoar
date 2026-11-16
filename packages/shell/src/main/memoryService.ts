@@ -251,6 +251,16 @@ export class MemoryService {
     }
   }
 
+  /** 后台巩固（D3 后半）：合并近似重复 + 归档长期未用条目；返回报告。 */
+  async consolidate(workspaceId?: string): Promise<{ merged: number; archived: string[]; scanned: number }> {
+    const report = this.store.consolidate(Date.now(), workspaceId ? { workspaceId } : {});
+    if (report.merged > 0 || report.archived.length > 0) {
+      await this.save();
+      await this.rebuildVectorIndex();
+    }
+    return report;
+  }
+
   /** 使用事件快照（图谱激活值用）。 */
   usageSnapshot(): ReturnType<MemoryStore["usageSnapshot"]> {
     return this.store.usageSnapshot();

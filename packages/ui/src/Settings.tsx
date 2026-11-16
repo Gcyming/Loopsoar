@@ -1328,11 +1328,40 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
           <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
-          <div style={S.note}>
-            {graphSel
-              ? `${graphSel.kind === "fact" ? tr("settings.memory.nodeFact") : graphSel.kind === "session" ? tr("settings.memory.nodeSession") : tr("settings.memory.nodeOrigin")}：${graphSel.label}`
-              : tr("settings.memory.graphHint")}
-          </div>
+          {graphSel ? (
+            (() => {
+              const detail = graphSel.factId ? mem.facts.find((f) => f.id === graphSel.factId) ?? null : null;
+              const related = detail ? detail.links.map((id) => mem.facts.find((f) => f.id === id)).filter(Boolean) : [];
+              return (
+                <div className="panel-card" style={S.card}>
+                  <div style={S.rowBetween}>
+                    <span style={S.meta}>
+                      <span style={BADGE.neutral}>{detail?.category ?? graphSel.kind}</span>
+                      <span style={S.tag}>{graphSel.workspaceId}</span>
+                      {detail ? <span style={S.tag}>{tr("settings.memory.importance", { value: detail.importance })}</span> : null}
+                      {graphSel.band !== "L1" ? <span style={S.tag}>{graphSel.band}</span> : null}
+                    </span>
+                    <Btn label={tr("settings.close")} small onClick={() => setGraphSel(null)} />
+                  </div>
+                  <div style={S.memText}>{detail?.content ?? graphSel.label}</div>
+                  {detail ? (
+                    <div style={S.note}>
+                      {new Date(detail.updatedAt).toLocaleString()} · {detail.trust ?? "user"}
+                      {detail.sessionId ? ` · ${tr("settings.memory.nodeSession")} ${detail.sessionId.slice(0, 12)}` : ""}
+                    </div>
+                  ) : null}
+                  {related.length > 0 ? (
+                    <div style={S.note}>
+                      {tr("settings.memory.related")}：
+                      {related.map((item) => (item ? item.content.slice(0, 24) : "")).join(" / ")}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()
+          ) : (
+            <div style={S.note}>{tr("settings.memory.graphHint")}</div>
+          )}
           <div style={S.stats}>
             <Stat l={tr("settings.memory.items")} v={mem.stats.active} />
             <Stat l={tr("settings.memory.archived")} v={mem.stats.archived} />
@@ -1369,7 +1398,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               {mEdit?.id === f.id ? <Area v={mEdit.content} rows={2} on={(x) => setMEdit({ id: f.id, content: x })} /> : <div style={S.memText}>{f.content}</div>}
             </div>
           ))}
-          <div style={S.btns}><Btn label={tr("settings.memory.clearAll")} onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} /></div>
+          <div style={S.btns}>
+            <Btn
+              label={tr("settings.memory.consolidate")}
+              onClick={() =>
+                void api.memory.consolidate().then(async () => {
+                  setMem(await api.memory.list());
+                })
+              }
+            />
+            <Btn label={tr("settings.memory.clearAll")} onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} />
+          </div>
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
       }
 

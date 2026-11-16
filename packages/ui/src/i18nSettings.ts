@@ -458,6 +458,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.memory.nodeOrigin": { zh: "原点", en: "Origin" },
   "settings.memory.nodeSession": { zh: "会话", en: "Session" },
   "settings.memory.nodeFact": { zh: "记忆", en: "Memory" },
+  "settings.memory.related": { zh: "关联", en: "Related" },
   "settings.memory.wsAll": { zh: "全部工作区", en: "All workspaces" },
   "settings.memory.wsHint": {
     zh: "记忆按工作区隔离：召回只会用当前会话所属工作区的条目，这里只是查看范围。",
@@ -475,6 +476,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   },
   "settings.memory.importance": { zh: "重要度 {value}", en: "importance {value}" },
   "settings.memory.added": { zh: "记忆已添加", en: "Memory added" },
+  "settings.memory.consolidate": { zh: "整理记忆", en: "Consolidate" },
   "settings.memory.clearAll": { zh: "清空全部记忆", en: "Clear all memories" },
 
   /* ── 扩展 ── */

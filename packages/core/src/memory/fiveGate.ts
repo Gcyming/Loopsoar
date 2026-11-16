@@ -28,6 +28,26 @@ export function jaccardCJK(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/** 共享「实词 bigram / 英文词」的数量：拒答门控用（纯单字重叠不算相关）。 */
+export function sharedBigrams(a: string, b: string): number {
+  const bigrams = (s: string): Set<string> => {
+    const out = new Set<string>();
+    const runs = s.match(/[\u4e00-\u9fff\u3400-\u4dbf]+/g) ?? [];
+    for (const run of runs) {
+      for (let i = 0; i + 1 < run.length; i += 1) out.add(run.slice(i, i + 2));
+    }
+    for (const word of s.split(/[^a-zA-Z0-9]+/)) {
+      if (word.length >= 2) out.add(word.toLowerCase());
+    }
+    return out;
+  };
+  const setA = bigrams(a);
+  const setB = bigrams(b);
+  let inter = 0;
+  for (const token of setA) if (setB.has(token)) inter += 1;
+  return inter;
+}
+
 function tokenSet(s: string): Set<string> {
   const set = new Set<string>();
   // CJK 部分：单字 + 相邻双字（不按空白）

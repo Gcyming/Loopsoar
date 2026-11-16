@@ -19,6 +19,7 @@ import {
   gateCrossAgent,
   effectiveValue,
   jaccardCJK,
+  sharedBigrams,
   THRESHOLD_CAPACITY_MAX,
   DEFAULT_AGENT_ID,
 } from "./fiveGate.js";
@@ -184,8 +185,26 @@ export class MemoryStore {
         continue;
       }
 
-      // ① 去重
-      const dedupe = gateDedupe(scoped, incoming);
+      // ① 取代（D2）：必须先于去重/合并——「改为 X」往往与旧条目高度相似，
+      // 若先走去重会被当成重复（repeated++），更新就永远不生效。
+      const replaceable = detectSupersede(
+        incoming,
+        scoped.filter((f) => f.id !== incoming.id && f.status === "active" && !f.invalidatedAt),
+      );
+      for (const hit of replaceable) {
+        const old = hit.fact;
+        old.invalidatedAt = nowMs;
+        old.supersededBy = incoming.id;
+        old.status = `invalidated:${old.category}`;
+        incoming.supersedes = [...(incoming.supersedes ?? []), old.id];
+        superseded.push(old.id);
+      }
+
+      // 被取代的旧条目退出后续闸门：否则新内容会被并进一条已失效的旧记忆。
+      const activeScoped = scoped.filter((f) => f.status === "active" && !f.invalidatedAt);
+
+      // ② 去重
+      const dedupe = gateDedupe(activeScoped, incoming);
       if (dedupe.duplicate && dedupe.hit) {
         dedupe.hit.repeated += 1;
         dedupe.hit.lastAccessed = nowMs;
@@ -194,20 +213,8 @@ export class MemoryStore {
         continue;
       }
 
-      // ② 取代（D2）：新事实明确表达「改为/不再/换成」或数字变化 → 旧条目失效（不删除，可查回）
-      const replaceable = detectSupersede(incoming, scoped.filter((f) => f.id !== incoming.id));
-      for (const candidate of replaceable) {
-        const old = candidate.fact;
-        old.invalidatedAt = nowMs;
-        old.supersededBy = incoming.id;
-        old.status = `invalidated:${old.category}`;
-        incoming.supersedes = [...(incoming.supersedes ?? []), old.id];
-        superseded.push(old.id);
-        linked += 0;
-      }
-
       // ③ 合并
-      const merge = gateMerge(scoped, incoming);
+      const merge = gateMerge(activeScoped, incoming);
       if (merge.mergeInto) {
         const target = merge.mergeInto;
         target.content = `${target.content}；${incoming.content}`;
@@ -222,8 +229,8 @@ export class MemoryStore {
       this.facts.push(incoming);
       added.push(incoming);
 
-      // ④ 建链（与已有条目）
-      const link = gateLink(scoped.filter((f) => f.id !== incoming.id), incoming);
+      // ⑤ 建链（与仍然有效的同区条目）
+      const link = gateLink(activeScoped.filter((f) => f.id !== incoming.id), incoming);
       linked += link.linked.length;
     }
 
@@ -266,6 +273,72 @@ export class MemoryStore {
     events.push({ at, w: weight, kind });
     if (events.length > USAGE_EVENT_CAP) events.splice(0, events.length - USAGE_EVENT_CAP);
     this.usage[key] = events;
+  }
+
+  /**
+   * 后台巩固（D3 后半）：
+   *  ① 合并近似重复（同工作区同 category、无 tags、相似度 ≥0.9）——历史数据里常见；
+   *  ② 把「长期未用 + 低价值 + 从未被检索」的条目软归档（不物理删除）；
+   * 返回报告供 UI/日志展示。
+   */
+  consolidate(
+    nowMs = this.now(),
+    opts: { workspaceId?: string; maxAgeDays?: number; minValue?: number } = {},
+  ): { merged: number; archived: string[]; scanned: number } {
+    const maxAgeDays = opts.maxAgeDays ?? 180;
+    const minValue = opts.minValue ?? 0.02;
+    const inScope = (fact: MemoryFact): boolean =>
+      !opts.workspaceId || (fact.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId;
+    const scanned = this.facts.filter(inScope).length;
+
+    // ① 合并近似重复（跳过带 tags 的条目：tags 是显式「同族」信号，合并会丢信息）
+    let merged = 0;
+    const pool = this.facts.filter(inScope);
+    for (let i = 0; i < pool.length; i += 1) {
+      const keep = pool[i];
+      if (!this.facts.includes(keep)) continue;
+      if (keep.tags.length > 0) continue;
+      for (let j = i + 1; j < pool.length; j += 1) {
+        const drop = pool[j];
+        if (drop.tags.length > 0) continue;
+        if (!this.facts.includes(drop)) continue;
+        if (keep.category !== drop.category) continue;
+        if ((keep.workspaceId ?? DEFAULT_WORKSPACE_ID) !== (drop.workspaceId ?? DEFAULT_WORKSPACE_ID)) continue;
+        if (jaccardCJK(keep.content, drop.content) < 0.9) continue;
+        keep.mergeTrail.push({ mergedAt: nowMs, reason: "巩固：近似重复合并" });
+        if (drop.content.length > keep.content.length) keep.content = drop.content;
+        keep.repeated += drop.repeated + 1;
+        keep.lastAccessed = Math.max(keep.lastAccessed, drop.lastAccessed);
+        keep.confidence = Math.max(keep.confidence, drop.confidence);
+        this.facts = this.facts.filter((f) => f.id !== drop.id);
+        merged += 1;
+      }
+    }
+
+    // ② 归档长期未用的低价值条目
+    const archived: string[] = [];
+    const staleCutoff = nowMs - maxAgeDays * 86_400_000;
+    const survivors: MemoryFact[] = [];
+    for (const fact of this.facts) {
+      const scoped = inScope(fact);
+      const stale =
+        scoped &&
+        fact.lastAccessed < staleCutoff &&
+        fact.accessCount === 0 &&
+        fact.repeated === 0 &&
+        effectiveValue(fact, nowMs) < minValue;
+      if (!stale) {
+        survivors.push(fact);
+        continue;
+      }
+      fact.status = `archived:stale`;
+      fact.archivedAt = nowMs;
+      fact.archivedReason = `长期未用（>${maxAgeDays} 天）且价值低于 ${minValue}`;
+      this.archived.push(fact);
+      archived.push(fact.id);
+    }
+    this.facts = survivors;
+    return { merged, archived, scanned };
   }
 
   /** 使用事件快照（图谱/诊断用）。 */
@@ -368,9 +441,8 @@ export class MemoryStore {
   ): MemoryFact[] {
     const nowMs = this.now();
     const raw = opts.includeArchived ? [...this.facts, ...this.archived] : [...this.facts];
-    const filtered = opts.includeInvalidated
-      ? raw
-      : raw.filter((f) => !f.invalidatedAt && f.status === "active");
+    // 只按「失效」过滤：归档条目属于历史，includeArchived 时应当可见。
+    const filtered = opts.includeInvalidated ? raw : raw.filter((f) => !f.invalidatedAt);
     const base = opts.workspaceId
       ? filtered.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
       : filtered;
@@ -394,14 +466,17 @@ export class MemoryStore {
       ? this.facts.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
       : this.facts
     ).filter((f) => f.status === "active" && !f.invalidatedAt);
-    const scored = pool.map((fact) => {
+    const scored: { fact: MemoryFact; score: number }[] = [];
+    for (const fact of pool) {
       const similarity = jaccardCJK(query, fact.content);
-      const tagBonus = fact.tags.some((tag) => query.includes(tag)) ? 0.15 : 0;
-      const score = effectiveValue(fact, nowMs) * (0.3 + similarity) + tagBonus;
-      return { fact, score };
-    });
+      const tagHit = fact.tags.some((tag) => query.includes(tag));
+      // 拒答门控（D4）：只共享单字（「的」「是」）不算相关，必须共享实词 bigram 或 tag 命中。
+      if (!tagHit && sharedBigrams(query, fact.content) === 0) continue;
+      const score = effectiveValue(fact, nowMs) * (0.2 + similarity) + (tagHit ? 0.15 : 0);
+      scored.push({ fact, score });
+    }
     return scored
-      .filter((item) => item.score > 0.08)
+      .filter((item) => item.score > 0.02)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
   }

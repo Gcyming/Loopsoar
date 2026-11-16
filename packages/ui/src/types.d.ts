@@ -970,6 +970,7 @@ export interface LoopsoarAPI {
     list(): Promise<MemoryListResult>;
     graph(): Promise<MemoryGraphResult>;
     stats(): Promise<MemoryStats>;
+    consolidate(): Promise<{ merged: number; archived: string[]; scanned: number }>;
     add(payload: { content: string; category: string; tags?: string[]; importance?: number }): Promise<{ added: boolean; id: string }>;
     update(payload: {
       id: string;

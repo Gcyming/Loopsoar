@@ -91,13 +91,13 @@ describe("MemoryService · 召回门控（默认开启）", () => {
     expect(prompt).toContain("深色主题");
   });
 
-  it("recallGate:false 绕过门控：无信号也检索（兼容旧行为）", async () => {
+  it("recallGate:false 只绕过信号门控，仍要求相关性（D4 拒答门控）", async () => {
     const { service } = await makeService({ recallGate: false });
     await service.add({ content: "用户偏好深色主题界面", category: "preference" });
-    // 默认重要度 5 → 即使相似度 0，基础有效值 0.4*0.3=0.12 仍高于召回阈值
-    const prompt = service.recallPrompt("你好");
-    expect(prompt).not.toBe("");
-    expect(prompt).toContain("深色主题");
+    // 旧行为是「相似度为 0 也注入」（基础有效值直接过阈值）——D4 起改为必须有实词 bigram 命中，
+    // 否则「你好」这类无关消息会把记忆库里的旧条目全捞出来。
+    expect(service.recallPrompt("你好")).toBe("");
+    expect(service.recallPrompt("深色主题")).toContain("深色主题");
   });
 
   it("recallSignals：路径/引号/专有名词与任务类型信号可诊断", async () => {

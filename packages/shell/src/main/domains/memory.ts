@@ -107,6 +107,13 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
     return { deleted: removed };
   });
 
+  // D3 后半：手动触发一次后台巩固（合并近似重复 + 归档长期未用条目）。
+  handleTrusted(deps, "memory:consolidate", async () => {
+    const report = await deps.memory.consolidate();
+    deps.push?.("memory:updated", { action: "consolidate", ...report });
+    return report;
+  });
+
   handleTrusted(deps, "memory:clear", async () => {
     await deps.memory.clear();
     deps.push?.("memory:updated", { action: "clear" });

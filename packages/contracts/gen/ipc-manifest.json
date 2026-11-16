@@ -309,6 +309,13 @@
       "hasRequest": false
     },
     {
+      "channel": "memory:consolidate",
+      "domain": "memory",
+      "method": "consolidate",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "chat:history",
       "domain": "chat",
       "method": "history",

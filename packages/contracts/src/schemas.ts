@@ -753,6 +753,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "memory:consolidate": {
+    domain: "memory",
+    method: "consolidate",
+    request: null,
+    sensitive: true,
+  },
   "chat:history": {
     domain: "chat",
     method: "history",

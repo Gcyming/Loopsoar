@@ -1166,3 +1166,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 图组件比较激活值增量（>0.02）触发 750ms 外扩光晕（rAF，结束即停）。
 - 验证：197 文件 / 1653 用例全绿；typecheck/build 全过。
 
+
+### D3 后半 / D4 / M3：巩固、评测与 wiki 详情（ADR-0116）
+
+- consolidate()：近似重复合并（≥0.9、无 tags）+ 长期未用低价值软归档（180 天 / <0.02 / 从未检索）；IPC memory:consolidate + 设置页「整理记忆」。
+- scripts/memory-eval.mjs：60 题 / 5 类能力，实测 **60/60（100%）**，P95 0.11ms，平均注入 69 字符。
+- 评测暴露并修复两个真实缺陷：① 召回基础分地板导致无关查询也注入 → bigram 拒答门控；② 去重先于取代导致更新永不生效 → 取代提前并让失效条目退出闸门。
+- M3：图谱节点点击展开详情卡（分类/工作区/重要度/时间/信任/来源会话/关联条目）。
+- 验证：memoryConsolidate 4 条；199 文件 / 1657 用例全绿；typecheck/build/gen-check 全过。
+
