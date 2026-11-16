@@ -1109,3 +1109,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 实测我们自己的 hash embedding：相关对 0.4328、无关对最高 0.3042（中文单字制造假相似）→ 建议 bigram 加权，而不是照搬 slime 删 hash 回退（它删的是字符码位伪嵌入）。
 - 给出 D1 可立即动手的八件事（workspaceId、provenance、原子写入、阈值进偏好、注入头归属、面板过滤、跨区不召回、四个 spec）。
 
+
+### 记忆图谱设计（同日，用户口述模型）
+
+- 产出 [docs/规划/记忆图谱-原点与三层.md](docs/规划/记忆图谱-原点与三层.md)：把「记忆原点=Loopsoar 本身、第一分支=会话（硬性）、删除会话才压缩为游离层、长期沉默沉入失真层、半径按激活距离」形式化。
+- 关键设计：ACT-R 幂律激活 B=ln(Σt^-0.5) → A=B/(B+1) × 重要度；三层硬边界 + 层内连续半径；角度稳定（只在会话增删时变）；确定性环带布局（无力导向）；Canvas 2D 自绘零依赖。
+- 用户补充：**工具调用选择也计入记忆**（tool 节点 + usage 事件 w=0.8）；**检索排序以距原点距离为第一权重**（activation 0.75 + similarity 0.25，保留 memoryRanking 开关）。
+- 生命周期接到现有钩子：onSessionDeleting → compressConversation → episode；L2→L3 每日任务；L3 被提及才 rehydrate。
+- 分期 M0 静态图 → M1 事件与迁移 → M2 反馈动画 → M3 wiki 详情 → M4 时间回放；前置是 D1（workspaceId + provenance）。
+
