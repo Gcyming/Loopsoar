@@ -1617,13 +1617,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <div style={S.fieldHint}>{tr("settings.memory.addHint")}</div>
             <div style={S.col}>
               <Area v={mForm.content} rows={2} full ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
-              <div style={memoryFormRow}>
-                <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
-                <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
-              </div>
-              <div style={memoryFormRow}>
-                <Combo v={mForm.tags} ph={tr("settings.memory.addTagsPh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, tags: x })} options={tagOptions} />
-                <Combo v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} style={{ flex: 1 }} on={(x) => setMForm({ ...mForm, workspaceId: x })} options={workspaceOptions} />
+              <div style={memoryFormGrid}>
+                <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
+                <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
+                <div />
+                <Combo v={mForm.tags} ph={tr("settings.memory.addTagsPh")} on={(x) => setMForm({ ...mForm, tags: x })} options={tagOptions} />
+                <Combo v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} on={(x) => setMForm({ ...mForm, workspaceId: x })} options={workspaceOptions} />
                 <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
               </div>
             </div>
@@ -2179,9 +2178,10 @@ const memoryBlock: React.CSSProperties = {
 
 const memoryFormGrid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) auto",
   gap: 8,
   width: "100%",
+  alignItems: "center",
 };
 const memoryFormRow: React.CSSProperties = { display: "flex", gap: 8, width: "100%", alignItems: "center" };
 const comboWrap: React.CSSProperties = { position: "relative", minWidth: 0 };
