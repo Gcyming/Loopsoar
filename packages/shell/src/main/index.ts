@@ -2432,7 +2432,7 @@ app.whenReady().then(async () => {
       pushToRenderer("browser:tabs", { tabs: browserHost.listTabs(), visibleSession: browserHost.visibleSessionId() });
     },
   });
-  registerMemoryDomain({ ...deps, memory, push: pushToRenderer });
+  registerMemoryDomain({ ...deps, memory, sessions, push: pushToRenderer });
   registerBrowserDomain({
     ...deps,
     browser: browserHost,

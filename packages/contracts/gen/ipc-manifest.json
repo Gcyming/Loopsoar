@@ -288,6 +288,13 @@
       "hasRequest": true
     },
     {
+      "channel": "memory:graph",
+      "domain": "memory",
+      "method": "graph",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "memory:stats",
       "domain": "memory",
       "method": "stats",

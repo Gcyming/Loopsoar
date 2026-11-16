@@ -13,9 +13,11 @@ import { Icon } from "./Icon.js";
 import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
 import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
+import MemoryGraphView from "./MemoryGraphView.js";
 import type {
   AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
-  LoopListResult, LoopsoarAPI, McpServerInfo, MemoryListResult, PermissionCategory, PermissionsState, Preferences,
+  LoopListResult, LoopsoarAPI, McpServerInfo, MemoryGraphNodeView, MemoryGraphResult, MemoryListResult,
+  PermissionCategory, PermissionsState, Preferences,
   ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
@@ -179,6 +181,13 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
   /** 记忆面板的查看范围（D1）：只影响展示，召回隔离在壳层。 */
   const [memWs, setMemWs] = useState<string>("all");
+  /** 记忆图谱（E-M0）：随 mem 刷新一起更新（增删改后自动重画）。 */
+  const [memGraph, setMemGraph] = useState<MemoryGraphResult | null>(null);
+  const [graphSel, setGraphSel] = useState<MemoryGraphNodeView | null>(null);
+  useEffect(() => {
+    if (!api || !mem) return;
+    void api.memory.graph().then(setMemGraph).catch(() => setMemGraph(null));
+  }, [api, mem]);
   const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
   /** Agent-Loop：可运行 loop 列表 + 当前选择 + 回退历史（设置 · 通用）。 */
@@ -1308,6 +1317,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         );
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
+          <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
+          <div style={S.note}>
+            {graphSel
+              ? `${graphSel.kind === "fact" ? tr("settings.memory.nodeFact") : graphSel.kind === "session" ? tr("settings.memory.nodeSession") : tr("settings.memory.nodeOrigin")}：${graphSel.label}`
+              : tr("settings.memory.graphHint")}
+          </div>
           <div style={S.stats}>
             <Stat l={tr("settings.memory.items")} v={mem.stats.active} />
             <Stat l={tr("settings.memory.archived")} v={mem.stats.archived} />

@@ -2,11 +2,14 @@
  * memory 域：记忆条目的列表/新增/编辑/删除/清空/统计（供设置面板「记忆」分区）。
  * 写入治理与召回在 MemoryService 内完成（五门 + 容量软归档）。
  */
+import { buildMemoryGraph, layoutMemoryGraph } from "loopsoar-core/memory";
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { MemoryService } from "../memoryService.js";
+import type { SessionStore } from "../sessionStore.js";
 
 export interface MemoryDeps extends TrustedIpcDeps {
   memory: MemoryService;
+  sessions?: SessionStore;
   push?: (event: string, payload: unknown) => void;
 }
 
@@ -36,6 +39,23 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
   }));
 
   handleTrusted(deps, "memory:stats", () => deps.memory.stats());
+
+  /**
+   * 记忆图谱（E-M0）：事实 + 会话 → 节点/边 → 确定性环带布局（1000×1000 画布坐标系）。
+   * 布局放在壳层算：渲染层不需要依赖 core，且同一份数据在任何窗口得到同一张图。
+   */
+  handleTrusted(deps, "memory:graph", () => {
+    const facts = deps.memory.list({ includeArchived: false });
+    const sessions = (deps.sessions?.list() ?? []).map((session) => ({
+      sessionId: session.id,
+      title: session.title,
+      workspaceId: session.workspaceId ?? null,
+      updatedAt: session.updatedAt,
+    }));
+    const model = buildMemoryGraph({ facts, sessions });
+    const points = layoutMemoryGraph(model, { width: 1000, height: 1000, padding: 24 });
+    return { ...model, points };
+  });
 
   handleTrusted(deps, "memory:add", async (payload) => {
     const p = payload as {

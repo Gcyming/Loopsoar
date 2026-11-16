@@ -735,6 +735,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: MemoryDeleteSchema,
     sensitive: true,
   },
+  "memory:graph": {
+    domain: "memory",
+    method: "graph",
+    request: null,
+    sensitive: true,
+  },
   "memory:stats": {
     domain: "memory",
     method: "stats",

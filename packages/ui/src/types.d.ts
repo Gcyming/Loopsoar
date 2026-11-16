@@ -133,6 +133,49 @@ export interface MemoryStats {
   byWorkspace?: Record<string, number>;
 }
 
+export interface MemoryGraphNodeView {
+  id: string;
+  kind: "origin" | "session" | "fact";
+  label: string;
+  workspaceId: string;
+  band: "L1" | "L2" | "L3";
+  factId?: string;
+  sessionId?: string;
+  importance: number;
+  activation: number;
+  createdAt: number;
+  lastUsedAt: number;
+  size: number;
+}
+
+export interface MemoryGraphEdgeView {
+  id: string;
+  kind: "owns" | "contains" | "semantic";
+  from: string;
+  to: string;
+  strength: number;
+}
+
+export interface MemoryGraphPointView {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+export interface MemoryGraphResult {
+  nodes: MemoryGraphNodeView[];
+  edges: MemoryGraphEdgeView[];
+  points: MemoryGraphPointView[];
+  stats: {
+    sessions: number;
+    facts: number;
+    orphanFacts: number;
+    semanticLinks: number;
+    workspaces: string[];
+  };
+}
+
 export interface MemoryListResult {
   facts: MemoryFactView[];
   archivedCount: number;
@@ -923,6 +966,7 @@ export interface LoopsoarAPI {
   };
   memory: LoopsoarDomain & {
     list(): Promise<MemoryListResult>;
+    graph(): Promise<MemoryGraphResult>;
     stats(): Promise<MemoryStats>;
     add(payload: { content: string; category: string; tags?: string[]; importance?: number }): Promise<{ added: boolean; id: string }>;
     update(payload: {

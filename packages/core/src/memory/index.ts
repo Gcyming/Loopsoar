@@ -11,3 +11,4 @@ export * from "./store.js";
 export * from "./extract.js";
 export * from "./vector.js";
 export * from "./retrieval.js";
+export * from "./graph.js";

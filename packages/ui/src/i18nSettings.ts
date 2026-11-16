@@ -451,6 +451,13 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     zh: "会话自动汇总：抽取 → 去重/合并/建链 → 容量软归档；相关对话自动召回。",
     en: "Automatic session summaries: extract → dedupe/merge/link → soft-archive when full; related conversations are recalled automatically.",
   },
+  "settings.memory.graphHint": {
+    zh: "原点 = Loopsoar 本体；内圈 = 会话；外圈 = 没有存活会话的记忆。悬停看关联，点击看详情。",
+    en: "Center = Loopsoar itself; inner ring = sessions; outer ring = memories without a live session. Hover to see links, click for details.",
+  },
+  "settings.memory.nodeOrigin": { zh: "原点", en: "Origin" },
+  "settings.memory.nodeSession": { zh: "会话", en: "Session" },
+  "settings.memory.nodeFact": { zh: "记忆", en: "Memory" },
   "settings.memory.wsAll": { zh: "全部工作区", en: "All workspaces" },
   "settings.memory.wsHint": {
     zh: "记忆按工作区隔离：召回只会用当前会话所属工作区的条目，这里只是查看范围。",

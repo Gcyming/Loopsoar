@@ -1126,3 +1126,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - recallPrompt 读取侧格式带「[分类] 日期 · 来源 · 内容」；设置页记忆面板增工作区过滤与徽标（仅展示，隔离在壳层）。
 - 验证：typecheck 5/5、193 文件 / 1629 用例全绿、build 5/5、gen/check 一致；新增两个 spec 共 10 条（隔离/容量/迁移/.bak 恢复/provenance）。
 
+
+### E-M0：记忆图谱静态骨架（ADR-0111）
+
+- 新增 core/src/memory/graph.ts（派生 + 确定性环带布局）、memory:graph IPC、ui/src/MemoryGraphView.tsx（Canvas 2D，零依赖）。
+- 设置 · 记忆顶部出图：原点「Loopsoar」在中心，会话在 L1 扇区，事实挂在会话下，无会话的事实进 L2（青色外环）；hover 高亮邻域、点击回调。
+- 证据：scripts/e2e-memory-graph.mjs 可复现（种演示数据 → 启动 GUI → 打开设置·记忆 → 截图），产物 e2e-evidence/memory-graph.png。
+- 验证：新增 memoryGraph 7 条；194 文件 / 1636 用例全绿；typecheck/build/gen-check 全过。
+
