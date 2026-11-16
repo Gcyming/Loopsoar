@@ -1476,11 +1476,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Stat l={tr("settings.memory.links")} v={mem.stats.links} />
             <Stat l={tr("settings.memory.invalidated")} v={mem.stats.invalidated ?? 0} />
           </div>
-          <Field l={tr("settings.memory.store")} h={tr("settings.memory.storeHint")}>
+          <div style={memoryBlock}>
+            <div style={S.meta}>{tr("settings.memory.store")}</div>
+            <div style={S.fieldHint}>{tr("settings.memory.storeHint")}</div>
             <div style={S.col}>
               <In
                 v={prefs?.memoryStorePath ?? ""}
                 ph={locations?.defaultMemoryFile ?? ""}
+                style={{ maxWidth: "none" }}
                 on={(x) => {
                   if (prefs) setPrefs({ ...prefs, memoryStorePath: x });
                 }}
@@ -1514,7 +1517,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               />
               </div>
             </div>
-          </Field>
+          </div>
           <div style={S.note}>{tr("settings.memory.vaultHint")}</div>
           {mem.reconciling ? <div style={S.note}>{tr("settings.memory.reconciling")}</div> : null}
           {workspaceIds.length > 1 ? (
@@ -1611,9 +1614,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               {review.available && review.suggestions.length === 0 && review.merges.length === 0 ? <div style={S.muted}>{tr("settings.memory.reviewEmpty")}</div> : null}
             </div>
           ) : null}
-          <Field l={tr("settings.memory.addTitle")} h={tr("settings.memory.addHint")}>
+          <div style={memoryBlock}>
+            <div style={S.meta}>{tr("settings.memory.addTitle")}</div>
+            <div style={S.fieldHint}>{tr("settings.memory.addHint")}</div>
             <div style={S.col}>
-              <Area v={mForm.content} rows={2} ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
+              <Area v={mForm.content} rows={2} full ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
               <div style={memoryFormGrid}>
                 <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
                 <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
@@ -1624,7 +1629,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
               </div>
             </div>
-          </Field>
+          </div>
           {shownFacts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : pageFacts.map((f) => (
             <div key={f.id} className="panel-card" style={S.card}>
               <div style={S.rowBetween}>
@@ -2166,10 +2171,19 @@ function Combo({ v, ph, on, options }: { v: string; ph?: string; on: (x: string)
   );
 }
 
+const memoryBlock: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  padding: "10px 0",
+  borderBottom: `1px solid ${BRAND.border}`,
+};
+
 const memoryFormGrid: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   gap: 8,
+  width: "100%",
 };
 const comboWrap: React.CSSProperties = { position: "relative", minWidth: 0 };
 const comboArrow: React.CSSProperties = {
@@ -2215,10 +2229,16 @@ const comboItem: React.CSSProperties = {
 function In({ v, ph, on, type, style }: { v: string; ph?: string; on: (x: string) => void; type?: string; style?: React.CSSProperties }) {
   return <input style={{ ...S.input, ...style }} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
 }
-function Area({ v, rows, on, wide, ph }: { v: string; rows: number; on: (x: string) => void; wide?: boolean; ph?: string }) {
+function Area({ v, rows, on, wide, full, ph }: { v: string; rows: number; on: (x: string) => void; wide?: boolean; full?: boolean; ph?: string }) {
   return (
     <textarea
-      style={wide ? { ...S.area, maxWidth: "none", width: "100%", minWidth: 240, fontFamily: "ui-monospace, Consolas, monospace" } : S.area}
+      style={
+        wide
+          ? { ...S.area, maxWidth: "none", width: "100%", minWidth: 240, fontFamily: "ui-monospace, Consolas, monospace" }
+          : full
+            ? { ...S.area, maxWidth: "none", width: "100%" }
+            : S.area
+      }
       rows={rows}
       value={v}
       placeholder={ph ?? (wide ? "x-opencode-session: {{sessionId}}\nUser-Agent: Loopsoar/1.0" : undefined)}
