@@ -339,7 +339,13 @@ export class MemoryService {
       vectorDim: this.hashDim,
       limit: safeLimit,
     });
-    return this.mapHits(hits, facts);
+    const mapped = this.mapHits(hits, facts);
+    // D3：显式检索命中才算一次使用（自动注入不算，避免富者愈富）。
+    if (mapped.length > 0) {
+      this.store.touch(mapped.map((hit) => hit.fact.id));
+      void this.save();
+    }
+    return mapped;
   }
 
   /**

@@ -236,6 +236,27 @@ export class MemoryStore {
     };
   }
 
+  /**
+   * 访问信号（D3）：只有「真正的检索命中」才计数。
+   * 为什么不由 recallPrompt/注入路径调用：注入是渲染，不是使用；若按注入计数，
+   * 排名外的沉睡记忆永远追不上（slime 的「富者愈富」bug，见 slime-memory-review.md §3.2）。
+   */
+  touch(ids: readonly string[]): number {
+    if (ids.length === 0) return 0;
+    const nowMs = this.now();
+    const wanted = new Set(ids);
+    let touched = 0;
+    for (const fact of this.facts) {
+      if (!wanted.has(fact.id)) continue;
+      if (fact.status !== "active" || fact.invalidatedAt) continue;
+      fact.accessCount += 1;
+      fact.lastAccessed = nowMs;
+      fact.confidence = Math.min(1, fact.confidence + 0.02);
+      touched += 1;
+    }
+    return touched;
+  }
+
   /** 手动新增（UI「新增记忆」入口）。 */
   add(input: MemoryCandidate): MemoryFact {
     const result = this.write([{ ...input, source: input.source ?? "manual" }]);

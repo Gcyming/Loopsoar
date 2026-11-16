@@ -160,9 +160,13 @@ export function effectiveWeight(fact: MemoryFact, nowMs: number): number {
   return decay * importanceNorm * (1 + 0); // 相似度项由调用方加
 }
 
-/** effectiveValue = effectiveWeight * confidence * (1 + repeated)。 */
+/**
+ * effectiveValue = effectiveWeight * confidence * (1 + repeated) * usageBoost。
+ * D3：真实使用次数做温和加成（对数，封顶 +50%），避免爆款通吃；只由显式检索命中累加。
+ */
 export function effectiveValue(fact: MemoryFact, nowMs: number): number {
-  return effectiveWeight(fact, nowMs) * fact.confidence * (1 + fact.repeated);
+  const usageBoost = 1 + Math.min(0.5, 0.1 * Math.log1p(Math.max(0, fact.accessCount)));
+  return effectiveWeight(fact, nowMs) * fact.confidence * (1 + fact.repeated) * usageBoost;
 }
 
 /**

@@ -1142,3 +1142,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 写入顺序改为「跨 agent → 去重 → 取代 → 合并 → 新增 → 建链 → 容量」；recall/list 默认排除失效，includeInvalidated 可查回；stats 增 invalidated，面板显示「已失效」。
 - 验证：memorySupersede 6 条；194 文件 / 1642 用例全绿；typecheck/build 全过。
 
+
+### D3 前半：访问信号与使用加成（ADR-0113）
+
+- store.touch(ids)：accessCount+1 / lastAccessed 刷新 / confidence +0.02；失效条目不计数。
+- 只有显式检索命中才 touch（memory_search / searchAsync）；自动注入不算，避免 slime 的「富者愈富」。
+- effectiveValue 乘 usageBoost = 1 + min(0.5, 0.1×ln(1+accessCount))，对数封顶；命中后异步落盘。
+- 验证：memoryUsage 3 条；195 文件 / 1645 用例全绿；typecheck/build/gen-check 全过。
+
