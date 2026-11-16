@@ -1392,6 +1392,20 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         const pageNumbers = Array.from({ length: memTotalPages }, (_, index) => index + 1).filter(
           (page) => memTotalPages <= 7 || page === 1 || page === memTotalPages || Math.abs(page - memPageSafe) <= 2,
         );
+        const categoryOptions = [
+          ...new Set([
+            ...(mem?.facts ?? []).map((fact) => fact.category),
+            "general",
+            "convention",
+            "lesson",
+            "fact",
+            "preference",
+            "episode",
+          ]),
+        ].filter(Boolean);
+        const tagOptions = [...new Set((mem?.facts ?? []).flatMap((fact) => fact.tags))].filter(Boolean).sort();
+        const workspaceOptions = [...new Set([...(workspaceIds ?? []), "default"])].filter(Boolean);
+        const importanceOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
           <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
@@ -1600,11 +1614,13 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Field l={tr("settings.memory.addTitle")} h={tr("settings.memory.addHint")}>
             <div style={S.col}>
               <Area v={mForm.content} rows={2} ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
+              <div style={memoryFormGrid}>
+                <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
+                <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
+                <Combo v={mForm.tags} ph={tr("settings.memory.addTagsPh")} on={(x) => setMForm({ ...mForm, tags: x })} options={tagOptions} />
+                <Combo v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} on={(x) => setMForm({ ...mForm, workspaceId: x })} options={workspaceOptions} />
+              </div>
               <div style={S.rowEnd}>
-                <In v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} />
-                <In v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} />
-                <In v={mForm.tags} ph={tr("settings.memory.addTagsPh")} on={(x) => setMForm({ ...mForm, tags: x })} />
-                <In v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} on={(x) => setMForm({ ...mForm, workspaceId: x })} />
                 <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
               </div>
             </div>
@@ -2105,6 +2121,97 @@ function Toggle({ v, on, title, testId }: { v: boolean; on: (x: boolean) => void
     </button>
   );
 }
+function Combo({ v, ph, on, options }: { v: string; ph?: string; on: (x: string) => void; options: string[] }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={comboWrap}>
+      <input
+        style={{ ...S.input, paddingRight: 22 }}
+        value={v}
+        placeholder={ph}
+        onChange={(event) => on(event.target.value)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 140)}
+      />
+      <button
+        type="button"
+        style={comboArrow}
+        aria-label="展开选项"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+      >
+        ▾
+      </button>
+      {open && options.length > 0 ? (
+        <div style={comboMenu}>
+          {options.slice(0, 40).map((option) => (
+            <button
+              key={option}
+              type="button"
+              style={comboItem}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                on(option);
+                setOpen(false);
+              }}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const memoryFormGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+};
+const comboWrap: React.CSSProperties = { position: "relative", minWidth: 0 };
+const comboArrow: React.CSSProperties = {
+  position: "absolute",
+  right: 2,
+  top: 2,
+  bottom: 2,
+  width: 22,
+  border: "none",
+  background: "transparent",
+  color: "#a8a29a",
+  cursor: "pointer",
+  fontSize: 10,
+};
+const comboMenu: React.CSSProperties = {
+  position: "absolute",
+  zIndex: 60,
+  top: "100%",
+  left: 0,
+  right: 0,
+  marginTop: 2,
+  maxHeight: 180,
+  overflowY: "auto",
+  background: BRAND.inkRaised,
+  border: `1px solid ${BRAND.border}`,
+  borderRadius: 8,
+  boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
+  padding: 3,
+};
+const comboItem: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  border: "none",
+  borderRadius: 5,
+  background: "transparent",
+  color: "#d8d2c8",
+  padding: "5px 8px",
+  fontSize: 12,
+  cursor: "pointer",
+};
+
 function In({ v, ph, on, type, style }: { v: string; ph?: string; on: (x: string) => void; type?: string; style?: React.CSSProperties }) {
   return <input style={{ ...S.input, ...style }} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
 }

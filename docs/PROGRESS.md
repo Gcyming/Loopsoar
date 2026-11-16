@@ -1293,3 +1293,5 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 按钮统一 nowrap；归档口径改为按目录判定（失效条目不再算归档）。
 - 验证：208 文件 / 1710 用例全绿；typecheck/build/gen-check 全过；E2E 两张截图。
 
+- 记忆表单四个字段加下拉建议（分类/标签/工作区取现有值，重要度 1–10，可自由输入）；表单两列网格、提交按钮独立一行。
+
