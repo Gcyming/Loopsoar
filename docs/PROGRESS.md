@@ -1076,3 +1076,10 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 
 计划见 `docs/规划/第三阶段-可自定义性与长期连续性.md`，四条主线：**可自定义性补齐**（扩展权限交集 + loop/theme 贡献点 + 作用域逆序撤下）、**长期连续性**（工作区级记忆）、**可观测与可接管**（trace/回放、浏览器局部检索与控制台/网络、L3 逃生舱）、**工程硬化**（E2E 钩子出主进程、超大文件拆分、契约瘦身、core 出口可加载、守卫补强）。切片 A（安全与正确性硬化）为下一步起点。
 
+
+### 浏览器侧两个 P0（ADR-0109，同日）
+
+- **敏感点击对 `#eN` 失明**（审计 P0）：`browser_click` 的 `target` 多为 `#e12`，策略层按参数扫描看不到「立即支付」，而 `browser` 档默认 allow —— 敏感闸是唯一拦截，实际空转。现在：新增 `sensitiveClickReason(target, label)` 纯函数，用 ref 注册表读出的真实文案在**定位之后、移动光标之前**再判一次；命中即走 `hooks.confirmSensitive`（AskBus 模态「确认执行 / 取消」，120s 超时），取消/超时/抛错/未注入钩子一律 `[SENSITIVE_DENIED]` 且不点击。确认文案用真实 label（如 `[#e2] link "登录"`）。
+- **浏览器侧 SSRF 比 web_fetch 松一档**（审计 P0）：守卫默认 `allowLoopback=true`，Agent 可顶层导航到 `127.0.0.1:11434` 再 `browser_snapshot` 读正文。现在：`BrowserHost.isAgentWebContents` + `setAgentTabPredicate` 注入判定，`shouldBlockAgentLoopback` 只在「已放行 + Agent 标签 + 回环 + 未显式放开」时拦截——**用户自己开的标签照常浏览 localhost**，E2E/开发用 `LOOPSOAR_ALLOW_LOOPBACK=1`（两个 runner 已设置）；`browser_navigate` 另加工具层早拒（`[BLOCKED_LOOPBACK]` 可行动文案）。
+- **验证**：新增 12 条用例；全量 **191 文件 / 1614 用例全绿**；typecheck 5/5。
+

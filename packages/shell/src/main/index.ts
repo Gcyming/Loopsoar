@@ -61,6 +61,7 @@ import { registerSearchTools } from "./searchTools.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
 import { AskBus } from "./askBus.js";
+import { setAgentTabPredicate } from "./browserRequestGuard.js";
 import { registerAskDomain } from "./domains/ask.js";
 import { registerAskTools } from "./askTools.js";
 import { BookmarksStore } from "./bookmarksStore.js";
@@ -2057,6 +2058,11 @@ app.whenReady().then(async () => {
     persistPendingForks();
   }
 
+  // 出网守卫注入「Agent 标签」判定：Agent 任务标签默认不得访问回环地址（用户标签不受影响），
+  // 与 web_fetch 的 allowLoopback:false 对齐；E2E/开发可用 LOOPSOAR_ALLOW_LOOPBACK=1 放开。
+  // 放在启动恢复之前：恢复出来的任务页在加载时就要按新策略判定。
+  setAgentTabPredicate((id) => browserHost?.isAgentWebContents(id) ?? false);
+
   // 启动恢复：全局用户标签独立于会话；会话只恢复 Agent 工作区（agentBound 标签）。
   let bootUserState: PersistedBrowserState | null = null;
   try {
@@ -2116,6 +2122,22 @@ app.whenReady().then(async () => {
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
   registerBrowserTools(registry, () => browserHost, resolveSessionRoot, {
     beforeOpenPage: beforeOpenBrowserPage,
+    // 敏感步骤二次确认：策略层只看到 target（多为 #e12），只有定位后拿到真实文案才判得出
+    // 「立即支付 / 确认转账」。返回 false（含取消/超时/异常）= 不点击（fail-closed）。
+    confirmSensitive: async ({ sessionId, tool, label, reason }) => {
+      try {
+        const answer = await askBus.request({
+          question: `Agent 准备在网页上执行敏感操作（${tool}）：「${label}」\n\n${reason}\n\n这一步不可撤销，确认要执行吗？`,
+          options: ["确认执行", "取消"],
+          allowFreeText: false,
+          timeoutMs: 120_000,
+        });
+        if (answer.cancelled) return false;
+        return (answer.answer ?? "").includes("确认");
+      } catch {
+        return false;
+      }
+    },
     // 视觉层：Agent 的「鼠标」画在应用级覆盖窗口里（网页 DOM 零注入）。
     pointer: {
       moveTo: (x, y) => agentPointer?.moveTo(x, y),

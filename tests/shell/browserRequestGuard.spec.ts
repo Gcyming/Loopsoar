@@ -7,6 +7,9 @@ import {
   browserRequestHost,
   createBrowserRequestChecker,
   createBrowserRequestPolicy,
+  isLoopbackTarget,
+  setAgentTabPredicate,
+  shouldBlockAgentLoopback,
 } from "../../packages/shell/src/main/browserRequestGuard.ts";
 
 describe("浏览器请求策略 · 协议与主机名", () => {
@@ -203,5 +206,42 @@ describe("浏览器请求校验器 · DNS 校验与缓存", () => {
     expect((await check("http://evil.example.com/")).action).toBe("block");
     expect((await check("http://evil.example.com/x")).action).toBe("block");
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("Agent 标签回环策略（P0：与 web_fetch 的 allowLoopback:false 对齐）", () => {
+  afterEach(() => {
+    setAgentTabPredicate(null);
+    delete process.env.LOOPSOAR_ALLOW_LOOPBACK;
+  });
+
+  it("isLoopbackTarget 识别回环 IP/主机名，公网地址不算", () => {
+    expect(isLoopbackTarget("http://127.0.0.1:11434/")).toBe(true);
+    expect(isLoopbackTarget("http://localhost:5173/app")).toBe(true);
+    expect(isLoopbackTarget("http://[::1]:8080/")).toBe(true);
+    expect(isLoopbackTarget("https://example.com/")).toBe(false);
+    expect(isLoopbackTarget("不是 URL")).toBe(false);
+  });
+
+  it("Agent 标签访问回环被拦；用户标签仍可浏览 localhost", () => {
+    setAgentTabPredicate((id) => id === 7);
+    // Agent 标签（7）+ 回环 → 拦
+    expect(shouldBlockAgentLoopback({ webContentsId: 7, url: "http://127.0.0.1:11434/", allowed: false })).toBe(true);
+    // 用户标签（8）→ 放行
+    expect(shouldBlockAgentLoopback({ webContentsId: 8, url: "http://127.0.0.1:11434/", allowed: false })).toBe(false);
+    // Agent 标签访问公网 → 放行
+    expect(shouldBlockAgentLoopback({ webContentsId: 7, url: "https://example.com/", allowed: false })).toBe(false);
+  });
+
+  it("显式放开（LOOPSOAR_ALLOW_LOOPBACK=1）时 Agent 也可访问回环", () => {
+    setAgentTabPredicate(() => true);
+    expect(shouldBlockAgentLoopback({ webContentsId: 7, url: "http://127.0.0.1:11434/", allowed: true })).toBe(false);
+    process.env.LOOPSOAR_ALLOW_LOOPBACK = "1";
+    expect(shouldBlockAgentLoopback({ webContentsId: 7, url: "http://127.0.0.1:11434/" })).toBe(false);
+  });
+
+  it("未注入判定时不影响任何请求（保持用户浏览能力）", () => {
+    setAgentTabPredicate(null);
+    expect(shouldBlockAgentLoopback({ webContentsId: 7, url: "http://127.0.0.1:11434/", allowed: false })).toBe(false);
   });
 });

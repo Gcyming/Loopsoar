@@ -86,6 +86,8 @@ try {
   const evalSource = readFileSync(path.join(ROOT, "scripts/e2e-p2-eval.js"), "utf8");
   const app = start("app", [path.join(ROOT, "scripts/dev-gui.mjs")], {
     LOOPSOAR_DATA_DIR: DATA_DIR,
+    // E2E 走本地页服务（127.0.0.1）：放开「Agent 标签访问回环」的默认限制（生产不设）。
+    LOOPSOAR_ALLOW_LOOPBACK: "1",
     LOOPSOAR_E2E_HOLD_MS: "4000",
     LOOPSOAR_E2E_SHOT: SHOT,
     // 取证：只截指针覆盖窗口自身（不含桌面）+ 光标保持可见

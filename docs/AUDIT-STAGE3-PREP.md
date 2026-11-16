@@ -176,13 +176,15 @@ git status --short                   # 仅本轮预期改动
 | P1 | **接管锁计数不随关页释放**：`lockAttempts` 只在手动解锁/删会话时清 | `main/browserHost.ts:216,907` | `closeTab` 内删 `session::tab` 键 |
 | P1 | **前后退指针不回滚**：导航失败后 index 与真实页面脱钩，`canBack/canForward` 与地址栏永久错位（再点会跨两页） | `main/browserHost.ts:729-741` | 失败时回滚 index |
 | P1 | **favicon 缓存只写不删**：每条最多 96KB，长时间浏览后主进程内存单调增长 | `main/electronBrowser.ts:146-182` | 上限 200 条，按插入顺序淘汰 |
+| **P0** | **敏感点击对 `#eN` 失明**：分类只看参数字符串，`browser_click` 的 schema 只有 `target`，文档主路径是 `#e5`；点「立即支付」传 `#e12` 时分类恒 false，而 `browser` 档默认 allow，敏感闸是唯一拦截 | `core/src/sensitiveSteps.ts:188`、`browserTools.ts:410` | 定位成功后用 ref 注册表给出的真实文案再判一次；确认通道走 AskBus 弹窗，取消/超时/异常一律不点击（fail-closed）。见 §8.3 |
+| **P0** | **浏览器侧 SSRF 比 web_fetch 松一档**：默认 `allowLoopback=true`、无端口白名单，而 web_fetch 写死 `allowLoopback:false` → Agent 可顶层导航到 `127.0.0.1:11434` 再读正文 | `browserRequestGuard.ts:115-155` | 按标签分档：用户标签照常浏览 localhost，**Agent 标签默认拒绝回环**（`LOOPSOAR_ALLOW_LOOPBACK=1` 才放开）。见 §8.3 |
 
-### 8.2 待办（进第三阶段台账，需产品/安全口径）
+### 8.2 待办（进第三阶段台账）
+
+> 原列在此的两个 P0（敏感点击 ★ / 浏览器侧 SSRF）已在同一轮实现，详见 §8.3。
 
 | 级别 | 问题 | 证据 | 建议 |
 |---|---|---|---|
-| **P0** | **敏感点击对 `#eN` 失明**：分类只看参数字符串，`browser_click` 的 schema 只有 `target`，文档主路径是 `#e5`；点「立即支付」传 `#e12` 时分类恒 false | `core/src/sensitiveSteps.ts:188`、`browserTools.ts:410` | 定位成功后用 `performTargetPoint` 已返回的 `label/role` 再判一次（需在工具层加确认通道，或把 label 回传给策略层复核） |
-| **P0** | **浏览器侧 SSRF 比 web_fetch 松一档**：默认 `allowLoopback=true`（仅 `LOOPSOAR_STRICT_NET=1` 收紧）、无端口白名单；web_fetch 写死 `allowLoopback:false` → 可顶层导航到 `127.0.0.1:11434` 再读正文 | `browserRequestGuard.ts:115-155`、`browserTools.ts:1116` | 复用 `core/net/ssrf` 判据；回环改显式配置（默认关、E2E 才开）；回环导航加一次确认 |
 | P1 | **后台会话抢前台视图**：`ensureAgentTab` 无条件 `showTask`，与「绝不切走用户所在会话」注释冲突，轮次结束也不恢复 | `browserHost.ts:1379,1408` | 仅 `sid === activeSession` 时切；后台只建标签 |
 | P1 | **Agent 页面的新标签落错组**：`openInNewTab` 不传 sessionId/origin → 落到用户当前会话且 `agentBound=false` | `main/index.ts:1976`、`browserHost.ts:869` | window open handler 传回 `(sessionId, tabId)` 与 `origin:"agent"` |
 | P1 | **新会话「首次快照→首次动作」必然 STALE_REF**：快照回落用户标签并回填 tabId，动作前取 `activeTabId(session)` 为 null，令牌迁移条件短路 | `browserHost.ts:1290-1296`、`browserTools.ts:1169-1182` | 迁移以 `lastSnapshotTab` 为来源键；或克隆后自动重快照一次 |
@@ -195,4 +197,22 @@ git status --short                   # 仅本轮预期改动
 | P2 | `applyLayout` 重排所有会话所有标签；`browser_stateStore` 每次 set 全量同步读写 | `browserHost.ts:529`、`browserStateStore.ts:13-27` | 隐藏标签标 dirty；状态改内存 + 批量 flush |
 | P2 | 失败码只在中文文案里，`ToolResult.error` 从不设置 → 无法按码聚合 | `browserTools.ts:440` 等 | 把 `perform*` 的 `code` 写进 `ToolResult.error`（契约变更） |
 | P2 | 只读工具在会话无标签时回落用户全局标签，Agent 未开工即可读用户当前页 | `browserHost.ts:1290` | 结果显式标注来源，或加会话级开关 |
+
+### 8.3 两个 P0 的实现（同日完成）
+
+**① 敏感点击按「定位后的文案」确认**（`packages/shell/src/main/browserTools.ts`）
+- 新增 `sensitiveClickReason(target, label)` 纯函数：把 ref 注册表读出的元素文案并入分类参数；
+- `browser_click` 在**光标移动之前**判定：命中即调用 `hooks.confirmSensitive`（AskBus 模态，选项「确认执行 / 取消」，120s 超时）；
+- 取消 / 超时 / 抛错 / **未注入钩子**一律 `[SENSITIVE_DENIED]` 且不点击（fail-closed），不产生涟漪与鼠标事件；
+- 确认文案使用真实 label（`[#e2] link "登录"`），模型与用户看到的是同一个对象。
+
+**② Agent 标签的回环访问分档**（`packages/shell/src/main/browserRequestGuard.ts` + `electronBrowser.ts` + `browserHost.ts`）
+- `BrowserHost.isAgentWebContents(id)`：按 webContents 反查标签是否 `agentBound`；
+- `setAgentTabPredicate(fn)`：壳层在宿主创建后注入（模块级引用，请求期动态读取，避免装配顺序问题）；
+- `shouldBlockAgentLoopback({webContentsId, url, allowed})` 纯函数：仅在「已判定放行 + Agent 标签 + 回环目标 + 未显式放开」时拦截；
+- **用户标签不受影响**——用户自己打开 `localhost` 是正常浏览行为；生产不需要任何配置，E2E/开发用 `LOOPSOAR_ALLOW_LOOPBACK=1`（两个 E2E runner 已设置）；
+- 工具层再加一道早拒：`browser_navigate` 遇到回环直接返回 `[BLOCKED_LOOPBACK]` 可行动文案，而不是一次「网页加载失败」。
+
+**验证**：新增 12 条用例（guard 4 + 工具 6 + 分类 2 扩展）；全量 **191 文件 / 1614 用例全绿**；typecheck 5/5。
+
 

@@ -7,8 +7,11 @@
  *   ① 纯函数策略（同步）：协议白名单 + 主机名/私网 IP 判定（IP 字面量不需要 DNS）；
  *   ② DNS 校验（异步，带 5 分钟 LRU 缓存）：域名解析结果里出现私网/保留 IP 即拦截（防 DNS rebinding）。
  *
- * 回环策略：E2E 与本地开发页面需要 127.0.0.1（默认放行），
- * 设置环境变量 `LOOPSOAR_STRICT_NET=1` 后不再放行（生产严格模式）。
+ * 回环策略（按标签分档）：
+ *   · 用户标签：默认放行 127.0.0.1（本地预览/开发调试是正常浏览行为）；
+ *   · Agent 标签（`agentBound`，由 BrowserHost 注入判定）：默认**拒绝**回环——否则 Agent 可顶层导航到
+ *     `127.0.0.1:11434` 之类本机服务再用 `browser_snapshot` 读正文，等价绕过 web_fetch 的 SSRF 钉扎；
+ *   · `LOOPSOAR_ALLOW_LOOPBACK=1`（E2E/本地开发）放开 Agent 标签；`LOOPSOAR_STRICT_NET=1` 则连用户标签一起收紧。
  */
 import {
   AD_BLOCK_HOST_SUFFIXES,
@@ -93,6 +96,58 @@ export function matchAdBlockUrl(rawUrl: string): AdBlockMatch | null {
 function blockAd(match: AdBlockMatch): BrowserRequestDecision {
   const what = match.kind === "host" ? `域名后缀 ${match.detail}` : `URL 片段 ${match.detail}`;
   return { action: "block", kind: "adblock", reason: `广告/追踪请求拦截（${what}）` };
+}
+
+/* ─────────────────── Agent 标签的回环访问策略（P0：与 web_fetch 对齐） ─────────────────── */
+
+/**
+ * 「该 webContents 是否属于 Agent 绑定的任务标签」判定（装配层注入，缺省 null = 一律按用户标签处理）。
+ *
+ * 为什么按标签而不是按全局：用户自己访问 `localhost` 是正常浏览行为（本地预览、开发调试），
+ * 全局封死等于把产品做残；真正的缺口是 Agent 可以顶层导航到本机服务（Ollama/DevServer/管理后台）
+ * 再用 `browser_snapshot` 读正文——那等于绕过 web_fetch 的 SSRF 钉扎。
+ */
+let agentTabPredicate: ((webContentsId: number) => boolean) | null = null;
+
+/** 设置/清除 Agent 标签判定（壳层在 BrowserHost 创建后注入）。 */
+export function setAgentTabPredicate(fn: ((webContentsId: number) => boolean) | null): void {
+  agentTabPredicate = fn;
+}
+
+/** 显式放开 Agent 访问回环（E2E / 本地开发才设；生产不应设置）。 */
+export function agentLoopbackAllowed(): boolean {
+  return process.env.LOOPSOAR_ALLOW_LOOPBACK === "1";
+}
+
+/** URL 是否指向回环（IP 字面量或 localhost 系主机名）。 */
+export function isLoopbackTarget(rawUrl: string): boolean {
+  try {
+    const host = new URL(String(rawUrl ?? "")).hostname.replace(/^\[|\]$/g, "");
+    if (!host) return false;
+    return isLoopbackIp(host) || isLoopbackHostname(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 纯函数版本的决策（可单测）：Agent 标签 + 回环 + 未显式放开 → 拦截。
+ * 只有「已判定放行」的请求才会走到这里，所以它只负责补上回环这一层差异。
+ */
+export function shouldBlockAgentLoopback(input: {
+  webContentsId?: number;
+  url: string;
+  allowed?: boolean;
+}): boolean {
+  if (input.allowed ?? agentLoopbackAllowed()) return false;
+  if (typeof input.webContentsId !== "number" || !agentTabPredicate) return false;
+  let agentTab = false;
+  try {
+    agentTab = agentTabPredicate(input.webContentsId);
+  } catch {
+    agentTab = false;
+  }
+  return agentTab && isLoopbackTarget(input.url);
 }
 
 export interface BrowserRequestPolicyOptions {

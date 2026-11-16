@@ -13,6 +13,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { NetAdapter } from "loopsoar-core/platform";
+import { classifySensitiveStep } from "loopsoar-core/sensitiveSteps";
+import { agentLoopbackAllowed, isLoopbackTarget } from "./browserRequestGuard.js";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import type { BrowserHost, TabState } from "./browserHost.js";
 import type { BrowserElementSnapshot } from "../browserAdapter/types.js";
@@ -249,6 +251,20 @@ function htmlToText(html: string): string {
 }
 
 /**
+ * 点击前的敏感判定（纯函数，可单测）：把「定位后拿到的元素文案」纳入分类。
+ *
+ * 为什么单独抽出来：`#e12` 这类 ref 本身不含任何语义，策略层按参数扫描必然判不出
+ * 「立即支付 / 确认转账 / 删除账户」，只有 label 才能判。返回 null = 不敏感。
+ */
+export function sensitiveClickReason(target: string, label: string): string | null {
+  const verdict = classifySensitiveStep({
+    toolName: "browser_click",
+    params: { target, label, text: label },
+  });
+  return verdict.sensitive ? (verdict.reason ?? "敏感步骤需要确认") : null;
+}
+
+/**
  * 浏览器工具钩子（第二阶段 Slice E）。
  *
  * 为什么用「可选第四参」而不是改 register 流程：不传钩子时行为必须与之前**完全一致**
@@ -262,6 +278,20 @@ export interface BrowserToolHooks {
    * 只有 browser_navigate 挂钩子：本片只拦「打开网页」，browser_tabs new 保持原样（面收敛）。
    */
   beforeOpenPage?: (args: { sessionId?: string; url: string }) => Promise<{ proceed: boolean; note?: string }>;
+  /**
+   * 敏感步骤二次确认：在**解析出元素真实文案之后**由工具内部发起。
+   *
+   * 为什么必须在工具内部：`browser_click` 的 schema 只有 `target`，模型主路径传的是 `#e12`，
+   * 策略层（services/chat.ts）按参数扫描根本看不到「立即支付」这类文案，敏感闸对 ref 点击等于失明。
+   * 只有定位成功、拿到 `label` 之后才判得出，所以确认点只能在点击前一步。
+   * 约定：返回 false / 抛错 / 超时一律按拒绝处理（fail-closed，不点击）；未提供钩子时同样拒绝。
+   */
+  confirmSensitive?: (args: {
+    sessionId?: string;
+    tool: string;
+    label: string;
+    reason: string;
+  }) => Promise<boolean>;
   /**
    * Agent 指针覆盖层（主进程里的透明子窗口，压在网页视图之上）。
    * 动作前把「鼠标」移到目标并画高亮/涟漪/键盘提示；坐标是覆盖层坐标（页面 CSS 像素 × 缩放）。
@@ -377,6 +407,14 @@ export function registerBrowserTools(
         const params = ctx.params as { url?: string };
         if (!params?.url) return { ok: false, content: "[错误] 缺少 url" };
         const host = needHost();
+        // Agent 标签默认不得访问回环（与 web_fetch 的 allowLoopback:false 对齐）。
+        // 在工具层先拒一次：模型拿到的是可行动文案，而不是一次「网页加载失败」。
+        if (!agentLoopbackAllowed() && isLoopbackTarget(params.url)) {
+          return {
+            ok: false,
+            content: `[BLOCKED_LOOPBACK] Agent 不允许打开本机/回环地址（${params.url}）。本机服务请让用户自己打开；确实需要时由用户显式放开。`,
+          };
+        }
         // 打开网页前先过钩子（会话窗口布局询问，Slice E）：必须在真正 host.navigate 之前，
         // 否则「用户取消」已经变成了一次真实导航（源站可见、可能触发登录态/埋点）。
         // 放在 readTab 之前也让「动作前状态」是导航前的真实状态（用户思考期间页面可能变化）。
@@ -438,6 +476,31 @@ export function registerBrowserTools(
         }
         if (!point.ok || typeof point.x !== "number" || typeof point.y !== "number") {
           return { ok: false, content: point.message ?? `[错误] 点击失败：${target}` };
+        }
+        // 敏感步骤：策略层只能看到 target（多为 #e12），必须等定位拿到真实文案后再判一次。
+        // 判定放在「移动光标之前」：被拒绝时不留下任何动作痕迹，也不产生涟漪/点击。
+        const sensitive = sensitiveClickReason(target, point.label ?? "");
+        if (sensitive) {
+          const label = point.label?.trim() || target;
+          let allowed = false;
+          if (hooks?.confirmSensitive) {
+            try {
+              allowed = await hooks.confirmSensitive({
+                sessionId: ctx.sessionId,
+                tool: "browser_click",
+                label,
+                reason: sensitive,
+              });
+            } catch {
+              allowed = false;
+            }
+          }
+          if (!allowed) {
+            return {
+              ok: false,
+              content: `[SENSITIVE_DENIED] 已拦截敏感点击「${label}」：${sensitive}。未执行点击；如确需执行，请在界面上确认`,
+            };
+          }
         }
         // 第二步：光标移动 + 高亮 + 涟漪（视觉在覆盖层，网页本身不被注入任何节点）。
         const shown = pointPointer(host, ctx.sessionId, tabId, {

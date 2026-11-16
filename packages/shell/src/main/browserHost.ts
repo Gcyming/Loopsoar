@@ -909,6 +909,26 @@ export class BrowserHost {
     return true;
   }
 
+  /**
+   * 该 webContents 是否属于「Agent 绑定的任务标签」（供出网守卫判定）。
+   *
+   * 用途：用户标签允许访问 localhost（本地预览是正常浏览行为），Agent 标签默认不允许——
+   * 否则 Agent 可以顶层导航到本机服务再用 snapshot 读正文，等价绕过 web_fetch 的 SSRF 钉扎。
+   * 找不到该 id 时返回 false（按用户标签处理，保持人类浏览能力）。
+   */
+  isAgentWebContents(webContentsId: number): boolean {
+    for (const group of this.groups.values()) {
+      for (const entry of group.tabs.values()) {
+        try {
+          if (entry.view.webContents.id === webContentsId) return entry.agentBound === true;
+        } catch {
+          // 视图已销毁：忽略该条目
+        }
+      }
+    }
+    return false;
+  }
+
   async closeTab(tabId: string, sessionId?: string): Promise<boolean> {
     const group = this.group(sessionId);
     const entry = group.tabs.get(tabId);

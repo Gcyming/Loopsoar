@@ -18,6 +18,7 @@ import {
   browserRequestHost,
   createBrowserRequestChecker,
   createBrowserRequestPolicy,
+  shouldBlockAgentLoopback,
 } from "./browserRequestGuard.js";
 
 export interface ElectronBrowserHostOptions {
@@ -130,6 +131,19 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
     };
     void check(details.url)
       .then((decision) => {
+        // Agent 标签不得用浏览器绕过 SSRF 策略访问本机/回环服务（web_fetch 侧写死 allowLoopback:false）。
+        // 显式 LOOPSOAR_ALLOW_LOOPBACK=1（E2E/本地开发）才放开；用户自己开的标签照常可以浏览 localhost。
+        if (
+          decision.action === "allow" &&
+          shouldBlockAgentLoopback({
+            webContentsId: (details as { webContentsId?: number }).webContentsId,
+            url: details.url,
+          })
+        ) {
+          console.warn(`[browser-guard] Agent 标签拒绝回环地址 host=${browserRequestHost(details.url)}`);
+          done({ cancel: true });
+          return;
+        }
         if (decision.action === "allow") {
           done({});
           return;

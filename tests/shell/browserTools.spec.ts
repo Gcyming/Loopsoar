@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
-import { registerBrowserTools } from "../../packages/shell/src/main/browserTools.ts";
+import { registerBrowserTools, sensitiveClickReason } from "../../packages/shell/src/main/browserTools.ts";
 import { createTabRegistry, type RawBrowserElement } from "../../packages/shell/src/browserAdapter/refs.ts";
 
 /** 5 个元素的假页面：覆盖 link / textbox / button / heading / navigation 五种形态。 */
@@ -23,9 +23,19 @@ interface FakePage {
   loading: boolean;
 }
 
-function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = { ok: true }) {
+interface RegistryOptions {
+  /** 敏感确认：缺省放行（既有用例点的是「登录」这类文案，只需验证链路）；拒绝路径单独覆盖。 */
+  confirmSensitive?: (args: { sessionId?: string; tool: string; label: string; reason: string }) => Promise<boolean>;
+}
+
+function makeRegistry(
+  page: RawBrowserElement[] = PAGE,
+  scriptResult: unknown = { ok: true },
+  options: RegistryOptions = {},
+) {
   const registry = new ToolRegistry();
   const calls: string[] = [];
+  const confirmed: { label: string; reason: string }[] = [];
   const scripts: string[] = [];
   const executed: { script: string; tabId?: string }[] = [];
   const tab = createTabRegistry();
@@ -91,7 +101,12 @@ function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = 
       return scriptResult;
     },
   };
-  registerBrowserTools(registry, () => host as never);
+  registerBrowserTools(registry, () => host as never, undefined, {
+    confirmSensitive: async (args) => {
+      confirmed.push({ label: args.label, reason: args.reason });
+      return options.confirmSensitive ? options.confirmSensitive(args) : true;
+    },
+  });
   return {
     registry,
     calls,
@@ -100,6 +115,7 @@ function makeRegistry(page: RawBrowserElement[] = PAGE, scriptResult: unknown = 
     state,
     loadingPlan,
     taskPrep,
+    confirmed,
     setScriptHook: (hook: ((script: string) => void) | null) => {
       scriptHook = hook;
     },
@@ -336,5 +352,51 @@ describe("浏览器工具集", () => {
     expect(click.content).toContain("仍在加载");
     expect(click.content).toContain("发生导航");
     expect(elapsed).toBeLessThan(4000);
+  });
+});
+
+describe("点击的敏感判定（P0：策略层看不到 #eN 的语义，必须用定位后的 label 再判一次）", () => {
+  it("ref 点击 + 文案「立即支付」→ 命中支付类", () => {
+    expect(sensitiveClickReason("#e12", "立即支付")).toContain("支付");
+  });
+
+  it("文案「退出登录」→ 命中登录类；「删除账户」→ 命中不可撤销类", () => {
+    expect(sensitiveClickReason("#e3", "退出登录")).toContain("登录");
+    expect(sensitiveClickReason("#e4", "删除账户")).toContain("不可撤销");
+  });
+
+  it("普通按钮不误报", () => {
+    expect(sensitiveClickReason("#e5", "下一页")).toBeNull();
+    expect(sensitiveClickReason("#e6", "查看详情")).toBeNull();
+  });
+
+  it("target 本身就是敏感文案时同样命中（text= 选择器路径）", () => {
+    expect(sensitiveClickReason("text=确认支付", "")).toContain("支付");
+  });
+
+  it("定位到「登录」按钮且用户拒绝 → 不点击，返回 SENSITIVE_DENIED", async () => {
+    // 元素文案由 ref 注册表提供（真实实现从 DOM 读出），#e2 本身没有语义——这正是要修的盲区。
+    const { registry, confirmed, calls } = makeRegistry(PAGE, { ok: true }, {
+      confirmSensitive: async () => false,
+    });
+    // ref 必须先由快照分配（否则拿到的是 STALE_REF，测不到敏感闸）
+    await run(registry, "browser_snapshot", {}, "sens-deny");
+    const click = await run(registry, "browser_click", { target: "e2" }, "sens-deny");
+    expect(click.ok).toBe(false);
+    expect(click.content).toContain("SENSITIVE_DENIED");
+    // 确认请求带上的是真实文案（模型传的 #e2 本身没有语义）
+    expect(confirmed[0]?.label).toContain("登录");
+    // 被拒绝时不执行任何点击脚本（只跑了定位用的那一次）
+    expect(calls.filter((c) => c === "script").length).toBe(1);
+  });
+
+  it("定位到「登录」按钮且用户确认 → 正常点击", async () => {
+    const { registry, confirmed } = makeRegistry(PAGE, { ok: true }, {
+      confirmSensitive: async () => true,
+    });
+    await run(registry, "browser_snapshot", {}, "sens-allow");
+    const click = await run(registry, "browser_click", { target: "e2" }, "sens-allow");
+    expect(click.ok).toBe(true);
+    expect(confirmed[0]?.reason).toContain("登录");
   });
 });
