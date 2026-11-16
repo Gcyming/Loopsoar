@@ -107,6 +107,7 @@ export default function SessionListPanel({
   const [pinned, setPinned] = React.useState<string[]>(readPinned);
   const [menu, setMenu] = React.useState<RowMenu | null>(null);
   const [renaming, setRenaming] = React.useState<{ id: string; value: string } | null>(null);
+  const [renamingSession, setRenamingSession] = React.useState<{ id: string; value: string } | null>(null);
 
   // 会话列表本身在 `app-session` 浮层里；再用 usePopover 登记会 claim 掉父浮层，
   // 父浮层关闭 → 本组件卸载 → 菜单瞬间消失。这里用本地 outside-click，不抢父浮层。
@@ -202,6 +203,13 @@ export default function SessionListPanel({
     setRenaming(null);
   };
 
+  const commitSessionRename = (): void => {
+    if (!renamingSession) return;
+    const name = renamingSession.value.trim();
+    if (name) onRenameSession?.(renamingSession.id, name);
+    setRenamingSession(null);
+  };
+
   const sessionRow = (session: SessionMeta): React.ReactElement => {
     const isPinned = pinned.includes(session.id);
     const isActive = session.id === currentSession;
@@ -226,7 +234,22 @@ export default function SessionListPanel({
               {tr("chat.forkSessionLabel")}
             </span>
           ) : null}
-          <span style={styles.itemTitle}>{session.title}</span>
+          {renamingSession?.id === session.id ? (
+            <input
+              value={renamingSession.value}
+              onChange={(event) => setRenamingSession({ id: session.id, value: event.target.value })}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitSessionRename();
+                if (event.key === "Escape") setRenamingSession(null);
+              }}
+              onBlur={commitSessionRename}
+              style={styles.inlineRename}
+              autoFocus
+            />
+          ) : (
+            <span style={styles.itemTitle}>{session.title}</span>
+          )}
         </button>
         <span className="session-item-time" style={styles.itemTime}>{formatTime(session.updatedAt)}</span>
         <span className="session-row-actions" style={styles.rowActions}>
@@ -452,8 +475,7 @@ export default function SessionListPanel({
                     style={styles.menuItem}
                     onClick={() => {
                       const session = sessions.find((item) => item.id === menu.id);
-                      const next = window.prompt(tr("chat.renameSession"), session?.title ?? "");
-                      if (next && next.trim()) onRenameSession?.(menu.id, next.trim());
+                      setRenamingSession({ id: menu.id, value: session?.title ?? "" });
                       setMenu(null);
                     }}
                   >
@@ -592,6 +614,7 @@ const styles: Record<string, React.CSSProperties> = {
   itemNested: { paddingLeft: 22 },
   itemActive: { color: BRAND.ochreHover },
   itemTitle: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 },
+  inlineRename: { flex: 1, minWidth: 0, border: `1px solid ${BRAND.border}`, borderRadius: 4, background: BRAND.inkPanel, color: BRAND.linen, fontSize: 11.5, padding: "2px 4px", outline: "none" },
   itemTime: { flex: "none", marginLeft: "auto", fontSize: 9.5, color: BRAND.linenFaint, whiteSpace: "nowrap", transition: "opacity 120ms ease" },
   pinMark: { flex: "none", color: BRAND.ochreHover },
   /** 悬浮操作：默认透明且不可点，行 hover 时淡入（CSS 见 index.html 的 .session-item-row/.session-workspace-row）。 */
