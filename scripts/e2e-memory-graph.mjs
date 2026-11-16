@@ -1,12 +1,13 @@
 /**
  * E2E：记忆图谱（E-M0）截图——种一份演示记忆 + 会话，启动 GUI，自动打开「设置 · 记忆」并截图。
- * 用法：node scripts/e2e-memory-graph.mjs
- * 产物：e2e-evidence/memory-graph.png、e2e-evidence/memory-graph.log
+ * 用法：node scripts/e2e-memory-graph.mjs [2d|3d]
+ * 产物：e2e-evidence/memory-graph.png（2d）、e2e-evidence/memory-graph-3d.png（3d）、memory-graph.log
  */
 import { spawn } from "node:child_process";
 import { createWriteStream, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+const MODE = process.argv[2] === "3d" ? "3d" : "2d";
 const ROOT = process.cwd();
 const DATA = path.join(ROOT, ".loopsoar-data-graph-e2e");
 const OUT = path.join(ROOT, "e2e-evidence");
@@ -70,16 +71,24 @@ const evalJs = `(async () => {
     .find((n) => (n.textContent || '').trim().startsWith('记忆'));
   nav?.click();
   await sleep(2200);
-  return { navClicked: Boolean(nav), hasCanvas: Boolean(document.querySelector('canvas')) };
+  let clicked3d = false;
+  if (${JSON.stringify(MODE)} === "3d") {
+    const btn = Array.from(document.querySelectorAll("button")).find((b) => (b.textContent || "").trim() === "3D");
+    btn?.click();
+    clicked3d = Boolean(btn);
+    await sleep(1200);
+  }
+  const canvas = document.querySelector("canvas");
+  return { navClicked: Boolean(nav), hasCanvas: Boolean(canvas), clicked3d, canvasSize: canvas ? [canvas.width, canvas.height] : null };
 })()`;
 
-const log = createWriteStream(path.join(OUT, "memory-graph.log"), { flags: "w" });
+const log = createWriteStream(path.join(OUT, MODE === "3d" ? "memory-graph-3d.log" : "memory-graph.log"), { flags: "w" });
 const child = spawn(process.execPath, [path.join(ROOT, "scripts/dev-gui.mjs")], {
   cwd: ROOT,
   env: {
     ...process.env,
     LOOPSOAR_DATA_DIR: DATA,
-    LOOPSOAR_E2E_SHOT: path.join(OUT, "memory-graph.png"),
+    LOOPSOAR_E2E_SHOT: path.join(OUT, MODE === "3d" ? "memory-graph-3d.png" : "memory-graph.png"),
     LOOPSOAR_E2E_HOLD_MS: "2500",
     LOOPSOAR_E2E_EVAL: evalJs,
   },
@@ -88,4 +97,4 @@ const child = spawn(process.execPath, [path.join(ROOT, "scripts/dev-gui.mjs")], 
 child.stdout.on("data", (b) => { const t = b.toString(); log.write(t); process.stdout.write(t); });
 child.stderr.on("data", (b) => { const t = b.toString(); log.write(t); process.stderr.write(t); });
 setTimeout(() => { try { child.kill(); } catch {} }, 120000);
-child.on("exit", (code) => { console.log("MEMORY_GRAPH_E2E_EXIT", code); process.exit(0); });
+child.on("exit", (code) => { console.log("MEMORY_GRAPH_E2E_EXIT", MODE, code); process.exit(0); });

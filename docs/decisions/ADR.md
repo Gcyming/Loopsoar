@@ -2318,4 +2318,19 @@
 - **验证方式**：新增 memoryConsolidate **4 条**；评测台 **60/60（100%）**（单跳/时序/更新/拒答/隔离各 12）；全量 vitest **199 文件 / 1657 用例全绿**；typecheck 5/5、build 5/5、gen/check 一致。
 - **状态**：✅ 已验证（2026-11-16）
 - **回退条件**：若 bigram 门控在真实查询上误杀（相关但无共享 bigram 的改写），把门控降级为「tag 命中或 bigram ≥1 或 similarity ≥0.3」，而不是回到「基础分地板」；若巩固误合并，提高 0.9 阈值并只在手动触发时执行。
+
+## ADR-0117 记忆图谱 3D 视图与 loop 接线验证
+
+- **背景**：① 用户要求图谱有 3D 渲染，并与 2D 做成可切换的拨片；② 需要确认记忆不是「只有 UI」——召回、写入、使用信号必须真的进入 agent 的 loop；③ 之前 D4 修的两个检索缺陷要复验。
+- **决策**：
+  1. **视图切换**：MemoryGraphView 右上角 2D/3D 拨片，选择写 localStorage（loopsoar.memoryGraph.mode），默认 2D；切换后重置视角。
+  2. **3D 投影**：复用同一份环带坐标，z = -0.55·radius + 由节点 id 确定性散列出的 ±320 抖动（圆盘才有厚度，同半径节点不共面）；先绕 Y 轴 yaw、再绕 X 轴 pitch，focal=1150 做透视除法，base = min(w,h)/1000×1.5×zoom；节点按 depth 从远到近画（画家算法），深度越远越透明、半径越小；拖拽旋转、滚轮缩放 0.5–2.6；2D 保留环带参考线，3D 显示「拖拽旋转 · 滚轮缩放」提示。
+  3. **标签避让**：标签收集后按优先级（原点 0 / 会话 1 / 悬停 1.5 / 事实 3）单独放置，measureText 求包围盒，与已放置的相交就跳过；避免节点密集时糊成一片。
+  4. **loop 接线（本次是验证，不是新增功能）**：ChatService 构造 ToolContext 时传 agentId/sessionId（packages/services/src/chat.ts 约 :369-372）；记忆注入在 volatile 段末条 user（约 :480-528，stable 段只放 system/skill）；memory_search/add/update/delete 经 registerMemoryTools 用 sessionId 取 workspaceId，检索与写入都收窄到该工作区。
+- **理由**：记忆若只在设置面板里可见就没有价值；3D 只是同一数据的不同投影，不引入第二套数据源，也不新增契约。
+- **替代方案**：① three.js / WebGL——被否（为一张图引入大依赖，且要与 Electron 渲染层处理上下文丢失）；② 球面布局——被否（会破坏「原点→会话→事实」的距离语义）；③ 3D 独立页面——被否（拨片切换已够用）。
+- **验证方式**：新增 tests/services/chat-memory.spec.ts **3 条**（记忆进末段 user 而非 system、别的会话不注入、tool_call 触发 onToolCall）与 tests/shell/memoryLoopIntegration.spec.ts **3 条**（按 workspace 检索、命中回写 accessCount 与 usage 事件、写入后同区可召回而别的区不可）；E2E 2D/3D 真机截图；全量 vitest **201 文件 / 1663 用例全绿**；评测台 **60/60**；typecheck 5/5、build 5/5、gen/check 一致。
+- **状态**：✅ 已验证（2026-11-16）
+- **回退条件**：3D 在低配机掉帧 → DPR 封顶 2 或降低展示节点数；标签避让过严导致事实标签全被跳过 → 只对 fact 跳过、会话与原点永远显示。
+- **复核时间**：M4（时间回放）开工前。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。

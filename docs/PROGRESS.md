@@ -1175,3 +1175,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - M3：图谱节点点击展开详情卡（分类/工作区/重要度/时间/信任/来源会话/关联条目）。
 - 验证：memoryConsolidate 4 条；199 文件 / 1657 用例全绿；typecheck/build/gen-check 全过。
 
+
+### 3D 视图与 loop 接线验证（ADR-0117）
+
+- 图谱加 2D/3D 拨片：3D 用环带坐标做透视投影（id 散列 z 抖动让圆盘有厚度、focal=1150、按深度画家算法排序），拖拽旋转、滚轮缩放，选择记 localStorage。
+- 标签改为按优先级避让放置（measureText 包围盒相交则跳过），解决节点密集时文字重叠。
+- loop 接线验证新增 6 条用例：services/chat-memory（记忆进末段 user、跨会话不注入、tool_call 触发 onToolCall）与 shell/memoryLoopIntegration（按 workspace 检索、命中回写 accessCount+usage、写入后同区召回/异区落空）。
+- E2E 脚本支持 2d/3d 两种截图：node scripts/e2e-memory-graph.mjs 3d。
+- 验证：201 文件 / 1663 用例全绿；评测台 60/60；typecheck 5/5、build 5/5、gen-check 一致。
+
