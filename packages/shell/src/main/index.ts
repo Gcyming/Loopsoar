@@ -57,6 +57,7 @@ import {
   savePreferencesPatch,
 } from "./domains/settings.js";
 import { registerMemoryTools } from "./memoryTools.js";
+import { buildSessionEpisode } from "./memoryEpisode.js";
 import { registerSearchTools } from "./searchTools.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
@@ -1816,6 +1817,7 @@ app.whenReady().then(async () => {
     getSystemRules: () => currentRulesPrompt(settingsDeps),
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
+    onToolCall: (toolName: string, sessionId: string) => memory.recordToolUsage(toolName, sessionId),
     getMemoryFor: (text: string, sessionId?: string) =>
       memory.recallPrompt(text, (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default"),
     // 技能：独立子系统，只注入 SKILL.md 文本（不提供工具）
@@ -2407,6 +2409,24 @@ app.whenReady().then(async () => {
     },
     onSessionDeleting: async (sessionId) => {
       terminals.closeSession(sessionId);
+      // E-M1：删除会话 → 压缩成一条 episode（游离层原料）；失败不阻断删除。
+      try {
+        const already = memory
+          .list({ includeInvalidated: true })
+          .some((fact) => fact.category === "episode" && fact.provenance?.sessionId === sessionId);
+        if (!already) {
+          const meta = sessions.get(sessionId);
+          const episode = buildSessionEpisode({
+            sessionId,
+            title: meta?.title,
+            workspaceId: meta?.workspaceId ?? undefined,
+            messages: sessions.loadMessages(sessionId) ?? [],
+          });
+          if (episode) await memory.add(episode);
+        }
+      } catch (err) {
+        console.warn("[Loopsoar] 会话记忆压缩失败（已忽略）：", err);
+      }
       const worktree = sessions.getWorktree(sessionId);
       if (!worktree) return;
       await removeWorktree({

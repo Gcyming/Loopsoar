@@ -1150,3 +1150,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - effectiveValue 乘 usageBoost = 1 + min(0.5, 0.1×ln(1+accessCount))，对数封顶；命中后异步落盘。
 - 验证：memoryUsage 3 条；195 文件 / 1645 用例全绿；typecheck/build/gen-check 全过。
 
+
+### E-M1：使用事件与三层迁移（ADR-0114）
+
+- Store 增 usage 事件（fact/session/tool 三键，每键 50 条；权重 mention 1.0 / tool 0.8 / search 0.6 / view 0.3）。
+- 激活值改 ACT-R：A = ln(1+R)/(1+ln(1+R))，R=Σw·e^{-Δt/30d}；无事件回落新近度。
+- 工具调用经 ChatService.onToolCall 记 tool/session 事件（500ms 合并落盘）。
+- 删除会话 → buildSessionEpisode 生成 episode（≤400 字，幂等，失败不阻断）；启动时把 90 天未用的 episode 降级为 ghost（≤120 字 + ghost 标签，不删除）。
+- 验证：新增 8 条用例；197 文件 / 1653 用例全绿；typecheck/build/gen-check 全过。
+

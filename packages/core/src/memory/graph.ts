@@ -11,6 +11,7 @@
  */
 import type { MemoryFact } from "./fact.js";
 import { DEFAULT_WORKSPACE_ID } from "./fact.js";
+import type { UsageEvent } from "./store.js";
 
 export type MemoryNodeKind = "origin" | "session" | "fact";
 
@@ -64,6 +65,8 @@ export interface MemoryGraphModel {
 export interface BuildMemoryGraphInput {
   facts: readonly MemoryFact[];
   sessions: readonly MemoryGraphSession[];
+  /** 使用事件（E-M1）：key = fact:<id> / session:<id>；有事件时优先于「新近度」估算。 */
+  usage?: Record<string, UsageEvent[]>;
   /** 每个会话最多上图多少条事实（其余靠点开查看）。 */
   maxFactsPerSession?: number;
   now?: number;
@@ -80,18 +83,50 @@ export function recencyActivation(lastUsedAt: number, importance: number, now = 
   return Math.max(0, Math.min(1, recency * (0.6 + 0.4 * (importance / 10))));
 }
 
+/**
+ * 激活值（E-M1，ACT-R 形式）：R = Σ w·exp(-Δt/τ) → B = ln(1+R) → A = B/(B+1)。
+ * 与 recencyActivation 的区别：它把「被用了几次」也编码进来，而不仅是「最后一次何时」。
+ */
+export function activationFromEvents(events: readonly UsageEvent[], now: number, tauDays = 30): number {
+  if (events.length === 0) return 0;
+  let r = 0;
+  for (const event of events) {
+    const days = Math.max(0, (now - event.at) / DAY);
+    r += event.w * Math.exp(-days / tauDays);
+  }
+  const b = Math.log1p(r);
+  return b / (b + 1);
+}
+
+/** 有事件用事件算；没有事件回落到「新近度 × 重要度」。 */
+export function activationOf(
+  key: string,
+  lastUsedAt: number,
+  importance: number,
+  now: number,
+  usage?: Record<string, UsageEvent[]>,
+): number {
+  const events = usage?.[key];
+  if (events && events.length > 0) {
+    const fromEvents = activationFromEvents(events, now);
+    if (fromEvents > 0) return fromEvents;
+  }
+  return recencyActivation(lastUsedAt, importance, now);
+}
+
 function factNodesOf(
   facts: readonly MemoryFact[],
   sessionId: string,
   max: number,
   now: number,
+  usage?: Record<string, UsageEvent[]>,
 ): MemoryGraphNode[] {
   return facts
     .filter((f) => f.provenance?.sessionId === sessionId)
     .sort((a, b) => b.importance - a.importance || b.lastAccessed - a.lastAccessed)
     .slice(0, max)
     .map((fact) => {
-      const activation = recencyActivation(fact.lastAccessed, fact.importance, now);
+      const activation = activationOf(`fact:${fact.id}`, fact.lastAccessed, fact.importance, now, usage);
       return {
         id: `fact:${fact.id}`,
         kind: "fact" as const,
@@ -147,7 +182,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel
       band: "L1",
       sessionId: session.sessionId,
       importance: 6,
-      activation: recencyActivation(updatedAt, 6, now),
+      activation: activationOf(`session:${session.sessionId}`, updatedAt, 6, now, input.usage),
       createdAt: session.createdAt ?? updatedAt,
       lastUsedAt: updatedAt,
       size: 7,
@@ -160,7 +195,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel
       strength: 1,
     });
 
-    const children = factNodesOf(input.facts, session.sessionId, max, now);
+    const children = factNodesOf(input.facts, session.sessionId, max, now, input.usage);
     for (const child of children) {
       nodes.push(child);
       edges.push({
@@ -179,7 +214,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraphModel
     .sort((a, b) => b.importance - a.importance || b.lastAccessed - a.lastAccessed)
     .slice(0, max * 4);
   for (const fact of orphans) {
-    const activation = recencyActivation(fact.lastAccessed, fact.importance, now);
+    const activation = activationOf(`fact:${fact.id}`, fact.lastAccessed, fact.importance, now, input.usage);
     nodes.push({
       id: `fact:${fact.id}`,
       kind: "fact",

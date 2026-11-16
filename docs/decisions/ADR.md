@@ -2273,3 +2273,19 @@
 - **状态**：✅ 前半完成（2026-11-16）；后半（后台巩固：合并重复/生成 summary fact）与 D4 评测台仍待做。
 - **回退条件**：若真实使用中出现「高频条目压过更相关条目」，下调 usageBoost 系数或改为仅影响图半径、不影响召回排序。
 - **复核时间**：D3 后半（巩固）开工前、D4 评测台建立后各复核一次。
+
+## ADR-0114 使用事件与三层迁移（E-M1）
+
+- **背景**：M0 的激活值只来自「新近度 × 重要度」，图谱是静态的；设计文档要求「工具调用也算记忆、提及越多越靠近原点」。D3 前半已有 touch，但只覆盖显式搜索。
+- **决策**：
+  1. **事件模型**：MemoryStoreState 增 usage: Record<string, UsageEvent[]>（key = fact:<id> / session:<id> / tool:<name>），每键最多 50 条，权重 mention 1.0 / tool 0.8 / search 0.6 / view 0.3。
+  2. **激活值**：有事件时用 ACT-R 形式 A = ln(1+R)/(ln(1+R)+1)，R = Σ w·exp(-Δt/30d)；无事件回落 M0 的新近度公式。会话节点用 session:<id> 的事件。
+  3. **工具调用**：ChatService 在 tool_start 时回调 onToolCall(toolName, sessionId) → 壳层 recordToolUsage：记 tool:<name> 与 session:<id> 两条事件，500ms 合并落盘。
+  4. **删除会话 → episode**：onSessionDeleting 里用 buildSessionEpisode（标题 + 前 3 条用户消息 + 最后一条助手回复，≤400 字）生成 category=episode 的条目，provenance.capturedBy=consolidation；幂等（同会话已有 episode 则跳过）；失败不阻断删除。
+  5. **失真层**：MemoryService.load() 启动时对 90 天未用的 episode 调 demoteGhosts：category=ghost、内容截到 120 字、importance 封顶 5、加 ghost 标签；不物理删除，提及后可按指针恢复（下一轮 M2 接 UI 展开）。
+- **理由**：没有事件就没有「越用越近」；没有删除时压缩，游离层永远是空的。两者都接在现有钩子上（tool_start / onSessionDeleting），不新增后台进程。
+- **替代方案**：① 后台定时扫描工具日志——被否（多一个进程、且 tool 事件本来就在主路径上）；② 删除时调 LLM 摘要——被否（删除要快且可离线，确定性摘要够用，后续可替换）；③ ghost 直接删——被否（违反「永不物理删除」）。
+- **验证方式**：新增 memoryUsageEvents **6 条** + memoryEpisode **2 条**；全量 vitest **197 文件 / 1653 用例全绿**；typecheck 5/5、build 5/5、gen/check 一致。
+- **状态**：✅ 已验证（2026-11-16）
+- **回退条件**：若工具事件导致落盘过频，调大合并窗口或只记 session 事件；若 episode 摘要在真实会话里信息量不足，把 buildSessionEpisode 换成 contextCompress。
+- **复核时间**：M2（反馈动画）开工前、M3（wiki 详情）完成后各复核一次。

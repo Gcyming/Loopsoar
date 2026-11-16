@@ -141,6 +141,8 @@ export class MemoryService {
   private externalDisabled = false;
   private readonly embedFn: MemoryEmbedder | null;
   private readonly embedTimeoutMs: number;
+  /** 使用事件写入很频繁：合并成一次落盘，避免每次工具调用都写 JSON。 */
+  private saveTimer: NodeJS.Timeout | null = null;
 
   constructor(private opts: MemoryServiceOptions) {
     this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
@@ -213,6 +215,8 @@ export class MemoryService {
       }
     }
     if (migrated) await this.save();
+    // E-M1：长期未用的 episode 降级为 ghost（失真层），随启动做一次维护。
+    if (this.store.demoteGhosts().length > 0) await this.save();
     // 索引在 load 后立即维护：hash 索引同步重建（毫秒级）；外部向量尽力而为（超时/失败降级 hash）
     await this.rebuildVectorIndex();
     this.loaded = true;
@@ -245,6 +249,26 @@ export class MemoryService {
     } catch {
       // .bak 失败只影响可恢复性，不影响本次写入
     }
+  }
+
+  /** 使用事件快照（图谱激活值用）。 */
+  usageSnapshot(): ReturnType<MemoryStore["usageSnapshot"]> {
+    return this.store.usageSnapshot();
+  }
+
+  /** 工具调用（E-M1）：记 tool 与 session 两条事件，合并落盘。 */
+  recordToolUsage(toolName: string, sessionId?: string): void {
+    this.store.recordUsage(`tool:${toolName}`, "tool");
+    if (sessionId) this.store.recordUsage(`session:${sessionId}`, "tool");
+    this.scheduleSave();
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      void this.save();
+    }, 500);
   }
 
   list(opts?: {
@@ -343,7 +367,7 @@ export class MemoryService {
     // D3：显式检索命中才算一次使用（自动注入不算，避免富者愈富）。
     if (mapped.length > 0) {
       this.store.touch(mapped.map((hit) => hit.fact.id));
-      void this.save();
+      this.scheduleSave();
     }
     return mapped;
   }

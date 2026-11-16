@@ -52,7 +52,7 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
       workspaceId: session.workspaceId ?? null,
       updatedAt: session.updatedAt,
     }));
-    const model = buildMemoryGraph({ facts, sessions });
+    const model = buildMemoryGraph({ facts, sessions, usage: deps.memory.usageSnapshot() });
     const points = layoutMemoryGraph(model, { width: 1000, height: 1000, padding: 24 });
     return { ...model, points };
   });

@@ -72,6 +72,8 @@ export interface ChatServiceOptions {
   getSystemRules?: () => string;
   /** 记忆召回注入（按用户消息取相关记忆，放进 volatile 段）。 */
   getMemoryFor?: (userText: string, sessionId?: string) => string;
+  /** 每次工具调用（E-M1）：用于记录 tool/session 使用事件，不改变循环行为。 */
+  onToolCall?: (toolName: string, sessionId: string) => void;
   /** 技能注入（与扩展/MCP 隔离：仅 SKILL.md 文本，不提供工具）。 */
   getSkillPrompt?: (userText: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
@@ -613,6 +615,10 @@ export class ChatService {
           if (event.type === "done") return;
           // LoopEvent → ChatEventType（type 同名，data 原样传递）
           emit(event.type as ChatEventType, event.data);
+      if (event.type === "tool_start") {
+        const data = event.data as { toolName?: string } | undefined;
+        if (data?.toolName) this.opts.onToolCall?.(data.toolName, sessionId);
+      }
         },
         messages,
         reasoningEffort: input.reasoningEffort,

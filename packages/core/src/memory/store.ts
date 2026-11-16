@@ -54,15 +54,32 @@ export interface MemoryStats {
   invalidated?: number;
 }
 
+/** 使用事件类型（E-M1）：提及 / 工具调用 / 显式搜索 / 点开查看。 */
+export type UsageKind = "mention" | "tool" | "search" | "view";
+
+export interface UsageEvent {
+  at: number;
+  /** 权重：mention 1.0 / tool 0.8 / search 0.6 / view 0.3。 */
+  w: number;
+  kind: UsageKind;
+}
+
+export const USAGE_EVENT_CAP = 50;
+export const GHOST_IDLE_DAYS = 90;
+export const GHOST_MAX_CHARS = 120;
+
 export interface MemoryStoreState {
   facts: MemoryFact[];
   /** 已归档条目单独存放（软归档：可恢复，不物理删除）。 */
   archived: MemoryFact[];
+  /** 使用事件（E-M1）：key = fact:<id> / session:<id> / tool:<name>，每键最多 50 条。 */
+  usage?: Record<string, UsageEvent[]>;
 }
 
 export class MemoryStore {
   private facts: MemoryFact[] = [];
   private archived: MemoryFact[] = [];
+  private usage: Record<string, UsageEvent[]> = {};
   private seq = 0;
 
   constructor(
@@ -74,13 +91,19 @@ export class MemoryStore {
   }
 
   snapshot(): MemoryStoreState {
-    return { facts: [...this.facts], archived: [...this.archived] };
+    const usage: Record<string, UsageEvent[]> = {};
+    for (const [key, events] of Object.entries(this.usage)) usage[key] = [...events];
+    return { facts: [...this.facts], archived: [...this.archived], usage };
   }
 
   /** 从持久化状态恢复（文件损坏时由壳层保证传入空状态）。 */
   restore(state: Partially<MemoryStoreState>): void {
     this.facts = Array.isArray(state?.facts) ? state.facts : [];
     this.archived = Array.isArray(state?.archived) ? state.archived : [];
+    this.usage = {};
+    for (const [key, events] of Object.entries(state?.usage ?? {})) {
+      if (Array.isArray(events)) this.usage[key] = events.slice(-USAGE_EVENT_CAP);
+    }
     // 旧数据归一（D1）：补齐 workspaceId 与 provenance.trust，读取端无需到处判空。
     for (const fact of [...this.facts, ...this.archived]) {
       if (!fact.workspaceId) fact.workspaceId = DEFAULT_WORKSPACE_ID;
@@ -236,6 +259,43 @@ export class MemoryStore {
     };
   }
 
+  /** 记录一次使用事件（E-M1）：mention 1.0 / tool 0.8 / search 0.6 / view 0.3。 */
+  recordUsage(key: string, kind: UsageKind, at = this.now()): void {
+    const weight = kind === "mention" ? 1 : kind === "tool" ? 0.8 : kind === "search" ? 0.6 : 0.3;
+    const events = this.usage[key] ?? [];
+    events.push({ at, w: weight, kind });
+    if (events.length > USAGE_EVENT_CAP) events.splice(0, events.length - USAGE_EVENT_CAP);
+    this.usage[key] = events;
+  }
+
+  /** 使用事件快照（图谱/诊断用）。 */
+  usageSnapshot(): Record<string, UsageEvent[]> {
+    const out: Record<string, UsageEvent[]> = {};
+    for (const [key, events] of Object.entries(this.usage)) out[key] = [...events];
+    return out;
+  }
+
+  /**
+   * 失真层降级（E-M1）：长期未被使用的 episode 压成 ghost——
+   * 只留一句话 + 关键词，不物理删除；提及后可重新升回游离层。
+   */
+  demoteGhosts(nowMs = this.now(), idleDays = GHOST_IDLE_DAYS): string[] {
+    const cutoff = nowMs - idleDays * 86_400_000;
+    const demoted: string[] = [];
+    for (const fact of this.facts) {
+      if (fact.category !== "episode") continue;
+      if (fact.status !== "active" || fact.invalidatedAt) continue;
+      if (fact.lastAccessed >= cutoff) continue;
+      fact.category = "ghost";
+      fact.content = fact.content.slice(0, GHOST_MAX_CHARS);
+      fact.importance = Math.min(5, fact.importance);
+      fact.tags = [...new Set([...fact.tags, "ghost"])];
+      fact.layer = "working";
+      demoted.push(fact.id);
+    }
+    return demoted;
+  }
+
   /**
    * 访问信号（D3）：只有「真正的检索命中」才计数。
    * 为什么不由 recallPrompt/注入路径调用：注入是渲染，不是使用；若按注入计数，
@@ -252,6 +312,7 @@ export class MemoryStore {
       fact.accessCount += 1;
       fact.lastAccessed = nowMs;
       fact.confidence = Math.min(1, fact.confidence + 0.02);
+      this.recordUsage(`fact:${fact.id}`, "search", nowMs);
       touched += 1;
     }
     return touched;
@@ -287,6 +348,7 @@ export class MemoryStore {
   clear(): void {
     this.facts = [];
     this.archived = [];
+    this.usage = {};
     this.seq = 0;
   }
 
