@@ -1093,3 +1093,10 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **真机 E2E（新增、可重复）**：`node scripts/e2e-confirm-run.mjs`（`scripts/e2e-confirm-eval.js` + 主进程 `LOOPSOAR_E2E_CONFIRM_SHOT` 轮询 DOM 后截图）。实测 `E2E_EVAL {"ok":true,"dialogTitle":"敏感操作确认","detailLabels":["操作","目标","原因","页面"],"hasPaymentReason":true,"sawCountdown":true,"confirmedByClick":true,"pageSaysPaid":true,"askCarriesSession":true,"askHasExpiry":true}`；证据 `e2e-evidence/confirm-sensitive.png`、`confirm-window-early.png`、`confirm-sensitive.log`。
 - **验证**：191 文件 / 1619 用例全绿；typecheck 5/5、build 5/5。
 
+
+### 记忆板块前置调研（同日）
+
+- 产出 [docs/research/agent-memory-survey.md](docs/research/agent-memory-survey.md)：13 节、约 520 行，覆盖 MemGPT/Letta、Mem0、Zep/Graphiti、Generative Agents、A-MEM、HippoRAG/RAPTOR、MemoryOS、LangMem/Cognee、Claude Code/Cursor 九条路线，以及写入/检索/注入/遗忘/隔离/评测/安全七层工程细节（每条结论带一手链接）。
+- 核心判断：记忆的难点在「写什么、何时写、怎么改（冲突/时效）、怎么忘、怎么注进上下文」；业界三条主线（OS 分页、抽取-巩固、时序图谱）都承认「记忆是上下文工程的一部分」。
+- 与现状对照：我们缺 **workspace 隔离、provenance、冲突/时效、使用信号写回、后台巩固、质量评测** 六项；建议按 D1（隔离+溯源）→ D2（冲突+时效）→ D3（巩固+使用信号）→ D4（质量评测）推进，D1 前先写三条 ADR（归属维度/迁移策略/冲突判据）。
+
