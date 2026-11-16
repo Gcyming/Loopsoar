@@ -1211,3 +1211,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 本机未发现既有记忆库（%APPDATA%/loopsoar 不存在），无可删除的历史数据；E2E 演示数据每次重建。
 - 验证：206 文件 / 1690 用例全绿；typecheck/build 全过；E2E 真机迁移成功。
 
+
+### 记忆文件命名与回顾（ADR-0121）
+
+- 首次落盘文件名改为 `YYYY-MM-DD-<正文摘要>.md`；之后内容更新不改名；重名追加 id 后缀。frontmatter 增 `aliases: [id]`，`[[id]]` 靠 alias 仍可解析。
+- 命名目前是确定性规则（离线可用）；LLM 回顾作为独立切片，只改 title 与新条目文件名，禁止重命名既有文件。
+- 2000 条笔记基准：全量加载 399ms、仅 stat 扫描 41ms；mtime 增量留到规模需要时，且必须配周期全扫（同步盘可能保留旧 mtime）。
+- 验证：207 文件 / 1693 用例全绿；typecheck/build 全过；E2E 生成可读文件名。
+

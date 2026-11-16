@@ -86,6 +86,23 @@ describe("MemoryService · D1 持久化与隔离", () => {
     expect(fs.existsSync(filePath)).toBe(false);
   });
 
+  it("首次落盘用人类可读文件名；更新内容不改名；同内容不同条目不会互相覆盖", async () => {
+    const filePath = tempFilePath();
+    const service = makeService(filePath);
+    const added = await service.add({ content: "项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-a" });
+    const factsDir = path.join(path.dirname(filePath), "vault", "facts");
+    const first = fs.readdirSync(factsDir).filter((name) => name.endsWith(".md"));
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatch(/^\d{4}-\d{2}-\d{2}-.+\.md$/);
+    expect(first[0]).toContain("项目使用");
+
+    await service.update({ id: added.id, content: "项目统一使用 pnpm 管理依赖（已确认）" });
+    expect(fs.readdirSync(factsDir).filter((name) => name.endsWith(".md"))).toEqual(first);
+
+    await service.add({ content: "项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-b" });
+    expect(fs.readdirSync(factsDir).filter((name) => name.endsWith(".md"))).toHaveLength(2);
+  });
+
   it("vault 里坏文件被跳过，其余记忆照常加载", async () => {
     const filePath = tempFilePath();
     const first = makeService(filePath);

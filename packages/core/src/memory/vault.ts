@@ -22,10 +22,32 @@ export interface VaultParseResult {
   warnings: string[];
 }
 
-/** 文件名只允许安全字符：id 里的路径分隔符等统一替换。 */
+/** 文件名只允许安全字符：id 里的路径分隔符等统一替换（日志/兜底用）。 */
 export function vaultFileName(id: string): string {
   const safe = id.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "");
   return `${safe || "memory"}.md`;
+}
+
+/** 把正文压成一段可读的文件名 slug（保留中文，去掉文件名非法字符）。 */
+function slugOf(content: string): string {
+  const cleaned = content
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/[，。！？、；：“”‘’（）【】《》,.!?;:'"()\[\]{}]/g, "");
+  const cut = Array.from(cleaned).slice(0, 24).join("").trim();
+  // Windows 不允许文件名以空格或点结尾
+  return cut.replace(/[\s.]+$/g, "") || "memory";
+}
+
+/**
+ * 人类可读的文件名：`2026-11-16-记忆原点代表-Loopsoar-本体.md`。
+ * 只在「第一次落盘」时使用；之后沿用它（改名会让外部 markdown 链接失效）。
+ * 链接仍写 [[id]]，靠 frontmatter 的 aliases 解析，因此改标题不会断链。
+ */
+export function memoryFileName(fact: MemoryFact): string {
+  const day = new Date(fact.timestamp).toISOString().slice(0, 10);
+  return `${day}-${slugOf(fact.content)}.md`;
 }
 
 /** 从文件名还原 id（仅当 frontmatter 缺 id 时兜底）。 */
@@ -56,6 +78,8 @@ export function factToMarkdown(fact: MemoryFact): string {
   const fm: Record<string, unknown> = {
     schema: VAULT_SCHEMA_VERSION,
     id: fact.id,
+    // 文件名会变，id 才是稳定锚点：Obsidian 里 [[m1]] 通过 alias 仍能解析到这条笔记
+    aliases: [fact.id],
     title: titleOf(fact.content),
     category: fact.category,
     workspace: fact.workspaceId ?? DEFAULT_WORKSPACE_ID,

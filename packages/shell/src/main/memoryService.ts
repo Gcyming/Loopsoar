@@ -22,11 +22,11 @@ import {
   factToMarkdown,
   hashEmbedding,
   markdownToFact,
+  memoryFileName,
   renderMemoryMarkdown,
   renderVaultIndex,
   retrieveMemory,
   shouldRecall,
-  vaultFileName,
   type MemoryCandidate,
   type MemoryFact,
   type UsageEvent,
@@ -231,7 +231,7 @@ export class MemoryService {
       const sidecar = await this.readSidecar();
       this.applyRuntime(loaded.facts, loaded.archived, sidecar.runtime);
       this.store.restore({ facts: loaded.facts, archived: loaded.archived, usage: sidecar.usage });
-      this.lastWritten = this.fingerprint(loaded.facts, loaded.archived);
+      this.lastWritten = this.fingerprint(loaded.facts, loaded.archived, loaded.paths);
       console.warn(`[Loopsoar] 记忆仓库：${this.vaultPath}（${loaded.facts.length} 活跃 / ${loaded.archived.length} 归档）`);
     } else if (legacyExists) {
       // 一次性迁移：旧 JSON（含 .bak 兜底）→ Markdown 仓库；原文件改名 .migrated 以便回滚。
@@ -270,9 +270,15 @@ export class MemoryService {
   }
 
   /** 读取 vault：facts/ 为活跃条目，archive/ 为归档（缺 archivedAt 用文件 mtime 兜底）。 */
-  private readVault(factsDir: string, archiveDir: string): { facts: MemoryFact[]; archived: MemoryFact[] } {
+  private readVault(factsDir: string, archiveDir: string): {
+    facts: MemoryFact[];
+    archived: MemoryFact[];
+    /** 实际磁盘路径（文件名可能被手改/重命名），用于增量写时不制造「改名抖动」。 */
+    paths: Map<string, string>;
+  } {
     const facts: MemoryFact[] = [];
     const archived: MemoryFact[] = [];
+    const paths = new Map<string, string>();
     for (const [dir, isArchive] of [
       [factsDir, false],
       [archiveDir, true],
@@ -289,13 +295,14 @@ export class MemoryService {
           const fact = parsed.fact;
           if (isArchive && fact.archivedAt === undefined) fact.archivedAt = fs.statSync(file).mtimeMs;
           if (isArchive && fact.status === "active") fact.status = "archived";
+          paths.set(fact.id, file);
           (isArchive ? archived : facts).push(fact);
         } catch (err) {
           console.warn(`[Loopsoar] 读取记忆文件失败：${name}`, err);
         }
       }
     }
-    return { facts, archived };
+    return { facts, archived, paths };
   }
 
   private async readLegacyJson(legacyPath: string): Promise<{ facts?: MemoryFact[]; archived?: MemoryFact[] }> {
@@ -336,16 +343,16 @@ export class MemoryService {
   }
 
   /** 载入后建立「id → 路径 + 内容指纹」基线，后续 save 只写变化的那几个文件。 */
-  private fingerprint(facts: readonly MemoryFact[], archived: readonly MemoryFact[]): Map<string, string> {
+  private fingerprint(
+    facts: readonly MemoryFact[],
+    archived: readonly MemoryFact[],
+    paths: Map<string, string>,
+  ): Map<string, string> {
     const map = new Map<string, string>();
-    for (const [list, dir] of [
-      [facts, "facts"],
-      [archived, "archive"],
-    ] as const) {
-      for (const fact of list) {
-        const file = path.join(this.vaultPath, dir, vaultFileName(fact.id));
-        map.set(fact.id, `${file}\u0000${hashText(factToMarkdown(fact))}`);
-      }
+    for (const fact of [...facts, ...archived]) {
+      const file = paths.get(fact.id);
+      if (!file) continue;
+      map.set(fact.id, `${file}\u0000${hashText(factToMarkdown(fact))}`);
     }
     return map;
   }
@@ -367,7 +374,14 @@ export class MemoryService {
       [archived, "archive"],
     ] as const) {
       for (const fact of list) {
-        const file = path.join(this.vaultPath, dir, vaultFileName(fact.id));
+        // 首次落盘用人类可读名；之后沿用已有文件名（改名会让外部 md 链接失效）。
+        const previous = this.lastWritten.get(fact.id)?.split("\u0000")[0];
+        const name = previous ? path.basename(previous) : memoryFileName(fact);
+        let file = path.join(this.vaultPath, dir, name);
+        // 同名不同条目（同一天、同标题）时用 id 后缀去重，保证不覆盖
+        if ([...seen.values()].some((token) => token.split("\u0000")[0] === file)) {
+          file = path.join(this.vaultPath, dir, name.replace(/\.md$/i, `-${fact.id}.md`));
+        }
         const text = factToMarkdown(fact);
         const token = `${file}\u0000${hashText(text)}`;
         seen.set(fact.id, token);

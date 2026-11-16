@@ -6,6 +6,7 @@ import { createFact } from "../../packages/core/src/memory/fact.ts";
 import {
   factToMarkdown,
   markdownToFact,
+  memoryFileName,
   renderVaultIndex,
   vaultFileName,
 } from "../../packages/core/src/memory/vault.ts";
@@ -74,6 +75,18 @@ describe("记忆仓库编解码（Obsidian 风格）", () => {
   it("文件名安全化：路径分隔符不会逃出目录", () => {
     expect(vaultFileName("a/b:c")).toBe("a_b_c.md");
     expect(vaultFileName("")).toBe("memory.md");
+  });
+
+  it("人类可读文件名：日期 + 内容摘要，且去掉 Windows 非法字符", () => {
+    const name = memoryFileName(fact({ content: "记忆原点: 第一层/只放会话?" }));
+    expect(name).toMatch(/^\d{4}-\d{2}-\d{2}-.+\.md$/);
+    expect(name).not.toMatch(/[\\/:*?"<>|]/);
+    expect(name).toContain("记忆原点");
+  });
+
+  it("frontmatter 带 aliases: [id]，改文件名后 [[id]] 仍可解析", () => {
+    const md = factToMarkdown(fact());
+    expect(md).toContain("aliases: [m1]");
   });
 
   it("索引笔记按工作区汇总并用 wikilink 指向条目", () => {
