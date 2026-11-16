@@ -247,6 +247,8 @@ describe("MemoryService · 内容哈希索引（可丢弃缓存）", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     expect(service.list({ workspaceId: "ws-a" })[0]?.content).toContain("运行期新内容");
+    // 向量索引也跟着增量更新了：新的关键词能检索到
+    expect(service.search("运行期新内容", 6, "ws-a").some((hit) => hit.fact.content.includes("运行期新内容"))).toBe(true);
     service.dispose();
   });
 

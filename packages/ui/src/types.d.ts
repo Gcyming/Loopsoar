@@ -185,6 +185,8 @@ export interface MemoryListResult {
   archivedCount: number;
   stats: MemoryStats;
   filePath: string;
+  /** 后台是否仍在按内容哈希核对磁盘（启动后的最终一致窗口）。 */
+  reconciling: boolean;
 }
 
 export interface LocationsInfo {

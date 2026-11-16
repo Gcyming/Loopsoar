@@ -463,6 +463,10 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Drag the timeline to watch memories appear and get superseded.",
   },
   "settings.memory.superseded": { zh: "已失效", en: "Superseded" },
+  "settings.memory.reconciling": {
+    zh: "索引核对中：正在按内容哈希核对磁盘，刚在外部改动的记忆稍后生效。",
+    en: "Verifying index: hashing files on disk; external edits apply shortly.",
+  },
   "settings.memory.vaultHint": {
     zh: "这个目录本身就是 Obsidian vault：可直接「打开文件夹作为仓库」，一条记忆一个 .md，frontmatter 就是属性。",
     en: "This folder is itself an Obsidian vault: open it as a vault; each memory is one .md file and its frontmatter is the properties.",

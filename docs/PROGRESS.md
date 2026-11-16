@@ -1237,3 +1237,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 实测：2k 热启动 208→83ms（后台核对 124ms）；10k 955→467ms（后台核对 713ms）。
 - 验证：新增 1 条运行期监听用例；208 文件 / 1698 用例全绿；typecheck/build/gen-check 全过；E2E 正常。
 
+
+### 记忆索引运行期收尾（ADR-0124）
+
+- 外部变更只增量更新向量：indexFacts(变化的 fact) + hashIndex.remove(删除的 id)，不再全量重建。
+- memory:list 增加 reconciling；设置页显示「索引核对中……」并轮询到结束。
+- 监听用例补向量检索断言：外部改完 search 能命中新关键词。
+- 验证：206 文件 / 1698 用例全绿；typecheck/build 全过。
+

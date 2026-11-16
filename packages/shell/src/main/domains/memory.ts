@@ -36,6 +36,7 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
     archivedCount: deps.memory.stats().archived,
     stats: deps.memory.stats(),
     filePath: deps.memory.vaultPath,
+    reconciling: deps.memory.reconciling,
   }));
 
   handleTrusted(deps, "memory:stats", () => deps.memory.stats());

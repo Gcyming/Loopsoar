@@ -293,6 +293,11 @@ export class MemoryService {
     if (fromIndex) this.reconcilePromise = this.reconcileAll();
   }
 
+  /** 后台核对是否仍在进行（设置页展示「核对中」，让最终一致窗口可见）。 */
+  get reconciling(): boolean {
+    return this.reconcilePromise !== null;
+  }
+
   /** 测试/退出用：等待后台核对完成。 */
   async whenSettled(): Promise<void> {
     if (this.reconcilePromise) await this.reconcilePromise;
@@ -331,6 +336,8 @@ export class MemoryService {
     const byPath = new Map<string, { id: string; entry: IndexEntry }>();
     for (const [id, entry] of this.indexEntries) byPath.set(entry.path, { id, entry });
     const presentPaths = new Set<string>();
+    const changedFacts: MemoryFact[] = [];
+    const removedIds: string[] = [];
     let changed = false;
 
     for (const [dir, relDir, isArchive] of [
@@ -361,6 +368,7 @@ export class MemoryService {
             this.indexEntries.set(fact.id, { path: rel, hash, fact: stableFact(fact) });
             this.touchedShards.add(shardOf(fact.id));
             this.lastWritten.set(fact.id, `${file}\u0000${hash}`);
+            changedFacts.push(fact);
             changed = true;
           } catch (err) {
             console.warn(`[Loopsoar] 后台核对读取失败：${rel}`, err);
@@ -376,10 +384,16 @@ export class MemoryService {
       this.indexEntries.delete(id);
       this.touchedShards.add(shardOf(id));
       this.lastWritten.delete(id);
+      removedIds.push(id);
       changed = true;
     }
     if (changed) {
-      await this.rebuildVectorIndex();
+      // 只更新变化的向量，避免外部改一条就重建全量索引（10k 时差别很大）
+      if (changedFacts.length > 0) await this.indexFacts(changedFacts);
+      for (const id of removedIds) {
+        this.hashIndex.remove(id);
+        this.externalVectors?.delete(id);
+      }
     }
     await this.flushIndex();
     this.reconcilePromise = null;
@@ -408,24 +422,31 @@ export class MemoryService {
     const paths = [...this.pendingPaths];
     this.pendingPaths.clear();
     if (paths.length === 0) return;
-    let changed = false;
-    for (const rel of paths) changed = (await this.reconcilePath(rel)) || changed;
-    if (changed) {
-      await this.rebuildVectorIndex();
-      await this.flushIndex();
+    const changedFacts: MemoryFact[] = [];
+    const removedIds: string[] = [];
+    for (const rel of paths) {
+      const result = await this.reconcilePath(rel);
+      if (result.fact) changedFacts.push(result.fact);
+      if (result.removedId) removedIds.push(result.removedId);
     }
+    if (changedFacts.length > 0) await this.indexFacts(changedFacts);
+    for (const id of removedIds) {
+      this.hashIndex.remove(id);
+      this.externalVectors?.delete(id);
+    }
+    if (changedFacts.length > 0 || removedIds.length > 0) await this.flushIndex();
   }
 
   /** 单个文件的外部变更：改/新建 → 解析并 upsert；删除 → 移除。 */
-  private async reconcilePath(rel: string): Promise<boolean> {
+  private async reconcilePath(rel: string): Promise<{ fact?: MemoryFact; removedId?: string }> {
     const file = path.join(this.vaultPath, rel);
     try {
       const text = await fs.promises.readFile(file, "utf8");
       const hash = hashText(text);
       const entry = [...this.indexEntries.entries()].find(([, item]) => item.path === rel);
-      if (entry && entry[1].hash === hash) return false;
+      if (entry && entry[1].hash === hash) return {};
       const parsed = markdownToFact(text, path.basename(file));
-      if (!parsed) return false;
+      if (!parsed) return {};
       const fact = parsed.fact;
       if (rel.startsWith("archive/")) {
         fact.archivedAt ??= Date.now();
@@ -435,19 +456,19 @@ export class MemoryService {
       this.indexEntries.set(fact.id, { path: rel, hash, fact: stableFact(fact) });
       this.touchedShards.add(shardOf(fact.id));
       this.lastWritten.set(fact.id, `${file}\u0000${hash}`);
-      return true;
+      return { fact };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         console.warn(`[Loopsoar] 同步外部编辑失败：${rel}`, err);
-        return false;
+        return {};
       }
       const entry = [...this.indexEntries.entries()].find(([, item]) => item.path === rel);
-      if (!entry) return false;
+      if (!entry) return {};
       this.store.removeAnywhere(entry[0]);
       this.indexEntries.delete(entry[0]);
       this.touchedShards.add(shardOf(entry[0]));
       this.lastWritten.delete(entry[0]);
-      return true;
+      return { removedId: entry[0] };
     }
   }
 

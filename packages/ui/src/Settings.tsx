@@ -177,6 +177,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [drafts, setDrafts] = useState<DraftRule[]>([]);
   const [deleted, setDeleted] = useState<string[]>([]);
   const [mem, setMem] = useState<MemoryListResult | null>(null);
+  // 启动后的索引核对在后台进行：轮询到 idle 为止，让「最终一致窗口」可见并自动消失。
+  useEffect(() => {
+    if (!mem?.reconciling || !api) return;
+    const timer = window.setTimeout(() => {
+      void api.memory
+        .list()
+        .then(setMem)
+        .catch(() => undefined);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [mem]);
   const [mForm, setMForm] = useState({ content: "", category: "general" });
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
   /** 记忆面板的查看范围（D1）：只影响展示，召回隔离在壳层。 */
@@ -1416,6 +1427,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           </div>
           <div style={S.note}>{tr("settings.memory.store")}<code style={S.code}>{mem.filePath}</code></div>
           <div style={S.note}>{tr("settings.memory.vaultHint")}</div>
+          {mem.reconciling ? <div style={S.note}>{tr("settings.memory.reconciling")}</div> : null}
           {workspaceIds.length > 1 ? (
             <div style={S.btns}>
               <Btn label={tr("settings.memory.wsAll")} small primary={memWs === "all"} onClick={() => setMemWs("all")} />
