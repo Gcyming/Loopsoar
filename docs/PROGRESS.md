@@ -1245,3 +1245,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 监听用例补向量检索断言：外部改完 search 能命中新关键词。
 - 验证：206 文件 / 1698 用例全绿；typecheck/build 全过。
 
+
+### LLM 回顾命名（ADR-0125）
+
+- 新增 memory:review（dry-run 默认）：最多 24 条候选，模型给短标题；设置页预览「原正文 → 建议标题」，确认后写回 frontmatter title。
+- 写入范围最小：不改正文/文件名/链接；title 为可选字段，旧库兼容。输出严格校验（未知 id、重复、超长、空标题丢弃）；20s 超时降级。
+- 运行时解析当前模型（换供应商立即生效），无模型提示不可用。
+- 验证：新增 5 条回顾用例；207 文件 / 1703 用例全绿；typecheck/build/gen-check 全过；E2E 正常。
+

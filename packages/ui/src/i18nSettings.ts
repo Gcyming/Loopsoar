@@ -463,6 +463,12 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "Drag the timeline to watch memories appear and get superseded.",
   },
   "settings.memory.superseded": { zh: "已失效", en: "Superseded" },
+  "settings.memory.review": { zh: "回顾命名", en: "Review titles" },
+  "settings.memory.reviewTitle": { zh: "回顾建议（{count} 条，确认后应用）", en: "Suggested titles ({count})" },
+  "settings.memory.reviewApply": { zh: "应用标题", en: "Apply titles" },
+  "settings.memory.reviewApplied": { zh: "已应用 {count} 条标题", en: "Applied {count} titles" },
+  "settings.memory.reviewUnavailable": { zh: "当前没有可用模型：先到「供应商」配置后再回顾", en: "No model available: configure a provider first" },
+  "settings.memory.reviewEmpty": { zh: "没有需要回顾的记忆", en: "Nothing to review" },
   "settings.memory.reconciling": {
     zh: "索引核对中：正在按内容哈希核对磁盘，刚在外部改动的记忆稍后生效。",
     en: "Verifying index: hashing files on disk; external edits apply shortly.",

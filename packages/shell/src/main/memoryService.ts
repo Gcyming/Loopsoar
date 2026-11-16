@@ -798,6 +798,31 @@ export class MemoryService {
     return { path: target, bytes: Buffer.byteLength(text), count: facts.length };
   }
 
+  /** 回顾候选：重要度高、近期用过的活跃条目（默认最多 24 条，够模型一次看完）。 */
+  reviewCandidates(limit = 24): MemoryFact[] {
+    return this.store
+      .list()
+      .filter((fact) => !fact.invalidatedAt && fact.status === "active")
+      .sort((a, b) => b.importance - a.importance || b.lastAccessed - a.lastAccessed)
+      .slice(0, limit);
+  }
+
+  /** 应用回顾标题：只改 frontmatter 的 title，不动正文、不改文件名（外部链接不失效）。 */
+  async applyTitles(updates: readonly { id: string; title: string }[]): Promise<number> {
+    const byId = new Map(updates.map((update) => [update.id, update.title.trim().slice(0, 60)]));
+    const changed: MemoryFact[] = [];
+    for (const fact of this.store.list()) {
+      const title = byId.get(fact.id);
+      if (!title || title === fact.title) continue;
+      fact.title = title;
+      changed.push(fact);
+    }
+    if (changed.length === 0) return 0;
+    await this.save();
+    await this.indexFacts(changed);
+    return changed.length;
+  }
+
   /** 后台巩固（D3 后半）：合并近似重复 + 归档长期未用条目；返回报告。 */
   async consolidate(workspaceId?: string): Promise<{ merged: number; archived: string[]; scanned: number }> {
     const report = this.store.consolidate(Date.now(), workspaceId ? { workspaceId } : {});

@@ -26,6 +26,8 @@ export const DEFAULT_WORKSPACE_ID = "default";
 export interface MemoryFact {
   id: string;
   content: string;
+  /** 回顾命名（可选）：模型/人工给的短标题；缺省时用正文首段。 */
+  title?: string;
   category: string;
   tags: string[];
   importance: number; // 1..10

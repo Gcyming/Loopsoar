@@ -55,7 +55,9 @@ export function idFromFileName(fileName: string): string {
   return fileName.replace(/\.md$/i, "");
 }
 
-function titleOf(content: string): string {
+function titleOf(content: string, title?: string): string {
+  const given = title?.trim();
+  if (given) return given.length > 60 ? `${given.slice(0, 60)}…` : given;
   const first = content.replace(/\s+/g, " ").trim();
   return first.length > 40 ? `${first.slice(0, 40)}…` : first;
 }
@@ -80,7 +82,7 @@ export function factToMarkdown(fact: MemoryFact): string {
     id: fact.id,
     // 文件名会变，id 才是稳定锚点：Obsidian 里 [[m1]] 通过 alias 仍能解析到这条笔记
     aliases: [fact.id],
-    title: titleOf(fact.content),
+    title: titleOf(fact.content, fact.title),
     category: fact.category,
     workspace: fact.workspaceId ?? DEFAULT_WORKSPACE_ID,
     importance: fact.importance,
@@ -194,6 +196,7 @@ export function markdownToFact(text: string, fileName: string): VaultParseResult
 
   const fact = createFact({
     id,
+    title: asString(record.title),
     content,
     category: asString(record.category) ?? "fact",
     tags: asStringList(record.tags),
@@ -255,7 +258,7 @@ export function renderVaultIndex(facts: readonly MemoryFact[], archived: readonl
   for (const [ws, items] of [...byWorkspace.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push(`## ${ws}`, "");
     for (const fact of items.sort((a, b) => b.importance - a.importance)) {
-      lines.push(`- [[${fact.id}|${titleOf(fact.content)}]] · ${fact.category} · 重要度 ${fact.importance}`);
+      lines.push(`- [[${fact.id}|${titleOf(fact.content, fact.title)}]] · ${fact.category} · 重要度 ${fact.importance}`);
     }
     lines.push("");
   }

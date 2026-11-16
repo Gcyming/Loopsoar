@@ -972,6 +972,12 @@ export interface LoopsoarAPI {
   };
   memory: LoopsoarDomain & {
     list(): Promise<MemoryListResult>;
+    /** 回顾命名（LLM）：默认 dry-run 返回建议，apply=true 才写回 title。 */
+    review(req?: { apply?: boolean }): Promise<{
+      suggestions: { id: string; title: string; content: string }[];
+      applied: number;
+      available: boolean;
+    }>;
     /** M4：at = 回放时刻（缺省 = 现在）。 */
   graph(req?: { at?: number }): Promise<MemoryGraphResult>;
   /** 导出 Markdown 快照（只读投影，写到 memory.json 同目录的 memory.md）。 */

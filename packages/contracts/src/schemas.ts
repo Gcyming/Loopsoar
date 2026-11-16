@@ -470,6 +470,9 @@ export const MemoryUpdateSchema = z.object({
 export const MemoryDeleteSchema = z.object({ id: z.string().min(1) });
 
 /** M4 时间回放：at = 回放时刻（毫秒时间戳）；缺省 = 现在。 */
+/** 回顾命名（LLM）：apply=false 只出建议，true 才落库。 */
+export const MemoryReviewSchema = z.object({ apply: z.boolean().optional() }).nullish();
+
 export const MemoryGraphSchema = z.object({ at: z.number().int().nonnegative().optional() }).optional();
 
 /**
@@ -760,6 +763,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "memory",
     method: "consolidate",
     request: null,
+    sensitive: true,
+  },
+  "memory:review": {
+    domain: "memory",
+    method: "review",
+    request: MemoryReviewSchema,
     sensitive: true,
   },
   "memory:export": {

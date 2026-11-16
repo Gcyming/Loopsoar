@@ -2,13 +2,15 @@
  * memory 域：记忆条目的列表/新增/编辑/删除/清空/统计（供设置面板「记忆」分区）。
  * 写入治理与召回在 MemoryService 内完成（五门 + 容量软归档）。
  */
-import { buildMemoryGraph, layoutMemoryGraph } from "loopsoar-core/memory";
+import { buildMemoryGraph, layoutMemoryGraph, type MemoryFact } from "loopsoar-core/memory";
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { MemoryService } from "../memoryService.js";
 import type { SessionStore } from "../sessionStore.js";
 
 export interface MemoryDeps extends TrustedIpcDeps {
   memory: MemoryService;
+  /** 回顾命名（可选）：注入 LLM 后可用；缺省时设置页按钮会提示不可用。 */
+  review?: (facts: MemoryFact[]) => Promise<{ id: string; title: string; content: string }[] | null>;
   sessions?: SessionStore;
   push?: (event: string, payload: unknown) => void;
 }
@@ -68,6 +70,16 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
 
   /** Markdown 导出（只读投影）：写给人和 git 看，写入仍以 JSON 为准。 */
   handleTrusted(deps, "memory:export", async () => deps.memory.exportMarkdown());
+
+  /** 回顾命名：默认只出建议（dry-run），apply=true 才写回 title。 */
+  handleTrusted(deps, "memory:review", async (payload) => {
+    const request = (payload ?? {}) as { apply?: boolean };
+    const facts = deps.memory.reviewCandidates();
+    const available = Boolean(deps.review);
+    const suggestions = (available ? await deps.review?.(facts) : null) ?? [];
+    const applied = request.apply && suggestions.length > 0 ? await deps.memory.applyTitles(suggestions) : 0;
+    return { suggestions, applied, available };
+  });
 
   handleTrusted(deps, "memory:add", async (payload) => {
     const p = payload as {

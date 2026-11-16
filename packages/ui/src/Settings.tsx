@@ -190,6 +190,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, [mem]);
   const [mForm, setMForm] = useState({ content: "", category: "general" });
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
+  const [review, setReview] = useState<{
+    suggestions: { id: string; title: string; content: string }[];
+    applied: number;
+    available: boolean;
+  } | null>(null);
   /** 记忆面板的查看范围（D1）：只影响展示，召回隔离在壳层。 */
   const [memWs, setMemWs] = useState<string>("all");
   /** 记忆图谱（E-M0）：随 mem 刷新一起更新（增删改后自动重画）。 */
@@ -1475,8 +1480,43 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   .catch(bad)
               }
             />
+            <Btn label={tr("settings.memory.review")} onClick={() => void api.memory.review().then(setReview).catch(bad)} />
             <Btn label={tr("settings.memory.clearAll")} onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} />
           </div>
+          {review ? (
+            <div className="panel-card" style={S.card}>
+              <div style={S.rowBetween}>
+                <span style={S.meta}>
+                  {review.available
+                    ? tr("settings.memory.reviewTitle", { count: review.suggestions.length })
+                    : tr("settings.memory.reviewUnavailable")}
+                </span>
+                {review.suggestions.length > 0 ? (
+                  <Btn
+                    label={tr("settings.memory.reviewApply")}
+                    primary
+                    small
+                    onClick={() =>
+                      void api.memory
+                        .review({ apply: true })
+                        .then(async (result) => {
+                          setReview(null);
+                          setMem(await api.memory.list());
+                          ok(tr("settings.memory.reviewApplied", { count: result.applied }));
+                        })
+                        .catch(bad)
+                    }
+                  />
+                ) : null}
+              </div>
+              {review.suggestions.map((item) => (
+                <div key={item.id} style={S.memText}>
+                  <span style={S.muted}>{item.content.slice(0, 50)}…</span> → <b>{item.title}</b>
+                </div>
+              ))}
+              {review.available && review.suggestions.length === 0 ? <div style={S.muted}>{tr("settings.memory.reviewEmpty")}</div> : null}
+            </div>
+          ) : null}
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
       }
 

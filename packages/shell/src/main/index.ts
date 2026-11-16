@@ -69,6 +69,7 @@ import { BookmarksStore } from "./bookmarksStore.js";
 import { registerBookmarksDomain } from "./domains/bookmarks.js";
 import { registerPageSaveDomain } from "./domains/pageSave.js";
 import { registerMemoryDomain } from "./domains/memory.js";
+import { reviewTitles } from "./memoryReview.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
 import { WorkspaceStore } from "./workspaceStore.js";
@@ -2476,7 +2477,14 @@ app.whenReady().then(async () => {
       pushToRenderer("browser:tabs", { tabs: browserHost.listTabs(), visibleSession: browserHost.visibleSessionId() });
     },
   });
-  registerMemoryDomain({ ...deps, memory, sessions, push: pushToRenderer });
+  registerMemoryDomain({
+    ...deps,
+    memory,
+    sessions,
+    push: pushToRenderer,
+    // 回顾命名：运行时才解析当前模型（设置里换供应商后立即生效）；无模型时返回 null，按钮提示不可用。
+    review: (facts) => reviewTitles(buildLlmFromActive() ?? llmRef, facts),
+  });
   registerBrowserDomain({
     ...deps,
     browser: browserHost,

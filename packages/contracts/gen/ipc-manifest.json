@@ -316,6 +316,13 @@
       "hasRequest": false
     },
     {
+      "channel": "memory:review",
+      "domain": "memory",
+      "method": "review",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "memory:export",
       "domain": "memory",
       "method": "export",
