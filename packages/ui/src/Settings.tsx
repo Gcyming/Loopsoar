@@ -1406,6 +1406,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         const tagOptions = [...new Set((mem?.facts ?? []).flatMap((fact) => fact.tags))].filter(Boolean).sort();
         const workspaceOptions = [...new Set([...(workspaceIds ?? []), "default"])].filter(Boolean);
         const importanceOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
+        const categoryLabel = (key: string): string => tr(`settings.memory.category.${key}`);
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
           <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
@@ -1443,7 +1444,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 <div className="panel-card" style={S.card}>
                   <div style={S.rowBetween}>
                     <span style={S.meta}>
-                      <span style={BADGE.neutral}>{detail?.category ?? graphSel.kind}</span>
+                      <span style={BADGE.neutral}>{detail ? categoryLabel(detail.category) : graphSel.kind}</span>
                       <span style={S.tag}>{graphSel.workspaceId}</span>
                       {detail ? <span style={S.tag}>{tr("settings.memory.importance", { value: detail.importance })}</span> : null}
                       {graphSel.band !== "L1" ? <span style={S.tag}>{graphSel.band}</span> : null}
@@ -1618,7 +1619,13 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <div style={S.col}>
               <Area v={mForm.content} rows={2} full ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
               <div style={memoryFormGrid}>
-                <Combo v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} options={categoryOptions} />
+                <CategoryCombo
+                  value={mForm.category}
+                  onChange={(x) => setMForm({ ...mForm, category: x })}
+                  options={categoryOptions}
+                  labelOf={categoryLabel}
+                  placeholder={tr("settings.memory.addCategoryPh")}
+                />
                 <Combo v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} options={importanceOptions} />
                 <div />
                 <Combo v={mForm.tags} ph={tr("settings.memory.addTagsPh")} on={(x) => setMForm({ ...mForm, tags: x })} options={tagOptions} />
@@ -1630,7 +1637,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           {shownFacts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : pageFacts.map((f) => (
             <div key={f.id} className="panel-card" style={S.card}>
               <div style={S.rowBetween}>
-                <span style={S.meta}><span style={BADGE.neutral}>{f.category}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
+                <span style={S.meta}><span style={BADGE.neutral}>{categoryLabel(f.category)}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
                 <span style={S.icons}>
                   {mEdit?.id === f.id ? <>
                     <Btn label={tr("settings.save")} small onClick={() => void saveMemEdit()} /><Btn label={tr("settings.cancel")} small onClick={() => setMEdit(null)} />
@@ -2123,6 +2130,77 @@ function Toggle({ v, on, title, testId }: { v: boolean; on: (x: boolean) => void
     </button>
   );
 }
+function CategoryCombo({
+  value,
+  onChange,
+  options,
+  labelOf,
+  placeholder,
+}: {
+  value: string;
+  onChange: (x: string) => void;
+  options: string[];
+  labelOf: (key: string) => string;
+  placeholder: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState<string | null>(null);
+  // 失焦/选择时把「本地化标签」还原成规范 key；自定义文本原样保留
+  const commit = (text: string) => {
+    const matched = options.find((option) => labelOf(option) === text.trim());
+    onChange(matched ?? text.trim());
+    setDraft(null);
+  };
+  return (
+    <div style={comboWrap}>
+      <input
+        style={{ ...S.input, paddingRight: 22 }}
+        value={draft ?? labelOf(value)}
+        placeholder={placeholder}
+        onFocus={() => {
+          setDraft(labelOf(value));
+          setOpen(true);
+        }}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          onChange(event.target.value);
+        }}
+        onBlur={() => commit(draft ?? labelOf(value))}
+      />
+      <button
+        type="button"
+        style={comboArrow}
+        aria-label="展开选项"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          setOpen((open) => !open);
+        }}
+      >
+        ▾
+      </button>
+      {open && options.length > 0 ? (
+        <div style={comboMenu}>
+          {options.slice(0, 40).map((option) => (
+            <button
+              key={option}
+              type="button"
+              style={comboItem}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onChange(option);
+                setDraft(null);
+                setOpen(false);
+              }}
+            >
+              {labelOf(option)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Combo({ v, ph, on, options, style }: { v: string; ph?: string; on: (x: string) => void; options: string[]; style?: React.CSSProperties }) {
   const [open, setOpen] = React.useState(false);
   return (
