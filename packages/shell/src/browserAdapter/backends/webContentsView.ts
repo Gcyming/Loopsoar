@@ -76,11 +76,18 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
   const refs = createTabRegistry();
 
   async function waitDomReady(): Promise<void> {
+    // 每次导航都会调用这里：监听器与兜底定时器必须在 settle 后立刻释放，
+    // 否则同一 WebContents 上会累积 N 个监听 + N 个挂起定时器（MaxListenersExceededWarning / 闭包泄漏）。
+    // 测试假件只实现了 on()，因此 removeListener 用可选调用，不改变适配器契约。
+    const removable = wc as unknown as { removeListener?: (event: string, cb: (...args: unknown[]) => void) => void };
     await new Promise<void>((resolve) => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const done = (): void => {
         if (settled) return;
         settled = true;
+        if (timer) clearTimeout(timer);
+        removable.removeListener?.("dom-ready", done);
         resolve();
       };
       wc.on("dom-ready", done);
@@ -88,7 +95,7 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
       wc.executeJavaScript("document.readyState", false)
         .then(() => done())
         .catch(() => done());
-      setTimeout(done, 15_000);
+      timer = setTimeout(done, 15_000);
     });
   }
 

@@ -45,7 +45,17 @@ export interface SensitiveStepVerdict {
 }
 
 /** 会被分类的动作型工具（其余工具一律不敏感）。 */
-export const SENSITIVE_ACTION_TOOLS = ["browser_click", "browser_type", "browser_navigate", "terminal_run"] as const;
+export const SENSITIVE_ACTION_TOOLS = [
+  "browser_click",
+  "browser_type",
+  "browser_navigate",
+  // Enter 可提交表单（真实键盘 + requestSubmit 兜底）、下拉可选中「确认支付」、拖拽可拖动确认滑块：
+  // 三者都能完成不可撤销动作，漏在名单外等于敏感闸对它们失明。
+  "browser_press_key",
+  "browser_select",
+  "browser_drag",
+  "terminal_run",
+] as const;
 
 /** 扫描参数的硬上限：防止把超大工具入参（整页 HTML）当文本扫。 */
 const MAX_SCAN_CHARS = 8_000;

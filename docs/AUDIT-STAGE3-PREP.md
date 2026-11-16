@@ -159,3 +159,40 @@ pnpm build                           # 5/5 Done
 pnpm gen && pnpm check               # 逐字节一致
 git status --short                   # 仅本轮预期改动
 ```
+
+---
+
+## 8. 补充：浏览器子系统专项审计（同日补跑）
+
+> 独立只读审计覆盖 browserHost / browserTools / browserAdapter / refs.ts / agentPointerWindow / chromePopover / toastWindow / browserRequestGuard / electronBrowser，逐条核对 16 个 `browser_*` 工具的门控、克隆、失败码。
+> 结论：**「适配器一套、工具层一套」的担忧不成立**——生产只有 refs.ts 一套实现，适配器的 `click()/type()` 是零调用方死代码。
+
+### 8.1 已修（本轮第二提交）
+
+| 级别 | 缺陷 | 证据 | 修复 |
+|---|---|---|---|
+| **P0** | **敏感动作名单缺项**：只有 click/type/navigate/terminal_run——Enter 提交支付表单、下拉选「确认支付」、拖拽确认滑块都不触发确认；而 `browser` 档默认 allow，敏感闸是唯一拦截 | `core/src/sensitiveSteps.ts:48` | 名单补 `browser_press_key` / `browser_select` / `browser_drag`；新增 2 条回归用例（命中 + 不误报） |
+| P1 | **等待就绪泄漏监听与定时器**：`waitDomReady` 每次导航 `wc.on("dom-ready")` 不移除、`setTimeout(done, 15s)` 不 clear | `browserAdapter/backends/webContentsView.ts:78-93` | settle 后 `removeListener`（对测试假件用可选调用）+ `clearTimeout` |
+| P1 | **接管锁计数不随关页释放**：`lockAttempts` 只在手动解锁/删会话时清 | `main/browserHost.ts:216,907` | `closeTab` 内删 `session::tab` 键 |
+| P1 | **前后退指针不回滚**：导航失败后 index 与真实页面脱钩，`canBack/canForward` 与地址栏永久错位（再点会跨两页） | `main/browserHost.ts:729-741` | 失败时回滚 index |
+| P1 | **favicon 缓存只写不删**：每条最多 96KB，长时间浏览后主进程内存单调增长 | `main/electronBrowser.ts:146-182` | 上限 200 条，按插入顺序淘汰 |
+
+### 8.2 待办（进第三阶段台账，需产品/安全口径）
+
+| 级别 | 问题 | 证据 | 建议 |
+|---|---|---|---|
+| **P0** | **敏感点击对 `#eN` 失明**：分类只看参数字符串，`browser_click` 的 schema 只有 `target`，文档主路径是 `#e5`；点「立即支付」传 `#e12` 时分类恒 false | `core/src/sensitiveSteps.ts:188`、`browserTools.ts:410` | 定位成功后用 `performTargetPoint` 已返回的 `label/role` 再判一次（需在工具层加确认通道，或把 label 回传给策略层复核） |
+| **P0** | **浏览器侧 SSRF 比 web_fetch 松一档**：默认 `allowLoopback=true`（仅 `LOOPSOAR_STRICT_NET=1` 收紧）、无端口白名单；web_fetch 写死 `allowLoopback:false` → 可顶层导航到 `127.0.0.1:11434` 再读正文 | `browserRequestGuard.ts:115-155`、`browserTools.ts:1116` | 复用 `core/net/ssrf` 判据；回环改显式配置（默认关、E2E 才开）；回环导航加一次确认 |
+| P1 | **后台会话抢前台视图**：`ensureAgentTab` 无条件 `showTask`，与「绝不切走用户所在会话」注释冲突，轮次结束也不恢复 | `browserHost.ts:1379,1408` | 仅 `sid === activeSession` 时切；后台只建标签 |
+| P1 | **Agent 页面的新标签落错组**：`openInNewTab` 不传 sessionId/origin → 落到用户当前会话且 `agentBound=false` | `main/index.ts:1976`、`browserHost.ts:869` | window open handler 传回 `(sessionId, tabId)` 与 `origin:"agent"` |
+| P1 | **新会话「首次快照→首次动作」必然 STALE_REF**：快照回落用户标签并回填 tabId，动作前取 `activeTabId(session)` 为 null，令牌迁移条件短路 | `browserHost.ts:1290-1296`、`browserTools.ts:1169-1182` | 迁移以 `lastSnapshotTab` 为来源键；或克隆后自动重快照一次 |
+| P1 | **令牌跨标签错挂**：复用已有 agentBound 标签时仍把旧标签令牌改键挂到新标签 | `browserHost.ts:1356-1363` | 只在本函数新建标签时迁移；复用时删旧键让模型重快照 |
+| P1 | **两张令牌表无界**：`snapshotTokens`/`lastSnapshotTab` 只在 `browser_tabs close` 清，UI 关页/删会话/fork 都不清 | `browserTools.ts:56-58` | 合并进 host 的 TabEntry，随标签生命周期释放 |
+| P2 | 适配器 `click()`/`type()` 零生产调用，`scroll?/wait?` 无实现 | `browserAdapter/types.ts:81-94` | 删死接口，保留 `performClick/performType` 唯一入口 |
+| P2 | `browser_dismiss_popup` 把任何异常映射成「没有可操作的网页标签」，找不到关闭控件时仍返回 `ok:true, escape` | `browserTools.ts:498`、`refs.ts:428` | 区分 NO_TAB/SCRIPT_ERROR/NOTHING_FOUND |
+| P2 | `browser_navigate` 首次两次整页加载（先克隆加载源页、再加载目标页） | `browserTools.ts:1159` | 导航类工具用空白克隆，源=目标时跳过 |
+| P2 | 缩放三源不一致；`setZoom` 忽略 tabId 且不持久 | `webContentsView.ts:130`、`browserHost.ts:1311` | 统一读 `wc.getZoomFactor()`；记入 TabEntry |
+| P2 | `applyLayout` 重排所有会话所有标签；`browser_stateStore` 每次 set 全量同步读写 | `browserHost.ts:529`、`browserStateStore.ts:13-27` | 隐藏标签标 dirty；状态改内存 + 批量 flush |
+| P2 | 失败码只在中文文案里，`ToolResult.error` 从不设置 → 无法按码聚合 | `browserTools.ts:440` 等 | 把 `perform*` 的 `code` 写进 `ToolResult.error`（契约变更） |
+| P2 | 只读工具在会话无标签时回落用户全局标签，Agent 未开工即可读用户当前页 | `browserHost.ts:1290` | 结果显式标注来源，或加会话级开关 |
+

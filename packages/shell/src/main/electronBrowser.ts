@@ -147,6 +147,17 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
 const FAVICON_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const FAVICON_MAX_BYTES = 96 * 1024;
 const faviconCache = new Map<string, { at: number; dataUrl: string | null }>();
+/** 缓存条数上限：旧实现只写不删，长时间浏览后主进程内存单调增长（每条最多 96KB）。 */
+const FAVICON_CACHE_MAX = 200;
+
+/** 超出上限时按插入顺序淘汰最旧条目（Map 保序，等价于近似 LRU）。 */
+function trimFaviconCache(): void {
+  if (faviconCache.size <= FAVICON_CACHE_MAX) return;
+  for (const key of faviconCache.keys()) {
+    faviconCache.delete(key);
+    if (faviconCache.size <= FAVICON_CACHE_MAX) return;
+  }
+}
 
 /**
  * 把 page-favicon-updated 给的图标 URL 抓成 data URL。
@@ -174,9 +185,11 @@ async function fetchFaviconDataUrl(url: string): Promise<string | null> {
     if (buffer.byteLength === 0 || buffer.byteLength > FAVICON_MAX_BYTES) throw new Error("图标体积超限");
     const dataUrl = `data:${mime};base64,${buffer.toString("base64")}`;
     faviconCache.set(url, { at: Date.now(), dataUrl });
+    trimFaviconCache();
     return dataUrl;
   } catch (err) {
     faviconCache.set(url, { at: Date.now(), dataUrl: null });
+    trimFaviconCache();
     return null;
   }
 }

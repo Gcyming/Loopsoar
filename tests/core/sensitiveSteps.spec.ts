@@ -43,6 +43,19 @@ describe("只分类动作型工具（只读工具永不敏感）", () => {
   it("工具名大小写不敏感", () => {
     expectSensitive(classifySensitiveStep({ toolName: "Browser_Click", params: { target: "登录" } }), "login");
   });
+
+  it("提交/选择/拖拽类动作同样进入敏感分类（回归：旧名单只含 click/type/navigate/terminal）", () => {
+    // Enter 可提交支付表单；下拉可选中「确认支付」；拖拽可拖动确认滑块——
+    // 三者都能完成不可撤销动作，漏在 SENSITIVE_ACTION_TOOLS 外等于敏感闸对它们失明。
+    expectSensitive(classifySensitiveStep({ toolName: "browser_press_key", params: { key: "Enter", text: "确认支付" } }), "payment");
+    expectSensitive(classifySensitiveStep({ toolName: "browser_select", params: { target: "#pay", option: "确认支付" } }), "payment");
+    expectSensitive(classifySensitiveStep({ toolName: "browser_drag", params: { to: "删除账户" } }), "irreversible");
+  });
+
+  it("普通按键/普通下拉不误报", () => {
+    expectSafe(classifySensitiveStep({ toolName: "browser_press_key", params: { key: "Tab" } }));
+    expectSafe(classifySensitiveStep({ toolName: "browser_select", params: { target: "#city", option: "杭州" } }));
+  });
 });
 
 describe("browser_click / browser_type：登录/账号", () => {

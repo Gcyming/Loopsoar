@@ -728,7 +728,10 @@ export class BrowserHost {
     const [id, entry] = resolved;
     if (entry.index <= 0) return { ok: false, error: "没有可后退的历史" };
     entry.index -= 1;
-    return this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
+    const result = await this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
+    // 导航失败必须回滚指针：否则 index 与真实页面脱钩，canBack/canForward 与地址栏永久错位（再点会跨两页）。
+    if (!result.ok) entry.index += 1;
+    return result;
   }
 
   async goForward(tabId?: string, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
@@ -737,7 +740,9 @@ export class BrowserHost {
     const [id, entry] = resolved;
     if (entry.index >= entry.history.length - 1) return { ok: false, error: "没有可前进的历史" };
     entry.index += 1;
-    return this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
+    const result = await this.navigateRecorded(entry.history[entry.index], id, false, sessionId);
+    if (!result.ok) entry.index -= 1;
+    return result;
   }
 
   /**
@@ -918,6 +923,8 @@ export class BrowserHost {
       group.activeId = group.tabs.keys().next().value ?? null;
     }
     const sid = sessionId ?? this.activeSession;
+    // 关页即释放该标签的接管锁重试计数，否则 Map 随标签数单调增长（closeSessionTabs 才按会话清）。
+    this.lockAttempts.delete(`${sid}::${tabId}`);
     this.emitTabs(sid);
     // 任务工作区的最后一个页面关掉：回到用户全局标签，而不是停在一片空白。
     if (group.tabs.size === 0 && sid !== USER_TABS_SESSION && this.visibleSession === sid) {
