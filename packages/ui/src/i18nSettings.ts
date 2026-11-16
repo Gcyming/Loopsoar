@@ -466,6 +466,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.memory.items": { zh: "条目", en: "Entries" },
   "settings.memory.archived": { zh: "归档", en: "Archived" },
   "settings.memory.links": { zh: "关联", en: "Links" },
+  "settings.memory.invalidated": { zh: "已失效", en: "Invalidated" },
   "settings.memory.store": { zh: "记忆库：", en: "Memory store:" },
   "settings.memory.addTitle": { zh: "新增记忆", en: "New memory" },
   "settings.memory.empty": {

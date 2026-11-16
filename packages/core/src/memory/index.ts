@@ -12,3 +12,4 @@ export * from "./extract.js";
 export * from "./vector.js";
 export * from "./retrieval.js";
 export * from "./graph.js";
+export * from "./supersede.js";

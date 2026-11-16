@@ -131,6 +131,8 @@ export interface MemoryStats {
   byCategory: Record<string, number>;
   /** 按工作区分布（D1）。 */
   byWorkspace?: Record<string, number>;
+  /** D2：已失效（被取代）的条目数。 */
+  invalidated?: number;
 }
 
 export interface MemoryGraphNodeView {

@@ -1327,6 +1327,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Stat l={tr("settings.memory.items")} v={mem.stats.active} />
             <Stat l={tr("settings.memory.archived")} v={mem.stats.archived} />
             <Stat l={tr("settings.memory.links")} v={mem.stats.links} />
+            <Stat l={tr("settings.memory.invalidated")} v={mem.stats.invalidated ?? 0} />
           </div>
           <div style={S.note}>{tr("settings.memory.store")}<code style={S.code}>{mem.filePath}</code></div>
           {workspaceIds.length > 1 ? (

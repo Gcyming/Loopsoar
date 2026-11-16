@@ -22,6 +22,7 @@ import {
   THRESHOLD_CAPACITY_MAX,
   DEFAULT_AGENT_ID,
 } from "./fiveGate.js";
+import { detectSupersede } from "./supersede.js";
 
 export interface MemoryCandidate {
   content: string;
@@ -49,6 +50,8 @@ export interface MemoryStats {
   crossAgentLinks?: number;
   /** 按工作区统计（D1：面板与隔离诊断用）。 */
   byWorkspace?: Record<string, number>;
+  /** D2：已失效（被取代）的条目数。 */
+  invalidated?: number;
 }
 
 export interface MemoryStoreState {
@@ -110,6 +113,8 @@ export class MemoryStore {
     linked: number;
     /** 第 5 闸：本次建立的跨 agent 指针数。 */
     crossAgent: number;
+    /** D2：本次被取代（失效）的旧条目 id。 */
+    superseded: string[];
   } {
     const nowMs = this.now();
     const defaultAgent = this.opts.agentId ?? DEFAULT_AGENT_ID;
@@ -119,6 +124,7 @@ export class MemoryStore {
     const deduped: { id: string; content: string }[] = [];
     let linked = 0;
     let crossAgent = 0;
+    const superseded: string[] = [];
 
     for (const candidate of candidates) {
       const content = candidate.content.trim();
@@ -165,7 +171,19 @@ export class MemoryStore {
         continue;
       }
 
-      // ② 合并
+      // ② 取代（D2）：新事实明确表达「改为/不再/换成」或数字变化 → 旧条目失效（不删除，可查回）
+      const replaceable = detectSupersede(incoming, scoped.filter((f) => f.id !== incoming.id));
+      for (const candidate of replaceable) {
+        const old = candidate.fact;
+        old.invalidatedAt = nowMs;
+        old.supersededBy = incoming.id;
+        old.status = `invalidated:${old.category}`;
+        incoming.supersedes = [...(incoming.supersedes ?? []), old.id];
+        superseded.push(old.id);
+        linked += 0;
+      }
+
+      // ③ 合并
       const merge = gateMerge(scoped, incoming);
       if (merge.mergeInto) {
         const target = merge.mergeInto;
@@ -214,6 +232,7 @@ export class MemoryStore {
       archived: archivedIds,
       linked,
       crossAgent,
+      superseded,
     };
   }
 
@@ -260,13 +279,18 @@ export class MemoryStore {
       sortBy?: "updated" | "value" | "importance";
       /** 只看某个工作区（缺省 = 全部；UI/召回必须显式传，避免跨区泄漏）。 */
       workspaceId?: string;
+      /** D2：是否包含已失效条目（默认不含，供「查看历史」用）。 */
+      includeInvalidated?: boolean;
     } = {},
   ): MemoryFact[] {
     const nowMs = this.now();
     const raw = opts.includeArchived ? [...this.facts, ...this.archived] : [...this.facts];
+    const filtered = opts.includeInvalidated
+      ? raw
+      : raw.filter((f) => !f.invalidatedAt && f.status === "active");
     const base = opts.workspaceId
-      ? raw.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
-      : raw;
+      ? filtered.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
+      : filtered;
     const sortBy = opts.sortBy ?? "updated";
     return base.sort((a, b) => {
       if (sortBy === "importance") return b.importance - a.importance;
@@ -282,9 +306,11 @@ export class MemoryStore {
    */
   recall(query: string, limit = 6, opts: { workspaceId?: string } = {}): { fact: MemoryFact; score: number }[] {
     const nowMs = this.now();
-    const pool = opts.workspaceId
+    // D2：失效条目默认不参与召回（可被显式查回，但不再自动注入）。
+    const pool = (opts.workspaceId
       ? this.facts.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
-      : this.facts;
+      : this.facts
+    ).filter((f) => f.status === "active" && !f.invalidatedAt);
     const scored = pool.map((fact) => {
       const similarity = jaccardCJK(query, fact.content);
       const tagBonus = fact.tags.some((tag) => query.includes(tag)) ? 0.15 : 0;
@@ -332,6 +358,7 @@ export class MemoryStore {
       byCategory,
       crossAgentLinks: all.reduce((sum, f) => sum + (f.crossAgentLinks?.length ?? 0), 0),
       byWorkspace,
+      invalidated: this.facts.filter((f) => f.invalidatedAt || f.status !== "active").length,
     };
   }
 }

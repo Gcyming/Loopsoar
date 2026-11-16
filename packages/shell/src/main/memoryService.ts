@@ -251,6 +251,7 @@ export class MemoryService {
     includeArchived?: boolean;
     sortBy?: "updated" | "value" | "importance";
     workspaceId?: string;
+    includeInvalidated?: boolean;
   }): MemoryFact[] {
     return this.store.list(opts);
   }

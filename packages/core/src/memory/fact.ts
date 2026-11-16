@@ -56,6 +56,16 @@ export interface MemoryFact {
   workspaceId: string;
   /** 溯源：会话/消息/工具调用/URL/文件 + 信任级别（网页抓取的记忆不能与用户指令同权）。 */
   provenance?: MemoryProvenance;
+  /** 生效起点（可选）：事实在「世界上」开始为真的时间；缺省取 timestamp。 */
+  validFrom?: number;
+  /** 失效时刻（D2）：被新事实取代时写入。不物理删除，检索默认排除，可显式查回。 */
+  invalidatedAt?: number;
+  /** 取代它的条目 id（双向之一：新 → 旧）。 */
+  supersededBy?: string;
+  /** 它取代的旧条目 id 列表（旧 → 新）。 */
+  supersedes?: string[];
+  /** 待裁决的冲突：无法判定新旧时两边都保留，检索时提示存在冲突版本。 */
+  conflictsWith?: string[];
 }
 
 /** 工厂：从部分字段构造完整 MemoryFact（缺失字段给默认值，保持钢筋结构不塌）。 */
@@ -87,6 +97,11 @@ export function createFact(
     crossAgentLinks: partial.crossAgentLinks ?? [],
     workspaceId: partial.workspaceId ?? DEFAULT_WORKSPACE_ID,
     provenance: partial.provenance,
+    validFrom: partial.validFrom,
+    invalidatedAt: partial.invalidatedAt,
+    supersededBy: partial.supersededBy,
+    supersedes: partial.supersedes ?? [],
+    conflictsWith: partial.conflictsWith,
   };
 }
 

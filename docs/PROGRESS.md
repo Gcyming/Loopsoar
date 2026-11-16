@@ -1134,3 +1134,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 证据：scripts/e2e-memory-graph.mjs 可复现（种演示数据 → 启动 GUI → 打开设置·记忆 → 截图），产物 e2e-evidence/memory-graph.png。
 - 验证：新增 memoryGraph 7 条；194 文件 / 1636 用例全绿；typecheck/build/gen-check 全过。
 
+
+### D2：记忆取代与时效（ADR-0112）
+
+- MemoryFact 增 validFrom / invalidatedAt / supersededBy / supersedes / conflictsWith；失效不删除，status=invalidated:<category>。
+- core/src/memory/supersede.ts：变更标记（改为/换成/不再…）/ 否定翻转 / 数字变化三档判据，仅同工作区同 category。
+- 写入顺序改为「跨 agent → 去重 → 取代 → 合并 → 新增 → 建链 → 容量」；recall/list 默认排除失效，includeInvalidated 可查回；stats 增 invalidated，面板显示「已失效」。
+- 验证：memorySupersede 6 条；194 文件 / 1642 用例全绿；typecheck/build 全过。
+
