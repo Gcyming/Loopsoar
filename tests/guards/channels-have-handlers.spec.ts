@@ -10,6 +10,8 @@ import { registerAgentsDomain } from "../../packages/shell/src/main/domains/agen
 import { registerChatDomain } from "../../packages/shell/src/main/domains/chat.ts";
 import { registerBrowserDomain } from "../../packages/shell/src/main/domains/browserAdapter.ts";
 import { registerSettingsDomain } from "../../packages/shell/src/main/domains/settings.ts";
+import { registerRuleLearningDomain } from "../../packages/shell/src/main/domains/ruleLearning.ts";
+import { RuleCandidateStore } from "../../packages/shell/src/main/ruleCandidates.ts";
 import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
 import { registerWindowDomain } from "../../packages/shell/src/main/domains/window.ts";
 import { registerMemoryDomain } from "../../packages/shell/src/main/domains/memory.ts";
@@ -137,6 +139,13 @@ function assemble(): void {
     workspaceRoot: "C:/tmp/loopsoar-workspace-test",
     env: {},
     appVersion: "0.0.0-test",
+  });
+  registerRuleLearningDomain({
+    ...deps,
+    dataDir: "C:/tmp/loopsoar-data-test",
+    store: new RuleCandidateStore("C:/tmp/loopsoar-data-test/rules/candidates.json"),
+    workspaces: { list: () => [], activeId: () => null },
+    push: () => {},
   });
   registerMemoryDomain({
     ...deps,

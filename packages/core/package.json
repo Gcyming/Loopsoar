@@ -26,6 +26,7 @@
     "./permissions": "./src/permissions.js",
     "./sensitiveSteps": "./src/sensitiveSteps.js",
     "./rules": "./src/rules.js",
+    "./rules/learn": "./src/rules/learn.js",
     "./tool_loop": "./src/tool_loop.js",
     "./memory": "./src/memory/index.js",
     "./loop": "./src/loop/index.js",

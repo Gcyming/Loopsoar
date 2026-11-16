@@ -11,6 +11,10 @@ export interface ChatDeps extends TrustedIpcDeps {
   chatService: ChatService;
   push(event: string, payload: unknown): void;
   memory?: MemoryService;
+  /** 规则候选：从用户消息中识别硬约束，交给人确认；未注入时静默跳过。 */
+  ruleLearning?: {
+    observe(input: { sessionId: string; workspaceId?: string; message: string }): { added: number; repeated: number } | Promise<{ added: number; repeated: number }>;
+  };
   sessions?: SessionStore;
   /** 是否自动从会话抽取记忆（来自「通用」偏好）。 */
   shouldAutoCapture?: () => boolean;
@@ -181,6 +185,21 @@ export function startStream(
           }
         } catch (err) {
           console.warn("[Loopsoar] 记忆汇总失败（已忽略）：", err);
+        }
+      }
+      // 规则候选：只识别「必须/只能/不要…」这类硬约束，等用户采纳后才写 AGENTS.md。
+      if (deps.ruleLearning) {
+        try {
+          const learned = await deps.ruleLearning.observe({
+            sessionId,
+            workspaceId: deps.sessions?.get(sessionId)?.workspaceId ?? undefined,
+            message: payload.message,
+          });
+          if (learned.added > 0 || learned.repeated > 0) {
+            deps.push("rules:updated", { action: "observed", ...learned });
+          }
+        } catch (err) {
+          console.warn("[Loopsoar] 规则候选识别失败（已忽略）：", err);
         }
       }
     })

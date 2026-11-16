@@ -18,7 +18,7 @@ import type {
   AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
   LoopListResult, LoopsoarAPI, McpServerInfo, MemoryGraphNodeView, MemoryGraphResult, MemoryListResult,
   PermissionCategory, PermissionsState, Preferences,
-  ProviderItem, ProviderModel, ProviderStatus, RulesSnapshot, SkillRecord, TestProviderResult,
+  ProviderItem, ProviderModel, ProviderStatus, RuleCandidateView, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
 /**
@@ -177,6 +177,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [rules, setRules] = useState<RulesSnapshot | null>(null);
   const [drafts, setDrafts] = useState<DraftRule[]>([]);
   const [deleted, setDeleted] = useState<string[]>([]);
+  const [ruleCandidates, setRuleCandidates] = useState<RuleCandidateView[]>([]);
+  const [rulePending, setRulePending] = useState(0);
   const [mem, setMem] = useState<MemoryListResult | null>(null);
   // 启动后的索引核对在后台进行：轮询到 idle 为止，让「最终一致窗口」可见并自动消失。
   useEffect(() => {
@@ -258,6 +260,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, []);
   const bad = useCallback((e: unknown) => setNotice({ kind: "error", text: e instanceof Error ? e.message : String(e) }), []);
 
+  const loadRuleCandidates = useCallback(async () => {
+    if (!api) return;
+    try {
+      const r = await api.rules.candidates();
+      setRuleCandidates(r.candidates);
+      setRulePending(r.pending);
+    } catch {
+      // 候选只是提示，失败不影响规则编辑
+    }
+  }, [api]);
+
   const applyRules = useCallback((r: RulesSnapshot) => {
     setRules(r);
     setDrafts(r.entries.map((x) => ({
@@ -273,10 +286,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api) { setLoading(false); return; }
     void (async () => {
       try {
-        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc] = await Promise.allSettled([
+        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc, rc] = await Promise.allSettled([
           api.settings.getPreferences(), api.settings.getPermissions(), api.settings.getProvider(),
           api.settings.getRules(), api.settings.diagnostics(), api.settings.about(), api.memory.list(),
           api.settings.listProviders(), api.extensions.list(), api.skills.list(), api.mcp.list(),
+          api.rules.candidates(),
         ]);
         if (p.status === "fulfilled") { setPrefs(p.value.preferences); setLocations(p.value.locations); }
         if (pm.status === "fulfilled") setPerms(pm.value);
@@ -305,6 +319,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         if (mc.status === "fulfilled") {
           setMcpServers(mc.value.servers);
           setMcpConfigPath(mc.value.configPath);
+        }
+        if (rc.status === "fulfilled") {
+          setRuleCandidates(rc.value.candidates);
+          setRulePending(rc.value.pending);
         }
       } catch (e) { bad(e); } finally { setLoading(false); }
     })();
@@ -511,6 +529,37 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       ok(tr("settings.rules.saved", { count: r.merged.included.length }));
     } catch (e) { bad(e); }
   }, [api, drafts, deleted, applyRules, ok, bad, tr]);
+
+  const refreshRulesAfterLearn = useCallback(async (candidate: RuleCandidateView) => {
+    if (!api) return;
+    const workspaceId = candidate.workspaceId ?? rules?.activeWorkspaceId ?? undefined;
+    const draft = workspaceId ? drafts.find((d) => d.scope === "workspace" && d.workspaceId === workspaceId) : undefined;
+    if (workspaceId && draft) {
+      await loadRuleWorkspace(draft.key, workspaceId);
+      return;
+    }
+    const fresh = await api.settings.getRules();
+    setRules((prev) => prev ? { ...prev, entries: fresh.entries, merged: fresh.merged } : fresh);
+  }, [api, rules?.activeWorkspaceId, drafts, loadRuleWorkspace]);
+
+  const acceptRuleCandidate = useCallback(async (candidate: RuleCandidateView) => {
+    if (!api) return;
+    try {
+      const r = await api.rules.acceptCandidate({ id: candidate.id });
+      await loadRuleCandidates();
+      await refreshRulesAfterLearn(candidate);
+      ok(tr("settings.rules.learnedAccepted", { path: r.path }));
+    } catch (err) { bad(err); }
+  }, [api, loadRuleCandidates, refreshRulesAfterLearn, ok, bad, tr]);
+
+  const dismissRuleCandidate = useCallback(async (candidate: RuleCandidateView) => {
+    if (!api) return;
+    try {
+      await api.rules.dismissCandidate({ id: candidate.id });
+      await loadRuleCandidates();
+      ok(tr("settings.rules.learnedDismissed"));
+    } catch (err) { bad(err); }
+  }, [api, loadRuleCandidates, ok, bad, tr]);
 
   const addDraft = (scope: "global" | "workspace") => {
     const key = `new-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
@@ -1443,6 +1492,27 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Btn label={tr("settings.rules.newGlobal")} onClick={() => addDraft("global")} />
             <Btn label={tr("settings.rules.newWorkspace")} onClick={() => addDraft("workspace")} />
           </div>
+          {rulePending > 0 ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.rules.learnedTitle", { count: rulePending })}</div>
+              <div style={S.note}>{tr("settings.rules.learnedHint")}</div>
+              {ruleCandidates.filter((candidate) => candidate.status === "pending").map((candidate) => (
+                <div key={candidate.id} style={{ ...S.rowBetween, alignItems: "flex-start", gap: 12, padding: "8px 0", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13 }}>{candidate.text}</div>
+                    <div style={S.meta}>
+                      {tr("settings.rules.learnedEvidence", { count: candidate.seenCount })}
+                      {candidate.workspaceId ? ` · ${rules?.workspaces.find((w) => w.id === candidate.workspaceId)?.name ?? candidate.workspaceId}` : ` · ${tr("settings.rules.scopeGlobal")}`}
+                    </div>
+                  </div>
+                  <div style={S.icons}>
+                    <Btn label={tr("settings.rules.learnedAccept")} small primary onClick={() => void acceptRuleCandidate(candidate)} />
+                    <Btn label={tr("settings.rules.learnedDismiss")} small onClick={() => void dismissRuleCandidate(candidate)} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div style={S.box}>
             <div style={S.boxTitle}>{tr("settings.rules.merged")}</div>
             <div style={S.meta}>

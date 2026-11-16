@@ -1299,4 +1299,6 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 新增记忆改三列网格（1fr 1fr auto），四个输入框等宽，添加按钮占末列。
 - 分类改为规范 key + 本地化标签：下拉/列表显示中文（通用/约定/事实/经验/偏好/片段/演示/项目），切语言即时更新，入库仍是稳定 key。
 - 规则按项目隔离（ADR-0131）：项目规则卡片可选已挂载工作区，读写该项目的 AGENTS.md，注入按会话所属工作区解析；新增 settings:getWorkspaceRule。
+- 规则候选（ADR-0132）：从对话识别「必须/只能/不要」等硬约束，先入候选项，人工采纳后才写入 AGENTS.md/learned-rules.md；新增 rules:candidates/acceptCandidate/dismissCandidate 与规则页审核区。
+- 调研：docs/research/rule-documents.md（规则文档形态/加载/自迭代机制）；设计：docs/规划/规则-记忆-工具-Loop协同.md（四层闭环、守卫编译、清单、路线图）。
 

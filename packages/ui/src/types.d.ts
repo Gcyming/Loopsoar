@@ -90,6 +90,25 @@ export interface RuleEntry {
   workspaceRoot?: string;
 }
 
+export interface RuleCandidateView {
+  id: string;
+  key: string;
+  text: string;
+  quote: string;
+  strength: "hard" | "should" | "prefer";
+  scopeHint: "workspace" | "global";
+  confidence: number;
+  tags: string[];
+  status: "pending" | "accepted" | "dismissed";
+  workspaceId?: string;
+  sessionId?: string;
+  seenCount: number;
+  createdAt: number;
+  lastSeenAt: number;
+  acceptedAt?: number;
+  promotedTo?: string;
+}
+
 export interface RulesSnapshot {
   maxFileBytes: number;
   maxTotalBytes: number;
@@ -731,6 +750,7 @@ export type LoopsoarEvent =
   | "skills:updated"
   | "mcp:updated"
   | "memory:updated"
+  | "rules:updated"
   | "terminal:data"
   | "terminal:exit"
   | "terminal:state"
@@ -1075,6 +1095,21 @@ export interface LoopsoarAPI {
     }>;
     diagnostics(): Promise<DiagnosticsInfo>;
     about(): Promise<AboutInfo>;
+  };
+  rules: LoopsoarDomain & {
+    candidates(payload?: { workspaceId?: string }): Promise<{
+      candidates: RuleCandidateView[];
+      pending: number;
+      workspaces: { id: string; name: string; root: string }[];
+      activeWorkspaceId: string | null;
+    }>;
+    acceptCandidate(payload: { id: string; target?: "workspace" | "global" }): Promise<{
+      ok: boolean;
+      candidate: RuleCandidateView | null;
+      path: string;
+      written: boolean;
+    }>;
+    dismissCandidate(payload: { id: string }): Promise<{ ok: boolean; candidate: RuleCandidateView | null }>;
   };
   window: LoopsoarDomain & {
     minimize(): Promise<{ ok: boolean }>;

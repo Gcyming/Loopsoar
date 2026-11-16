@@ -890,6 +890,27 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: z.object({ workspaceId: z.string().min(1).max(80) }),
     sensitive: true,
   },
+  "rules:candidates": {
+    domain: "rules",
+    method: "candidates",
+    request: z.object({ workspaceId: z.string().min(1).max(80).optional() }).optional(),
+    sensitive: true,
+  },
+  "rules:acceptCandidate": {
+    domain: "rules",
+    method: "acceptCandidate",
+    request: z.object({
+      id: z.string().min(1).max(80),
+      target: z.enum(["workspace", "global"]).optional(),
+    }),
+    sensitive: true,
+  },
+  "rules:dismissCandidate": {
+    domain: "rules",
+    method: "dismissCandidate",
+    request: z.object({ id: z.string().min(1).max(80) }),
+    sensitive: true,
+  },
   "settings:diagnostics": {
     domain: "settings",
     method: "diagnostics",
@@ -1422,6 +1443,7 @@ export const EVENTS = [
   "chat:taskForked",
   "browser:downloads",
   "memory:updated",
+  "rules:updated",
   "extensions:updated",
   "skills:updated",
   "mcp:updated",

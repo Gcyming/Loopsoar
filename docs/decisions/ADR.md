@@ -2555,6 +2555,22 @@
 - **补充（2026-11-16，第三版）**：分类改为「规范 key + 本地化标签」：新增只读 `settings.memory.category.<key>` 文案（general/convention/lesson/fact/preference/episode/demo/project），下拉与列表徽标显示当前语言下的标签，选择/失焦时还原成规范 key 入库；自定义分类原样保存。语言切换后标签即时更新（未聚焦时直接按当前语言渲染）。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。
 
+## ADR-0132 规则候选：从对话学习，但由人确认
+
+- **背景**：规则页只能手工编辑；用户在对话里说「必须/只能/不要」时，约束只留在当轮上下文，下一轮就消失。调研（docs/research/rule-documents.md）显示：Claude 的自动记忆写 MEMORY.md 不写 CLAUDE.md；WorkBuddy 的 Rules 是手动文件、Memory 才自动抽取；Copilot Dreaming 可以改仓库 instruction，但以 PR 形式提案。直接让模型静默改写 AGENTS.md 会把一次性纠正、例外和噪声写成永久规则——CLR-Bench 显示这类「例外清单」几乎学不到规则本身。
+- **决策**：新增「规则候选」层，默认只提议、不落规则文件。
+  1. **抽取**：core/rules/learn 从用户消息按句/逗号切分，识别中文「必须/只能/禁止/不得/不要/一律…」与英文 must/never/only/do not 等硬约束；排除问句、假设、不确定表达、代码块；输出 key/text/quote/strength/scopeHint/confidence/tags。
+  2. **存储**：shell/ruleCandidates 持久化到 <dataDir>/rules/candidates.json；同工作区同 key 只累加 seenCount/lastSeenAt/confidence，不重复建条目；pending 上限 80、settled 上限 40。
+  3. **回路**：chat 域在助手回复落库、记忆汇总之后调用 observe；只产生候选并发 rules:updated，任何异常吞掉，不阻断对话。
+  4. **采纳**：rules:acceptCandidate 才写文件——项目候选追加到 <workspace>/AGENTS.md 的「## 学到的规则（Loopsoar）」段；全局候选追加到 <dataDir>/rules/learned-rules.md；已存在同一行不重复写；未知工作区/重复采纳直接拒绝。
+  5. **UI**：规则页顶部显示「学到 N 条候选规则」，含文本、出现次数、项目/全局、采纳/忽略；采纳后按当前选中项目刷新合并预览，不跳回活动项目。
+- **理由**：规则是「规范」，记忆是「证据」；规范进入仓库需要人的判断。候选层把「发现」和「承诺」分开，既让 Agent 越用越懂用户，又保留可回滚、可审计的边界。
+- **替代方案**：① 检测到硬约束就直接追加 AGENTS.md——会积累例外、污染仓库、无法回滚；② 让 LLM 每轮总结规则——成本高、幻觉多、无法解释来源；③ 只写记忆不写规则——规则文件永远不会成长，跨会话仍靠召回碰运气。
+- **验证方式**：tests/core/ruleLearn.spec.ts 6 条（中英硬约束、问句/假设/建议、去重、代码块）；tests/shell/ruleCandidates.spec.ts 6 条（证据累加、跨工作区隔离、采纳写项目、全局写 learned-rules、忽略、未知 id）；E2E e2e-evidence/rules-learned.png（2 条候选 → 采纳 1 条 → 合并预览出现「只能使用 pnpm 管理依赖」→ 提示「已采纳并写入」）。全量 vitest 211 文件 / 1728 用例全绿。
+- **状态**：✅ 第一版已验证（2026-11-16）
+- **已知取舍**：抽取器是规则/正则，不调用模型，召回有限但零成本、可解释；只观察用户消息，不观察工具失败/评审；暂不做冲突检测与规则效能统计；同一候选被忽略后，同 key 再出现会重新建候选。
+
+
 ## ADR-0131 规则按项目隔离与注入
 
 - **背景**：规则页只有一个「项目规则」卡片，固定读取全局偏好 `workspaceRoot` 下的 AGENTS.md；没有项目选择器。Agent 侧 `getSystemRules` 也不接收会话，所有会话都拿到同一份项目规则——即使用户在侧栏切换了工作区。

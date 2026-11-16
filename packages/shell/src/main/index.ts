@@ -69,6 +69,8 @@ import { BookmarksStore } from "./bookmarksStore.js";
 import { registerBookmarksDomain } from "./domains/bookmarks.js";
 import { registerPageSaveDomain } from "./domains/pageSave.js";
 import { registerMemoryDomain } from "./domains/memory.js";
+import { registerRuleLearningDomain } from "./domains/ruleLearning.js";
+import { RuleCandidateStore } from "./ruleCandidates.js";
 import { reviewMemory } from "./memoryReview.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
@@ -2319,12 +2321,21 @@ app.whenReady().then(async () => {
   });
   registerAgentsDomain({ ...deps, agents });
   registerSettingsDomain(settingsDeps);
+  const ruleCandidates = new RuleCandidateStore(path.join(dirs.dataDir, "rules", "candidates.json"));
+  registerRuleLearningDomain({
+    ...deps,
+    dataDir: dirs.dataDir,
+    store: ruleCandidates,
+    workspaces,
+    push: pushToRenderer,
+  });
   registerChatDomain({
     ...deps,
     chatService,
     push: pushToRenderer,
     memory,
     sessions,
+    ruleLearning: ruleCandidates,
     shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
     getActiveWorkspaceId: () => workspaces.activeId(),
     getDefaultWorkspaceId: () => {
