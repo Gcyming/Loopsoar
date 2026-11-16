@@ -115,7 +115,6 @@ export default function AgentSidebar({
   sessions,
   currentSession,
   workspaces,
-  activeWorkspaceId,
   sessionOpen,
   onToggleSession,
   onCloseSession,
@@ -189,8 +188,6 @@ export default function AgentSidebar({
       .then(() => onNotice(tr("chat.copyConversationDone")))
       .catch(() => onNotice(tr("chat.copyFailed")));
   };
-
-  const activeSession = sessions.find((x) => x.id === currentSession) ?? null;
 
   const collapseLabel = localized("chat.sidebarCollapse", "收起会话栏", "Collapse sidebar");
   const expandLabel = localized("chat.sidebarExpand", "展开会话栏", "Expand sidebar");
