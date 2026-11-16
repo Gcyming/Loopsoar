@@ -71,7 +71,7 @@ export interface ChatServiceOptions {
   /** 规则文件注入（AGENTS.md 合并文本）；每次 stream 时调用，保存规则后即时生效。 */
   getSystemRules?: () => string;
   /** 记忆召回注入（按用户消息取相关记忆，放进 volatile 段）。 */
-  getMemoryFor?: (userText: string) => string;
+  getMemoryFor?: (userText: string, sessionId?: string) => string;
   /** 技能注入（与扩展/MCP 隔离：仅 SKILL.md 文本，不提供工具）。 */
   getSkillPrompt?: (userText: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
@@ -489,7 +489,7 @@ export class ChatService {
       ? `${segments.stable}\n\n${rulesText}`
       : segments.stable;
     // 记忆召回 + 技能注入：都放 volatile 段（不进稳定前缀，避免破坏 KV 缓存）
-    const memoryText = this.opts.getMemoryFor?.(input.message) ?? "";
+    const memoryText = this.opts.getMemoryFor?.(input.message, sessionId) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
     // 当前墙钟时间放 volatile 段（每轮刷新、不进 stable 前缀，不破坏 KV 缓存）
     const requestNow = Date.now();

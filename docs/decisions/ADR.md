@@ -2207,3 +2207,21 @@
 | ADR-0107 | 会话/网页解耦（阶段一）：关最后页不退出、开会话不拖网页、首次动作克隆任务页、agentBound 持久化、会话分支（特殊会话） | ✅ 自动化 + 真机 E2E（阶段二待做：全局用户标签层） |
 | ADR-0108 | 第三阶段开工前：死代码清理（−1,162 行）+ 3 个 P0 修复（声称核验旁路 / 沙箱 target 空转 / Anthropic Token 闸）+ 结构裁决（扩展=唯一插件系统） | ✅ 已验证（191 文件 / 1602 用例全绿） |
 | ADR-0109 | 浏览器侧两个 P0：敏感点击按「定位后的文案」确认（AskBus，fail-closed）+ Agent 标签回环访问分档（用户标签不受影响） | ✅ 自动化验证（1614 用例） |
+
+## ADR-0110 记忆归属与溯源（D1）：workspaceId + provenance + 崩溃安全写入
+
+- **背景**：第三阶段 D 切片的第一片。审计与调研（docs/research/agent-memory-survey.md、slime-memory-review.md）确认记忆库当前是「全局单库 + agentId」——A 项目的记忆会进入 B 项目的召回；source 是自由字符串，无法回答「这条从哪来」；memoryService.save() 直接 writeFileUtf8，没有 fsync/备份，断电可能留下半截 JSON。
+- **决策**：
+  1. **归属维度**：MemoryFact 增 workspaceId（默认 default），作为**隔离边界**；agentId 保留作归属标注。五闸（去重/合并/建链/跨 agent/容量）全部只在同工作区内生效——否则 A 项目的事实会被 B 项目去重或挤进归档。
+  2. **溯源**：增 provenance { sessionId?, messageId?, toolCallId?, workspaceId?, url?, file?, trust: user|agent|tool|web, capturedBy: auto|tool|user|consolidation }。自动汇总按说话人打 trust（用户消息=user、助手回复=agent），工具写入=tool。
+  3. **召回隔离**：ChatService.getMemoryFor 增 sessionId 形参；壳层按会话所属工作区解析，未绑定工作区归 default，显式传 workspaceId 给 recallPrompt。memory_search / memory_add 同样按会话工作区收窄。
+  4. **崩溃安全写入**：save 改 tmp → fsync → rename → .bak；load 主文件损坏或缺失时回退 .bak，两者都坏才空库启动并告警。
+  5. **迁移**：旧数据缺 workspaceId/provenance 时，读取归一（default + trust=user）并**回写一次**（幂等：第二次加载不再触发）。
+  6. **读取侧格式（轻量版）**：recallPrompt 每条带 [分类] 日期 · 来源 · 内容，头部声明「本工作区 / 共 N 条」。
+  7. **面板**：memory:list 返回 workspaceId/trust/sessionId，设置页提供工作区过滤与徽标；过滤只影响展示，隔离在壳层。
+- **理由**：先有归属与溯源，后面的冲突/时效（D2）、巩固（D3）、记忆图谱（E）才有正确的过滤边界；否则巩固会把 A 项目的摘要写进 B 项目。崩溃安全是低成本高收益——记忆是用户不可重建的数据。
+- **替代方案**：① 把隔离做成「设置开关」——被否，默认必须隔离，跨区是例外；② 把 provenance 做成独立表——被否，单 JSON 真相源下嵌套字段更简单且可逐条迁移；③ 迁移时物理拆成每工作区一个文件——被否，先验证隔离语义，拆文件留到按需时。
+- **验证方式**：`pnpm -r typecheck` 5/5；全量 vitest **193 文件 / 1629 用例全绿**（新增 memoryWorkspace 5 条 + memoryWorkspaceService 5 条）；`pnpm build` 5/5；`pnpm gen && pnpm check` 逐字节一致。
+- **状态**：✅ 已验证（2026-11-16）
+- **回退条件**：若多工作区共享被证明是刚需（用户明确要求跨工作区回顾），加显式 includeOtherWorkspaces 参数与 UI 开关，而不是回退默认隔离；若 .bak 造成目录噪音，改为滚动 1 份并保留，不得取消。
+- **复核时间**：D2 开工前、记忆图谱 M0 完成后各复核一次。

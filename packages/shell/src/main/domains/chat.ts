@@ -169,6 +169,8 @@ export function startStream(
           const captured = await deps.memory.captureFromTurn({
             userMessage: payload.message,
             assistantReply: finalText,
+            sessionId,
+            workspaceId: deps.sessions?.get(sessionId)?.workspaceId ?? undefined,
           });
           if (captured.added || captured.merged || captured.deduped) {
             deps.push("memory:updated", {

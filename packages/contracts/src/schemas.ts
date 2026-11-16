@@ -457,6 +457,8 @@ export const MemoryAddSchema = z.object({
   category: z.string().min(1).max(40),
   tags: z.array(z.string().max(24)).max(10).optional(),
   importance: z.number().int().min(1).max(10).optional(),
+  /** 归属工作区（D1）；缺省 = default。 */
+  workspaceId: z.string().min(1).max(120).optional(),
 });
 export const MemoryUpdateSchema = z.object({
   id: z.string().min(1),

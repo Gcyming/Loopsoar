@@ -114,6 +114,12 @@ export interface MemoryFactView {
   confidence: number;
   links: string[];
   updatedAt: number;
+  /** 归属工作区（D1）。 */
+  workspaceId?: string;
+  /** 信任级别：user / agent / tool / web。 */
+  trust?: string;
+  /** 来源会话（provenance）。 */
+  sessionId?: string;
 }
 
 export interface MemoryStats {
@@ -123,6 +129,8 @@ export interface MemoryStats {
   links: number;
   totalAccess: number;
   byCategory: Record<string, number>;
+  /** 按工作区分布（D1）。 */
+  byWorkspace?: Record<string, number>;
 }
 
 export interface MemoryListResult {

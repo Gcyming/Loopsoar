@@ -1118,3 +1118,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 生命周期接到现有钩子：onSessionDeleting → compressConversation → episode；L2→L3 每日任务；L3 被提及才 rehydrate。
 - 分期 M0 静态图 → M1 事件与迁移 → M2 反馈动画 → M3 wiki 详情 → M4 时间回放；前置是 D1（workspaceId + provenance）。
 
+
+### D1：记忆归属与溯源（ADR-0110）
+
+- MemoryFact 增 workspaceId + provenance（trust: user/agent/tool/web）；五闸与容量按工作区独立，召回/工具/自动汇总全部按会话工作区收窄。
+- memoryService 写入改 tmp → fsync → rename → .bak；主文件损坏从 .bak 恢复；旧数据加载时归一并回写一次（幂等）。
+- recallPrompt 读取侧格式带「[分类] 日期 · 来源 · 内容」；设置页记忆面板增工作区过滤与徽标（仅展示，隔离在壳层）。
+- 验证：typecheck 5/5、193 文件 / 1629 用例全绿、build 5/5、gen/check 一致；新增两个 spec 共 10 条（隔离/容量/迁移/.bak 恢复/provenance）。
+

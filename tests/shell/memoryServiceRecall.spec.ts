@@ -85,7 +85,9 @@ describe("MemoryService · 召回门控（默认开启）", () => {
 
     const prompt = service.recallPrompt(query);
     expect(prompt).not.toBe("");
-    expect(prompt).toContain("以下是过往会话中记住的相关信息");
+    expect(prompt).toContain("以下是过往会话的长期记忆");
+    // D1：读取侧格式带分类 / 时间 / 来源，模型能判断「这条从哪来」
+    expect(prompt).toMatch(/- \[preference\] \d{4}-\d{2}-\d{2} · /);
     expect(prompt).toContain("深色主题");
   });
 

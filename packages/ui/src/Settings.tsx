@@ -177,6 +177,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mem, setMem] = useState<MemoryListResult | null>(null);
   const [mForm, setMForm] = useState({ content: "", category: "general" });
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
+  /** 记忆面板的查看范围（D1）：只影响展示，召回隔离在壳层。 */
+  const [memWs, setMemWs] = useState<string>("all");
   const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
   /** Agent-Loop：可运行 loop 列表 + 当前选择 + 回退历史（设置 · 通用）。 */
@@ -1299,7 +1301,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <SaveBtn onClick={saveRules} label={tr("settings.rules.saveAll")} />
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
 
-      case "memory":
+      case "memory": {
+        const workspaceIds = Object.keys(mem?.stats.byWorkspace ?? {});
+        const shownFacts = (mem?.facts ?? []).filter(
+          (f) => memWs === "all" || (f.workspaceId ?? "default") === memWs,
+        );
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
           <div style={S.stats}>
@@ -1308,6 +1314,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Stat l={tr("settings.memory.links")} v={mem.stats.links} />
           </div>
           <div style={S.note}>{tr("settings.memory.store")}<code style={S.code}>{mem.filePath}</code></div>
+          {workspaceIds.length > 1 ? (
+            <div style={S.btns}>
+              <Btn label={tr("settings.memory.wsAll")} small primary={memWs === "all"} onClick={() => setMemWs("all")} />
+              {workspaceIds.map((ws) => (
+                <Btn key={ws} label={ws} small primary={memWs === ws} onClick={() => setMemWs(ws)} />
+              ))}
+            </div>
+          ) : null}
           <Field l={tr("settings.memory.addTitle")}><div style={S.col}>
             <Area v={mForm.content} rows={2} on={(x) => setMForm({ ...mForm, content: x })} />
             <div style={S.rowEnd}>
@@ -1315,10 +1329,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
             </div>
           </div></Field>
-          {mem.facts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : mem.facts.map((f) => (
+          {shownFacts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : shownFacts.map((f) => (
             <div key={f.id} className="panel-card" style={S.card}>
               <div style={S.rowBetween}>
-                <span style={S.meta}><span style={BADGE.neutral}>{f.category}</span><span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
+                <span style={S.meta}><span style={BADGE.neutral}>{f.category}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
                 <span style={S.icons}>
                   {mEdit?.id === f.id ? <>
                     <Btn label={tr("settings.save")} small onClick={() => void saveMemEdit()} /><Btn label={tr("settings.cancel")} small onClick={() => setMEdit(null)} />
@@ -1331,6 +1345,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           ))}
           <div style={S.btns}><Btn label={tr("settings.memory.clearAll")} onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} /></div>
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
+      }
 
       case "extensions":
         return (

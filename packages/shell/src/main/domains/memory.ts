@@ -12,6 +12,8 @@ export interface MemoryDeps extends TrustedIpcDeps {
 
 export function registerMemoryDomain(deps: MemoryDeps): void {
   handleTrusted(deps, "memory:list", () => ({
+    // D1：一次返回全部工作区（条目带 workspaceId），由面板按当前工作区过滤；
+    // 召回侧（recallPrompt）才是隔离的硬边界，面板只是展示。
     facts: deps.memory.list({ includeArchived: false }).map((fact) => ({
       id: fact.id,
       content: fact.content,
@@ -24,6 +26,9 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
       confidence: fact.confidence,
       links: fact.links,
       updatedAt: fact.lastAccessed,
+      workspaceId: fact.workspaceId,
+      trust: fact.provenance?.trust ?? "user",
+      sessionId: fact.provenance?.sessionId,
     })),
     archivedCount: deps.memory.stats().archived,
     stats: deps.memory.stats(),
@@ -38,6 +43,7 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
       category: string;
       tags?: string[];
       importance?: number;
+      workspaceId?: string;
     };
     const fact = await deps.memory.add({
       content: p.content,
@@ -45,6 +51,12 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
       tags: p.tags,
       importance: p.importance,
       source: "manual",
+      ...(p.workspaceId ? { workspaceId: p.workspaceId } : {}),
+      provenance: {
+        ...(p.workspaceId ? { workspaceId: p.workspaceId } : {}),
+        trust: "user",
+        capturedBy: "user",
+      },
     });
     deps.push?.("memory:updated", { action: "add", id: fact.id, total: deps.memory.stats().total });
     return { added: true, id: fact.id };

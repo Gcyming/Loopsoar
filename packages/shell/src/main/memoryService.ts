@@ -177,36 +177,86 @@ export class MemoryService {
 
   async load(): Promise<void> {
     if (this.loaded) return;
+    let migrated = false;
+    const apply = (raw: string): boolean => {
+      const parsed = JSON.parse(raw) as { facts?: MemoryFact[]; archived?: MemoryFact[] };
+      // 迁移检测（D1）：旧数据没有 workspaceId / provenance → 归一后回写一次。
+      const legacy = [...(parsed.facts ?? []), ...(parsed.archived ?? [])].some(
+        (f) => !f.workspaceId || !f.provenance,
+      );
+      this.store.restore(parsed);
+      return legacy;
+    };
     try {
       const exists = await this.opts.platform.fs.exists(this.opts.filePath);
       if (exists) {
-        const raw = await this.opts.platform.fs.readFileUtf8(this.opts.filePath);
-        const parsed = JSON.parse(raw) as { facts?: MemoryFact[]; archived?: MemoryFact[] };
-        this.store.restore(parsed);
+        migrated = apply(await this.opts.platform.fs.readFileUtf8(this.opts.filePath));
+      } else {
+        const bak = `${this.opts.filePath}.bak`;
+        if (await this.opts.platform.fs.exists(bak)) {
+          migrated = apply(await this.opts.platform.fs.readFileUtf8(bak));
+          console.warn("[Loopsoar] 记忆主文件缺失，已从 .bak 恢复");
+        }
       }
     } catch {
-      // 损坏的记忆文件 → 以空库启动（不阻断应用）
-      this.store.restore({});
+      // 主文件损坏 → 尝试 .bak；两者都坏则以空库启动（不阻断应用）
+      try {
+        const bak = `${this.opts.filePath}.bak`;
+        if (await this.opts.platform.fs.exists(bak)) {
+          migrated = apply(await this.opts.platform.fs.readFileUtf8(bak));
+          console.warn("[Loopsoar] 记忆主文件损坏，已从 .bak 恢复");
+        } else {
+          this.store.restore({});
+        }
+      } catch {
+        this.store.restore({});
+      }
     }
+    if (migrated) await this.save();
     // 索引在 load 后立即维护：hash 索引同步重建（毫秒级）；外部向量尽力而为（超时/失败降级 hash）
     await this.rebuildVectorIndex();
     this.loaded = true;
   }
 
+  /**
+   * 崩溃安全写入（D1）：tmp → fsync → rename → .bak。
+   * 为什么需要：rename 是元数据操作，可能先于数据落盘；断电/强杀后会留下「文件名在、内容空或半截」的
+   * 记忆文件。记忆是用户不可重建的数据，宁可多一次 fsync 与一份 .bak。
+   */
   async save(): Promise<void> {
-    fs.mkdirSync(path.dirname(this.opts.filePath), { recursive: true });
-    await this.opts.platform.fs.writeFileUtf8(
-      this.opts.filePath,
-      JSON.stringify(this.store.snapshot(), null, 2),
-    );
+    const dir = path.dirname(this.opts.filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    const data = JSON.stringify(this.store.snapshot(), null, 2);
+    const tmp = `${this.opts.filePath}.tmp`;
+    await this.opts.platform.fs.writeFileUtf8(tmp, data);
+    try {
+      const fd = fs.openSync(tmp, "r+");
+      try {
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      // 某些文件系统不支持 fsync：继续 rename，不让写记忆失败
+    }
+    fs.renameSync(tmp, this.opts.filePath);
+    try {
+      fs.copyFileSync(this.opts.filePath, `${this.opts.filePath}.bak`);
+    } catch {
+      // .bak 失败只影响可恢复性，不影响本次写入
+    }
   }
 
-  list(opts?: { includeArchived?: boolean; sortBy?: "updated" | "value" | "importance" }): MemoryFact[] {
+  list(opts?: {
+    includeArchived?: boolean;
+    sortBy?: "updated" | "value" | "importance";
+    workspaceId?: string;
+  }): MemoryFact[] {
     return this.store.list(opts);
   }
 
-  stats(): ReturnType<MemoryStore["stats"]> {
-    return this.store.stats();
+  stats(workspaceId?: string): ReturnType<MemoryStore["stats"]> {
+    return this.store.stats(workspaceId);
   }
 
   get(id: string): MemoryFact | null {
@@ -261,9 +311,9 @@ export class MemoryService {
    * 说明：召回注入保持 v1 的关键词路径（store.recall），混合检索用于显式 search / searchAsync，
    * 避免自动注入的行为随向量权重变化而漂移（行为可回归、可对照）。
    */
-  recallPrompt(text: string): string {
+  recallPrompt(text: string, workspaceId?: string): string {
     if (this.recallGateEnabled() && !shouldRecall(text).hit) return "";
-    return this.store.recallPrompt(text);
+    return this.store.recallPrompt(text, 6, workspaceId ? { workspaceId } : {});
   }
 
   /** 召回门控是否生效（默认开启；显式 recallGate:false 才关闭，便于测试/兼容对照）。 */
@@ -276,9 +326,9 @@ export class MemoryService {
    * 四阶段检索：门控（显式搜索跳过）→ BM25 候选 → hash 向量重排 → 阈值 + limit。
    * 保持同步签名（工具执行链路不变）；需要真实语义向量时用 searchAsync()。
    */
-  search(query: string, limit = 6): { fact: MemoryFact; score: number }[] {
+  search(query: string, limit = 6, workspaceId?: string): { fact: MemoryFact; score: number }[] {
     const safeLimit = this.clampLimit(limit);
-    const facts = this.store.list();
+    const facts = this.store.list(workspaceId ? { workspaceId } : {});
     if (facts.length === 0) return [];
     const lookup: VectorLookup = (id) => this.hashIndex.get(id);
     const hits = retrieveMemory({
@@ -295,10 +345,10 @@ export class MemoryService {
    * 混合检索（异步，真实 embedding 优先）：外部向量可用时用 BGE-M3 语义向量重排；
    * 外部向量/embed 不可用或失败 → 自动回退 search() 的 hash 混合检索（不抛错）。
    */
-  async searchAsync(query: string, limit = 6): Promise<{ fact: MemoryFact; score: number }[]> {
+  async searchAsync(query: string, limit = 6, workspaceId?: string): Promise<{ fact: MemoryFact; score: number }[]> {
     const safeLimit = this.clampLimit(limit);
-    if (!this.externalVectors || !this.embedFn) return this.search(query, safeLimit);
-    const facts = this.store.list();
+    if (!this.externalVectors || !this.embedFn) return this.search(query, safeLimit, workspaceId);
+    const facts = this.store.list(workspaceId ? { workspaceId } : {});
     if (facts.length === 0) return [];
     try {
       const queryVectors = await this.embedTexts([query]);
@@ -352,8 +402,21 @@ export class MemoryService {
   async captureFromTurn(input: {
     userMessage: string;
     assistantReply: string;
+    sessionId?: string;
+    messageId?: string;
+    workspaceId?: string;
   }): Promise<{ added: number; merged: number; deduped: number }> {
-    const candidates = extractMemoryCandidates(input);
+    const candidates = extractMemoryCandidates(input).map((candidate) => ({
+      ...candidate,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      provenance: {
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.messageId ? { messageId: input.messageId } : {}),
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        trust: candidate.source === "assistant" ? ("agent" as const) : ("user" as const),
+        capturedBy: "auto" as const,
+      },
+    }));
     if (candidates.length === 0) return { added: 0, merged: 0, deduped: 0 };
     const result = this.store.write(candidates);
     if (result.added.length || result.merged.length || result.deduped.length) {

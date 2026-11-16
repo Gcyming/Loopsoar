@@ -10,7 +10,7 @@
  *
  * 本模块零 node 依赖：文件读写由壳层负责，这里只处理状态与规则。
  */
-import { createFact, type MemoryFact } from "./fact.js";
+import { createFact, DEFAULT_WORKSPACE_ID, type MemoryFact, type MemoryProvenance } from "./fact.js";
 import {
   gateDedupe,
   gateMerge,
@@ -30,6 +30,10 @@ export interface MemoryCandidate {
   importance?: number;
   source?: string;
   layer?: MemoryFact["layer"];
+  /** 归属工作区（缺省 = store 的默认工作区）。写入治理只在同工作区内去重/合并/建链。 */
+  workspaceId?: string;
+  /** 溯源（会话/消息/工具/URL + 信任级别）。 */
+  provenance?: MemoryProvenance;
   /** 归属 agent（缺省 = store 的默认 agent "loopsoar"；多 Agent 场景用于第 5 闸跨 agent 指针）。 */
   agentId?: string;
 }
@@ -43,6 +47,8 @@ export interface MemoryStats {
   byCategory: Record<string, number>;
   /** 跨 agent 指针总数（第 5 闸；旧数据/单 agent 场景为 0）。 */
   crossAgentLinks?: number;
+  /** 按工作区统计（D1：面板与隔离诊断用）。 */
+  byWorkspace?: Record<string, number>;
 }
 
 export interface MemoryStoreState {
@@ -56,7 +62,9 @@ export class MemoryStore {
   private archived: MemoryFact[] = [];
   private seq = 0;
 
-  constructor(private opts: { capacity?: number; now?: () => number; agentId?: string } = {}) {}
+  constructor(
+    private opts: { capacity?: number; now?: () => number; agentId?: string; workspaceId?: string } = {},
+  ) {}
 
   private now(): number {
     return this.opts.now ? this.opts.now() : Date.now();
@@ -70,6 +78,15 @@ export class MemoryStore {
   restore(state: Partially<MemoryStoreState>): void {
     this.facts = Array.isArray(state?.facts) ? state.facts : [];
     this.archived = Array.isArray(state?.archived) ? state.archived : [];
+    // 旧数据归一（D1）：补齐 workspaceId 与 provenance.trust，读取端无需到处判空。
+    for (const fact of [...this.facts, ...this.archived]) {
+      if (!fact.workspaceId) fact.workspaceId = DEFAULT_WORKSPACE_ID;
+      if (!fact.provenance) {
+        fact.provenance = { trust: "user", capturedBy: "user", workspaceId: fact.workspaceId };
+      } else if (!fact.provenance.trust) {
+        fact.provenance.trust = "user";
+      }
+    }
     this.seq = this.facts.length + this.archived.length;
   }
 
@@ -96,6 +113,7 @@ export class MemoryStore {
   } {
     const nowMs = this.now();
     const defaultAgent = this.opts.agentId ?? DEFAULT_AGENT_ID;
+    const defaultWorkspace = this.opts.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const added: MemoryFact[] = [];
     const merged: { into: string; content: string }[] = [];
     const deduped: { id: string; content: string }[] = [];
@@ -105,6 +123,9 @@ export class MemoryStore {
     for (const candidate of candidates) {
       const content = candidate.content.trim();
       if (!content) continue;
+      // 工作区隔离（D1）：五闸与建链只在同工作区内进行，否则 A 项目的事实会被 B 项目去重/合并。
+      const workspaceId = candidate.workspaceId ?? defaultWorkspace;
+      const scoped = this.facts.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === workspaceId);
       const incoming = createFact({
         id: `mem-${++this.seq}-${nowMs.toString(36)}`,
         content,
@@ -116,10 +137,12 @@ export class MemoryStore {
         layer: candidate.layer ?? "semantic",
         agentId: candidate.agentId ?? defaultAgent,
         crossAgentLinks: [],
+        workspaceId,
+        provenance: candidate.provenance ?? { trust: "user", workspaceId },
       });
 
       // ⓪ 第 5 闸：同内容但不同 agent → 保留双方条目，只建双向指针（不合并/不去重）
-      const cross = gateCrossAgent(this.facts, incoming, incoming.agentId ?? defaultAgent);
+      const cross = gateCrossAgent(scoped, incoming, incoming.agentId ?? defaultAgent);
       if (cross.crossAgent) {
         for (const pointer of cross.pointers) {
           pointer.crossAgentLinks = pointer.crossAgentLinks ?? [];
@@ -133,7 +156,7 @@ export class MemoryStore {
       }
 
       // ① 去重
-      const dedupe = gateDedupe(this.facts, incoming);
+      const dedupe = gateDedupe(scoped, incoming);
       if (dedupe.duplicate && dedupe.hit) {
         dedupe.hit.repeated += 1;
         dedupe.hit.lastAccessed = nowMs;
@@ -143,7 +166,7 @@ export class MemoryStore {
       }
 
       // ② 合并
-      const merge = gateMerge(this.facts, incoming);
+      const merge = gateMerge(scoped, incoming);
       if (merge.mergeInto) {
         const target = merge.mergeInto;
         target.content = `${target.content}；${incoming.content}`;
@@ -159,7 +182,7 @@ export class MemoryStore {
       added.push(incoming);
 
       // ④ 建链（与已有条目）
-      const link = gateLink(this.facts.filter((f) => f.id !== incoming.id), incoming);
+      const link = gateLink(scoped.filter((f) => f.id !== incoming.id), incoming);
       linked += link.linked.length;
     }
 
@@ -168,9 +191,16 @@ export class MemoryStore {
     // 返回的 id 与真实归档无关（可能 0 条或多条历史归档），审计与 UI 都会读到错数据。
     const archivedIds: string[] = [];
     const cap = this.opts.capacity ?? THRESHOLD_CAPACITY_MAX;
-    if (this.facts.length > cap) {
-      const result = gateCapacity(this.facts, cap);
-      this.facts = result.keep;
+    // 容量也按工作区独立：否则 B 项目的写入会把 A 项目的记忆挤进归档（跨区泄漏的另一种形式）。
+    const workspaces = new Set(this.facts.map((f) => f.workspaceId ?? DEFAULT_WORKSPACE_ID));
+    for (const ws of workspaces) {
+      const group = this.facts.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === ws);
+      if (group.length <= cap) continue;
+      const result = gateCapacity(group, cap);
+      const keepIds = new Set(result.keep.map((f) => f.id));
+      this.facts = this.facts.filter(
+        (f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) !== ws || keepIds.has(f.id),
+      );
       for (const fact of result.archived) {
         this.archived.push(fact);
         archivedIds.push(fact.id);
@@ -224,9 +254,19 @@ export class MemoryStore {
     return this.facts.find((f) => f.id === id) ?? this.archived.find((f) => f.id === id) ?? null;
   }
 
-  list(opts: { includeArchived?: boolean; sortBy?: "updated" | "value" | "importance" } = {}): MemoryFact[] {
+  list(
+    opts: {
+      includeArchived?: boolean;
+      sortBy?: "updated" | "value" | "importance";
+      /** 只看某个工作区（缺省 = 全部；UI/召回必须显式传，避免跨区泄漏）。 */
+      workspaceId?: string;
+    } = {},
+  ): MemoryFact[] {
     const nowMs = this.now();
-    const base = opts.includeArchived ? [...this.facts, ...this.archived] : [...this.facts];
+    const raw = opts.includeArchived ? [...this.facts, ...this.archived] : [...this.facts];
+    const base = opts.workspaceId
+      ? raw.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
+      : raw;
     const sortBy = opts.sortBy ?? "updated";
     return base.sort((a, b) => {
       if (sortBy === "importance") return b.importance - a.importance;
@@ -240,9 +280,12 @@ export class MemoryStore {
    * 命中后按 effectiveValue（时间衰减×重要度×置信度×重复次数）排序取前 N 条。
    * 为什么不由调用方传入全量：记忆会增长，检索必须自带预算。
    */
-  recall(query: string, limit = 6): { fact: MemoryFact; score: number }[] {
+  recall(query: string, limit = 6, opts: { workspaceId?: string } = {}): { fact: MemoryFact; score: number }[] {
     const nowMs = this.now();
-    const scored = this.facts.map((fact) => {
+    const pool = opts.workspaceId
+      ? this.facts.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
+      : this.facts;
+    const scored = pool.map((fact) => {
       const similarity = jaccardCJK(query, fact.content);
       const tagBonus = fact.tags.some((tag) => query.includes(tag)) ? 0.15 : 0;
       const score = effectiveValue(fact, nowMs) * (0.3 + similarity) + tagBonus;
@@ -255,25 +298,40 @@ export class MemoryStore {
   }
 
   /** 召回结果格式化为提示词片段（空 = 不注入）。 */
-  recallPrompt(query: string, limit = 6): string {
-    const hits = this.recall(query, limit);
+  recallPrompt(query: string, limit = 6, opts: { workspaceId?: string } = {}): string {
+    const hits = this.recall(query, limit, opts);
     if (hits.length === 0) return "";
-    const lines = hits.map(({ fact }) => `- [${fact.category}] ${fact.content}`);
-    return `以下是过往会话中记住的相关信息（可能过时，按需使用）：\n${lines.join("\n")}`;
+    // 读取侧格式（D1 轻量版）：每条带分类 / 时间 / 来源，模型与用户都能判断「这条从哪来」。
+    const lines = hits.map(({ fact }) => {
+      const day = new Date(fact.timestamp).toISOString().slice(0, 10);
+      const source = fact.provenance?.sessionId ? "会话" : fact.provenance?.trust === "web" ? "网页" : "记录";
+      return `- [${fact.category}] ${day} · ${source} · ${fact.content}`;
+    });
+    const scope = opts.workspaceId ? "本工作区" : "过往会话";
+    return `以下是${scope}的长期记忆（共 ${hits.length} 条，可能过时，按需使用）：\n${lines.join("\n")}`;
   }
 
-  stats(): MemoryStats {
-    const all = this.facts;
+  stats(workspaceId?: string): MemoryStats {
+    const inScope = (fact: MemoryFact): boolean =>
+      !workspaceId || (fact.workspaceId ?? DEFAULT_WORKSPACE_ID) === workspaceId;
+    const all = this.facts.filter(inScope);
+    const archived = this.archived.filter(inScope);
     const byCategory: Record<string, number> = {};
     for (const fact of all) byCategory[fact.category] = (byCategory[fact.category] ?? 0) + 1;
+    const byWorkspace: Record<string, number> = {};
+    for (const fact of this.facts) {
+      const ws = fact.workspaceId ?? DEFAULT_WORKSPACE_ID;
+      byWorkspace[ws] = (byWorkspace[ws] ?? 0) + 1;
+    }
     return {
-      total: all.length + this.archived.length,
+      total: all.length + archived.length,
       active: all.length,
-      archived: this.archived.length,
+      archived: archived.length,
       links: all.reduce((sum, f) => sum + f.links.length, 0),
       totalAccess: all.reduce((sum, f) => sum + f.accessCount, 0),
       byCategory,
       crossAgentLinks: all.reduce((sum, f) => sum + (f.crossAgentLinks?.length ?? 0), 0),
+      byWorkspace,
     };
   }
 }

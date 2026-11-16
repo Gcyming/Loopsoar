@@ -5,6 +5,24 @@
  * 综合计算；mergeTrail 记录合并历史，防止合并循环；layer 区分 working/episodic/semantic，决定召回优先级。
  */
 
+/** 记忆归属与信任级别（D1）：决定注入时如何标注来源，以及能否跨工作区使用。 */
+export type MemoryTrust = "user" | "agent" | "tool" | "web";
+
+/** 溯源（D1）：这条记忆从哪来。旧数据缺失时按「用户手写」归一。 */
+export interface MemoryProvenance {
+  sessionId?: string;
+  messageId?: string;
+  toolCallId?: string;
+  workspaceId?: string;
+  url?: string;
+  file?: string;
+  trust?: MemoryTrust;
+  capturedBy?: "auto" | "tool" | "user" | "consolidation";
+}
+
+/** 默认工作区 id：旧数据与「未绑定工作区」的会话都归到这里。 */
+export const DEFAULT_WORKSPACE_ID = "default";
+
 export interface MemoryFact {
   id: string;
   content: string;
@@ -31,6 +49,13 @@ export interface MemoryFact {
   agentId?: string;
   /** 跨 agent 指针：同内容但属于其它 agent 的记忆 id（双向维护，不合并、不去重）。 */
   crossAgentLinks?: string[];
+  /**
+   * 归属工作区（D1）。读取端必须按它过滤：A 项目的记忆不得进入 B 项目的召回。
+   * 旧数据没有该字段 → 读取时按 DEFAULT_WORKSPACE_ID 归一，写回时补齐。
+   */
+  workspaceId: string;
+  /** 溯源：会话/消息/工具调用/URL/文件 + 信任级别（网页抓取的记忆不能与用户指令同权）。 */
+  provenance?: MemoryProvenance;
 }
 
 /** 工厂：从部分字段构造完整 MemoryFact（缺失字段给默认值，保持钢筋结构不塌）。 */
@@ -60,6 +85,8 @@ export function createFact(
     // crossAgentLinks 恒有数组，读取方无需到处判空。
     agentId: partial.agentId,
     crossAgentLinks: partial.crossAgentLinks ?? [],
+    workspaceId: partial.workspaceId ?? DEFAULT_WORKSPACE_ID,
+    provenance: partial.provenance,
   };
 }
 

@@ -451,6 +451,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     zh: "会话自动汇总：抽取 → 去重/合并/建链 → 容量软归档；相关对话自动召回。",
     en: "Automatic session summaries: extract → dedupe/merge/link → soft-archive when full; related conversations are recalled automatically.",
   },
+  "settings.memory.wsAll": { zh: "全部工作区", en: "All workspaces" },
+  "settings.memory.wsHint": {
+    zh: "记忆按工作区隔离：召回只会用当前会话所属工作区的条目，这里只是查看范围。",
+    en: "Memories are scoped by workspace: recall only uses entries from the session's workspace; this filter only changes what you see.",
+  },
   "settings.memory.items": { zh: "条目", en: "Entries" },
   "settings.memory.archived": { zh: "归档", en: "Archived" },
   "settings.memory.links": { zh: "关联", en: "Links" },

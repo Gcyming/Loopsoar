@@ -79,7 +79,12 @@ function factAfterAdd(memory: MemoryService, saved: MemoryFact, content: string)
 }
 
 /** 注册 4 个记忆工具（由 index.ts 装配：与 MemoryService 单例共用同一份记忆库）。 */
-export function registerMemoryTools(registry: ToolRegistry, memory: MemoryService): void {
+export function registerMemoryTools(
+  registry: ToolRegistry,
+  memory: MemoryService,
+  opts: { workspaceIdForSession?: (sessionId?: string) => string | undefined } = {},
+): void {
+  const workspaceOf = (sessionId?: string): string | undefined => opts.workspaceIdForSession?.(sessionId);
   registry.register({
     name: "memory_search",
     description:
@@ -91,10 +96,12 @@ export function registerMemoryTools(registry: ToolRegistry, memory: MemoryServic
       if (!parsed.success) return invalidParams(parsed.error);
       const { query, limit } = parsed.data;
       // 语义向量可用时走 searchAsync（llama-server 嵌入）；旧装配/测试只有同步 search 时自动回退
+      // D1：工具检索同样只看本会话所属工作区，跨区记忆不可见。
+      const ws = workspaceOf(ctx.sessionId);
       const hits =
         typeof memory.searchAsync === "function"
-          ? await memory.searchAsync(query, limit ?? 6)
-          : memory.search(query, limit ?? 6);
+          ? await memory.searchAsync(query, limit ?? 6, ws)
+          : memory.search(query, limit ?? 6, ws);
       if (hits.length === 0) {
         return {
           ok: true,
@@ -124,12 +131,19 @@ export function registerMemoryTools(registry: ToolRegistry, memory: MemoryServic
       const { content, category, tags, importance } = parsed.data;
       const actualCategory = category ?? "fact";
       try {
+        const ws = workspaceOf(ctx.sessionId);
         const saved = await memory.add({
           content,
           category: actualCategory,
           tags,
           importance,
           source: "agent",
+          ...(ws ? { workspaceId: ws } : {}),
+          provenance: {
+            ...(ws ? { workspaceId: ws } : {}),
+            trust: "agent",
+            capturedBy: "tool",
+          },
         });
         const fact = factAfterAdd(memory, saved, content);
         const tagText = fact.tags.length > 0 ? `，标签: ${fact.tags.join("/")}` : "";

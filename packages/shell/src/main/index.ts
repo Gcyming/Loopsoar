@@ -1815,7 +1815,9 @@ app.whenReady().then(async () => {
     // 规则文件（AGENTS.md）：每次 stream 重新读取，设置面板保存后即时生效
     getSystemRules: () => currentRulesPrompt(settingsDeps),
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
-    getMemoryFor: (text: string) => memory.recallPrompt(text),
+    // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
+    getMemoryFor: (text: string, sessionId?: string) =>
+      memory.recallPrompt(text, (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default"),
     // 技能：独立子系统，只注入 SKILL.md 文本（不提供工具）
     getSkillPrompt: (text: string) => skills.promptFor(text),
     // 权限策略：设置面板保存后即时生效
@@ -2223,7 +2225,10 @@ app.whenReady().then(async () => {
   registerPlanTools(registry);
   registerFileTools(registry, resolveSessionRoot);
   // 记忆工具（设置·记忆同源数据）：读工具 plan 可用，写工具按 sandbox L2 确认
-  registerMemoryTools(registry, memory);
+  registerMemoryTools(registry, memory, {
+    workspaceIdForSession: (sessionId?: string) =>
+      (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default",
+  });
   // 联网搜索工具：走注入的 platform.net.request（SSRF/DNS 钉扎），引擎来自偏好
   registerSearchTools(registry, {
     getEngine: () => loadPreferences(dirs.configDir).searchEngine,
