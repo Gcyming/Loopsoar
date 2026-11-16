@@ -58,6 +58,8 @@ export interface PersistedSession {
   forkedFrom?: { sessionId: string; keepCount: number; at: number };
   /** 浏览器任务会话（Agent 工作区）：列表里要用专属标记区分，关掉页面也不退回普通会话。 */
   task?: boolean;
+  /** 用户自定义标题（重命名后保留；缺省按首条用户消息生成）。 */
+  title?: string;
 }
 
 export interface SessionMeta {
@@ -106,6 +108,9 @@ function sanitizeSession(data: PersistedSession): PersistedSession {
   }
   if (data.task !== undefined && data.task !== true) {
     delete data.task;
+  }
+  if (data.title !== undefined && (typeof data.title !== "string" || !data.title.trim())) {
+    delete data.title;
   }
   return data;
 }
@@ -243,12 +248,13 @@ export class SessionStore {
     updatedAt: number,
     workspaceId?: string | null,
     browserControl?: boolean,
+    customTitle?: string,
   ): SessionMeta {
     const firstUser = messages.find((m) => m.role === "user")?.text ?? "新会话";
     const last = messages[messages.length - 1]?.text ?? "";
     return {
       id,
-      title: firstUser.replace(/\s+/g, " ").slice(0, 40) || "新会话",
+      title: customTitle?.trim().slice(0, 40) || firstUser.replace(/\s+/g, " ").slice(0, 40) || "新会话",
       updatedAt,
       preview: last.replace(/\s+/g, " ").slice(0, 80),
       messageCount: messages.length,
@@ -400,14 +406,14 @@ export class SessionStore {
     });
     this.writeJson(file, trimmed);
     const index = this.index();
-    const meta = this.metaOf(safeId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId, trimmed.browserControl);
+    const meta = this.metaOf(safeId, trimmed.messages, trimmed.updatedAt, trimmed.workspaceId, trimmed.browserControl, trimmed.title);
     const at = index.items.findIndex((i) => i.id === safeId);
     const old = at >= 0 ? index.items[at] : undefined;
     // metaOf 只算派生字段；task / forkedFrom / 自定义分支标题必须从旧索引项保留，
     // 否则 append/moveTail 一次 save 就会把徽标和「分支 · X」抹掉（UI 读索引）。
     if (old?.task || trimmed.task === true) meta.task = true;
     if (trimmed.forkedFrom ?? old?.forkedFrom) meta.forkedFrom = trimmed.forkedFrom ?? old!.forkedFrom;
-    if (old?.forkedFrom && old.title && (trimmed.forkedFrom ?? old.forkedFrom)) meta.title = old.title;
+    if (old?.forkedFrom && old.title && (trimmed.forkedFrom ?? old.forkedFrom) && !trimmed.title) meta.title = old.title;
     if (old?.workspaceId && !meta.workspaceId) meta.workspaceId = old.workspaceId;
     if (typeof old?.browserControl === "boolean" && trimmed.browserControl === undefined) meta.browserControl = old.browserControl;
     if (at >= 0) index.items[at] = meta;
@@ -446,7 +452,9 @@ export class SessionStore {
     const item = index.items.find((i) => i.id === base.sessionId);
     if (item) {
       const sourceTitle = index.items.find((i) => i.id === sourceId)?.title ?? "会话";
-      item.title = (title ?? `分支 · ${sourceTitle}`).slice(0, 40);
+      const forkTitle = (title ?? `分支 · ${sourceTitle}`).slice(0, 40);
+      item.title = forkTitle;
+      forked.title = forkTitle;
       item.messageCount = forked.messages.length;
       item.preview = forked.messages[forked.messages.length - 1]?.text?.slice(0, 80) ?? "";
       item.updatedAt = forkedAt;
@@ -528,6 +536,25 @@ export class SessionStore {
     const meta = index.items.find((item) => item.id === sessionId);
     if (meta) {
       meta.browserControl = enabled;
+      this.saveIndex(index);
+    }
+    return true;
+  }
+
+  /** 重命名会话：同时写会话文件和索引，后续 append/save 不会覆盖。 */
+  renameSession(sessionId: string, title: string): boolean {
+    const file = this.sessionFile(sessionId);
+    if (!file) return false;
+    const data = this.readSession(file);
+    if (!data) return false;
+    const next = title.trim().slice(0, 40);
+    if (!next) return false;
+    data.title = next;
+    this.writeJson(file, data);
+    const index = this.index();
+    const meta = index.items.find((item) => item.id === sessionId);
+    if (meta) {
+      meta.title = next;
       this.saveIndex(index);
     }
     return true;

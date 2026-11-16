@@ -88,6 +88,7 @@ export const ChatRollbackSchema = z.object({
  * 会话分支：把源会话的前 keepCount 条消息复制成一个新会话（从指定阶段另开一方向）。
  * 不继承运行态（allow-session 白名单、流、压缩状态），消息前缀逐条一致。
  */
+export const ChatRenameSessionSchema = z.object({ sessionId: SessionIdSchema, title: z.string().min(1).max(80) });
 export const ChatForkSchema = z.object({
   sessionId: SessionIdSchema.optional(),
   keepCount: z.number().int().min(0).max(10_000),
@@ -508,6 +509,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "rollback",
     request: ChatRollbackSchema,
+    sensitive: true,
+  },
+  "chat:renameSession": {
+    domain: "chat",
+    method: "renameSession",
+    request: ChatRenameSessionSchema,
     sensitive: true,
   },
   "chat:forkSession": {

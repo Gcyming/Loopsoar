@@ -69,6 +69,8 @@ export interface AgentSidebarProps {
   onNewSession: () => void;
   onSwitchSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string, title: string) => void;
+  onForkSession?: (sessionId: string, keepCount: number) => void;
   onOpenWorkspacePanel: () => void;
   /** 会话列表底部「添加工作区」（原生文件夹选择器 → 新工作区 + 新会话）。 */
   onAddWorkspace?: () => void;
@@ -129,6 +131,8 @@ export default function AgentSidebar({
   onOpenWorkspaceFolder,
   onSwitchSession,
   onDeleteSession,
+  onRenameSession,
+  onForkSession,
   onAddWorkspace,
   onNotice,
   vibeMode = false,
@@ -450,6 +454,8 @@ export default function AgentSidebar({
                       onCloseSession();
                     }}
                     onDeleteSession={onDeleteSession}
+                    onRenameSession={onRenameSession}
+                    onForkSession={onForkSession}
                     onNewSession={() => {
                       onNewSession();
                       onCloseSession();
@@ -510,6 +516,8 @@ export default function AgentSidebar({
                       onCloseSession();
                     }}
                     onDeleteSession={onDeleteSession}
+                    onRenameSession={onRenameSession}
+                    onForkSession={onForkSession}
                     onNewSession={() => {
                       onNewSession();
                       onCloseSession();

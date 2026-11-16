@@ -2035,6 +2035,38 @@ export default function App(): React.JSX.Element {
     });
   }, [api, switchSession]);
 
+  const renameSession = useCallback(
+    (targetId: string, title: string): void => {
+      if (!api) return;
+      void api.chat
+        .renameSession({ sessionId: targetId, title })
+        .then((r) => {
+          if (r.ok) setSessions(r.sessions);
+        })
+        .catch((err: unknown) => setNotice(`重命名失败：${err instanceof Error ? err.message : String(err)}`));
+    },
+    [api],
+  );
+
+  const forkSessionById = useCallback(
+    (targetId: string, keepCount: number): void => {
+      if (!api) return;
+      void api.chat
+        .forkSession({ sessionId: targetId, keepCount })
+        .then((r) => {
+          if (!r.ok || !r.session) {
+            setNotice("分叉失败：源会话不存在");
+            return;
+          }
+          setSessions(r.sessions);
+          switchSession(r.session.sessionId);
+          setNotice("已分叉会话");
+        })
+        .catch((err: unknown) => setNotice(`分叉失败：${err instanceof Error ? err.message : String(err)}`));
+    },
+    [api, switchSession],
+  );
+
   const forkFrom = useCallback(
     (targetId: string): void => {
       if (!api) return;
@@ -2533,6 +2565,8 @@ export default function App(): React.JSX.Element {
           onOpenWorkspaceFolder={openWorkspaceFolder}
           onSwitchSession={switchSession}
           onDeleteSession={deleteSession}
+          onRenameSession={renameSession}
+          onForkSession={forkSessionById}
           onOpenWorkspacePanel={() => {
             dismissAllPopovers();
             setWorkspacePanelOpen(true);

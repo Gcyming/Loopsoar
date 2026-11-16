@@ -702,6 +702,7 @@ export interface LoopsoarAPI {
     stop(payload: { sessionId?: string }): Promise<{ stopped: boolean }>;
     rollback(payload: { keepCount: number; sessionId?: string }): Promise<{ ok: boolean; session: unknown }>;
     /** 从源会话第 keepCount 条消息处分支：复制前缀到新会话并切过去（不继承运行态/浏览器任务）。 */
+    renameSession(payload: { sessionId: string; title: string }): Promise<{ ok: boolean; sessions: SessionMeta[] }>;
     forkSession(payload: { sessionId?: string; keepCount: number; title?: string }): Promise<{
       ok: boolean;
       session: { sessionId: string; messages: ChatHistoryMessage[] } | null;

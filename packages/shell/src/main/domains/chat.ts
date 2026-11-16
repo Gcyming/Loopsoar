@@ -246,6 +246,12 @@ export function registerChatDomain(deps: ChatDeps): void {
     return { ok: session !== null, session };
   });
 
+  handleTrusted(deps, "chat:renameSession", (payload) => {
+    const p = payload as { sessionId: string; title: string };
+    const ok = deps.sessions?.renameSession(p.sessionId, p.title) ?? false;
+    return { ok, sessions: deps.sessions?.list() ?? [] };
+  });
+
   handleTrusted(deps, "chat:forkSession", async (payload) => {
     const p = payload as { sessionId?: string; keepCount: number; title?: string };
     const sourceId = p.sessionId ?? deps.sessions?.currentId() ?? null;

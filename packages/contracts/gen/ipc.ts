@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
   "chat:steer": { domain: "chat", method: "steer", sensitive: true, hasRequest: true },
   "chat:steerCancel": { domain: "chat", method: "steerCancel", sensitive: true, hasRequest: true },
   "chat:rollback": { domain: "chat", method: "rollback", sensitive: true, hasRequest: true },
+  "chat:renameSession": { domain: "chat", method: "renameSession", sensitive: true, hasRequest: true },
   "chat:forkSession": { domain: "chat", method: "forkSession", sensitive: true, hasRequest: true },
   "fs:readImage": { domain: "fs", method: "readImage", sensitive: true, hasRequest: true },
   "fs:saveImage": { domain: "fs", method: "saveImage", sensitive: true, hasRequest: true },
@@ -173,7 +174,7 @@ export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEn
 export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
   return {
     domains: {
-    "chat": ["stream", "steer", "steerCancel", "rollback", "forkSession", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession", "setBrowserControl", "compact"],
+    "chat": ["stream", "steer", "steerCancel", "rollback", "renameSession", "forkSession", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession", "setBrowserControl", "compact"],
     "fs": ["readImage", "saveImage"],
     "perm": ["respond"],
     "workspace": ["read", "write", "list", "create", "bindSession", "select", "rename", "openFolder", "remove", "status"],

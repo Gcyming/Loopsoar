@@ -24,6 +24,9 @@ export interface SessionListPanelProps {
   currentSession: string | null;
   onSwitchSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
+  /** 重命名 / 分叉（App 负责调 chat 域并刷新列表）。 */
+  onRenameSession?: (sessionId: string, title: string) => void;
+  onForkSession?: (sessionId: string, keepCount: number) => void;
   onNewSession: () => void;
   /** 在某工作区下新建会话（先切换工作区再建）。 */
   onNewSessionInWorkspace?: (workspaceId: string) => void;
@@ -87,6 +90,8 @@ export default function SessionListPanel({
   currentSession,
   onSwitchSession,
   onDeleteSession,
+  onRenameSession,
+  onForkSession,
   onNewSession,
   onNewSessionInWorkspace,
   onRenameWorkspace,
@@ -103,9 +108,27 @@ export default function SessionListPanel({
   const [menu, setMenu] = React.useState<RowMenu | null>(null);
   const [renaming, setRenaming] = React.useState<{ id: string; value: string } | null>(null);
 
-  usePopover("session-row-menu", Boolean(menu), (next) => {
-    if (!next) setMenu(null);
-  });
+  // 会话列表本身在 `app-session` 浮层里；再用 usePopover 登记会 claim 掉父浮层，
+  // 父浮层关闭 → 本组件卸载 → 菜单瞬间消失。这里用本地 outside-click，不抢父浮层。
+  React.useEffect(() => {
+    if (!menu) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-popover],[data-popover-trigger]")) return;
+      setMenu(null);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("mousedown", onPointerDown as unknown as (event: MouseEvent) => void, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("mousedown", onPointerDown as unknown as (event: MouseEvent) => void, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menu]);
 
   const togglePin = (id: string): void => {
     setPinned((prev) => {
@@ -423,6 +446,42 @@ export default function SessionListPanel({
                   >
                     <Icon name="pin" size={12} style={styles.menuIcon} />
                     <span>{pinned.includes(menu.id) ? tr("chat.unpinSession") : tr("chat.pinSession")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.menuItem}
+                    onClick={() => {
+                      const session = sessions.find((item) => item.id === menu.id);
+                      const next = window.prompt(tr("chat.renameSession"), session?.title ?? "");
+                      if (next && next.trim()) onRenameSession?.(menu.id, next.trim());
+                      setMenu(null);
+                    }}
+                  >
+                    <Icon name="edit" size={12} style={styles.menuIcon} />
+                    <span>{tr("chat.renameSession")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.menuItem}
+                    onClick={() => {
+                      const session = sessions.find((item) => item.id === menu.id);
+                      onForkSession?.(menu.id, session?.messageCount ?? 0);
+                      setMenu(null);
+                    }}
+                  >
+                    <Icon name="layers-linked" size={12} style={styles.menuIcon} />
+                    <span>{tr("chat.forkSessionMenu")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.menuItem}
+                    onClick={() => {
+                      onSwitchSession(menu.id);
+                      setMenu(null);
+                    }}
+                  >
+                    <Icon name="arrow-go" size={12} style={styles.menuIcon} />
+                    <span>{tr("chat.openInApp")}</span>
                   </button>
                   <button
                     type="button"

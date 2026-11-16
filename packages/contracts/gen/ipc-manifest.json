@@ -29,6 +29,13 @@
       "hasRequest": true
     },
     {
+      "channel": "chat:renameSession",
+      "domain": "chat",
+      "method": "renameSession",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "chat:forkSession",
       "domain": "chat",
       "method": "forkSession",
