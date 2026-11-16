@@ -191,7 +191,6 @@ export default function AgentSidebar({
   };
 
   const activeSession = sessions.find((x) => x.id === currentSession) ?? null;
-  const currentWorkspaceId = activeSession?.workspaceId ?? activeWorkspaceId;
 
   const collapseLabel = localized("chat.sidebarCollapse", "收起会话栏", "Collapse sidebar");
   const expandLabel = localized("chat.sidebarExpand", "展开会话栏", "Expand sidebar");
