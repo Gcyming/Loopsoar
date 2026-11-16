@@ -84,6 +84,15 @@ describe("记忆仓库编解码（Obsidian 风格）", () => {
     expect(name).toContain("记忆原点");
   });
 
+  it("Windows 保留设备名不会被当成文件名；标题换行被压平", () => {
+    const reserved = memoryFileName(fact({ content: "CON" }));
+    expect(reserved).toMatch(/_CON\.md$/);
+    const titled = fact();
+    titled.title = "第一行\n第二行";
+    const md = factToMarkdown(titled);
+    expect(md).toContain('title: "第一行 第二行"');
+  });
+
   it("frontmatter 带 aliases: [id]，改文件名后 [[id]] 仍可解析", () => {
     const md = factToMarkdown(fact());
     expect(md).toContain("aliases: [m1]");

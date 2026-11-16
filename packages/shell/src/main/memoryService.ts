@@ -265,7 +265,10 @@ export class MemoryService {
       const sidecar = await this.readSidecar();
       this.applyRuntime(loaded.facts, loaded.archived, sidecar.runtime);
       this.store.restore({ facts: loaded.facts, archived: loaded.archived, usage: sidecar.usage });
-      this.lastWritten = this.fingerprint(loaded.facts, loaded.archived, loaded.paths);
+      // 索引快路径已知每个文件的内容哈希：直接复用，避免把 10k 条记忆重新序列化+哈希一遍
+      this.lastWritten = loaded.fromIndex
+        ? loaded.lastWritten
+        : this.fingerprint(loaded.facts, loaded.archived, loaded.paths);
       if (!loaded.fromIndex) await this.persistIndex(loaded.facts, loaded.archived, loaded.written);
       console.warn(`[Loopsoar] 记忆仓库：${this.vaultPath}（${loaded.facts.length} 活跃 / ${loaded.archived.length} 归档）`);
       fromIndex = loaded.fromIndex;
@@ -309,12 +312,14 @@ export class MemoryService {
     archived: MemoryFact[];
     paths: Map<string, string>;
     written: Map<string, { file: string; hash: string }>;
+    lastWritten: Map<string, string>;
     fromIndex: boolean;
   } {
     const facts: MemoryFact[] = [];
     const archived: MemoryFact[] = [];
     const paths = new Map<string, string>();
     const written = new Map<string, { file: string; hash: string }>();
+    const lastWritten = new Map<string, string>();
     for (const [id, entry] of this.indexEntries) {
       const fact = { ...entry.fact };
       const file = path.join(this.vaultPath, entry.path);
@@ -322,8 +327,9 @@ export class MemoryService {
       (archivedFlag ? archived : facts).push(fact);
       paths.set(id, file);
       written.set(id, { file, hash: entry.hash });
+      lastWritten.set(id, `${file}\u0000${entry.hash}`);
     }
-    return { facts, archived, paths, written, fromIndex: true };
+    return { facts, archived, paths, written, lastWritten, fromIndex: true };
   }
 
   /**
@@ -511,6 +517,8 @@ export class MemoryService {
     paths: Map<string, string>;
     /** 本次读到的 id → 文件 + 内容哈希，供索引持久化。 */
     written: Map<string, { file: string; hash: string }>;
+    /** 与 fingerprint 等价的「路径 + 哈希」基线，供增量写复用。 */
+    lastWritten: Map<string, string>;
     fromIndex: boolean;
   }> {
     const facts: MemoryFact[] = [];
@@ -570,26 +578,34 @@ export class MemoryService {
       this.indexEntries.delete(id);
       this.touchedShards.add(shardOf(id));
     }
-    return { facts, archived, paths, written, fromIndex: false };
+    const lastWritten = new Map<string, string>();
+    for (const [id, info] of written) lastWritten.set(id, `${info.file}\u0000${info.hash}`);
+    return { facts, archived, paths, written, lastWritten, fromIndex: false };
   }
 
   /** 读索引分片；缺失/损坏都只是「没有缓存」，绝不影响正库加载。 */
   private async loadIndex(): Promise<void> {
     this.indexEntries.clear();
     this.touchedShards.clear();
-    for (let i = 0; i < INDEX_SHARDS; i += 1) {
-      const file = path.join(this.indexDir, shardFileName(i));
-      try {
-        if (!(await this.opts.platform.fs.exists(file))) continue;
-        const parsed = parseShard(await this.opts.platform.fs.readFileUtf8(file));
-        if (!parsed) {
-          console.warn(`[Loopsoar] 记忆索引分片损坏，已忽略：${path.basename(file)}`);
-          continue;
+    // 分片互相独立：并发读，避免 32 次串行 IO 把启动拖慢
+    const shards = await Promise.all(
+      Array.from({ length: INDEX_SHARDS }, async (_, i) => {
+        const file = path.join(this.indexDir, shardFileName(i));
+        try {
+          if (!(await this.opts.platform.fs.exists(file))) return null;
+          return { file, parsed: parseShard(await this.opts.platform.fs.readFileUtf8(file)) };
+        } catch {
+          return null;
         }
-        for (const [id, entry] of Object.entries(parsed.entries)) this.indexEntries.set(id, entry);
-      } catch {
-        // 单个分片读失败 → 视为无缓存，后续全量解析
+      }),
+    );
+    for (const shard of shards) {
+      if (!shard) continue;
+      if (!shard.parsed) {
+        console.warn(`[Loopsoar] 记忆索引分片损坏，已忽略：${path.basename(shard.file)}`);
+        continue;
       }
+      for (const [id, entry] of Object.entries(shard.parsed.entries)) this.indexEntries.set(id, entry);
     }
   }
 
@@ -718,7 +734,8 @@ export class MemoryService {
         let file = path.join(this.vaultPath, dir, name);
         // 同名不同条目（同一天、同标题）时用 id 后缀去重，保证不覆盖
         if ([...seen.values()].some((token) => token.split("\u0000")[0] === file)) {
-          file = path.join(this.vaultPath, dir, name.replace(/\.md$/i, `-${fact.id}.md`));
+          const suffix = fact.id.replace(/[^\w-]/g, "").slice(0, 8) || "dup";
+          file = path.join(this.vaultPath, dir, name.replace(/\.md$/i, `-${suffix}.md`));
         }
         const text = factToMarkdown(fact);
         const hash = hashText(text);

@@ -47,7 +47,10 @@ function slugOf(content: string): string {
  */
 export function memoryFileName(fact: MemoryFact): string {
   const day = new Date(fact.timestamp).toISOString().slice(0, 10);
-  return `${day}-${slugOf(fact.content)}.md`;
+  const slug = slugOf(fact.content);
+  // Windows 保留设备名不能作为文件名（CON/NUL/COM1…），加前缀规避
+  const safe = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(slug) ? `_${slug}` : slug;
+  return `${day}-${safe}.md`;
 }
 
 /** 从文件名还原 id（仅当 frontmatter 缺 id 时兜底）。 */
@@ -56,7 +59,7 @@ export function idFromFileName(fileName: string): string {
 }
 
 function titleOf(content: string, title?: string): string {
-  const given = title?.trim();
+  const given = title?.replace(/\s+/g, " ").trim();
   if (given) return given.length > 60 ? `${given.slice(0, 60)}…` : given;
   const first = content.replace(/\s+/g, " ").trim();
   return first.length > 40 ? `${first.slice(0, 40)}…` : first;
