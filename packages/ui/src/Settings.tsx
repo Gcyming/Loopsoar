@@ -188,7 +188,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     }, 900);
     return () => window.clearTimeout(timer);
   }, [mem]);
-  const [mForm, setMForm] = useState({ content: "", category: "general" });
+  const [mForm, setMForm] = useState({
+    content: "",
+    category: "general",
+    importance: "5",
+    tags: "",
+    workspaceId: "",
+  });
+  const [memPage, setMemPage] = useState(1);
+  const [memJump, setMemJump] = useState("");
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
   const [review, setReview] = useState<{
     suggestions: { id: string; title: string; content: string }[];
@@ -456,8 +464,24 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
 
   const addMemory = useCallback(async () => {
     if (!api || !mForm.content.trim()) return;
-    try { await api.memory.add({ content: mForm.content.trim(), category: mForm.category || "general", importance: 5 }); setMForm({ content: "", category: "general" }); setMem(await api.memory.list()); ok(tr("settings.memory.added")); }
-    catch (e) { bad(e); }
+    const tags = mForm.tags
+      .split(/[,，\s]+/)
+      .map((tag) => tag.replace(/^#/, "").trim())
+      .filter(Boolean)
+      .slice(0, 10);
+    const importance = Math.min(10, Math.max(1, Number(mForm.importance) || 5));
+    try {
+      await api.memory.add({
+        content: mForm.content.trim(),
+        category: mForm.category.trim() || "general",
+        importance,
+        ...(tags.length > 0 ? { tags } : {}),
+        ...(mForm.workspaceId.trim() ? { workspaceId: mForm.workspaceId.trim() } : {}),
+      });
+      setMForm({ content: "", category: "general", importance: "5", tags: "", workspaceId: "" });
+      setMem(await api.memory.list());
+      ok(tr("settings.memory.added"));
+    } catch (e) { bad(e); }
   }, [api, mForm, ok, bad, tr]);
 
   const saveMemEdit = useCallback(async () => {
@@ -1361,6 +1385,13 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         const shownFacts = (mem?.facts ?? []).filter(
           (f) => memWs === "all" || (f.workspaceId ?? "default") === memWs,
         );
+        const memPageSize = 10;
+        const memTotalPages = Math.max(1, Math.ceil(shownFacts.length / memPageSize));
+        const memPageSafe = Math.min(Math.max(1, memPage), memTotalPages);
+        const pageFacts = shownFacts.slice((memPageSafe - 1) * memPageSize, memPageSafe * memPageSize);
+        const pageNumbers = Array.from({ length: memTotalPages }, (_, index) => index + 1).filter(
+          (page) => memTotalPages <= 7 || page === 1 || page === memTotalPages || Math.abs(page - memPageSafe) <= 2,
+        );
         return mem ? (<div>
           <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
           <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
@@ -1431,38 +1462,55 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Stat l={tr("settings.memory.links")} v={mem.stats.links} />
             <Stat l={tr("settings.memory.invalidated")} v={mem.stats.invalidated ?? 0} />
           </div>
-          <div style={S.note}>{tr("settings.memory.store")}<code style={S.code}>{mem.filePath}</code></div>
+          <Field l={tr("settings.memory.store")} h={tr("settings.memory.storeHint")}>
+            <div style={S.col}>
+              <In
+                v={prefs?.memoryStorePath ?? ""}
+                ph={locations?.defaultMemoryFile ?? ""}
+                on={(x) => {
+                  if (prefs) setPrefs({ ...prefs, memoryStorePath: x });
+                }}
+              />
+              <div style={S.rowEnd}>
+              <Btn
+                label={tr("settings.browse")}
+                small
+                onClick={() => {
+                  if (!api) return;
+                  void api.dialog
+                    .pickPath({ kind: "file", title: tr("settings.storage.pickMemory") })
+                    .then((r) => {
+                      if (r.path && prefs) setPrefs({ ...prefs, memoryStorePath: r.path });
+                    });
+                }}
+              />
+              <Btn
+                label={tr("settings.save")}
+                small
+                primary
+                onClick={() => {
+                  const current = api;
+                  if (!current) return;
+                  void savePrefs().then(async () => {
+                    // 换库是异步的：等 relocate 完成再刷新，避免读到旧库
+                    await new Promise((resolve) => setTimeout(resolve, 400));
+                    setMem(await current.memory.list());
+                  });
+                }}
+              />
+              </div>
+            </div>
+          </Field>
           <div style={S.note}>{tr("settings.memory.vaultHint")}</div>
           {mem.reconciling ? <div style={S.note}>{tr("settings.memory.reconciling")}</div> : null}
           {workspaceIds.length > 1 ? (
             <div style={S.btns}>
-              <Btn label={tr("settings.memory.wsAll")} small primary={memWs === "all"} onClick={() => setMemWs("all")} />
+              <Btn label={tr("settings.memory.wsAll")} small primary={memWs === "all"} onClick={() => { setMemWs("all"); setMemPage(1); }} />
               {workspaceIds.map((ws) => (
-                <Btn key={ws} label={ws} small primary={memWs === ws} onClick={() => setMemWs(ws)} />
+                <Btn key={ws} label={ws} small primary={memWs === ws} onClick={() => { setMemWs(ws); setMemPage(1); }} />
               ))}
             </div>
           ) : null}
-          <Field l={tr("settings.memory.addTitle")}><div style={S.col}>
-            <Area v={mForm.content} rows={2} on={(x) => setMForm({ ...mForm, content: x })} />
-            <div style={S.rowEnd}>
-              <In v={mForm.category} on={(x) => setMForm({ ...mForm, category: x })} />
-              <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
-            </div>
-          </div></Field>
-          {shownFacts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : shownFacts.map((f) => (
-            <div key={f.id} className="panel-card" style={S.card}>
-              <div style={S.rowBetween}>
-                <span style={S.meta}><span style={BADGE.neutral}>{f.category}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
-                <span style={S.icons}>
-                  {mEdit?.id === f.id ? <>
-                    <Btn label={tr("settings.save")} small onClick={() => void saveMemEdit()} /><Btn label={tr("settings.cancel")} small onClick={() => setMEdit(null)} />
-                  </> : <Btn label={tr("settings.edit")} small onClick={() => setMEdit({ id: f.id, content: f.content })} />}
-                  <Btn label={tr("settings.delete")} small onClick={() => void api.memory.delete({ id: f.id }).then(async () => setMem(await api.memory.list()))} />
-                </span>
-              </div>
-              {mEdit?.id === f.id ? <Area v={mEdit.content} rows={2} on={(x) => setMEdit({ id: f.id, content: x })} /> : <div style={S.memText}>{f.content}</div>}
-            </div>
-          ))}
           <div style={S.btns}>
             <Btn
               label={tr("settings.memory.consolidate")}
@@ -1547,6 +1595,52 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 </div>
               ) : null}
               {review.available && review.suggestions.length === 0 && review.merges.length === 0 ? <div style={S.muted}>{tr("settings.memory.reviewEmpty")}</div> : null}
+            </div>
+          ) : null}
+          <Field l={tr("settings.memory.addTitle")} h={tr("settings.memory.addHint")}>
+            <div style={S.col}>
+              <Area v={mForm.content} rows={2} ph={tr("settings.memory.addContentPh")} on={(x) => setMForm({ ...mForm, content: x })} />
+              <div style={S.rowEnd}>
+                <In v={mForm.category} ph={tr("settings.memory.addCategoryPh")} on={(x) => setMForm({ ...mForm, category: x })} />
+                <In v={mForm.importance} ph={tr("settings.memory.addImportancePh")} on={(x) => setMForm({ ...mForm, importance: x })} />
+                <In v={mForm.tags} ph={tr("settings.memory.addTagsPh")} on={(x) => setMForm({ ...mForm, tags: x })} />
+                <In v={mForm.workspaceId} ph={tr("settings.memory.addWorkspacePh")} on={(x) => setMForm({ ...mForm, workspaceId: x })} />
+                <Btn label={tr("settings.add")} primary onClick={() => void addMemory()} />
+              </div>
+            </div>
+          </Field>
+          {shownFacts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : pageFacts.map((f) => (
+            <div key={f.id} className="panel-card" style={S.card}>
+              <div style={S.rowBetween}>
+                <span style={S.meta}><span style={BADGE.neutral}>{f.category}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
+                <span style={S.icons}>
+                  {mEdit?.id === f.id ? <>
+                    <Btn label={tr("settings.save")} small onClick={() => void saveMemEdit()} /><Btn label={tr("settings.cancel")} small onClick={() => setMEdit(null)} />
+                  </> : <Btn label={tr("settings.edit")} small onClick={() => setMEdit({ id: f.id, content: f.content })} />}
+                  <Btn label={tr("settings.delete")} small onClick={() => void api.memory.delete({ id: f.id }).then(async () => setMem(await api.memory.list()))} />
+                </span>
+              </div>
+              {mEdit?.id === f.id ? <Area v={mEdit.content} rows={2} on={(x) => setMEdit({ id: f.id, content: x })} /> : <div style={S.memText}>{f.content}</div>}
+            </div>
+          ))}
+          {shownFacts.length > memPageSize ? (
+            <div style={S.btns}>
+              <Btn label="‹" small onClick={() => setMemPage(Math.max(1, memPageSafe - 1))} />
+              {pageNumbers.map((page) => (
+                <Btn key={page} label={String(page)} small primary={page === memPageSafe} onClick={() => setMemPage(page)} />
+              ))}
+              <Btn label="›" small onClick={() => setMemPage(Math.min(memTotalPages, memPageSafe + 1))} />
+              <span style={S.meta}>{tr("settings.memory.pageInfo", { page: memPageSafe, total: memTotalPages, count: shownFacts.length })}</span>
+              <In v={memJump} ph={tr("settings.memory.pageJump")} on={setMemJump} style={{ width: 72, flex: "0 0 auto" }} />
+              <Btn
+                label={tr("settings.memory.pageGo")}
+                small
+                onClick={() => {
+                  const target = Math.trunc(Number(memJump));
+                  if (Number.isFinite(target) && target >= 1) setMemPage(Math.min(memTotalPages, target));
+                  setMemJump("");
+                }}
+              />
             </div>
           ) : null}
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
@@ -2011,23 +2105,32 @@ function Toggle({ v, on, title, testId }: { v: boolean; on: (x: boolean) => void
     </button>
   );
 }
-function In({ v, ph, on, type }: { v: string; ph?: string; on: (x: string) => void; type?: string }) {
-  return <input style={S.input} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
+function In({ v, ph, on, type, style }: { v: string; ph?: string; on: (x: string) => void; type?: string; style?: React.CSSProperties }) {
+  return <input style={{ ...S.input, ...style }} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
 }
-function Area({ v, rows, on, wide }: { v: string; rows: number; on: (x: string) => void; wide?: boolean }) {
+function Area({ v, rows, on, wide, ph }: { v: string; rows: number; on: (x: string) => void; wide?: boolean; ph?: string }) {
   return (
     <textarea
       style={wide ? { ...S.area, maxWidth: "none", width: "100%", minWidth: 240, fontFamily: "ui-monospace, Consolas, monospace" } : S.area}
       rows={rows}
       value={v}
-      placeholder={wide ? "x-opencode-session: {{sessionId}}\nUser-Agent: Loopsoar/1.0" : undefined}
+      placeholder={ph ?? (wide ? "x-opencode-session: {{sessionId}}\nUser-Agent: Loopsoar/1.0" : undefined)}
       onChange={(e) => on(e.target.value)}
       spellCheck={false}
     />
   );
 }
 function Btn({ label, onClick, primary, small }: { label: string; onClick: () => void; primary?: boolean; small?: boolean }) {
-  return <button type="button" className={primary ? "btn-primary" : "btn-ghost"} style={{ ...(primary ? S.primary : S.ghost), ...(small ? S.small : {}) }} onClick={onClick}>{label}</button>;
+  return (
+    <button
+      type="button"
+      className={primary ? "btn-primary" : "btn-ghost"}
+      style={{ ...(primary ? S.primary : S.ghost), ...(small ? S.small : {}), whiteSpace: "nowrap", flexShrink: 0 }}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
 }
 function SaveBtn({ onClick, label }: { onClick: () => void; label: string }) {
   return <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 14 }}><Btn label={label} primary onClick={onClick} /></div>;

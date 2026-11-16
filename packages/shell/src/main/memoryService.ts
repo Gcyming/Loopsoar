@@ -323,7 +323,9 @@ export class MemoryService {
     for (const [id, entry] of this.indexEntries) {
       const fact = { ...entry.fact };
       const file = path.join(this.vaultPath, entry.path);
-      const archivedFlag = Boolean(fact.archivedAt) || fact.status !== "active" || entry.path.startsWith("archive/");
+      // 以文件所在目录为准：失效（invalidated/merged）条目仍在 facts/ 里，只是不参与默认召回，
+      // 不能因为 status 不是 active 就当成归档，否则统计和列表会自相矛盾。
+      const archivedFlag = entry.path.startsWith("archive/");
       (archivedFlag ? archived : facts).push(fact);
       paths.set(id, file);
       written.set(id, { file, hash: entry.hash });

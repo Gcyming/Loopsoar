@@ -154,6 +154,20 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
     return () => cancelAnimationFrame(raf);
   }, [data]);
 
+  // 滚轮缩放：React 的 onWheel 是 passive，preventDefault 无效，会连带滚动整页；
+  // 这里用原生非 passive 监听，缩放时阻止页面滚动。
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setZoom((value) => Math.max(0.5, Math.min(2.6, value * (event.deltaY > 0 ? 0.92 : 1.08))));
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, []);
+
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -381,13 +395,29 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
           const rect = canvas.getBoundingClientRect();
           setHovered(hitTest(event.clientX - rect.left, event.clientY - rect.top));
         }}
-        onWheel={(event) => {
-          if (mode !== "3d") return;
-          event.preventDefault();
-          setZoom((value) => Math.max(0.5, Math.min(2.6, value * (event.deltaY > 0 ? 0.92 : 1.08))));
-        }}
         onClick={() => onSelect?.(hovered ? nodeById.get(hovered) ?? null : null)}
       />
+      <div style={zoomStyle}>
+        <button
+          type="button"
+          style={zoomButton}
+          title="放大"
+          onClick={() => setZoom((value) => Math.min(2.6, value * 1.15))}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          style={zoomButton}
+          title="缩小"
+          onClick={() => setZoom((value) => Math.max(0.5, value / 1.15))}
+        >
+          −
+        </button>
+        <button type="button" style={zoomButton} title="恢复 100%" onClick={() => setZoom(1)}>
+          1:1
+        </button>
+      </div>
       <div style={toggleStyle}>
         <button type="button" style={toggleButton(mode === "2d")} onClick={() => changeMode("2d")}>
           2D
@@ -396,13 +426,34 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
           3D
         </button>
       </div>
-      {mode === "3d" ? <div style={hintStyle}>拖拽旋转 · 滚轮缩放</div> : null}
+      {mode === "3d" ? <div style={hintStyle}>拖拽旋转 · 滚轮/± 缩放</div> : null}
       {hovered && nodeById.get(hovered) ? (
         <div style={captionStyle}>{nodeById.get(hovered)?.label}</div>
       ) : null}
     </div>
   );
 }
+
+const zoomStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 10,
+  bottom: 8,
+  display: "flex",
+  gap: 4,
+  padding: 2,
+  borderRadius: 8,
+  background: "rgba(17,19,24,0.72)",
+};
+const zoomButton: React.CSSProperties = {
+  border: "none",
+  borderRadius: 6,
+  width: 26,
+  height: 24,
+  fontSize: 12,
+  cursor: "pointer",
+  color: "#a8a29a",
+  background: "transparent",
+};
 
 const toggleStyle: React.CSSProperties = {
   position: "absolute",
