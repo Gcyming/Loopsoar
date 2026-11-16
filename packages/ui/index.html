@@ -1910,11 +1910,11 @@
       background: rgba(248, 113, 113, 0.22);
     }
     /* 其它会话有挂起确认时的悬浮入口：不抢焦点、不遮操作区，点一下切到那个会话 */
+    /* 放在会话栏一侧（右侧），不要压在网页区域上——原生视图会盖住它 */
     .ask-pending-other {
       position: fixed;
-      left: 50%;
+      right: 24px;
       bottom: 112px;
-      transform: translateX(-50%);
       z-index: 65;
       max-width: min(520px, 80vw);
       padding: 7px 14px;

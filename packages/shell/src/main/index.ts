@@ -1282,6 +1282,43 @@ function scheduleE2ESearchDemo(win: BrowserWindow): void {
   });
 }
 
+/**
+ * E2E：等「敏感确认弹窗」出现 → 截主窗口 → 落盘。
+ *
+ * 为什么单独一个钩子：截图时机必须由 DOM 决定（弹窗要等模型跑完几轮工具才出现），
+ * 用固定 HOLD_MS 只会拍到弹窗出现前、或用户已经点掉之后的帧，证据不可复现。
+ */
+function scheduleE2EConfirmShot(win: BrowserWindow): void {
+  const shotPath = process.env.LOOPSOAR_E2E_CONFIRM_SHOT;
+  if (!shotPath) return;
+  const waitMs = Number(process.env.LOOPSOAR_E2E_CONFIRM_WAIT_MS ?? 60_000);
+  win.webContents.once("did-finish-load", () => {
+    void (async () => {
+      const deadline = Date.now() + waitMs;
+      let seen = false;
+      while (Date.now() < deadline) {
+        seen = await win.webContents
+          .executeJavaScript(`Boolean(document.querySelector('[data-kind="sensitive"]'))`, true)
+          .catch(() => false);
+        if (seen) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (!seen) {
+        console.log("CONFIRM_SHOT_SKIPPED 未在超时内看到敏感确认弹窗");
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400)); // 动画落定
+      try {
+        const image = await win.webContents.capturePage();
+        fs.writeFileSync(shotPath, image.toPNG());
+        console.log("CONFIRM_SHOT_SAVED", shotPath);
+      } catch (err) {
+        console.log("CONFIRM_SHOT_FAILED", err instanceof Error ? err.message : String(err));
+      }
+    })();
+  });
+}
+
 function createMainWindow(): void {
   const appIcon = iconPath();
   if (appIcon) console.log(`[Loopsoar] appIcon=${appIcon}`);
@@ -1377,6 +1414,7 @@ function createMainWindow(): void {
   scheduleE2ESteerDemo(mainWindow);
   scheduleE2ESearchDemo(mainWindow);
   scheduleE2EDemoChat(mainWindow);
+  scheduleE2EConfirmShot(mainWindow);
 }
 
 /** 打开文件夹：Windows 直接拉起 explorer.exe（shell.openPath 在部分环境会弹「无法访问」错误）。 */

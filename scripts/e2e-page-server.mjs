@@ -20,6 +20,8 @@ const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   <p>这一页由 WebContentsView 真实加载（E2E）</p>
   <input id="name" placeholder="名字" oninput="document.getElementById('out').textContent=this.value">
   <button onclick="document.getElementById('out').textContent='按钮已点击'">点我</button>
+  <!-- 敏感确认 E2E：文案含「支付」→ 命中敏感步骤分类（browser_click 必须弹确认） -->
+  <button id="act-1" onclick="document.getElementById('out').textContent='支付已提交'">立即支付</button>
   <div id="out">等待交互</div>
   <div id="keys">keydown=0</div>
 </div>

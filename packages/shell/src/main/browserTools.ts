@@ -24,6 +24,7 @@ import {
   getTabRegistry,
   isSupportedKey,
   buildDismissOverlayScript,
+  buildFocusProbeScript,
   normalizeRef,
   performClick,
   performHover,
@@ -264,6 +265,17 @@ export function sensitiveClickReason(target: string, label: string): string | nu
   return verdict.sensitive ? (verdict.reason ?? "敏感步骤需要确认") : null;
 }
 
+/** 焦点探测结果 → 人读描述（供敏感判定与确认文案）。 */
+export function describeFocusProbe(raw: unknown): string | null {
+  const probe = raw as { ok?: boolean; tag?: string; type?: string; role?: string; name?: string } | null;
+  if (!probe?.ok) return null;
+  const tag = probe.tag || "element";
+  const type = probe.type ? `[${probe.type}]` : "";
+  const role = probe.role && probe.role !== tag ? ` ${probe.role}` : "";
+  const head = `${tag}${type}${role}`;
+  return probe.name ? `${head} "${probe.name}"` : head;
+}
+
 /**
  * 浏览器工具钩子（第二阶段 Slice E）。
  *
@@ -481,9 +493,20 @@ export function registerBrowserTools(
         }
         // 敏感步骤：策略层只能看到 target（多为 #e12），必须等定位拿到真实文案后再判一次。
         // 判定放在「移动光标之前」：被拒绝时不留下任何动作痕迹，也不产生涟漪/点击。
-        const sensitive = sensitiveClickReason(target, point.label ?? "");
+        //
+        // 去重：`text=立即支付` 这类把敏感词写在 target 里的调用，策略层（services/chat.ts 的
+        // 敏感步骤升级）已经弹过一次确认；这里只在「target 看不出语义、label 才判得出」时补一次，
+        // 避免同一次点击连弹两个窗（第一次是权限、第二次是敏感）。
+        // 优先用页面给的「元素可读文案」：ref/坐标/CSS 选择器本身都没有语义。
+        const targetText = point.text ?? point.label ?? "";
+        const sensitive = sensitiveClickReason(target, "")
+          ? null
+          : sensitiveClickReason(target, targetText);
+        if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
+          console.log("[browser-click] sensitive", JSON.stringify({ target, text: point.text ?? null, label: point.label ?? null, sensitive }));
+        }
         if (sensitive) {
-          const label = point.label?.trim() || target;
+          const label = (point.text && point.text.trim()) || point.label?.trim() || target;
           let allowed = false;
           if (hooks?.confirmSensitive) {
             try {
@@ -849,6 +872,41 @@ export function registerBrowserTools(
             pointPointer(host, ctx.sessionId, tabId, { x: point.x, y: point.y, width: point.width, height: point.height });
             const focus = await performFocus(registry, params.target, run);
             if (!focus.ok) return { ok: false, content: focus.message ?? "[FOCUS_MISMATCH] 目标无法聚焦" };
+          }
+        }
+        // Enter / Space 会提交表单：按键参数里没有元素语义，必须先读出焦点元素的真实文案再判敏感
+        // （ref/坐标只是「哪个元素」，不知道它是「确认支付」还是「下一页」）。
+        // 只对这两个提交键探测：逐字输入走 browser_type，不为每个字符付一次脚本开销。
+        if (key === "Enter" || key === " ") {
+          const probe = (await run(buildFocusProbeScript()).catch(() => null)) as unknown;
+          const descriptor = describeFocusProbe(probe);
+          if (descriptor) {
+            const verdict = classifySensitiveStep({
+              toolName: "browser_press_key",
+              params: { key, label: descriptor },
+            });
+            if (verdict.sensitive) {
+              let allowed = false;
+              if (hooks?.confirmSensitive) {
+                try {
+                  allowed = await hooks.confirmSensitive({
+                    sessionId: ctx.sessionId,
+                    tool: "browser_press_key",
+                    label: descriptor,
+                    reason: verdict.reason ?? "敏感步骤需要确认",
+                    ...(before?.url ? { url: before.url } : {}),
+                  });
+                } catch {
+                  allowed = false;
+                }
+              }
+              if (!allowed) {
+                return {
+                  ok: false,
+                  content: `[SENSITIVE_DENIED] 已拦截敏感按键 ${key}：焦点在「${descriptor}」上（${verdict.reason ?? "敏感步骤"}）。未发送按键；如确需执行，请在界面上确认`,
+                };
+              }
+            }
           }
         }
         if (typeof host.isSessionVisible === "function" && host.isSessionVisible(ctx.sessionId)) {

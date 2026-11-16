@@ -12,6 +12,7 @@ import {
   SNAPSHOT_SCRIPT,
   buildAgentDrivingScript,
   buildClickScript,
+  buildFocusProbeScript,
   buildHoverScript,
   buildPressKeyScript,
   buildSelectScript,
@@ -40,6 +41,16 @@ const PAGE: RawBrowserElement[] = [
   { tag: "button", role: "button", name: "提交", selector: "button", selectorWhy: "text", matchText: "提交" },
   { tag: "h1", role: "heading", name: "欢迎", selector: "h1", selectorWhy: "path" },
 ];
+
+describe("焦点探测脚本（press_key 的敏感判定）", () => {
+  it("带可识别标记，读 activeElement 的 tag/type/role/name", () => {
+    const script = buildFocusProbeScript();
+    expect(script).toContain("loopsoar:focus-probe");
+    expect(script).toContain("document.activeElement");
+    expect(script).toContain("aria-label");
+    expect(script).toContain("return { ok: true, tag: tag");
+  });
+});
 
 function fakeView(scriptResult: unknown = { ok: true }) {
   const handlers = new Map<string, (...args: unknown[]) => void>();

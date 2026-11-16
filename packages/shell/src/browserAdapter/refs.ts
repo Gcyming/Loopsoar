@@ -506,7 +506,40 @@ ${options.scrollIntoView === false ? "" : "  el.scrollIntoView({ block: 'center'
   const inputType = tag === 'input' ? String(el.getAttribute('type') || 'text').toLowerCase() : '';
   const editable = tag === 'textarea' || (tag === 'input' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].indexOf(inputType) >= 0) || Boolean(el.isContentEditable);
   const multiline = tag === 'textarea' || Boolean(el.isContentEditable);
-  return { ok: true, x: cx, y: cy, width: Math.max(rect.width, 2), height: Math.max(rect.height, 2), tag, type: inputType, editable, multiline };
+  // 可读文案：敏感步骤判定要用它（#e12 / #pay 这类选择器本身没有语义，
+  // 只有元素文案才判得出「立即支付」）。aria-label > title > 文本 > value > placeholder > name。
+  const labelRaw = el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.textContent || el.value || el.getAttribute('placeholder') || el.getAttribute('name') || '';
+  const text = String(labelRaw).replace(/\s+/g, ' ').trim().slice(0, 80);
+  return { ok: true, x: cx, y: cy, width: Math.max(rect.width, 2), height: Math.max(rect.height, 2), tag, type: inputType, editable, multiline, text };
+})()`;
+}
+
+/**
+ * 读取当前焦点元素的语义（press_key 的敏感判定用）。
+ *
+ * 为什么需要：Enter/Space 会提交表单，但工具参数里只有按键、没有元素文案——
+ * 只有读出 activeElement 的 tag/type/role/name，才判得出「焦点落在一个『确认支付』按钮上」。
+ * 与 target-point 脚本同样的约定：只返回 JSON-safe 结构，页面零注入。
+ */
+export function buildFocusProbeScript(): string {
+  return `/* loopsoar:focus-probe */
+(() => {
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return { ok: false };
+  const norm = (v) => String(v === undefined || v === null ? "" : v).replace(/\\s+/g, " ").trim();
+  const tag = (el.tagName || "").toLowerCase();
+  const type = tag === "input" ? String(el.getAttribute("type") || "text").toLowerCase() : "";
+  const role = norm(el.getAttribute("role"));
+  const name = norm(
+    el.getAttribute("aria-label") ||
+    el.getAttribute("title") ||
+    (el.innerText || el.textContent) ||
+    el.value ||
+    el.getAttribute("placeholder") ||
+    el.getAttribute("name") ||
+    ""
+  );
+  return { ok: true, tag: tag, type: type, role: role, name: name.slice(0, 200) };
 })()`;
 }
 
@@ -1129,6 +1162,8 @@ export interface TargetPointResult extends BrowserActionResult {
   editable?: boolean;
   /** 是否多行（textarea/contenteditable）：真实输入时换行用 Enter，否则折成空格。 */
   multiline?: boolean;
+  /** 元素可读文案（aria-label/文本/value/placeholder）：敏感步骤判定用，不进状态行。 */
+  text?: string;
 }
 
 type PagePointResult = PageActionResult & {
@@ -1140,6 +1175,7 @@ type PagePointResult = PageActionResult & {
   type?: string;
   editable?: boolean;
   multiline?: boolean;
+  text?: string;
 };
 
 /**
@@ -1176,6 +1212,7 @@ export async function performTargetPoint(
       ...(page.type ? { type: page.type } : {}),
       ...(typeof page.editable === "boolean" ? { editable: page.editable } : {}),
       ...(typeof page.multiline === "boolean" ? { multiline: page.multiline } : {}),
+      ...(page.text ? { text: page.text } : {}),
       ...(resolved.ref ? { ref: resolved.ref } : {}),
       selector: resolved.selector,
     };

@@ -2248,9 +2248,13 @@ export default function App(): React.JSX.Element {
       workspacePanelOpen ||
       snapshotData !== null ||
       onboardingOpen ||
-      chromePage !== null;
+      chromePage !== null ||
+      // 询问与权限确认也是主窗口 DOM：原生 WebContentsView 会整块盖住它们，
+      // 用户看到的会是「弹窗只露出一条边」（敏感确认尤其需要看清上下文）。
+      activeAsk !== null ||
+      permReq !== null;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, activeAsk, permReq]);
   useEffect(() => {
     return () => {
       void api?.browser.setOverlay({ open: false }).catch(() => undefined);

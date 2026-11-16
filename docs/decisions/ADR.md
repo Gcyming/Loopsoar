@@ -2085,6 +2085,15 @@
 3. **专用视觉**：敏感确认用 `warning` 图标 + `--ls-danger` 描边 + 上下文行（操作 / 目标 / 原因 / 页面），按钮为「确认执行 / 取消」，不再混用提问式选项列表与自由文本。
 4. **稳定回填 token**：确认按钮回填 `"confirm"`（不是中文文案），壳层判定 `value === "confirm" || includes("确认")`——文案走 i18n，判据不随语言变。
 
+### 修订 2（同日，用户「把那个盲点补上再跑吧」）
+
+1. **补上 browser_press_key 的盲区**：Enter / Space 会提交表单，但参数里只有按键、没有元素语义。现在按键前先跑 buildFocusProbeScript() 读 document.activeElement 的 tag/type/role/name，再用同一套分类判定；命中则走同一条 confirmSensitive 确认，取消/超时/异常/无钩子一律 [SENSITIVE_DENIED] 且不发送按键。只对 Enter/Space 探测（逐字输入走 browser_type，不为每个字符付脚本开销）。
+2. **修「弹窗被网页盖住」**：AskUserDialog / PermissionDialog 是主窗口 DOM，而原生 WebContentsView 永远画在 DOM 之上——设置页/工作区面板早有 browser:setOverlay 处理，这两个弹窗漏了，用户看到的是「弹窗只露出一条边」。现在两者都参与同一份 overlay 判定（开窗即隐藏原生视图，关窗恢复）；「其它会话待确认」胶囊也从页面区域挪到会话栏一侧。
+3. **去掉双弹窗**：text=立即支付 这类把敏感词写在 target 里的调用，策略层（services/chat.ts 的敏感步骤升级）已经确认过一次；工具层只在「target 看不出语义、label 才判得出」时补确认，一次点击最多一个窗。
+4. **CSS/坐标目标也能判语义**：buildTargetPointScript 现在回传元素可读文案（aria-label > title > 文本 > value > placeholder > name），performTargetPoint 以 text 字段带出；browser_click 优先用它判定与展示（ref 路径仍用注册表 label，格式不变）。
+5. **真机 E2E（可重复）**：新增 scripts/e2e-confirm-run.mjs + scripts/e2e-confirm-eval.js + 主进程 LOOPSOAR_E2E_CONFIRM_SHOT（轮询 DOM 出现敏感确认弹窗后再截主窗口，不靠固定延时）。实测 E2E_EVAL ok=true：dialogTitle=敏感操作确认、detailLabels=[操作,目标,原因,页面]、hasPaymentReason/sawCountdown/confirmedByClick/pageSaysPaid/askCarriesSession/askHasExpiry 全为 true；证据 e2e-evidence/confirm-sensitive.png。过程中「另一个会话待确认」胶囊也被真实点到（pillSeen/pillClicked=true），说明会话路由与切会话链路都通。
+
+
 ## 附：ADR 索引与状态总览
 
 | 编号 | 主题 | 状态 |

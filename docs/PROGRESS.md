@@ -1084,3 +1084,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - **确认体验细化（同日，用户「那就做细致点」）**：`ask:user` 负载新增 `sessionId/kind/title/detail/expiresAt`——渲染层只显示**当前会话**的询问，其它会话收进「另一个会话正在等待你的确认 · 点击前往」悬浮胶囊（不抢界面）；敏感确认弹窗带倒计时（普通提问不显示），到期自动出队（shell 早已按取消结算，不留下点了没用的窗）；敏感确认改用独立视觉（warning 图标 + danger 描边 + 操作/目标/原因/页面四行上下文 + 确认执行/取消），确认回填稳定 token `"confirm"`（英文界面不再被判成拒绝）。
 - **验证**：新增 13 条用例；全量 **191 文件 / 1615 用例全绿**；typecheck 5/5、build 5/5。
 
+
+### 补上 press_key 盲点 + 修弹窗遮挡（同日，ADR-0109 修订 2）
+
+- **press_key 盲区**：Enter/Space 能提交表单，但工具参数里只有按键。现在按键前跑 `buildFocusProbeScript()` 读 `document.activeElement` 的 tag/type/role/name，命中敏感则走同一条 AskBus 确认；拒绝时**不发送按键**。只对 Enter/Space 探测，逐字输入不受影响。回归用例 4 条（命中拒绝 / 命中确认 / Tab 不探测 / 普通焦点不误报）。
+- **弹窗被网页盖住（用户实测发现）**：`AskUserDialog` / `PermissionDialog` 是主窗口 DOM，原生 `WebContentsView` 画在它上面——设置页/工作区面板早走 `browser:setOverlay`，这两个弹窗漏了。现在两者都参与同一份 overlay 判定；「其它会话待确认」胶囊从页面区挪到会话栏一侧。
+- **去重与语义**：`text=立即支付` 这类调用策略层已确认过，工具层不再补第二次；`buildTargetPointScript` 回传元素可读文案，CSS/坐标目标也能判出「立即支付」。
+- **真机 E2E（新增、可重复）**：`node scripts/e2e-confirm-run.mjs`（`scripts/e2e-confirm-eval.js` + 主进程 `LOOPSOAR_E2E_CONFIRM_SHOT` 轮询 DOM 后截图）。实测 `E2E_EVAL {"ok":true,"dialogTitle":"敏感操作确认","detailLabels":["操作","目标","原因","页面"],"hasPaymentReason":true,"sawCountdown":true,"confirmedByClick":true,"pageSaysPaid":true,"askCarriesSession":true,"askHasExpiry":true}`；证据 `e2e-evidence/confirm-sensitive.png`、`confirm-window-early.png`、`confirm-sensitive.log`。
+- **验证**：191 文件 / 1619 用例全绿；typecheck 5/5、build 5/5。
+

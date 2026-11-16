@@ -217,4 +217,19 @@ git status --short                   # 仅本轮预期改动
 
 **验证**：新增 13 条用例（guard 4 + 工具 6 + 分类 2 扩展 + 事件负载 1）；全量 **191 文件 / 1615 用例全绿**；typecheck 5/5。
 
+### 8.4 补充修复：press_key 盲点 + 弹窗遮挡（同日，ADR-0109 修订 2）
+
+| 级别 | 问题 | 证据 | 修复 |
+|---|---|---|---|
+| **P0 补完** | `browser_press_key` 的 Enter/Space 提交不判敏感（参数里只有按键） | `browserTools.ts`（press_key） | 按键前 `buildFocusProbeScript()` 读 activeElement 的 tag/type/role/name 再判；拒绝时不发按键。回归用例 4 条 |
+| P1（用户实测发现） | 询问/权限弹窗被原生 WebContentsView 整块盖住（只露一条边） | `ui/src/App.tsx` overlay 判定 | ask/perm 弹窗纳入 `browser:setOverlay`；待确认胶囊移到会话栏一侧 |
+| P2 | `text=立即支付` 这类调用会连弹两次（策略层 + 工具层） | `browserTools.ts` | target 自身已敏感时不再补工具层确认 |
+| P2 | CSS/坐标目标没有语义，label 恒为空 | `browserAdapter/refs.ts`（target-point） | 脚本回传元素可读文案，工具层用它判定与展示 |
+
+**真机 E2E（新增、可重复）**：`node scripts/e2e-confirm-run.mjs` —— mock 依次 navigate / snapshot / click(#act-1)，`#act-1` 是页面上的「立即支付」按钮（id 中性，策略层看不出语义）；主进程轮询到敏感确认弹窗后截主窗口，渲染层用真实按钮点「确认执行」，最后用 `browser.snapshot()` 核对页面文案变成「支付已提交」。
+实测 `E2E_EVAL {"ok":true, ... "dialogTitle":"敏感操作确认","detailLabels":["操作","目标","原因","页面"],"hasPaymentReason":true,"sawCountdown":true,"confirmedByClick":true,"pageSaysPaid":true,"askCarriesSession":true,"askHasExpiry":true}`；证据 `e2e-evidence/confirm-sensitive.png`（弹窗完整可见，页面按 overlay 规则隐藏）。
+
+**验证**：全量 **191 文件 / 1619 用例全绿**；typecheck 5/5、build 5/5。
+
+
 

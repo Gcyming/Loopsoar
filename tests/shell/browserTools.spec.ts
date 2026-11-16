@@ -26,6 +26,8 @@ interface FakePage {
 interface RegistryOptions {
   /** 敏感确认：缺省放行（既有用例点的是「登录」这类文案，只需验证链路）；拒绝路径单独覆盖。 */
   confirmSensitive?: (args: { sessionId?: string; tool: string; label: string; reason: string }) => Promise<boolean>;
+  /** 假的焦点探测结果（真实实现由 refs.ts 读 activeElement）。 */
+  focusProbe?: { ok?: boolean; tag?: string; type?: string; role?: string; name?: string };
 }
 
 function makeRegistry(
@@ -35,7 +37,7 @@ function makeRegistry(
 ) {
   const registry = new ToolRegistry();
   const calls: string[] = [];
-  const confirmed: { label: string; reason: string }[] = [];
+  const confirmed: { tool: string; label: string; reason: string }[] = [];
   const scripts: string[] = [];
   const executed: { script: string; tabId?: string }[] = [];
   const tab = createTabRegistry();
@@ -97,13 +99,14 @@ function makeRegistry(
       executed.push({ script, tabId });
       if (scriptHook) scriptHook(script);
       // 「只定位不点击」脚本：真实实现回目标中心坐标（getBoundingClientRect 的视口坐标）。
+      if (script.includes("loopsoar:focus-probe")) return options.focusProbe ?? { ok: false };
       if (script.includes("loopsoar:target-point")) return { ok: true, x: 120, y: 90, width: 40, height: 20 };
       return scriptResult;
     },
   };
   registerBrowserTools(registry, () => host as never, undefined, {
     confirmSensitive: async (args) => {
-      confirmed.push({ label: args.label, reason: args.reason });
+      confirmed.push({ tool: args.tool, label: args.label, reason: args.reason });
       return options.confirmSensitive ? options.confirmSensitive(args) : true;
     },
   });
@@ -388,6 +391,51 @@ describe("点击的敏感判定（P0：策略层看不到 #eN 的语义，必须
     expect(confirmed[0]?.label).toContain("登录");
     // 被拒绝时不执行任何点击脚本（只跑了定位用的那一次）
     expect(calls.filter((c) => c === "script").length).toBe(1);
+  });
+
+  it("Enter 提交表单：焦点在「立即支付」且用户拒绝 → 不发按键", async () => {
+    // 盲区回归：按键参数里只有 Enter，没有元素语义；必须读焦点元素文案才判得出。
+    const { registry, confirmed, calls } = makeRegistry(PAGE, { ok: true }, {
+      focusProbe: { ok: true, tag: "button", type: "submit", name: "立即支付" },
+      confirmSensitive: async () => false,
+    });
+    const press = await run(registry, "browser_press_key", { key: "Enter" }, "press-deny");
+    expect(press.ok).toBe(false);
+    expect(press.content).toContain("SENSITIVE_DENIED");
+    expect(press.content).toContain("立即支付");
+    expect(confirmed[0]?.tool).toBe("browser_press_key");
+    // 只跑了焦点探测这一次脚本，没有真正发送按键
+    expect(calls.filter((c) => c === "script").length).toBe(1);
+  });
+
+  it("Enter 提交表单：焦点在「立即支付」且用户确认 → 正常发送", async () => {
+    const { registry, confirmed } = makeRegistry(PAGE, { ok: true }, {
+      focusProbe: { ok: true, tag: "button", type: "submit", name: "立即支付" },
+      confirmSensitive: async () => true,
+    });
+    const press = await run(registry, "browser_press_key", { key: "Enter" }, "press-allow");
+    expect(press.ok).toBe(true);
+    expect(confirmed[0]?.reason).toContain("支付");
+  });
+
+  it("非提交键不探测焦点、普通焦点不误报", async () => {
+    const sensitive = makeRegistry(PAGE, { ok: true }, {
+      focusProbe: { ok: true, tag: "button", name: "立即支付" },
+      confirmSensitive: async () => false,
+    });
+    // Tab 不触发探测
+    const tab = await run(sensitive.registry, "browser_press_key", { key: "Tab" }, "press-tab");
+    expect(tab.ok).toBe(true);
+    expect(sensitive.confirmed).toHaveLength(0);
+
+    // 焦点是普通按钮 → 不打扰
+    const plain = makeRegistry(PAGE, { ok: true }, {
+      focusProbe: { ok: true, tag: "button", name: "下一页" },
+      confirmSensitive: async () => false,
+    });
+    const next = await run(plain.registry, "browser_press_key", { key: "Enter" }, "press-plain");
+    expect(next.ok).toBe(true);
+    expect(plain.confirmed).toHaveLength(0);
   });
 
   it("定位到「登录」按钮且用户确认 → 正常点击", async () => {
