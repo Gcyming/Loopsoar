@@ -21,12 +21,18 @@ import {
   extractMemoryCandidates,
   factToMarkdown,
   hashEmbedding,
+  INDEX_SHARDS,
   markdownToFact,
   memoryFileName,
+  parseShard,
   renderMemoryMarkdown,
   renderVaultIndex,
   retrieveMemory,
+  serializeShard,
+  shardFileName,
+  shardOf,
   shouldRecall,
+  type IndexEntry,
   type MemoryCandidate,
   type MemoryFact,
   type UsageEvent,
@@ -110,6 +116,11 @@ function hashText(text: string): string {
   return createHash("sha1").update(text).digest("hex");
 }
 
+/** 索引里存的 fact：剥掉易变字段，避免每次召回/记录使用都重写分片。 */
+function stableFact(fact: MemoryFact): MemoryFact {
+  return { ...fact, accessCount: 0, lastAccessed: fact.timestamp, confidence: 0.6 };
+}
+
 /** 从平台适配层解析 embed 能力；缺失/未实现时返回 null（不抛，交由 hash 降级）。 */
 function resolvePlatformEmbedder(platform: LoopsoarPlatform | undefined): MemoryEmbedder | null {
   const adapter = platform?.embed as { embed?: unknown } | undefined;
@@ -173,6 +184,10 @@ export class MemoryService {
   /** vault 内容指纹（id → 路径 + hash）：save 只写变化的那几个文件。 */
   private lastWritten = new Map<string, string>();
   private lastIndexHash = "";
+  /** vault 内容索引（id → 路径 + 内容哈希 + 解析结果）：可丢弃缓存，md 才是真相。 */
+  private indexEntries = new Map<string, IndexEntry>();
+  /** 本次改动过的分片：只重写这些文件。 */
+  private touchedShards = new Set<number>();
 
   constructor(private opts: MemoryServiceOptions) {
     this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
@@ -200,6 +215,8 @@ export class MemoryService {
     this.opts = { ...this.opts, filePath };
     this.lastWritten = new Map();
     this.lastIndexHash = "";
+    this.indexEntries = new Map();
+    this.touchedShards = new Set();
     this.store = new MemoryStore({ capacity: this.opts.capacity, agentId: this.opts.agentId });
     this.loaded = false;
     // 换库时重新给本地模型一次机会（可能刚启动）
@@ -218,6 +235,11 @@ export class MemoryService {
     return path.join(path.dirname(this.opts.filePath), "usage.json");
   }
 
+  /** 索引目录：vault/.loopsoar/index（点目录，Obsidian 默认不展示）。 */
+  private get indexDir(): string {
+    return path.join(this.vaultPath, ".loopsoar", "index");
+  }
+
   async load(): Promise<void> {
     if (this.loaded) return;
     const factsDir = path.join(this.vaultPath, "facts");
@@ -226,12 +248,14 @@ export class MemoryService {
     const legacyExists =
       (await this.opts.platform.fs.exists(legacyPath)) || (await this.opts.platform.fs.exists(`${legacyPath}.bak`));
 
+    await this.loadIndex();
     if (this.hasVaultNotes(factsDir, archiveDir)) {
-      const loaded = this.readVault(factsDir, archiveDir);
+      const loaded = await this.readVaultIndexed(factsDir, archiveDir);
       const sidecar = await this.readSidecar();
       this.applyRuntime(loaded.facts, loaded.archived, sidecar.runtime);
       this.store.restore({ facts: loaded.facts, archived: loaded.archived, usage: sidecar.usage });
       this.lastWritten = this.fingerprint(loaded.facts, loaded.archived, loaded.paths);
+      await this.persistIndex(loaded.facts, loaded.archived, loaded.written);
       console.warn(`[Loopsoar] 记忆仓库：${this.vaultPath}（${loaded.facts.length} 活跃 / ${loaded.archived.length} 归档）`);
     } else if (legacyExists) {
       // 一次性迁移：旧 JSON（含 .bak 兜底）→ Markdown 仓库；原文件改名 .migrated 以便回滚。
@@ -270,39 +294,140 @@ export class MemoryService {
   }
 
   /** 读取 vault：facts/ 为活跃条目，archive/ 为归档（缺 archivedAt 用文件 mtime 兜底）。 */
-  private readVault(factsDir: string, archiveDir: string): {
+  /**
+   * 读 vault 的索引快路径：先读索引，再按内容哈希校验每个文件。
+   * 哈希一致 → 复用索引里的解析结果（跳过 YAML 解析）；不一致 → 重新解析。
+   * 异步并发读，避免上万条时阻塞主线程。
+   */
+  private async readVaultIndexed(
+    factsDir: string,
+    archiveDir: string,
+  ): Promise<{
     facts: MemoryFact[];
     archived: MemoryFact[];
     /** 实际磁盘路径（文件名可能被手改/重命名），用于增量写时不制造「改名抖动」。 */
     paths: Map<string, string>;
-  } {
+    /** 本次读到的 id → 文件 + 内容哈希，供索引持久化。 */
+    written: Map<string, { file: string; hash: string }>;
+  }> {
     const facts: MemoryFact[] = [];
     const archived: MemoryFact[] = [];
     const paths = new Map<string, string>();
-    for (const [dir, isArchive] of [
-      [factsDir, false],
-      [archiveDir, true],
+    const written = new Map<string, { file: string; hash: string }>();
+    const seen = new Set<string>();
+    const byPath = new Map<string, IndexEntry>();
+    for (const entry of this.indexEntries.values()) byPath.set(entry.path, entry);
+
+    for (const [dir, relDir, isArchive] of [
+      [factsDir, "facts", false],
+      [archiveDir, "archive", true],
     ] as const) {
-      for (const name of this.listMarkdown(dir)) {
-        const file = path.join(dir, name);
-        try {
-          const parsed = markdownToFact(fs.readFileSync(file, "utf8"), name);
-          if (!parsed) {
-            console.warn(`[Loopsoar] 跳过无法解析的记忆文件：${name}`);
-            continue;
+      const names = this.listMarkdown(dir);
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        while (cursor < names.length) {
+          const name = names[cursor++] as string;
+          const file = path.join(dir, name);
+          const rel = `${relDir}/${name}`;
+          try {
+            const text = await fs.promises.readFile(file, "utf8");
+            const hash = hashText(text);
+            const cached = byPath.get(rel);
+            let fact: MemoryFact;
+            if (cached && cached.hash === hash) {
+              fact = { ...cached.fact };
+            } else {
+              const parsed = markdownToFact(text, name);
+              if (!parsed) {
+                console.warn(`[Loopsoar] 跳过无法解析的记忆文件：${name}`);
+                continue;
+              }
+              if (parsed.warnings.length > 0) console.warn(`[Loopsoar] 记忆 ${name}：${parsed.warnings.join("；")}`);
+              fact = parsed.fact;
+            }
+            if (isArchive && fact.archivedAt === undefined) fact.archivedAt = (await fs.promises.stat(file)).mtimeMs;
+            if (isArchive && fact.status === "active") fact.status = "archived";
+            const previous = this.indexEntries.get(fact.id);
+            if (!previous || previous.hash !== hash || previous.path !== rel) this.touchedShards.add(shardOf(fact.id));
+            this.indexEntries.set(fact.id, { path: rel, hash, fact: stableFact(fact) });
+            paths.set(fact.id, file);
+            written.set(fact.id, { file, hash });
+            seen.add(fact.id);
+            (isArchive ? archived : facts).push(fact);
+          } catch (err) {
+            console.warn(`[Loopsoar] 读取记忆文件失败：${name}`, err);
           }
-          if (parsed.warnings.length > 0) console.warn(`[Loopsoar] 记忆 ${name}：${parsed.warnings.join("；")}`);
-          const fact = parsed.fact;
-          if (isArchive && fact.archivedAt === undefined) fact.archivedAt = fs.statSync(file).mtimeMs;
-          if (isArchive && fact.status === "active") fact.status = "archived";
-          paths.set(fact.id, file);
-          (isArchive ? archived : facts).push(fact);
-        } catch (err) {
-          console.warn(`[Loopsoar] 读取记忆文件失败：${name}`, err);
         }
+      };
+      await Promise.all(Array.from({ length: Math.min(8, Math.max(1, names.length)) }, worker));
+    }
+
+    for (const id of [...this.indexEntries.keys()]) {
+      if (seen.has(id)) continue;
+      this.indexEntries.delete(id);
+      this.touchedShards.add(shardOf(id));
+    }
+    return { facts, archived, paths, written };
+  }
+
+  /** 读索引分片；缺失/损坏都只是「没有缓存」，绝不影响正库加载。 */
+  private async loadIndex(): Promise<void> {
+    this.indexEntries.clear();
+    this.touchedShards.clear();
+    for (let i = 0; i < INDEX_SHARDS; i += 1) {
+      const file = path.join(this.indexDir, shardFileName(i));
+      try {
+        if (!(await this.opts.platform.fs.exists(file))) continue;
+        const parsed = parseShard(await this.opts.platform.fs.readFileUtf8(file));
+        if (!parsed) {
+          console.warn(`[Loopsoar] 记忆索引分片损坏，已忽略：${path.basename(file)}`);
+          continue;
+        }
+        for (const [id, entry] of Object.entries(parsed.entries)) this.indexEntries.set(id, entry);
+      } catch {
+        // 单个分片读失败 → 视为无缓存，后续全量解析
       }
     }
-    return { facts, archived, paths };
+  }
+
+  /** 只写改动过的分片；索引是缓存，写失败不影响记忆本身。 */
+  private async persistIndex(
+    facts: readonly MemoryFact[],
+    archived: readonly MemoryFact[],
+    written: Map<string, { file: string; hash: string }>,
+  ): Promise<void> {
+    const live = new Set<string>();
+    for (const fact of [...facts, ...archived]) {
+      const info = written.get(fact.id);
+      if (!info) continue;
+      live.add(fact.id);
+      const rel = path.relative(this.vaultPath, info.file).split(path.sep).join("/");
+      const entry: IndexEntry = { path: rel, hash: info.hash, fact: stableFact(fact) };
+      const previous = this.indexEntries.get(fact.id);
+      if (previous && previous.path === entry.path && previous.hash === entry.hash) continue;
+      this.indexEntries.set(fact.id, entry);
+      this.touchedShards.add(shardOf(fact.id));
+    }
+    for (const id of [...this.indexEntries.keys()]) {
+      if (live.has(id)) continue;
+      this.indexEntries.delete(id);
+      this.touchedShards.add(shardOf(id));
+    }
+    if (this.touchedShards.size === 0) return;
+    const shards = new Map<number, Record<string, IndexEntry>>();
+    for (const index of this.touchedShards) shards.set(index, {});
+    for (const [id, entry] of this.indexEntries) {
+      const bucket = shards.get(shardOf(id));
+      if (bucket) bucket[id] = entry;
+    }
+    for (const [index, entries] of shards) {
+      try {
+        await this.writeAtomic(path.join(this.indexDir, shardFileName(index)), serializeShard(entries));
+      } catch (err) {
+        console.warn(`[Loopsoar] 记忆索引写入失败（可重建）：${path.basename(shardFileName(index))}`, err);
+      }
+    }
+    this.touchedShards.clear();
   }
 
   private async readLegacyJson(legacyPath: string): Promise<{ facts?: MemoryFact[]; archived?: MemoryFact[] }> {
@@ -363,12 +488,17 @@ export class MemoryService {
    */
   async save(): Promise<void> {
     const snapshot = this.store.snapshot();
-    await this.writeVault(snapshot.facts, snapshot.archived);
+    const written = await this.writeVault(snapshot.facts, snapshot.archived);
     await this.writeSidecar(snapshot);
+    await this.persistIndex(snapshot.facts, snapshot.archived, written);
   }
 
-  private async writeVault(facts: readonly MemoryFact[], archived: readonly MemoryFact[]): Promise<void> {
+  private async writeVault(
+    facts: readonly MemoryFact[],
+    archived: readonly MemoryFact[],
+  ): Promise<Map<string, { file: string; hash: string }>> {
     const seen = new Map<string, string>();
+    const written = new Map<string, { file: string; hash: string }>();
     for (const [list, dir] of [
       [facts, "facts"],
       [archived, "archive"],
@@ -383,8 +513,10 @@ export class MemoryService {
           file = path.join(this.vaultPath, dir, name.replace(/\.md$/i, `-${fact.id}.md`));
         }
         const text = factToMarkdown(fact);
-        const token = `${file}\u0000${hashText(text)}`;
+        const hash = hashText(text);
+        const token = `${file}\u0000${hash}`;
         seen.set(fact.id, token);
+        written.set(fact.id, { file, hash });
         if (this.lastWritten.get(fact.id) === token) continue;
         await this.writeAtomic(file, text);
       }
@@ -405,7 +537,9 @@ export class MemoryService {
       await this.writeAtomic(path.join(this.vaultPath, "index.md"), renderVaultIndex(facts, archived));
       this.lastIndexHash = idsHash;
     }
+    return written;
   }
+
 
   private async writeSidecar(snapshot: {
     facts: readonly MemoryFact[];
@@ -442,8 +576,8 @@ export class MemoryService {
   }
 
   /**
-   * 导出 Markdown 快照（只读投影）：默认写到 memory.json 同目录的 memory.md。
-   * 不写 .bak：它是派生文件，随时可重导；写入仍以 JSON 为准。
+   * 导出 Markdown 快照（只读投影）：默认写到记忆目录下的 memory.md。
+   * 不写 .bak：它是派生文件，随时可重导；写入仍以 vault 里的 md 为准。
    */
   async exportMarkdown(targetPath?: string): Promise<{ path: string; bytes: number; count: number }> {
     const target = targetPath ?? path.join(path.dirname(this.opts.filePath), "memory.md");

@@ -1219,3 +1219,12 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 2000 条笔记基准：全量加载 399ms、仅 stat 扫描 41ms；mtime 增量留到规模需要时，且必须配周期全扫（同步盘可能保留旧 mtime）。
 - 验证：207 文件 / 1693 用例全绿；typecheck/build 全过；E2E 生成可读文件名。
 
+
+### 记忆索引：内容哈希 + 分片（ADR-0122，替代 mtime 思路）
+
+- vault/.loopsoar/index/index-NN.json（32 分片）存 { path, hash, fact }；启动读索引后逐文件算 sha1，命中复用解析结果，不命中再解析。
+- 索引是缓存：删/坏/版本不符都退回全量解析；外部编辑、删除、重命名都会被哈希校验纠正；不写回解析失败的文件。
+- 只写改动分片；索引 fact 剥掉易变字段，召回不触发分片重写；异步 8 并发哈希。
+- 实测：2000 条冷 303ms → 热 208ms；10000 条冷 1368ms → 热 955ms（热启动下限 = 读全部文件算哈希）。
+- 验证：新增 4 条索引用例；208 文件 / 1697 用例全绿；typecheck/build/gen-check 全过。
+

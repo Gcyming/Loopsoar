@@ -189,6 +189,60 @@ describe("MemoryService · D1 持久化与隔离", () => {
   });
 });
 
+describe("MemoryService · 内容哈希索引（可丢弃缓存）", () => {
+  it("保存后生成分片索引；第二次加载走快路径仍拿到全部记忆", async () => {
+    const filePath = tempFilePath();
+    const first = makeService(filePath);
+    await first.add({ content: "索引测试：项目使用 pnpm", category: "fact", workspaceId: "ws-a" });
+    const indexDir = path.join(path.dirname(filePath), "vault", ".loopsoar", "index");
+    expect(fs.existsSync(indexDir)).toBe(true);
+    const shards = fs.readdirSync(indexDir).filter((name) => name.endsWith(".json"));
+    expect(shards.length).toBeGreaterThan(0);
+
+    const second = makeService(filePath);
+    await second.load();
+    expect(second.list({ workspaceId: "ws-a" })).toHaveLength(1);
+  });
+
+  it("外部编辑 md 后（哈希变了）下次加载会重新解析，不吃旧缓存", async () => {
+    const filePath = tempFilePath();
+    const first = makeService(filePath);
+    await first.add({ content: "索引测试：旧内容", category: "fact", workspaceId: "ws-a" });
+    const factsDir = path.join(path.dirname(filePath), "vault", "facts");
+    const note = fs.readdirSync(factsDir)[0] as string;
+    const notePath = path.join(factsDir, note);
+    fs.writeFileSync(notePath, fs.readFileSync(notePath, "utf8").replaceAll("旧内容", "外部改过的新内容"), "utf8");
+
+    const second = makeService(filePath);
+    await second.load();
+    expect(second.list({ workspaceId: "ws-a" })[0]?.content).toContain("外部改过的新内容");
+  });
+
+  it("索引分片损坏时退回全量解析，记忆不丢", async () => {
+    const filePath = tempFilePath();
+    const first = makeService(filePath);
+    await first.add({ content: "索引测试：坏分片", category: "fact", workspaceId: "ws-a" });
+    const indexDir = path.join(path.dirname(filePath), "vault", ".loopsoar", "index");
+    for (const name of fs.readdirSync(indexDir)) fs.writeFileSync(path.join(indexDir, name), "{ 坏掉的 JSON", "utf8");
+
+    const second = makeService(filePath);
+    await second.load();
+    expect(second.list({ workspaceId: "ws-a" })).toHaveLength(1);
+  });
+
+  it("文件被外部删除后，索引里的条目不会复活", async () => {
+    const filePath = tempFilePath();
+    const first = makeService(filePath);
+    await first.add({ content: "索引测试：会被删掉", category: "fact", workspaceId: "ws-a" });
+    const factsDir = path.join(path.dirname(filePath), "vault", "facts");
+    for (const name of fs.readdirSync(factsDir)) fs.unlinkSync(path.join(factsDir, name));
+
+    const second = makeService(filePath);
+    await second.load();
+    expect(second.list()).toHaveLength(0);
+  });
+});
+
 describe("MemoryService · Markdown 导出（只读投影）", () => {
   it("导出到同目录 memory.md：内容可读、计数一致、不残留 .tmp、不改主库", async () => {
     const filePath = tempFilePath();
