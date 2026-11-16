@@ -823,6 +823,32 @@ export class MemoryService {
     return changed.length;
   }
 
+  /** 应用回顾合并：返回实际合并掉的条目数（保留者可追溯）。 */
+  async applyMerges(
+    groups: readonly { ids: readonly string[]; reason?: string }[],
+  ): Promise<{ merged: number; kept: string[] }> {
+    const changed = new Map<string, MemoryFact>();
+    const kept: string[] = [];
+    let merged = 0;
+    for (const group of groups) {
+      const result = this.store.mergeGroup(group.ids, group.reason?.trim() || "回顾合并");
+      if (!result) continue;
+      merged += result.merged.length;
+      kept.push(result.kept);
+      for (const id of [result.kept, ...result.merged]) {
+        const fact = this.store
+          .list({ includeArchived: true, includeInvalidated: true })
+          .find((item) => item.id === id);
+        if (fact) changed.set(id, fact);
+      }
+    }
+    if (changed.size > 0) {
+      await this.save();
+      await this.indexFacts([...changed.values()]);
+    }
+    return { merged, kept };
+  }
+
   /** 后台巩固（D3 后半）：合并近似重复 + 归档长期未用条目；返回报告。 */
   async consolidate(workspaceId?: string): Promise<{ merged: number; archived: string[]; scanned: number }> {
     const report = this.store.consolidate(Date.now(), workspaceId ? { workspaceId } : {});

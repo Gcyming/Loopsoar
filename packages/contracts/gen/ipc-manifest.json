@@ -323,6 +323,13 @@
       "hasRequest": true
     },
     {
+      "channel": "memory:merge",
+      "domain": "memory",
+      "method": "merge",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "memory:export",
       "domain": "memory",
       "method": "export",

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MockLlmClient } from "../../packages/core/src/llm/index.ts";
-import { buildReviewPrompt, parseReviewResponse, reviewTitles } from "../../packages/shell/src/main/memoryReview.ts";
+import { buildReviewPrompt, parseReviewResponse, reviewMemory, reviewTitles } from "../../packages/shell/src/main/memoryReview.ts";
 import { MemoryService } from "../../packages/shell/src/main/memoryService.ts";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 import { createFact } from "../../packages/core/src/memory/fact.ts";
@@ -54,7 +54,7 @@ describe("记忆回顾命名（LLM）", () => {
     const prompt = buildReviewPrompt([fact("m1", "项目使用 pnpm 管理依赖".repeat(40))]);
     expect(prompt).toContain("id=m1");
     expect(prompt).toContain("分类=fact");
-    expect(prompt).toContain("只输出 JSON");
+    expect(prompt).toContain("输出 JSON");
     expect(prompt).toContain("…");
   });
 
@@ -81,6 +81,49 @@ describe("记忆回顾命名（LLM）", () => {
     llm.addScript([{ kind: "text", text: '[{"id":"m1","title":"pnpm 依赖约定"}]' }, { kind: "done" }]);
     const out = await reviewTitles(llm, [fact("m1", "项目使用 pnpm 管理依赖")]);
     expect(out).toEqual([{ id: "m1", title: "pnpm 依赖约定", content: "项目使用 pnpm 管理依赖" }]);
+  });
+
+  it("对象输出同时解析标题与合并建议，非法合并整组丢弃", async () => {
+    const llm = new MockLlmClient();
+    llm.addScript([
+      {
+        kind: "text",
+        text: JSON.stringify({
+          titles: [{ id: "m1", title: "pnpm 依赖约定" }, { id: "m2", title: "端口约定" }],
+          merges: [
+            { ids: ["m1", "m2"], reason: "同一条依赖约定" },
+            { ids: ["m1", "unknown"], reason: "交叉重复" },
+            { ids: ["m3", "m4"], reason: "未知 id" },
+          ],
+        }),
+      },
+      { kind: "done" },
+    ]);
+    const facts = [fact("m1", "项目使用 pnpm"), fact("m2", "端口 19444 是调试页")];
+    const result = await reviewMemory(llm, facts);
+    expect(result?.titles.map((item) => item.id)).toEqual(["m1", "m2"]);
+    expect(result?.merges).toEqual([{ ids: ["m1", "m2"], reason: "同一条依赖约定" }]);
+  });
+
+  it("applyMerges 落盘：保留者保留，被合并者标记失效且可追溯", async () => {
+    const filePath = tempFilePath();
+    const service = new MemoryService({ platform: fakePlatform(), filePath });
+    const first = await service.add({ content: "项目使用 pnpm 管理依赖", category: "fact", workspaceId: "default", importance: 5 });
+    // 用不同分类绕过去重闸门：这里只测「合并」本身
+    const second = await service.add({ content: "pnpm 是项目的依赖管理器", category: "convention", workspaceId: "default", importance: 9 });
+    const result = await service.applyMerges([{ ids: [first.id, second.id], reason: "同一依赖约定" }]);
+    expect(result.merged).toBe(1);
+
+    const active = service.list();
+    expect(active).toHaveLength(1);
+    const losers = service.list({ includeInvalidated: true }).filter((item) => item.supersededBy === active[0]?.id);
+    expect(losers).toHaveLength(1);
+    service.dispose();
+
+    const reloaded = new MemoryService({ platform: fakePlatform(), filePath });
+    await reloaded.load();
+    expect(reloaded.list()).toHaveLength(1);
+    reloaded.dispose();
   });
 
   it("applyTitles 只改 frontmatter title 并落盘，正文与文件名不变", async () => {

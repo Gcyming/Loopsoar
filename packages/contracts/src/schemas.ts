@@ -473,6 +473,15 @@ export const MemoryDeleteSchema = z.object({ id: z.string().min(1) });
 /** 回顾命名（LLM）：apply=false 只出建议，true 才落库。 */
 export const MemoryReviewSchema = z.object({ apply: z.boolean().optional() }).nullish();
 
+/** 回顾合并：确认后按组合并（每组 2-3 个 id）。 */
+export const MemoryMergeSchema = z
+  .object({
+    groups: z
+      .array(z.object({ ids: z.array(z.string().min(1)).min(2).max(3), reason: z.string().max(80).optional() }))
+      .max(12),
+  })
+  .optional();
+
 export const MemoryGraphSchema = z.object({ at: z.number().int().nonnegative().optional() }).optional();
 
 /**
@@ -769,6 +778,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     domain: "memory",
     method: "review",
     request: MemoryReviewSchema,
+    sensitive: true,
+  },
+  "memory:merge": {
+    domain: "memory",
+    method: "merge",
+    request: MemoryMergeSchema,
     sensitive: true,
   },
   "memory:export": {

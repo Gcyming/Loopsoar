@@ -417,6 +417,37 @@ export class MemoryStore {
     return fact;
   }
 
+  /**
+   * 回顾合并：把同一事实的多个条目合并到一条。
+   * 选「保留者」：重要度 → 访问次数 → 时间新；其余条目标记失效并指向保留者（不物理删除，可追溯/可恢复）。
+   * 只做信息并集（tags/links/重要度/合并历史），不改正文——正文改写属于人工或后续切片。
+   */
+  mergeGroup(ids: readonly string[], reason: string, nowMs = this.now()): { kept: string; merged: string[] } | null {
+    const unique = [...new Set(ids)];
+    if (unique.length < 2) return null;
+    const all = [...this.facts, ...this.archived];
+    const members = unique.map((id) => all.find((fact) => fact.id === id)).filter((fact): fact is MemoryFact => Boolean(fact));
+    if (members.length < 2) return null;
+    const keep = members
+      .slice()
+      .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount || b.timestamp - a.timestamp)[0] as MemoryFact;
+    const merged: string[] = [];
+    for (const fact of members) {
+      if (fact.id === keep.id) continue;
+      keep.tags = [...new Set([...keep.tags, ...fact.tags])];
+      keep.links = [...new Set([...keep.links, ...fact.links])].filter((id) => id !== keep.id);
+      keep.importance = Math.max(keep.importance, fact.importance);
+      keep.repeated += fact.repeated;
+      keep.confidence = Math.max(keep.confidence, fact.confidence);
+      keep.mergeTrail = [...keep.mergeTrail, ...fact.mergeTrail, { mergedAt: nowMs, reason }];
+      fact.invalidatedAt = nowMs;
+      fact.supersededBy = keep.id;
+      fact.status = `merged:${fact.category}`;
+      merged.push(fact.id);
+    }
+    return { kept: keep.id, merged };
+  }
+
   /** 外部删除同步（活跃或归档都移除）；不清理 links，悬空链接交由建链规则处理。 */
   removeAnywhere(id: string): boolean {
     const before = this.facts.length + this.archived.length;

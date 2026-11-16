@@ -192,6 +192,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [mEdit, setMEdit] = useState<{ id: string; content: string } | null>(null);
   const [review, setReview] = useState<{
     suggestions: { id: string; title: string; content: string }[];
+    merges: { ids: string[]; reason: string }[];
     applied: number;
     available: boolean;
   } | null>(null);
@@ -1514,7 +1515,38 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                   <span style={S.muted}>{item.content.slice(0, 50)}…</span> → <b>{item.title}</b>
                 </div>
               ))}
-              {review.available && review.suggestions.length === 0 ? <div style={S.muted}>{tr("settings.memory.reviewEmpty")}</div> : null}
+              {review.merges.length > 0 ? (
+                <div style={{ marginTop: 8 }}>
+                  <div style={S.rowBetween}>
+                    <span style={S.meta}>{tr("settings.memory.mergeTitle", { count: review.merges.length })}</span>
+                    <Btn
+                      label={tr("settings.memory.mergeApply")}
+                      small
+                      onClick={() =>
+                        void api.memory
+                          .merge({ groups: review.merges.map((item) => ({ ids: item.ids, reason: item.reason })) })
+                          .then(async (result) => {
+                            setReview(null);
+                            setMem(await api.memory.list());
+                            ok(tr("settings.memory.mergeApplied", { count: result.merged }));
+                          })
+                          .catch(bad)
+                      }
+                    />
+                  </div>
+                  {review.merges.map((item, index) => (
+                    <div key={index} style={S.memText}>
+                      <span style={S.muted}>
+                        {item.ids
+                          .map((id) => mem.facts.find((fact) => fact.id === id)?.content.slice(0, 40) ?? id)
+                          .join(" ｜ ")}
+                      </span>{" "}
+                      <b>{item.reason}</b>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {review.available && review.suggestions.length === 0 && review.merges.length === 0 ? <div style={S.muted}>{tr("settings.memory.reviewEmpty")}</div> : null}
             </div>
           ) : null}
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;

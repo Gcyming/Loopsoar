@@ -10,7 +10,10 @@ import type { SessionStore } from "../sessionStore.js";
 export interface MemoryDeps extends TrustedIpcDeps {
   memory: MemoryService;
   /** 回顾命名（可选）：注入 LLM 后可用；缺省时设置页按钮会提示不可用。 */
-  review?: (facts: MemoryFact[]) => Promise<{ id: string; title: string; content: string }[] | null>;
+  review?: (facts: MemoryFact[]) => Promise<{
+    titles: { id: string; title: string; content: string }[];
+    merges: { ids: string[]; reason: string }[];
+  } | null>;
   sessions?: SessionStore;
   push?: (event: string, payload: unknown) => void;
 }
@@ -76,9 +79,22 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
     const request = (payload ?? {}) as { apply?: boolean };
     const facts = deps.memory.reviewCandidates();
     const available = Boolean(deps.review);
-    const suggestions = (available ? await deps.review?.(facts) : null) ?? [];
+    const result = available ? await deps.review?.(facts) : null;
+    const suggestions = result?.titles ?? [];
+    const merges = result?.merges ?? [];
     const applied = request.apply && suggestions.length > 0 ? await deps.memory.applyTitles(suggestions) : 0;
-    return { suggestions, applied, available };
+    return { suggestions, merges, applied, available };
+  });
+
+  /** 回顾合并：确认后应用（保留一条，其余标记失效并指向保留者）。 */
+  handleTrusted(deps, "memory:merge", async (payload) => {
+    const request = (payload ?? {}) as { groups?: { ids?: string[]; reason?: string }[] };
+    const groups = Array.isArray(request.groups)
+      ? request.groups
+          .filter((group) => Array.isArray(group?.ids) && group.ids.length >= 2)
+          .map((group) => ({ ids: group.ids as string[], reason: group.reason }))
+      : [];
+    return deps.memory.applyMerges(groups);
   });
 
   handleTrusted(deps, "memory:add", async (payload) => {

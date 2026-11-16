@@ -469,6 +469,9 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.memory.reviewApplied": { zh: "已应用 {count} 条标题", en: "Applied {count} titles" },
   "settings.memory.reviewUnavailable": { zh: "当前没有可用模型：先到「供应商」配置后再回顾", en: "No model available: configure a provider first" },
   "settings.memory.reviewEmpty": { zh: "没有需要回顾的记忆", en: "Nothing to review" },
+  "settings.memory.mergeTitle": { zh: "合并建议（{count} 组，确认后合并）", en: "Merge suggestions ({count})" },
+  "settings.memory.mergeApply": { zh: "合并这些条目", en: "Merge these" },
+  "settings.memory.mergeApplied": { zh: "已合并 {count} 条", en: "Merged {count} entries" },
   "settings.memory.reconciling": {
     zh: "索引核对中：正在按内容哈希核对磁盘，刚在外部改动的记忆稍后生效。",
     en: "Verifying index: hashing files on disk; external edits apply shortly.",

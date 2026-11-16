@@ -1253,3 +1253,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 运行时解析当前模型（换供应商立即生效），无模型提示不可用。
 - 验证：新增 5 条回顾用例；207 文件 / 1703 用例全绿；typecheck/build/gen-check 全过；E2E 正常。
 
+
+### 回顾合并建议（ADR-0126）
+
+- 回顾提示词改为 {titles, merges}；合并建议 2-3 个 id + 理由，严格校验（存在/不重复/上限）。
+- memory:merge 确认后执行：保留者按重要度→访问→时间选，其余标记 invalidatedAt + supersededBy + status=merged:<分类>，文件保留可追溯；tags/links 并集、mergeTrail 记录原因。
+- 设置页预览合并组（内容 + 理由）并提供「合并这些条目」。
+- 验证：新增 core 3 条 + review 2 条；208 文件 / 1708 用例全绿；typecheck/build/gen-check 全过；E2E 正常。
+
