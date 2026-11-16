@@ -13,6 +13,17 @@ export interface AskUserRequestInput {
   allowFreeText?: boolean;
   /** 超时（默认 10 分钟；MCP/权限确认的超时语义不同，这里给用户足够时间）。 */
   timeoutMs?: number;
+  /**
+   * 归属会话：渲染层据此只在对应会话里显示弹窗。
+   * 为什么需要：Agent 可能在**后台会话**里提问/触发敏感确认，弹窗不能凭空盖在用户正在看的会话上。
+   */
+  sessionId?: string;
+  /** 语义：普通提问（ask_user）或敏感步骤确认；UI 用不同视觉与按钮文案。 */
+  kind?: "ask" | "sensitive";
+  /** 敏感确认的标题（缺省用通用标题）。 */
+  title?: string;
+  /** 敏感确认的上下文行（工具 / 目标元素 / 页面 / 原因），让用户看清自己在批准什么。 */
+  detail?: { label: string; value: string }[];
 }
 
 export interface AskUserAnswer {
@@ -26,6 +37,16 @@ export interface AskUserEventPayload {
   question: string;
   options?: string[];
   allowFreeText?: boolean;
+  sessionId?: string;
+  kind?: "ask" | "sensitive";
+  title?: string;
+  detail?: { label: string; value: string }[];
+  /**
+   * 到期时刻（ms 时间戳）：渲染层用它做倒计时并在到期后自动收起。
+   * 为什么必须带：shell 超时后已按取消结算，但弹窗留在界面上会让用户以为「还能答」，
+   * 点下去得到的是「问题已过期」——体验与事实都不对。
+   */
+  expiresAt?: number;
 }
 
 export class AskBus {
@@ -59,8 +80,10 @@ export class AskBus {
       .filter(Boolean)
       .slice(0, 8);
     const allowFreeText = input.allowFreeText ?? options.length === 0;
-    const requestId = `ask-${(this.opts.now?.() ?? Date.now()).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const nowMs = this.opts.now?.() ?? Date.now();
+    const requestId = `ask-${nowMs.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const timeoutMs = Math.max(50, Math.floor(input.timeoutMs ?? this.opts.defaultTimeoutMs ?? 600_000));
+    const expiresAt = nowMs + timeoutMs;
 
     return new Promise<AskUserAnswer>((resolve) => {
       const timer = setTimeout(() => {
@@ -75,6 +98,11 @@ export class AskBus {
           question,
           ...(options.length > 0 ? { options } : {}),
           allowFreeText,
+          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+          ...(input.kind ? { kind: input.kind } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.detail && input.detail.length > 0 ? { detail: input.detail.slice(0, 8) } : {}),
+          expiresAt,
         };
         this.opts.push("ask:user", payload);
       } catch {

@@ -1244,9 +1244,41 @@ export default function App(): React.JSX.Element {
     setPermReq(null);
   }, [api, permReq]);
 
+  /**
+   * 只展示「当前会话」的询问：Agent 可能在后台会话里提问或触发敏感确认，
+   * 弹窗不能凭空盖在用户正在看的会话上（会话隔离）。缺失 sessionId 的旧壳层事件按当前会话处理。
+   */
+  const scopedAskQueue = useMemo(
+    () => askQueue.filter((item) => !item.sessionId || item.sessionId === currentSession),
+    [askQueue, currentSession],
+  );
+  const activeAsk = scopedAskQueue[0] ?? null;
+  /** 其它会话里挂起的询问（只给一个可点击的提示，不抢界面）。 */
+  const otherSessionAsk = askQueue.find((item) => !!item.sessionId && item.sessionId !== currentSession) ?? null;
+
+  /** 到期的询问自动出队：shell 已按取消结算，弹窗再留着只会让用户点出一个「已过期」。 */
+  useEffect(() => {
+    if (askQueue.length === 0) return;
+    const nextExpiry = askQueue
+      .map((item) => item.expiresAt)
+      .filter((value): value is number => typeof value === "number")
+      .sort((a, b) => a - b)[0];
+    if (nextExpiry === undefined) return;
+    const timer = window.setTimeout(
+      () => {
+        const nowMs = Date.now();
+        setAskQueue((prev) =>
+          prev.filter((item) => !(typeof item.expiresAt === "number" && item.expiresAt <= nowMs)),
+        );
+      },
+      Math.max(0, nextExpiry - Date.now()) + 60,
+    );
+    return () => window.clearTimeout(timer);
+  }, [askQueue]);
+
   /** 回答/取消 ask_user 弹窗：先出队再回填（避免重复提交），失败只提示不阻塞界面。 */
   const respondAsk = useCallback((answer: string | null): void => {
-    const request = askQueue[0];
+    const request = activeAsk;
     if (!request) return;
     setAskQueue((prev) => prev.filter((item) => item.requestId !== request.requestId));
     if (!api?.ask) {
@@ -1263,7 +1295,7 @@ export default function App(): React.JSX.Element {
         if (!result?.received) setNotice("回答未送达：问题已过期或会话已结束");
       })
       .catch((err: unknown) => setNotice(`回答失败：${err instanceof Error ? err.message : String(err)}`));
-  }, [api, askQueue]);
+  }, [api, activeAsk]);
 
   /** 发送一条文本：立即渲染用户消息 + 助手占位（不等首字），再发起流式请求。 */
   const sendText = useCallback(
@@ -2783,9 +2815,19 @@ export default function App(): React.JSX.Element {
 
       {permReq ? <PermissionDialog request={permReq} onRespond={respondPermission} /> : null}
 
-      {/* ask_user 弹窗：Agent 提问挂起任务时置顶显示；取消/Esc 按 cancelled 回填 */}
-      {askQueue.length > 0 ? (
-        <AskUserDialog key={askQueue[0].requestId} request={askQueue[0]} onRespond={respondAsk} />
+      {/* 询问弹窗：只处理当前会话（后台会话的提问/敏感确认不抢界面） */}
+      {activeAsk ? <AskUserDialog key={activeAsk.requestId} request={activeAsk} onRespond={respondAsk} /> : null}
+
+      {/* 其它会话有挂起的确认：给一个可点击入口，点它切到该会话再确认 */}
+      {!activeAsk && otherSessionAsk?.sessionId ? (
+        <button
+          type="button"
+          className="ask-pending-other"
+          onClick={() => switchSession(otherSessionAsk.sessionId as string)}
+          title={t(getLanguage(), "ask.pendingOther")}
+        >
+          {t(getLanguage(), "ask.pendingOther")}
+        </button>
       ) : null}
 
       {/* 主窗口的提示走独立子窗口（原生网页会盖住 DOM）；只有独立的小窗模式仍用内联 Toast。 */}

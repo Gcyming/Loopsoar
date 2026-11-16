@@ -291,6 +291,8 @@ export interface BrowserToolHooks {
     tool: string;
     label: string;
     reason: string;
+    /** 产生这次动作的页面地址（用户要能看清自己在批准哪一页上的操作）。 */
+    url?: string;
   }) => Promise<boolean>;
   /**
    * Agent 指针覆盖层（主进程里的透明子窗口，压在网页视图之上）。
@@ -490,6 +492,7 @@ export function registerBrowserTools(
                 tool: "browser_click",
                 label,
                 reason: sensitive,
+                ...(before?.url ? { url: before.url } : {}),
               });
             } catch {
               allowed = false;

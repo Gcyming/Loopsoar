@@ -213,6 +213,8 @@ git status --short                   # 仅本轮预期改动
 - **用户标签不受影响**——用户自己打开 `localhost` 是正常浏览行为；生产不需要任何配置，E2E/开发用 `LOOPSOAR_ALLOW_LOOPBACK=1`（两个 E2E runner 已设置）；
 - 工具层再加一道早拒：`browser_navigate` 遇到回环直接返回 `[BLOCKED_LOOPBACK]` 可行动文案，而不是一次「网页加载失败」。
 
-**验证**：新增 12 条用例（guard 4 + 工具 6 + 分类 2 扩展）；全量 **191 文件 / 1614 用例全绿**；typecheck 5/5。
+**确认体验（同日细化）**：`ask:user` 负载新增 `sessionId / kind / title / detail / expiresAt`——渲染层只显示当前会话的询问，其它会话收进「另一个会话正在等待你的确认」悬浮胶囊；敏感确认带倒计时（普通提问不显示，避免催促）与到期自动收起；敏感确认用独立视觉（warning + danger 描边 + 操作/目标/原因/页面上下文行），确认回填稳定 token `"confirm"`（不拿中文文案做判据）。
+
+**验证**：新增 13 条用例（guard 4 + 工具 6 + 分类 2 扩展 + 事件负载 1）；全量 **191 文件 / 1615 用例全绿**；typecheck 5/5。
 
 

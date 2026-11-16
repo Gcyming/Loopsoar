@@ -25,6 +25,46 @@ describe("AskBus", () => {
     expect(bus.resolve(payload.requestId, { answer: "A" })).toBe(false);
   });
 
+  it("敏感确认携带会话归属 / 语义 / 上下文 / 到期时刻", async () => {
+    const pushed: { payload: unknown }[] = [];
+    const now = 1_700_000_000_000;
+    const bus = new AskBus({ push: (_e, payload) => pushed.push({ payload }), now: () => now });
+    const pending = bus.request({
+      question: "Agent 准备点击「立即支付」",
+      options: ["确认执行", "取消"],
+      allowFreeText: false,
+      timeoutMs: 180_000,
+      sessionId: "sess-42",
+      kind: "sensitive",
+      title: "敏感操作确认",
+      detail: [
+        { label: "操作", value: "browser_click" },
+        { label: "目标", value: "立即支付" },
+      ],
+    });
+    const payload = pushed[0].payload as {
+      requestId: string;
+      sessionId?: string;
+      kind?: string;
+      title?: string;
+      detail?: { label: string; value: string }[];
+      expiresAt?: number;
+    };
+    // 会话归属：渲染层据此只在对应会话弹窗（后台会话不抢界面）
+    expect(payload.sessionId).toBe("sess-42");
+    expect(payload.kind).toBe("sensitive");
+    expect(payload.title).toBe("敏感操作确认");
+    expect(payload.detail).toEqual([
+      { label: "操作", value: "browser_click" },
+      { label: "目标", value: "立即支付" },
+    ]);
+    // 到期时刻 = now + timeout：渲染层倒计时与自动收起都靠它
+    expect(payload.expiresAt).toBe(now + 180_000);
+
+    bus.resolve(payload.requestId, { answer: "confirm" });
+    await expect(pending).resolves.toEqual({ cancelled: false, answer: "confirm" });
+  });
+
   it("超时按取消结算，不伪造回答", async () => {
     const bus = new AskBus({ push: () => {} });
     const pending = bus.request({ question: "还在吗？", timeoutMs: 60 });

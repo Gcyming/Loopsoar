@@ -39,6 +39,9 @@ export function registerAskTools(registry: ToolRegistry, askBus: AskBus): void {
           options: Array.isArray(params.options) ? params.options : undefined,
           allowFreeText: params.allowFreeText,
           timeoutMs: ASK_USER_TIMEOUT_MS,
+          // 会话归属：后台会话的提问只在对应会话里弹窗（不抢用户当前会话的界面）。
+          sessionId: ctx.sessionId,
+          kind: "ask",
         });
         if (answer.cancelled) {
           return {

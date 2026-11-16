@@ -510,6 +510,16 @@ export interface AskUserRequest {
   options?: string[];
   /** 是否允许自由文本（缺省语义：无选项时允许）。 */
   allowFreeText?: boolean;
+  /** 归属会话：缺失表示「当前会话」（兼容旧壳层）；有值时只在对应会话里弹窗。 */
+  sessionId?: string;
+  /** 语义：普通提问 / 敏感步骤确认（决定弹窗的视觉与按钮文案）。 */
+  kind?: "ask" | "sensitive";
+  /** 敏感确认的标题。 */
+  title?: string;
+  /** 敏感确认的上下文行（操作 / 目标 / 原因 / 页面）。 */
+  detail?: { label: string; value: string }[];
+  /** 到期时刻（ms）：用于倒计时与到期自动收起。 */
+  expiresAt?: number;
 }
 
 /** ask:respond 返回：是否命中等待中的问题（重复/过期 = false）。 */

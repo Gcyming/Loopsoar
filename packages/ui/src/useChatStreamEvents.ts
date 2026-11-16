@@ -392,6 +392,19 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
               question: req.question,
               ...(Array.isArray(req.options) ? { options: req.options.filter((item): item is string => typeof item === "string") } : {}),
               ...(typeof req.allowFreeText === "boolean" ? { allowFreeText: req.allowFreeText } : {}),
+              ...(typeof req.sessionId === "string" && req.sessionId ? { sessionId: req.sessionId } : {}),
+              ...(req.kind === "sensitive" ? { kind: "sensitive" as const } : {}),
+              ...(typeof req.title === "string" && req.title ? { title: req.title } : {}),
+              ...(Array.isArray(req.detail)
+                ? {
+                    detail: req.detail
+                      .filter((row): row is { label: string; value: string } => {
+                        return !!row && typeof row.label === "string" && typeof row.value === "string";
+                      })
+                      .slice(0, 8),
+                  }
+                : {}),
+              ...(typeof req.expiresAt === "number" && Number.isFinite(req.expiresAt) ? { expiresAt: req.expiresAt } : {}),
             };
             // 去重入队：同一 requestId 重复推送不弹两个窗
             setAskQueue((prev) => (prev.some((item) => item.requestId === request.requestId) ? prev : [...prev, request]));

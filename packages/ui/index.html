@@ -1856,6 +1856,82 @@
     .ask-option:active {
       transform: scale(0.99);
     }
+
+    /* 敏感步骤确认（ask 事件 kind="sensitive"）：与普通提问视觉区分，强调「看清再点」 */
+    .ask-dialog[data-kind="sensitive"] {
+      border-color: var(--ls-danger);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--ls-danger-soft);
+    }
+    .ask-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      border: 1px solid var(--ls-border);
+      border-radius: 8px;
+      background: var(--ls-bg);
+      font-size: 12.5px;
+      line-height: 1.6;
+    }
+    .ask-detail-row {
+      display: flex;
+      gap: 8px;
+      min-width: 0;
+    }
+    .ask-detail-label {
+      flex: none;
+      width: 36px;
+      color: var(--ls-text-faint);
+    }
+    .ask-detail-value {
+      flex: 1;
+      min-width: 0;
+      color: var(--ls-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ask-countdown {
+      margin-right: auto;
+      align-self: center;
+      color: var(--ls-text-faint);
+      font-size: 11.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .ask-countdown[data-expired="true"] {
+      color: var(--ls-danger);
+    }
+    .ask-submit[data-danger="true"] {
+      border-color: var(--ls-danger);
+      background: var(--ls-danger-soft);
+      color: var(--ls-danger);
+    }
+    .ask-submit[data-danger="true"]:hover:not(:disabled) {
+      background: rgba(248, 113, 113, 0.22);
+    }
+    /* 其它会话有挂起确认时的悬浮入口：不抢焦点、不遮操作区，点一下切到那个会话 */
+    .ask-pending-other {
+      position: fixed;
+      left: 50%;
+      bottom: 112px;
+      transform: translateX(-50%);
+      z-index: 65;
+      max-width: min(520px, 80vw);
+      padding: 7px 14px;
+      border: 1px solid var(--ls-danger);
+      border-radius: 999px;
+      background: var(--ls-surface-raised);
+      color: var(--ls-text);
+      font-size: 12px;
+      line-height: 1.4;
+      cursor: pointer;
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.42);
+      animation: fadeOnly 140ms ease both;
+    }
+    .ask-pending-other:hover {
+      background: var(--ls-danger-soft);
+    }
+
     .ask-free {
       display: flex;
       flex-direction: column;

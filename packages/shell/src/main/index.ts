@@ -2124,16 +2124,30 @@ app.whenReady().then(async () => {
     beforeOpenPage: beforeOpenBrowserPage,
     // 敏感步骤二次确认：策略层只看到 target（多为 #e12），只有定位后拿到真实文案才判得出
     // 「立即支付 / 确认转账」。返回 false（含取消/超时/异常）= 不点击（fail-closed）。
-    confirmSensitive: async ({ sessionId, tool, label, reason }) => {
+    confirmSensitive: async ({ sessionId, tool, label, reason, url }) => {
       try {
         const answer = await askBus.request({
-          question: `Agent 准备在网页上执行敏感操作（${tool}）：「${label}」\n\n${reason}\n\n这一步不可撤销，确认要执行吗？`,
+          question: `Agent 准备在网页上执行敏感操作：「${label}」。这一步不可撤销，确认要执行吗？`,
           options: ["确认执行", "取消"],
           allowFreeText: false,
-          timeoutMs: 120_000,
+          // 给用户留足阅读时间；到期由渲染层自动收起（不会留下一个点了也没用的弹窗）。
+          timeoutMs: 180_000,
+          // 会话归属：后台会话的确认只在对应会话里显示，不抢用户当前界面。
+          sessionId,
+          kind: "sensitive",
+          title: "敏感操作确认",
+          detail: [
+            { label: "操作", value: tool },
+            { label: "目标", value: label },
+            { label: "原因", value: reason },
+            ...(url ? [{ label: "页面", value: url }] : []),
+          ],
         });
         if (answer.cancelled) return false;
-        return (answer.answer ?? "").includes("确认");
+        // 渲染层回填稳定 token "confirm"：按钮文案走 i18n，不能拿中文文案当判据
+        // （否则英文界面下「Confirm」会被判成拒绝）。
+        const value = (answer.answer ?? "").trim();
+        return value === "confirm" || value.includes("确认");
       } catch {
         return false;
       }

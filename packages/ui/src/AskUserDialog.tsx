@@ -31,16 +31,29 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
   const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
   const [text, setText] = React.useState("");
+  /** 每秒推进一次，仅用于倒计时（到期后弹窗由 App 收起，这里只负责如实显示）。 */
+  const [now, setNow] = React.useState(() => Date.now());
 
   const options = request.options ?? [];
   // 与 shell 的默认语义一致：未显式声明时，有选项=只让选，无选项=只让打字
   const allowFreeText = request.allowFreeText ?? options.length === 0;
+  /** 敏感步骤确认：不回显选项列表与自由文本，只给「确认执行 / 取消」两个明确动作。 */
+  const isSensitive = request.kind === "sensitive";
+  const remainingMs = typeof request.expiresAt === "number" ? Math.max(0, request.expiresAt - now) : null;
+  const expired = remainingMs !== null && remainingMs <= 0;
+
+  React.useEffect(() => {
+    if (typeof request.expiresAt !== "number") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [request.expiresAt]);
 
   // 焦点管理：弹窗打开时优先聚焦第一个选项（键盘可一键选择），没有选项则聚焦自由文本；
   // 关闭时把焦点还给打开前的元素。
   React.useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const target = firstOptionRef.current ?? textRef.current;
+    // 敏感确认没有选项列表与输入框：焦点落到弹窗本体，保证 Esc 与 Tab 圈定都从正确位置开始。
+    const target = firstOptionRef.current ?? textRef.current ?? dialogRef.current;
     target?.focus();
     return () => previous?.focus?.();
   }, [allowFreeText]);
@@ -108,6 +121,7 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
       <div
         ref={dialogRef}
         className="ask-dialog"
+        data-kind={isSensitive ? "sensitive" : "ask"}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -116,15 +130,31 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
         onKeyDown={onDialogKeyDown}
       >
         <div className="ask-head">
-          <Icon name="bulb" size={15} style={{ color: BRAND.ochreHover }} />
+          <Icon
+            name={isSensitive ? "warning" : "bulb"}
+            size={15}
+            style={{ color: isSensitive ? "var(--ls-danger)" : BRAND.ochreHover }}
+          />
           <span id={titleId} className="ask-title">
-            {tr("ask.title")}
+            {isSensitive ? request.title ?? tr("ask.sensitiveTitle") : tr("ask.title")}
           </span>
         </div>
         <div id={questionId} className="ask-question">
           {request.question}
         </div>
-        {options.length > 0 ? (
+        {isSensitive && request.detail && request.detail.length > 0 ? (
+          <div className="ask-detail">
+            {request.detail.map((row) => (
+              <div key={`${row.label}`} className="ask-detail-row">
+                <span className="ask-detail-label">{row.label}</span>
+                <span className="ask-detail-value" title={row.value}>
+                  {row.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {!isSensitive && options.length > 0 ? (
           <div className="ask-options" role="group" aria-label={tr("ask.ariaOptions")}>
             {options.map((option, index) => (
               <button
@@ -140,7 +170,7 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
             ))}
           </div>
         ) : null}
-        {allowFreeText ? (
+        {isSensitive ? null : allowFreeText ? (
           <div className="ask-free">
             <textarea
               ref={textRef}
@@ -162,10 +192,28 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
           <div className="ask-hint">{tr("ask.hintOptions")}</div>
         )}
         <div className="ask-actions">
+          {/* 倒计时只给敏感确认：普通提问是「等你想清楚」，显示倒计时是无谓催促 */}
+          {isSensitive && remainingMs !== null ? (
+            <span className="ask-countdown" data-expired={expired ? "true" : "false"} aria-live="off">
+              {expired
+                ? tr("ask.expired")
+                : tr("ask.countdown", { seconds: Math.ceil(remainingMs / 1000) })}
+            </span>
+          ) : null}
           <button type="button" className="ask-cancel" onClick={() => onRespond(null)}>
-            {tr("ask.cancel")}
+            {isSensitive ? tr("ask.sensitiveCancel") : tr("ask.cancel")}
           </button>
-          {allowFreeText ? (
+          {isSensitive ? (
+            <button
+              type="button"
+              className="ask-submit"
+              data-danger="true"
+              disabled={expired}
+              onClick={() => onRespond("confirm")}
+            >
+              {tr("ask.sensitiveConfirm")}
+            </button>
+          ) : allowFreeText ? (
             <button type="button" className="ask-submit" onClick={submitText} disabled={!text.trim()} title="Ctrl+Enter">
               {tr("ask.submit")}
             </button>

@@ -136,6 +136,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ask.ariaOptions": "可选回答",
     "ask.optionTitle": "点击即用此选项回答",
     "ask.close": "关闭",
+    "ask.sensitiveTitle": "敏感操作确认",
+    "ask.sensitiveConfirm": "确认执行",
+    "ask.sensitiveCancel": "取消",
+    "ask.countdown": "剩余 {seconds} 秒",
+    "ask.expired": "已超时，未执行",
+    "ask.pendingOther": "另一个会话正在等待你的确认 · 点击前往",
 
     // 终端面板
     "terminal.panelLabel": "终端面板",
@@ -344,6 +350,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ask.ariaOptions": "Answer options",
     "ask.optionTitle": "Click to answer with this option",
     "ask.close": "Close",
+    "ask.sensitiveTitle": "Confirm sensitive action",
+    "ask.sensitiveConfirm": "Confirm",
+    "ask.sensitiveCancel": "Cancel",
+    "ask.countdown": "{seconds}s left",
+    "ask.expired": "Expired — nothing was executed",
+    "ask.pendingOther": "Another session is waiting for your confirmation · Click to open",
 
     // Terminal panel
     "terminal.panelLabel": "Terminal panel",
