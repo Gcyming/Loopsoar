@@ -1276,3 +1276,11 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - reconcileAll 外层 try/finally，失败复位 reconciling，不再卡死；watcher flush 显式 catch。
 - 验证：210 文件 / 1710 用例全绿；typecheck/build/gen-check 全过。
 
+
+### 真实文本评测与收尾决策（ADR-0129）
+
+- 新增 scripts/memory-eval-vault.ts：237 条真实文档小节做记忆，关键词查询评测 hash 检索。
+- 结果：recall@1 0.515 / @3 0.726 / MRR 0.607；负样本 top score 0.20–0.21 与正样本 p10 0.205 重叠 → hash 模式只能给候选，语义区分靠外部 embedding。
+- 收尾决策：显式检索语义不改（保持候选召回）；worker 线程不做（触发条件 >20k 或启动 >500ms）；回顾仍 24 条一批。
+- 验证：208 文件 / 1710 用例全绿；typecheck/build/gen-check 全过。
+
