@@ -289,7 +289,7 @@
 
 - [x] P1-2 终端命令解析与分级：新增 `command_safety.ts` 词法/argv 语义层，覆盖引号拼接、转义、拆参数、sudo/env/timeout/xargs、bash -c/cmd /c/PowerShell 嵌套、Windows rd/del/Remove-Item；45 个 hard_rules 用例通过。
 - [x] P1-1 API key 加密/钥匙串：审计误判，已有 `secretStore.ts`（safeStorage + AES-GCM 回退）与 13 个测试；本轮只核对，不改代码。
-- [~] P1-4 图片输入 + 截图回灌（半完成）：LLM content 支持 image parts，OpenAI/Anthropic 适配，当前用户轮 `【附件】图片` 转多模态，text-only 模型自动跳过；截图自动回灌/PDF 版面仍未做。
+- [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 归 P1-6。
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
 - [ ] P1-5 子 Agent/任务树（未做；大改）。
 - [~] P1-6 工具面补齐（部分误判）：`web_search` 已有；PDF/Office 原生读取仍未做。
@@ -331,7 +331,7 @@
 
 - 2026-11-17：初版审计记录；只读，未修改源码。
 - 2026-11-17：完成 P0 修补（P0-1 / P0-2 / P0-3），全量 **222 文件 / 1,791 用例**通过；typecheck 5/5、build 5/5。P0-3 仅覆盖工具桥接权限，worker OS 级隔离仍留 P1-8。
-- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件多模态（半完成，含 text-only 模型跳过）、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成；P1-1/P1-6 的“缺失”经复核为误判。全量 **224 文件 / 1,825 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成；P1-1/P1-6 的“缺失”经复核为误判。全量 **225 文件 / 1,827 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -349,7 +349,7 @@
 |---|---|---|
 | P1-2 终端命令解析 | ✅ | 新增 `core/tools/command_safety.ts`：引号拼接、反斜杠转义、`; && \|` 分段、`sudo/env/timeout/xargs` 解包、`bash -c`/`cmd /c`/PowerShell 嵌套、Windows `rd`/`del`/`Remove-Item` 根路径；`hard_rules.ts` 保留 10 条正则做兜底。45 个 `hard_rules` 用例通过（含 `r''m`、`rm${IFS}-rf${IFS}/`、`rm -r -f /`、`rm --recursive --force /`、`sudo bash -c`、`xargs rm -rf /` 等变体）。 |
 | P1-1 Key 加密 | ✅ 已有 | 初版审计误判。`secretStore.ts` 已用 `safeStorage`，不可用时 AES-256-GCM + 机器绑定回退；13 个测试通过。未改代码。 |
-| P1-4 多模态 | 🟡 半完成 | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 读取并注入（壳层 `readImageDataUrl` 负责 6MB/扩展名白名单，且仅在模型声明 `vision`/`image` 模态时注入，text-only 模型不会收到图片）。**未做**：浏览器截图自动回灌、PDF 版面/OCR、历史图片重放。 |
+| P1-4 多模态 | ✅ | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 注入，壳层 `readImageDataUrl` 负责 6MB/扩展名白名单；`browser_screenshot` 对视觉模型回灌 PNG（仅 1 张/轮、解码后 ≤1.5MB，不写历史、不塞 UI IPC），text-only 模型只回路径。PDF 版面/OCR 仍归 P1-6。 |
 | P1-3 BrowserBackend | 🟡 端口第一步 | 新增 `shell/main/browserBackend.ts`：工具层只依赖 `BrowserBackend`，不再依赖 `BrowserHost` 类；`BrowserHost` 直接满足接口，新增非 Electron 假后端测试可注册并执行 `browser_tabs`。**未做**：真正的第二后端（Playwright/CDP）与会话生命周期/视图布局迁移。 |
 | P1-5 子 Agent | ⬜ 未做 | 仍是一轮一个 `ChatService`。 |
 | P1-6 工具面 | 🟡 部分误判 | `web_search` 已在 `searchTools.ts` 内置；PDF/Office 原生读取仍未做。 |
@@ -363,7 +363,7 @@
 | P2-2 UI 分包 | ✅ | `vite.config.ts` 增加 `manualChunks`：`react-vendor` 223.22 kB，主包 424.17 kB；>500 kB 警告消失。 |
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
 | P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
-| P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；实跑 `E2E_SESSION_VERIFY`：`sessionId=sess-mwkr3f5t-fpfd`、`evalSessionId=sess-mwkr3dkx-27ev`、`forkedFrom` 同源、`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真。 |
+| P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionId=sess-mwktbvyw-t1g5`、`evalSessionId=sess-mwktbuf7-mwvd`、`forkedFrom` 同源、`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真。 |
 | P2-1/P2-3 拆巨型文件 | ⬜ 未做 | `App.tsx`/`Settings.tsx`/`main/index.ts` 未拆。 |
 
-**本轮验证**：`npx vitest run` **224 文件 / 1,825 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **225 文件 / 1,827 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

@@ -137,6 +137,41 @@ describe("工具循环", () => {
     expect(toolMessage.content).toContain("完整内容见会话中的工具卡片");
   });
 
+  it("工具图片只注入当前轮：tool 消息保留文本，图片放在后续 user 消息", async () => {
+    const requests: { messages: { role: string; content: unknown }[] }[] = [];
+    const client = {
+      async *invoke(req: { messages: { role: string; content: unknown }[] }) {
+        requests.push({ messages: req.messages.map((m) => ({ ...m })) });
+        if (requests.length === 1) {
+          yield { kind: "tool_call" as const, toolCall: { id: "shot", name: "browser_screenshot", args: {} } };
+          yield { kind: "done" as const };
+          return;
+        }
+        yield { kind: "text" as const, text: "看到截图了" };
+        yield { kind: "done" as const };
+      },
+    };
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      llm: client as never,
+      executeTool: {
+        invoke: async () => ({
+          ok: true,
+          content: "已截图：C:/tmp/shot.png",
+          images: [{ mime: "image/png", base64: "aGVsbG8=" }],
+        }),
+      },
+      sink: () => {},
+    });
+    expect(outcome.status).toBe("done");
+    const toolMessage = requests[1].messages.find((m) => m.role === "tool")!;
+    expect(toolMessage.content).toContain("已截图");
+    const imageMessage = requests[1].messages.find((m) => m.role === "user" && Array.isArray(m.content))!;
+    expect(imageMessage.content).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "image", mime: "image/png", base64: "aGVsbG8=" })]),
+    );
+  });
+
   it("外部中止 → aborted", async () => {
     const llm = new MockLlmClient();
     llm.addScript([

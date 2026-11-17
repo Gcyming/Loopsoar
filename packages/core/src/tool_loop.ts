@@ -146,6 +146,9 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   const repeatCalls = new Map<string, number>();
   /** 回灌给模型的单条工具结果上限（完整内容仍在 UI 工具卡/本地记录中） */
   const MAX_TOOL_RESULT_IN_CONTEXT = 20_000;
+  /** 工具图片回灌上限：只带 1 张、解码后约 1.5MB，防止截图轮次把上下文打爆。 */
+  const MAX_TOOL_IMAGES_PER_ROUND = 1;
+  const MAX_TOOL_IMAGE_BYTES = 1_500_000;
 
   const emit = (type: LoopEvent["type"], data: unknown): void => {
     sink({ seq: seq++, type, data, ts: Date.now() });
@@ -233,7 +236,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
         id: string;
         name: string;
         args: unknown;
-        result: { ok: boolean; content?: string; error?: string };
+        result: { ok: boolean; content?: string; error?: string; images?: { mime: string; base64: string }[] };
       }[] = [];
 
       // 多轮工具对话上下文（工具结果必须回灌，否则模型"失忆" → 回答截断/重复调用）
@@ -413,7 +416,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 toolCallId: toolCall.id,
                 toolName: toolCall.name,
                 args: toolCall.args,
-                result: toolResult,
+                // 图片只走模型上下文；UI 工具卡不需要 base64（避免 1.5MB 级 IPC 载荷）。
+                result: { ok: toolResult.ok, content: toolResult.content, error: toolResult.error } as ToolResult,
               });
 
               // 更新预算：工具调用计数和 Token 计数
@@ -451,7 +455,12 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 id: toolCall.id,
                 name: toolCall.name,
                 args: toolCall.args,
-                result: { ok: toolResult.ok, content: toolResult.content, error: toolResult.error },
+                result: {
+                  ok: toolResult.ok,
+                  content: toolResult.content,
+                  error: toolResult.error,
+                  ...(toolResult.images ? { images: toolResult.images } : {}),
+                },
               });
               if (toolResult.ok) roundHadToolProgress = true;
 
@@ -544,6 +553,10 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           ];
           continue;
         }
+        const toolImages = roundToolCalls
+          .flatMap((call) => (call.result.ok ? (call.result.images ?? []) : []))
+          .filter((img) => img.base64.length * 0.75 <= MAX_TOOL_IMAGE_BYTES)
+          .slice(0, MAX_TOOL_IMAGES_PER_ROUND);
         conversation = [
           ...conversation,
           {
@@ -562,6 +575,17 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 : raw;
             return { role: "tool" as const, tool_call_id: call.id, content: clipped };
           }),
+          ...(toolImages.length > 0
+            ? [
+                {
+                  role: "user" as const,
+                  content: [
+                    { type: "text" as const, text: "工具返回了图片，已附在下方；请结合图片继续判断。" },
+                    ...toolImages.map((img) => ({ type: "image" as const, mime: img.mime, base64: img.base64 })),
+                  ],
+                },
+              ]
+            : []),
         ];
       } else if (sawDone) {
         // 引导续轮（移植 slime A-1061⑥）：模型只出正文、没有工具轮，本轮即将收尾；

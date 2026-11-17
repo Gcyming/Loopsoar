@@ -2328,6 +2328,12 @@ app.whenReady().then(async () => {
       click: (x, y) => agentPointer?.click(x, y),
       chip: (text) => agentPointer?.chip(text),
     },
+    // 只有视觉模型才把截图作为图片回灌；text-only 模型继续只拿文件路径。
+    visionEnabled: () => {
+      const active = providers.active();
+      const spec = active?.models?.find((m) => m.id === active.model);
+      return spec?.vision === true || spec?.inputModalities?.includes("image") === true;
+    },
   });
   // Agent 浏览器活动广播（会话隔离）：只在动作执行期间推 start/end，
   // 渲染层据此显示呼吸灯、把「该会话的活动标签」切到可见；绝不切走用户所在会话。

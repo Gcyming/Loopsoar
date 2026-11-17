@@ -40,6 +40,8 @@ export interface ToolResult {
   ok: boolean;
   content: string;
   error?: string;
+  /** 可选图片附件：仅注入当前工具轮的模型上下文，不写入会话历史。 */
+  images?: { mime: string; base64: string }[];
 }
 
 export class ToolRegistry {

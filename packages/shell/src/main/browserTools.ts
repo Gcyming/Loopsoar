@@ -318,6 +318,11 @@ export interface BrowserToolHooks {
     click(x: number, y: number): void;
     chip(text: string): void;
   };
+  /**
+   * 当前模型是否支持图片输入。为 true 时 browser_screenshot 会把 PNG 作为
+   * 工具图片回灌到模型上下文（仅当前轮，不写入历史）；text-only 模型仍只拿路径。
+   */
+  visionEnabled?: () => boolean;
 }
 
 /**
@@ -1107,7 +1112,7 @@ export function registerBrowserTools(
   registry.register({
     name: "browser_screenshot",
     description:
-      "对当前标签页截图（可见区域，PNG）并保存到会话工作根 .loopsoar/screenshots/；可选 selector 先把元素滚动到可视区。返回文件路径与像素尺寸",
+      "对当前标签页截图（可见区域，PNG）并保存到会话工作根 .loopsoar/screenshots/；可选 selector 先把元素滚动到可视区。视觉模型会直接收到图片附件，text-only 模型只返回路径",
     permissions: { read: true },
     schema: z.object({ selector: z.string().min(1).max(200).optional() }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -1140,9 +1145,18 @@ export function registerBrowserTools(
         fs.writeFileSync(file, buffer);
 
         const size = readPngSize(buffer);
+        let attachImage = false;
+        try {
+          attachImage = hooks?.visionEnabled?.() === true && buffer.length <= 1_500_000;
+        } catch {
+          // 能力探测失败不应让截图工具失败；退回只返回路径。
+        }
         return {
           ok: true,
-          content: `已截图：${file}\n尺寸：${size ? `${size.width}x${size.height}` : "未知"}（${buffer.length} 字节）`,
+          content: `已截图：${file}\n尺寸：${size ? `${size.width}x${size.height}` : "未知"}（${buffer.length} 字节）${
+            attachImage ? "\n图片已附在本轮工具结果中。" : ""
+          }`,
+          ...(attachImage ? { images: [{ mime: "image/png", base64 }] } : {}),
         };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
