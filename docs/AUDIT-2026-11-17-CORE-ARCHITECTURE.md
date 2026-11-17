@@ -292,8 +292,8 @@
 - [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 归 P1-6。
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
 - [ ] P1-5 子 Agent/任务树（未做；大改）。
-- [~] P1-6 工具面补齐（部分误判）：`web_search` 已有；PDF/Office 原生读取仍未做。
-- [ ] P1-7 技能候选生成（未做）。
+- [~] P1-6 工具面补齐（部分完成）：`web_search` 已有；新增 `docx_read` 原生 DOCX 文本抽取（纯 Node ZIP+XML，无新依赖）；PDF/XLSX 仍未做。
+- [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 工具，写入 `skills/<id>/SKILL.md` 并默认禁用，用户在设置·技能启用后才注入；尚未做任务结束自动生成。
 - [ ] P1-8 扩展贡献点协议 / worker OS 隔离（未做；P0-3 仅工具授权层）。
 
 ### 第三批：P2
@@ -331,7 +331,7 @@
 
 - 2026-11-17：初版审计记录；只读，未修改源码。
 - 2026-11-17：完成 P0 修补（P0-1 / P0-2 / P0-3），全量 **222 文件 / 1,791 用例**通过；typecheck 5/5、build 5/5。P0-3 仅覆盖工具桥接权限，worker OS 级隔离仍留 P1-8。
-- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成；P1-1/P1-6 的“缺失”经复核为误判。全量 **225 文件 / 1,827 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-6 DOCX 读取、P1-7 技能候选工具、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成；P1-1/P1-6 的“缺失”经复核为误判。全量 **227 文件 / 1,830 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -352,8 +352,8 @@
 | P1-4 多模态 | ✅ | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 注入，壳层 `readImageDataUrl` 负责 6MB/扩展名白名单；`browser_screenshot` 对视觉模型回灌 PNG（仅 1 张/轮、解码后 ≤1.5MB，不写历史、不塞 UI IPC），text-only 模型只回路径。PDF 版面/OCR 仍归 P1-6。 |
 | P1-3 BrowserBackend | 🟡 端口第一步 | 新增 `shell/main/browserBackend.ts`：工具层只依赖 `BrowserBackend`，不再依赖 `BrowserHost` 类；`BrowserHost` 直接满足接口，新增非 Electron 假后端测试可注册并执行 `browser_tabs`。**未做**：真正的第二后端（Playwright/CDP）与会话生命周期/视图布局迁移。 |
 | P1-5 子 Agent | ⬜ 未做 | 仍是一轮一个 `ChatService`。 |
-| P1-6 工具面 | 🟡 部分误判 | `web_search` 已在 `searchTools.ts` 内置；PDF/Office 原生读取仍未做。 |
-| P1-7 技能候选 | ⬜ 未做 | 仍只有技能注入。 |
+| P1-6 工具面 | 🟡 部分 | `web_search` 已有；新增 `docx_read`（纯 Node 解 ZIP+XML，25MB/20k 字符上限，不引入依赖）；PDF/XLSX 未做。 |
+| P1-7 技能候选 | 🟡 第一步 | 新增 `skill_candidate` 工具：写入 `skills/<id>/SKILL.md`，默认禁用，用户在设置·技能启用后才注入；未做任务结束自动生成/修订。 |
 | P1-8 扩展生态/隔离 | ⬜ 未做 | 只有 tools 贡献点；worker OS 级隔离未动。 |
 
 ### 11.2 P2 进度
@@ -363,7 +363,7 @@
 | P2-2 UI 分包 | ✅ | `vite.config.ts` 增加 `manualChunks`：`react-vendor` 223.22 kB，主包 424.17 kB；>500 kB 警告消失。 |
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
 | P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
-| P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionId=sess-mwktbvyw-t1g5`、`evalSessionId=sess-mwktbuf7-mwvd`、`forkedFrom` 同源、`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真。 |
+| P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
 | P2-1/P2-3 拆巨型文件 | ⬜ 未做 | `App.tsx`/`Settings.tsx`/`main/index.ts` 未拆。 |
 
-**本轮验证**：`npx vitest run` **225 文件 / 1,827 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **227 文件 / 1,830 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

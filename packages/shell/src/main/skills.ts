@@ -104,6 +104,48 @@ export class SkillHost {
     return item;
   }
 
+  /**
+   * 生成候选技能：写入 skills/<id>/SKILL.md，并在 skills.json 里默认禁用。
+   * 候选不会进入提示词注入，直到用户在设置·技能里启用——避免 Agent 自动“学会”未审阅的流程。
+   */
+  createCandidate(input: {
+    name: string;
+    description: string;
+    whenToUse?: string;
+    body: string;
+    tags?: string[];
+  }): SkillRecord | null {
+    const base =
+      input.name
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48) || "candidate";
+    let id = base;
+    let suffix = 2;
+    while (fs.existsSync(path.join(this.dir, id))) id = `${base}-${suffix++}`;
+    const dir = path.join(this.dir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    const frontmatter = [
+      "---",
+      `name: ${JSON.stringify(input.name)}`,
+      `description: ${JSON.stringify(input.description)}`,
+      ...(input.whenToUse ? [`whenToUse: ${JSON.stringify(input.whenToUse)}`] : []),
+      ...(input.tags && input.tags.length > 0
+        ? ["tags:", ...input.tags.map((tag) => `  - ${JSON.stringify(tag)}`)]
+        : []),
+      "---",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(dir, SKILL_FILE_NAME), `${frontmatter}${input.body.trim()}\n`, "utf8");
+    const state = this.readState();
+    state.enabled[id] = false;
+    this.writeState(state);
+    this.scan();
+    return this.registry.list().find((item) => item.id === id) ?? null;
+  }
+
   dirPath(): string {
     return this.dir;
   }
