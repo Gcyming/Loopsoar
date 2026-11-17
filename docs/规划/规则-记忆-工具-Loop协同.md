@@ -133,7 +133,7 @@ Markdown 仍是唯一可读真相；sidecar 只存机器需要的数据（统计
 
 只做三件事：抽取、去重、累加证据。任何异常都吞掉，不阻断对话。
 
-### 5.2 afterToolCall / afterToolResult（P1）
+### 5.2 afterToolCall / afterToolResult（第一版已实现失败证据）
 
 工具结果是规则最好的证据：
 

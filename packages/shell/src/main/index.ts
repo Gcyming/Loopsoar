@@ -74,6 +74,7 @@ import { registerMemoryDomain } from "./domains/memory.js";
 import { registerRuleLearningDomain } from "./domains/ruleLearning.js";
 import { RuleCandidateStore } from "./ruleCandidates.js";
 import { RuleStatsStore } from "./ruleStats.js";
+import { ToolEvidence } from "./toolEvidence.js";
 import { reviewMemory } from "./memoryReview.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
@@ -1847,6 +1848,7 @@ app.whenReady().then(async () => {
     return guards;
   };
 
+  const toolEvidence = new ToolEvidence(memory);
   const chatService = new ChatService({
     platform,
     registry,
@@ -1879,6 +1881,18 @@ app.whenReady().then(async () => {
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
     onToolCall: (toolName: string, sessionId: string) => memory.recordToolUsage(toolName, sessionId),
+    // 工具失败证据：同一会话同一工具同一错误连续两次才写 lesson（首次是偶发）。
+    onToolResult: (event) => {
+      const workspaceId = sessions.get(event.sessionId)?.workspaceId ?? undefined;
+      void toolEvidence
+        .observe({ ...event, ...(workspaceId ? { workspaceId } : {}) })
+        .then((result) => {
+          if (result.lesson) {
+            pushToRenderer("memory:updated", { action: "tool-lesson", added: 1, total: memory.stats().total });
+          }
+        })
+        .catch(() => {});
+    },
     getMemoryFor: (text: string, sessionId?: string) =>
       memory.recallPrompt(text, (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default"),
     // 技能：独立子系统，只注入 SKILL.md 文本（不提供工具）

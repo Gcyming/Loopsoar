@@ -92,6 +92,14 @@ export interface ChatServiceOptions {
   getMemoryFor?: (userText: string, sessionId?: string) => string;
   /** 每次工具调用（E-M1）：用于记录 tool/session 使用事件，不改变循环行为。 */
   onToolCall?: (toolName: string, sessionId: string) => void;
+  /** 每次工具结果（成功/失败）：用于把失败证据写进记忆；不改变循环行为。 */
+  onToolResult?: (input: {
+    toolName: string;
+    sessionId: string;
+    ok: boolean;
+    error?: string;
+    args?: Record<string, unknown>;
+  }) => void;
   /** 技能注入（与扩展/MCP 隔离：仅 SKILL.md 文本，不提供工具）。 */
   getSkillPrompt?: (userText: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
@@ -651,6 +659,22 @@ export class ChatService {
       if (event.type === "tool_start") {
         const data = event.data as { toolName?: string } | undefined;
         if (data?.toolName) this.opts.onToolCall?.(data.toolName, sessionId);
+      }
+      if (event.type === "tool") {
+        const data = event.data as {
+          toolName?: string;
+          args?: Record<string, unknown>;
+          result?: { ok?: boolean; error?: string };
+        } | undefined;
+        if (data?.toolName && data.result) {
+          this.opts.onToolResult?.({
+            toolName: data.toolName,
+            sessionId,
+            ok: data.result.ok === true,
+            ...(data.result.error ? { error: data.result.error } : {}),
+            ...(data.args ? { args: data.args } : {}),
+          });
+        }
       }
         },
         messages,
