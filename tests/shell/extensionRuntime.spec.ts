@@ -12,6 +12,7 @@ import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
 import { ExtensionHost } from "../../packages/shell/src/main/extensions.ts";
 import {
   buildExtensionWorkerEnv,
+  extensionSpawnArgs,
   ExtensionRuntime,
   type ExtensionChild,
   type ExtensionSpawn,
@@ -88,6 +89,86 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
       runtime.stopAll();
     }
   }, 25000);
+
+  it("isolation:node 在 worker 进程启用文件系统权限：扩展目录可读，外部写入被拒", async () => {
+    const root = makeExtension(
+      "iso",
+      `import fs from "node:fs";
+       import path from "node:path";
+       export async function activate(api) {
+         api.registerTool({
+           name: "probe",
+           description: "隔离探针",
+           parameters: {},
+           permissions: { read: true },
+           execute: async () => {
+             let read = "";
+             try { read = fs.readFileSync(path.join(api.extensionDir, "marker.txt"), "utf8"); }
+             catch (err) { read = "READ_" + (err && err.code ? err.code : "ERR"); }
+             let write = "";
+             try { fs.writeFileSync(path.join(process.env.TEMP || ".", "loopsoar-iso-probe.txt"), "x"); write = "WRITE_OK"; }
+             catch (err) { write = "WRITE_" + (err && err.code ? err.code : "ERR"); }
+             return read + "|" + write;
+           },
+         });
+       }`,
+    );
+    const dir = path.join(root, "extensions", "iso");
+    fs.writeFileSync(path.join(dir, "marker.txt"), "MARKER", "utf8");
+    fs.writeFileSync(
+      path.join(dir, "loopsoar.extension.json"),
+      JSON.stringify({
+        id: "iso",
+        name: "iso",
+        version: "0.1.0",
+        main: "index.mjs",
+        permissions: ["read"],
+        isolation: "node",
+      }),
+      "utf8",
+    );
+    const { registry, host, runtime } = makeRuntime(root);
+    try {
+      host.setEnabled("iso", true);
+      const status = await runtime.start("iso");
+      expect(status.state).toBe("ready");
+      const result = await registry.get("ext__iso__probe")!.execute({
+        agentId: "a",
+        params: {},
+        platform: {},
+      });
+      expect(result.ok).toBe(true);
+      expect(result.content).toBe("MARKER|WRITE_ERR_ACCESS_DENIED");
+    } finally {
+      runtime.stopAll();
+    }
+  }, 25000);
+
+  it("isolation:node 启动参数只放行扩展目录/worker 目录，write/terminal 按 manifest 授予", () => {
+    const dir = path.resolve("C:/extensions/iso");
+    const args = extensionSpawnArgs(
+      {
+        manifest: {
+          id: "iso",
+          name: "iso",
+          version: "0.1.0",
+          main: "index.mjs",
+          permissions: ["read", "write", "terminal"],
+          isolation: "node",
+        },
+        dir,
+        enabled: true,
+        installedAt: 0,
+      },
+      workerPath,
+    );
+    expect(args[0]).toBe("--permission");
+    expect(args).toContain(`--allow-fs-read=${dir}`);
+    expect(args).toContain(`--allow-fs-read=${path.dirname(path.resolve(workerPath))}`);
+    expect(args).toContain(`--allow-fs-write=${dir}`);
+    expect(args).toContain("--allow-child-process");
+    expect(args.slice(-3)).toEqual([workerPath, dir, "index.mjs"]);
+  });
 
   it("坏扩展崩溃互相隔离：一个启动失败不影响另一个", async () => {
     const goodRoot = makeExtension(

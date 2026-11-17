@@ -34,6 +34,24 @@ describe("技能候选（P1-7）", () => {
 
       host.setEnabled(skill.id, true);
       expect(host.promptFor("发布前检查")).toContain("pnpm test");
+
+      const read = await registry.get("skill_read")!.execute({
+        agentId: "test",
+        sessionId: "s1",
+        params: { id: skill.id },
+        platform: {},
+      });
+      expect(read.ok).toBe(true);
+      expect(read.content).toContain("pnpm test");
+      expect(read.content).toContain("状态：启用");
+
+      const listed = await registry.get("skill_list")!.execute({
+        agentId: "test",
+        sessionId: "s1",
+        params: {},
+        platform: {},
+      });
+      expect(listed.content).toContain("发布前检查");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

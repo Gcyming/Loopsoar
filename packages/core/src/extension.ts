@@ -32,10 +32,17 @@ export const ExtensionManifestSchema = z.object({
   main: z.string().max(300).optional(),
   /**
    * 扩展工具可用的权限上限。未声明 = 扩展工具全部拒绝（fail-closed）。
-   * 注意：它只约束桥接进 ToolRegistry 的工具；worker 进程本身仍是完整 Node 权限，
-   * 安装第三方扩展等同于信任其代码。OS 级隔离见审计报告 P1-8。
+   * 注意：它只约束桥接进 ToolRegistry 的工具；默认情况下 worker 进程仍是完整 Node 权限，
+   * 安装第三方扩展等同于信任其代码。设 `isolation: "node"` 可启用 Node permission model
+   * 的第一层 OS 隔离（只读扩展目录/worker 目录，写仅限扩展目录）；强隔离仍未做。
    */
   permissions: z.array(z.enum(EXTENSION_PERMISSION_KEYS)).max(4).optional(),
+  /**
+   * OS 级隔离（P1-8 第一步）：设为 "node" 时，worker 用 Node permission model 启动，
+   * 只读扩展目录与 worker 目录，写权限仅限扩展目录，子进程按 terminal 授权。
+   * 默认 "none" 保持旧扩展兼容；真正的强隔离/容器化仍未做。
+   */
+  isolation: z.enum(["none", "node"]).optional(),
   keywords: z.array(z.string().max(80)).max(50).optional(),
 });
 

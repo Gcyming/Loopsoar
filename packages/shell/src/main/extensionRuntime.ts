@@ -174,7 +174,7 @@ export class ExtensionRuntime {
     this.stop(id);
     const spawnImpl: ExtensionSpawn =
       this.opts.spawn ?? ((command, args, options) => spawn(command, args, options) as unknown as ExtensionChild);
-    const child = spawnImpl(process.execPath, [this.opts.workerPath, item.dir, main], {
+    const child = spawnImpl(process.execPath, extensionSpawnArgs(item, this.opts.workerPath), {
       stdio: ["pipe", "pipe", "pipe"],
       env: buildExtensionWorkerEnv(id),
       windowsHide: true,
@@ -398,6 +398,29 @@ export class ExtensionRuntime {
     this.opts.onUpdate?.(id, status);
     return status;
   }
+}
+
+/**
+ * 生成 worker 启动参数（P1-8 第一步）：
+ *   · 默认只传 worker/main，保持旧扩展完整 Node 权限；
+ *   · `isolation:"node"` 时启用 Node permission model：只读扩展目录 + worker 目录，
+ *     `write` 才允许写扩展目录，`terminal` 才允许子进程。
+ * 不做的事：网络/环境变量/系统调用的完整沙箱、容器化、跨平台强制。
+ */
+export function extensionSpawnArgs(item: InstalledExtension, workerPath: string): string[] {
+  const args: string[] = [];
+  if (item.manifest.isolation === "node") {
+    const dir = path.resolve(item.dir);
+    args.push(
+      "--permission",
+      `--allow-fs-read=${dir}`,
+      `--allow-fs-read=${path.dirname(path.resolve(workerPath))}`,
+    );
+    if (item.manifest.permissions?.includes("write")) args.push(`--allow-fs-write=${dir}`);
+    if (item.manifest.permissions?.includes("terminal")) args.push("--allow-child-process");
+  }
+  args.push(workerPath, item.dir, item.manifest.main?.trim() ?? "");
+  return args;
 }
 
 export function resolveWorkerPath(baseDir: string): string {

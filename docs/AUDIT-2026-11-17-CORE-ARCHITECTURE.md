@@ -220,8 +220,8 @@
 | P1-4 | 无多模态输入 | LLM 消息类型只有文本；附件走文本读取 | 不能看图/截图/PDF 版面 | 消息 content 支持 image parts；截图工具回灌图像；PDF 渲染/OCR |
 | P1-5 | 单 Agent，无子 Agent/并行任务 | 新增只读子代理：独立 ChatService/独立历史，工具面收窄到只读 allowlist，60s 超时可中止；无并行/任务树/持久化子会话 | 复杂任务吞吐与隔离仍不足 | 后续补任务树、并行与子会话持久化 |
 | P1-6 | 工具面偏窄（部分误判） | `shell/main/searchTools.ts` 已有内置 `web_search`；新增 `docx_read`/`xlsx_read`；仍缺 PDF 原生读取 | 与 codex/Claude/hermes 的日常能力有差距 | 补 `pdf_read`；web_search 已存在，不需重做 |
-| P1-7 | 技能只有“注入”，没有“生成/演化” | 技能扫描/注入存在；未见自动创建/修订 | 无法形成“越用越强”的闭环 | 任务结束后候选技能草稿 + 人工确认入库 |
-| P1-8 | 扩展生态只有 tools | manifest 只有 main/permissions；无 commands/UI/hooks | 离“高兼容性插件生态”最远的一项 | 先定贡献点协议（tools/commands/hooks），再谈市场 |
+| P1-7 | 技能只有“注入”，没有“生成/演化” | 技能扫描/注入存在；新增候选写入与 `skill_list`/`skill_read`，但无自动创建/修订 | 无法形成“越用越强”的闭环 | 任务结束后候选技能草稿 + 人工确认入库 |
+| P1-8 | 扩展生态只有 tools，且 worker 权限过大 | manifest 只有 main/permissions；无 commands/UI/hooks；默认 worker 仍是完整 Node 权限 | 离“高兼容性插件生态”最远；第三方扩展可越权读写 | 先定贡献点协议；OS 隔离已加 `isolation:"node"` 第一层（opt-in），强隔离/容器化仍缺 |
 
 ---
 
@@ -293,8 +293,8 @@
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
 - [~] P1-5 子 Agent/任务树（第一步）：新增 `delegate_research` 只读子代理——独立 `ChatService`/独立历史、只读工具 allowlist、60s 超时可中止；无并行/任务树/子会话持久化。
 - [~] P1-6 工具面补齐（部分完成）：`web_search` 已有；新增 `docx_read`/`xlsx_read` 原生文档文本抽取（纯 Node ZIP+XML，无新依赖）；PDF 仍未做。
-- [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 工具，写入 `skills/<id>/SKILL.md` 并默认禁用，用户在设置·技能启用后才注入；尚未做任务结束自动生成。
-- [ ] P1-8 扩展贡献点协议 / worker OS 隔离（未做；P0-3 仅工具授权层）。
+- [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 写入 `skills/<id>/SKILL.md` 并默认禁用；补 `skill_list`/`skill_read` 只读查看技能库（含禁用候选），用户在设置·技能启用后才注入；尚未做任务结束自动生成。
+- [~] P1-8 扩展贡献点协议 / worker OS 隔离（第一步）：manifest 新增 `isolation:"node"`，worker 用 Node permission model 启动（只读扩展目录/worker 目录、写仅扩展目录、`terminal` 才允许子进程）；默认仍为 `none`，强隔离/容器化与 commands/UI/hooks 贡献点未做。
 
 ### 第三批：P2
 
@@ -331,7 +331,7 @@
 
 - 2026-11-17：初版审计记录；只读，未修改源码。
 - 2026-11-17：完成 P0 修补（P0-1 / P0-2 / P0-3），全量 **222 文件 / 1,791 用例**通过；typecheck 5/5、build 5/5。P0-3 仅覆盖工具桥接权限，worker OS 级隔离仍留 P1-8。
-- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理、P1-6 DOCX/XLSX 读取、P1-7 技能候选工具、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成；P1-1/P1-6 的“缺失”经复核为误判。全量 **230 文件 / 1,836 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理、P1-6 DOCX/XLSX 读取、P1-7 技能候选与技能库读取、P1-8 扩展 Node permission 隔离第一步、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成；P1-1/P1-6 的“缺失”经复核为误判。全量 **230 文件 / 1,838 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -341,7 +341,7 @@
 | P0-2 | ✅ 已完成 | `core/loop/loopRegistry.ts`、`shell/main/loopRuntime.ts`、`tests/core/loopRegistry.spec.ts` | 新增“执行工具后抛错/超时→不回退”用例；原“无工具失败→回退”用例仍通过 |
 | P0-3 | ✅ 已完成（工具授权层） | `core/extension.ts`、`shell/main/extensionRuntime.ts`、`ui/i18nSettings.ts`、`ui/types.d.ts`、`tests/core/extension.spec.ts`、`tests/shell/extensionRuntime.spec.ts` | 新增 manifest∩工具权限、越权拒绝、空权限拒绝用例；真实 worker 集成测试通过 |
 
-**P0-3 的边界**：本轮修的是“manifest 授权 ∩ 工具声明”的**工具桥接权限**，以及“空权限默认 read”的漏洞。扩展 worker 本身仍有完整 Node 权限；OS 级隔离（Node permission model / 容器 / WASM）仍列在 P1-8，不能因为本轮通过就宣称“插件进程已完全隔离”。
+**P0-3 的边界**：本轮修的是“manifest 授权 ∩ 工具声明”的**工具桥接权限**，以及“空权限默认 read”的漏洞。扩展 worker 默认仍是完整 Node 权限；P1-8 已加 `isolation:"node"` 的 opt-in 第一层（Node permission model：只读扩展目录/worker 目录、写仅扩展目录、terminal 才允许子进程），但**不是默认开启**，也没有容器/网络/系统调用级强隔离，不能宣称“插件进程已完全隔离”。
 
 ### 11.1 P1 进度
 
@@ -353,8 +353,8 @@
 | P1-3 BrowserBackend | 🟡 端口第一步 | 新增 `shell/main/browserBackend.ts`：工具层只依赖 `BrowserBackend`，不再依赖 `BrowserHost` 类；`BrowserHost` 直接满足接口，新增非 Electron 假后端测试可注册并执行 `browser_tabs`。**未做**：真正的第二后端（Playwright/CDP）与会话生命周期/视图布局迁移。 |
 | P1-5 子 Agent | 🟡 第一步 | `delegate_research`：独立 `ChatService` + 独立历史 + 只读工具 allowlist + 60s 超时中止；无并行/任务树/持久化子会话。 |
 | P1-6 工具面 | 🟡 部分 | `web_search` 已有；新增 `docx_read`/`xlsx_read`（纯 Node 解 ZIP+XML，25MB/20k 字符上限，不引入依赖）；PDF 未做。 |
-| P1-7 技能候选 | 🟡 第一步 | 新增 `skill_candidate` 工具：写入 `skills/<id>/SKILL.md`，默认禁用，用户在设置·技能启用后才注入；未做任务结束自动生成/修订。 |
-| P1-8 扩展生态/隔离 | ⬜ 未做 | 只有 tools 贡献点；worker OS 级隔离未动。 |
+| P1-7 技能候选 | 🟡 第一步 | 新增 `skill_candidate`（默认禁用）+ `skill_list`/`skill_read` 只读查看；未做任务结束自动生成/修订。 |
+| P1-8 扩展生态/隔离 | 🟡 第一步 | manifest `isolation:"node"` opt-in：Node permission model 只读扩展目录/worker 目录，`write` 才允许写扩展目录，`terminal` 才允许子进程；真实 worker 测试验证扩展目录可读、外部写入 `ERR_ACCESS_DENIED`。默认仍 `none`；commands/UI/hooks 贡献点与强隔离未做。 |
 
 ### 11.2 P2 进度
 
@@ -366,4 +366,4 @@
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
 | P2-1/P2-3 拆巨型文件 | ⬜ 未做 | `App.tsx`/`Settings.tsx`/`main/index.ts` 未拆。 |
 
-**本轮验证**：`npx vitest run` **230 文件 / 1,836 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **230 文件 / 1,838 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
