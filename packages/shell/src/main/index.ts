@@ -96,6 +96,7 @@ import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
 import { registerDocumentTools } from "./documentTools.js";
 import { registerSkillTools } from "./skillTools.js";
+import { createChatSubagentRunner, registerSubagentTools } from "./subagentTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
 import { createChromePopoverManager } from "./chromePopover.js";
 import { registerChromePopoverDomain } from "./domains/chromePopover.js";
@@ -2363,6 +2364,7 @@ app.whenReady().then(async () => {
   registerFileTools(registry, resolveSessionRoot);
   registerDocumentTools(registry);
   registerSkillTools(registry, skills);
+  registerSubagentTools(registry, createChatSubagentRunner(chatService, registry));
   // 记忆工具（设置·记忆同源数据）：读工具 plan 可用，写工具按 sandbox L2 确认
   registerMemoryTools(registry, memory, {
     workspaceIdForSession: (sessionId?: string) =>

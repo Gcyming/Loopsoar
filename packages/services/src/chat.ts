@@ -163,6 +163,8 @@ export interface ChatInput {
   reasoningEffort?: string;
   /** 会话历史（持久化消息）；缺省则退化为单轮。 */
   getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string; ts?: number }[];
+  /** 内部取消信号（子代理超时等）；不来自 IPC，避免渲染层注入。 */
+  signal?: AbortSignal;
 }
 
 /** 权限确认请求（浮层 UI 据此弹窗；requestId 用于 resolvePermission 结算）。 */
@@ -469,6 +471,23 @@ export class ChatService {
     return true;
   }
 
+  /**
+   * 子代理作用域运行（P1-5 第一步）：复用同一套 LLM/平台/规则/沙箱，但：
+   *   · 工具面强制收窄到调用方给的 allowlist（只读工具）；
+   *   · 历史隔离（不继承父会话，避免子代理被父上下文带偏）；
+   *   · 独立 ChatService 实例，不污染父会话的 steer/abort 映射。
+   * 只供壳层内部使用，不暴露 IPC。
+   */
+  async runScoped(input: ChatInput, allowlist: string[], signal?: AbortSignal): Promise<ChatStreamResult> {
+    const scoped = new ChatService({
+      ...this.opts,
+      toolAllowlist: allowlist,
+      getToolAllowlist: () => allowlist,
+      getHistory: () => [],
+    });
+    return scoped.stream({ ...input, signal });
+  }
+
   /** 主入口：流式对话。 */
   async stream(input: ChatInput, sink?: (item: ChunkItem) => void): Promise<ChatStreamResult> {
     const { platform, registry, sandbox, agent } = this.opts;
@@ -601,6 +620,12 @@ export class ChatService {
     ];
 
     const controller = new AbortController();
+    // signal 只接受真正的 AbortSignal（来自子代理超时）；IPC 传入的普通对象直接忽略，
+    // 避免渲染层伪造 { signal: {} } 让 addEventListener 抛错。
+    if (input.signal && typeof input.signal.addEventListener === "function") {
+      if (input.signal.aborted) controller.abort();
+      else input.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
     this.aborts.set(sessionId, controller);
     const steers = new SteerBus();
     this.steerBuses.set(sessionId, steers);

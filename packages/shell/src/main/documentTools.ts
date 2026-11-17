@@ -85,6 +85,51 @@ export function extractDocxText(buffer: Buffer): string {
   return docxXmlToText(document.toString("utf8"));
 }
 
+function cellText(inner: string, attrs: string, shared: string[]): string {
+  const type = /\bt="([^"]+)"/.exec(attrs)?.[1] ?? "";
+  if (type === "inlineStr") {
+    const texts = [...inner.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]);
+    return decodeXmlEntities(texts.join(""));
+  }
+  const value = /<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? "";
+  if (!value) return "";
+  if (type === "s") return shared[Number(value)] ?? "";
+  if (type === "b") return value === "1" ? "TRUE" : "FALSE";
+  return decodeXmlEntities(value);
+}
+
+function cellColumn(attrs: string): number {
+  const ref = /\br="([A-Z]+)\d+"/i.exec(attrs)?.[1] ?? "";
+  let index = 0;
+  for (const char of ref.toUpperCase()) index = index * 26 + (char.charCodeAt(0) - 64);
+  return Math.max(0, index - 1);
+}
+
+/** XLSX → 纯文本表格（制表符分列、换行分行）；只取 sheet1，公式取缓存值。 */
+export function extractXlsxText(buffer: Buffer): string {
+  const sharedXml = readZipEntry(buffer, "xl/sharedStrings.xml")?.toString("utf8") ?? "";
+  const shared = [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((si) => {
+    const texts = [...si[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((m) => decodeXmlEntities(m[1]));
+    return texts.join("");
+  });
+  const sheet = readZipEntry(buffer, "xl/worksheets/sheet1.xml")?.toString("utf8");
+  if (!sheet) throw new Error("不是有效的 XLSX：找不到 xl/worksheets/sheet1.xml");
+  const rows = [...sheet.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map((row) => {
+    const cells = [...row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)].map((cell) => ({
+      column: cellColumn(cell[1]),
+      text: cellText(cell[2], cell[1], shared),
+    }));
+    const width = cells.reduce((max, cell) => Math.max(max, cell.column + 1), 0);
+    const line = Array.from({ length: width }, () => "");
+    for (const cell of cells) line[cell.column] = cell.text;
+    return line.join("\t").replace(/\t+$/g, "");
+  });
+  return rows
+    .filter((row) => row.trim().length > 0)
+    .join("\n")
+    .trim();
+}
+
 export function registerDocumentTools(registry: ToolRegistry): void {
   registry.register({
     name: "docx_read",
@@ -116,6 +161,42 @@ export function registerDocumentTools(registry: ToolRegistry): void {
         const limit = params.maxChars ?? MAX_TEXT_CHARS;
         const clipped = text.length > limit ? `${text.slice(0, limit)}\n…（已截断，全文 ${text.length} 字符）` : text;
         return { ok: true, content: clipped || "[空文档] 未找到可见文本" };
+      } catch (err) {
+        return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  registry.register({
+    name: "xlsx_read",
+    description:
+      "读取 XLSX（Excel）首个工作表为纯文本：制表符分列、换行分行，共享字符串与内联字符串都支持；只读首个 sheet，公式取缓存值。",
+    permissions: { read: true },
+    schema: z.object({
+      path: z.string().min(1).max(1000),
+      maxChars: z.number().int().min(500).max(MAX_TEXT_CHARS).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = ctx.params as { path: string; maxChars?: number };
+      try {
+        const file = path.resolve(params.path);
+        if (path.extname(file).toLowerCase() !== ".xlsx") {
+          return { ok: false, content: "[错误] 只支持 .xlsx（旧版 .xls 请先另存为 .xlsx）" };
+        }
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(file);
+        } catch {
+          return { ok: false, content: `[错误] 文件不存在：${file}` };
+        }
+        if (!stat.isFile()) return { ok: false, content: `[错误] 不是文件：${file}` };
+        if (stat.size > MAX_DOCX_BYTES) {
+          return { ok: false, content: `[错误] XLSX 过大（${stat.size} 字节，上限 ${MAX_DOCX_BYTES}）` };
+        }
+        const text = extractXlsxText(fs.readFileSync(file));
+        const limit = params.maxChars ?? MAX_TEXT_CHARS;
+        const clipped = text.length > limit ? `${text.slice(0, limit)}\n…（已截断，全文 ${text.length} 字符）` : text;
+        return { ok: true, content: clipped || "[空表格] 未找到可见单元格" };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
