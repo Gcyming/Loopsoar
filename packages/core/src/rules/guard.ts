@@ -8,6 +8,7 @@
  *
  * 不做自然语言全量理解：编译不了的一律留给 prompt/checklist，避免误杀。
  */
+import { parseRuleDocument } from "./document.js";
 
 export type RuleGuardAction = "read" | "write";
 
@@ -80,11 +81,8 @@ export function compileRuleGuards(sources: { id: string; text: string }[]): Comp
   const out: CompiledRuleGuard[] = [];
   let index = 0;
   for (const source of sources) {
-    for (const line of source.text.split(/\r?\n/)) {
-      const text = line.replace(/^\s*[-*]\s*/, "").trim();
-      if (!text) continue;
-      // 问句/假设不是规则：「为什么不要修改 dist/？」不应编译成守卫。
-      if (/[?？]\s*$/.test(text) || /^(为什么|怎么|如何|是否|能不能|要不要|如果|假如)/.test(text)) continue;
+    for (const line of parseRuleDocument(source.text)) {
+      const text = line.text;
       const writePath = pathFromWriteRule(text);
       if (writePath) {
         out.push({ id: "g" + String(++index), rule: text, path: writePath, actions: ["write"] });

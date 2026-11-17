@@ -278,7 +278,7 @@ Markdown 仍是唯一可读真相；sidecar 只存机器需要的数据（统计
 
 ## 11. 分阶段落地
 
-P0（本会话已完成）：
+P0（本会话已完成；规则解析已收拢到 core/rules/document.ts）：
 - 抽取器 + 候选存储 + afterUserTurn 钩子 + IPC + UI + 测试 + E2E。
 
 P1：

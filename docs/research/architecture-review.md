@@ -7,7 +7,7 @@
 1. **稳定性：通过，但有明确的增长风险。** 新增功能全部走既有 domain + handleTrusted + contracts + dataDir 持久化模式；没有跨层 import（core 不依赖 shell/services，services 不依赖 shell，ui 不依赖 shell/services）。IPC 契约同步、通道 handler 守卫、sandbox/权限链、原子写都仍然成立。
 2. **灵活性：通过。** 规则编译成守卫、清单、冲突检测都是纯函数，输入是 readRuleEntries 的条目；新增规则来源不需要改执行器。记忆 lesson 走 MemoryService.add；AI 回顾走可选 review 回调，不绑死模型。
 3. **兼容性：通过。** 旧 memory.json 迁移、旧规则 workspace:AGENTS.md、旧 stats 缺 injected、旧候选缺 evidence/origin 都有迁移/容错；IPC 只增不改，gen/check 一致。
-4. **自然性：大部分是自然生长，两处开始变「硬塞」。** 规则能力全部长在 Rules 域上，没有新建平行子系统；但 Settings.tsx 已经 2894 行、settings 域 966 行，规则页同时承载候选/守卫/冲突/清单/统计/历史六块，继续加功能会变成仪表盘。规则解析逻辑分散在 5 个文件，是下一阶段最该收拢的技术债。
+4. **自然性：大部分是自然生长，两处开始变「硬塞」。** 规则能力全部长在 Rules 域上，没有新建平行子系统；但 Settings.tsx 已经 2894 行、settings 域 966 行，规则页同时承载候选/守卫/冲突/清单/统计/历史六块，继续加功能会变成仪表盘。规则解析已在 2026-11-17 收拢到 core/rules/document.ts（guard/health/checklist/commandGuard 共用），剩余的主要技术债是 UI 门面。
 5. **多 Agent 共享没有硬做。** 当前运行时是单活动 Agent；全局规则天然跨 workspace，记忆按 workspace 隔离且带 agentId/crossAgentLinks。强行加 per-agent 命名空间会是为了「清单上有」而造功能，不符合本次复核标准。
 
 ## 1. 复核方法与证据
@@ -60,7 +60,7 @@
 
 | 风险 | 位置 | 影响 | 建议 |
 | --- | --- | --- | --- |
-| 规则解析逻辑分散 | core/rules/learn/guard/health/checklist/commandGuard | 五个文件各自切行/归一化，语义漂移时守卫、清单、体检不一致 | 抽 RuleDocument/RuleLine 解析器，再让各编译器消费 |
+| 规则解析逻辑分散（已解决） | core/rules/document.ts | 原先五个文件各自切行；已统一为 parseRuleDocument，语义漂移风险显著下降 | 保持 document.ts 为唯一解析入口 |
 | 门面文件过大 | shell/index.ts、Settings.tsx、domains/settings.ts | 合并冲突、测试定位、认知负担 | 规则子域拆出 rules 页面组件；settings 拆 prefs/providers/rules |
 | 响应类型手工维护 | packages/ui/src/types.d.ts | 请求有 contracts，响应没有生成；字段新增靠人记得改 | 给关键响应加 zod schema 或共享类型 |
 | 历史快照体积 | ruleHistory | 最多 100 条 × 多文件全文；规则上限 65KB，理论数 MB | 加总字节上限/压缩，或存 diff |
@@ -116,14 +116,14 @@
 | AI 会话回顾 | ruleReview + 可选 review 回调 | 自然：沿用 memoryReview 的「提议不写」边界 |
 | 多 Agent 共享 | 未新增 | 正确：当前无 per-agent 会话维度，硬加会是假功能 |
 
-**结论**：没有发现「为了清单而硬塞」的独立子系统。两处开始有「硬塞感」：规则页 UI 的六个 box、规则解析的五个副本。它们是增长导致的组织问题，不是架构方向错误。
+**结论**：没有发现「为了清单而硬塞」的独立子系统。一处仍有「硬塞感」：规则页 UI 的六个 box。它们是增长导致的组织问题，不是架构方向错误。
 
 ## 7. 建议
 
 ### P0（下一步就该做）
 
-1. **抽 RuleDocument 解析器**：统一切行、去 bullet、跳过标题/清单/问句、提取 key/极性；guard/health/checklist/commandGuard 全部消费它。收益：语义一致、测试集中、少四个重复实现。
-2. **拆规则页面**：Settings case 里拆出 RulesSection 组件（候选/守卫/体检/清单/历史各自子组件），Settings.tsx 只做导航与数据入口。
+1. ✅ **抽 RuleDocument 解析器（已完成）**：core/rules/document.ts 统一切行/去 bullet/跳过标题/清单/问句，提供 key/极性/body；guard/health/checklist/commandGuard 全部消费它。
+2. **拆规则页面（未完成）**：Settings case 里拆出 RulesSection 组件（候选/守卫/体检/清单/历史各自子组件），Settings.tsx 只做导航与数据入口。
 3. **响应类型契约化**：至少给 RulesSnapshot、MemoryListResult 加共享类型/zod，避免 UI 手工漂移。
 
 ### P1

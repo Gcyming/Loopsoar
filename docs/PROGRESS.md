@@ -1312,5 +1312,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 注入统计（ADR-0142）：currentRulesPrompt 记录规则行注入次数，旧 stats 缺字段迁移为 0。
 - AI 回顾（ADR-0143）：rules:reviewSession 用当前模型提炼 0-3 条候选，仍走人工确认。
 - 架构复核：docs/research/architecture-review.md（依赖方向、IPC、兼容性、自然性逐项审查）。
+- 规则解析收拢：core/rules/document.ts 统一 guard/health/checklist/commandGuard 的切行/key/极性，减少语义漂移。
+- 完整度复核：docs/research/memory-rules-completeness.md（记忆/规则对照 Claude/Cursor/Copilot/Windsurf/WorkBuddy/Cline）；memory-eval-vault 基线 recall@1 0.492 / recall@3 0.718（docs 语料）。
 - 调研：docs/research/rule-documents.md（规则文档形态/加载/自迭代机制）；设计：docs/规划/规则-记忆-工具-Loop协同.md（四层闭环、守卫编译、清单、路线图）。
 

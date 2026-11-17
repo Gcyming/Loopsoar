@@ -2,6 +2,7 @@
  * 命令类规则守卫：只处理「只能使用 pnpm」「不要用 npm」这类包管理器约束。
  * 不做通用命令语义解析——误杀成本太高，编译不了的一律留给 prompt/checklist。
  */
+import { parseRuleDocument } from "./document.js";
 
 export interface CommandGuard {
   id: string;
@@ -19,9 +20,8 @@ export function compileCommandGuards(sources: { id: string; text: string }[]): C
   const seen = new Set<string>();
   let index = 0;
   for (const source of sources) {
-    for (const raw of source.text.split(/\r?\n/)) {
-      const text = raw.replace(/^\s*[-*]\s*/, "").trim();
-      if (!text || /[\?？]\s*$/.test(text)) continue;
+    for (const line of parseRuleDocument(source.text)) {
+      const text = line.text;
       const only = text.match(ONLY);
       if (only) {
         const allowed = only[1].toLowerCase();
