@@ -19,6 +19,7 @@ import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { compileRuleGuards } from "loopsoar-core/rules/guard";
 import { analyzeRuleConflicts } from "loopsoar-core/rules/health";
+import { buildRuleChecklist, type Checklist } from "loopsoar-core/rules/checklist";
 import type { RuleHit } from "../ruleStats.js";
 import { withProviderDefaults } from "../providerDefaults.js";
 import { resolveModelsUrl } from "../providerModels.js";
@@ -271,8 +272,24 @@ export function ruleSourcesFromEntries(entries: RuleEntryState[]): RuleSource[] 
     .sort((a, b) => (a.scope === b.scope ? 0 : a.scope === "global" ? -1 : 1));
 }
 
+function checklistFor(entries: RuleEntryState[]): Checklist {
+  const enabled = entries.filter((entry) => entry.enabled && entry.content.trim());
+  const sources = enabled.map((entry) => ({ id: entry.id, scope: entry.scope, name: entry.name, text: entry.content }));
+  const guards = compileRuleGuards(enabled.map((entry) => ({ id: entry.id, text: entry.content })));
+  // 冲突项不进清单：让模型同时看到「必须 A」和「不要 A」只会更困惑。
+  const conflicts = analyzeRuleConflicts(sources);
+  const excluded = [
+    ...guards.map((guard) => guard.rule),
+    ...conflicts.flatMap((conflict) => [conflict.a.text, conflict.b.text]),
+  ];
+  return buildRuleChecklist(sources, excluded);
+}
+
 export function currentRulesPrompt(deps: SettingsDeps, workspaceId?: string): string {
-  return rulesForPrompt(mergeRules(ruleSourcesFromEntries(readRuleEntries(deps, workspaceId))));
+  const entries = readRuleEntries(deps, workspaceId);
+  const merged = rulesForPrompt(mergeRules(ruleSourcesFromEntries(entries)));
+  const checklist = checklistFor(entries);
+  return checklist.text ? merged + "\n\n" + checklist.text : merged;
 }
 
 /* ───────────────────────── 供应商探测目标校验（SSRF） ───────────────────────── */
@@ -650,6 +667,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
           .map((entry) => ({ id: entry.id, scope: entry.scope, name: entry.name, text: entry.content })),
       ),
       stats: deps.ruleStats?.list() ?? [],
+      checklist: checklistFor(entries),
       workspaces: deps.workspaces?.list() ?? [],
       activeWorkspaceId: activeWorkspaceId ?? null,
       guardrail: rulesForPrompt({ text: "…", included: [], skipped: [], totalBytes: 0 }).split("\n")[0],
@@ -691,6 +709,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
           .filter((entry) => entry.enabled && entry.content.trim())
           .map((entry) => ({ id: entry.id, scope: entry.scope, name: entry.name, text: entry.content })),
       ),
+      checklist: checklistFor(entries),
     };
   });
 

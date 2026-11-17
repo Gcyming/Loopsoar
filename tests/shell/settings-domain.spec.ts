@@ -304,6 +304,30 @@ describe("settings 域：项目规则按工作区隔离", () => {
     expect(snapshot.stats[0]).toMatchObject({ text: "不要使用 npm", count: 1 });
   });
 
+  it("自检清单从非守卫规则生成并进入 prompt", async () => {
+    const ws = workspacesOf();
+    const { deps, handlers } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+    });
+    writeFileSync(
+      path.join(ws.a, "AGENTS.md"),
+      "# 规则\n- 必须使用 pnpm\n- 不要修改 dist/ 下的文件\n",
+      "utf8",
+    );
+    const prompt = currentRulesPrompt(deps, "a");
+    expect(prompt).toContain("提交前自检");
+    expect(prompt).toContain("- [ ] 必须使用 pnpm");
+    expect(prompt).not.toContain("- [ ] 不要修改 dist");
+    const snapshot = (await invoke(handlers, "settings:getRules")) as {
+      checklist: { items: string[]; text: string };
+    };
+    expect(snapshot.checklist.items).toEqual(["必须使用 pnpm"]);
+    const single = (await invoke(handlers, "settings:getWorkspaceRule", { workspaceId: "a" })) as {
+      checklist: { items: string[] };
+    };
+    expect(single.checklist.items).toEqual(["必须使用 pnpm"]);
+  });
+
   it("未挂载的工作区 → 拒绝保存，不写任何文件", async () => {
     const ws = workspacesOf();
     const { handlers } = makeEnv(root, {}, {

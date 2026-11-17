@@ -433,6 +433,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "No rules yet. Create entries below, e.g. “code style”, “build command”, “prohibited actions”.",
   },
   "settings.rules.newGlobal": { zh: "新建全局规则", en: "New global rule" },
+  "settings.rules.checklist": { zh: "提交前自检（{count} 项）", en: "Pre-submit checklist ({count})" },
   "settings.rules.conflicts": { zh: "发现 {count} 处规则冲突/重复", en: "{count} rule conflict(s)/duplicate(s) found" },
   "settings.rules.conflict": { zh: "冲突", en: "Conflict" },
   "settings.rules.duplicate": { zh: "重复", en: "Duplicate" },

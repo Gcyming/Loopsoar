@@ -1303,5 +1303,6 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 规则守卫（ADR-0133）：路径写入/读取禁令编译成工具执行前的 deny，按会话工作区生效；规则页显示已编译守卫数。
 - 规则体检（ADR-0134）：守卫命中落盘统计；规则页显示冲突/重复与命中次数；新增 rules/health 纯检测与 ruleStats 存储。
 - 工具失败证据（ADR-0135）：同一工具同特征连续失败两次写 lesson 记忆，成功清零；ChatService 新增 onToolResult。
+- 自检清单（ADR-0136）：软规则投影成提交前 checkbox，排除守卫规则与冲突规则；随 currentRulesPrompt 注入并在规则页预览。
 - 调研：docs/research/rule-documents.md（规则文档形态/加载/自迭代机制）；设计：docs/规划/规则-记忆-工具-Loop协同.md（四层闭环、守卫编译、清单、路线图）。
 

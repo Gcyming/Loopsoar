@@ -482,7 +482,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         enabled: r.enabled,
         persisted: r.exists,
       } : d));
-      setRules((prev) => prev ? { ...prev, merged: r.merged, conflicts: r.conflicts } : prev);
+      setRules((prev) => prev ? { ...prev, merged: r.merged, conflicts: r.conflicts, checklist: r.checklist } : prev);
     } catch (e) { bad(e); }
   }, [api, bad]);
 
@@ -1499,6 +1499,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     {" "}{conflict.a.text} ↔ {conflict.b.text}
                   </div>
                   <div style={S.tag}>{conflict.reason}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {rules.checklist.items.length > 0 ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.rules.checklist", { count: rules.checklist.items.length })}</div>
+              {rules.checklist.items.map((item) => (
+                <div key={item} style={{ ...S.meta, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Icon name="checkbox" size={13} />
+                  <span>{item}</span>
                 </div>
               ))}
             </div>

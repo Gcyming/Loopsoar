@@ -131,6 +131,7 @@ export interface RulesSnapshot {
     reason: string;
   }[];
   stats: { text: string; count: number; firstAt: number; lastAt: number; lastTool?: string; lastTarget?: string }[];
+  checklist: { items: string[]; text: string };
 }
 
 export interface MemoryFactView {
@@ -1102,6 +1103,7 @@ export interface LoopsoarAPI {
       merged: RulesSnapshot["merged"];
       guards: RulesSnapshot["guards"];
       conflicts: RulesSnapshot["conflicts"];
+      checklist: RulesSnapshot["checklist"];
     }>;
     diagnostics(): Promise<DiagnosticsInfo>;
     about(): Promise<AboutInfo>;
