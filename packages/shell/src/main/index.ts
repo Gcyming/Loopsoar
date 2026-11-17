@@ -54,8 +54,10 @@ import {
   loadProviderConfig,
   registerSettingsDomain,
   currentRulesPrompt,
+  readRuleEntries,
   savePreferencesPatch,
 } from "./domains/settings.js";
+import { checkRuleGuards, compileRuleGuards } from "loopsoar-core/rules/guard";
 import { registerMemoryTools } from "./memoryTools.js";
 import { buildSessionEpisode } from "./memoryEpisode.js";
 import { registerSearchTools } from "./searchTools.js";
@@ -1831,6 +1833,17 @@ app.whenReady().then(async () => {
       if (nextMemory !== memory.filePath) void memory.relocate(nextMemory);
     },
   };
+  // 规则守卫缓存：按当前 workspace 的启用规则编译；内容/路径变化才重编译。
+  let ruleGuardCache: { key: string; guards: ReturnType<typeof compileRuleGuards> } | null = null;
+  const currentRuleGuards = (workspaceId?: string) => {
+    const entries = readRuleEntries(settingsDeps, workspaceId).filter((entry) => entry.enabled && entry.content.trim());
+    const key = entries.map((entry) => entry.path + ":" + entry.content).join("\u0000");
+    if (ruleGuardCache?.key === key) return ruleGuardCache.guards;
+    const guards = compileRuleGuards(entries.map((entry) => ({ id: entry.id, text: entry.content })));
+    ruleGuardCache = { key, guards };
+    return guards;
+  };
+
   const chatService = new ChatService({
     platform,
     registry,
@@ -1845,6 +1858,19 @@ app.whenReady().then(async () => {
         settingsDeps,
         sessionId ? sessions.get(sessionId)?.workspaceId ?? undefined : undefined,
       ),
+    // 规则守卫：把「不要修改 dist/」这类可判定的规则编译成执行前的拒绝
+    guardToolCall: ({ toolName, args, kind, target, sessionId }) => {
+      const workspaceId = sessionId ? sessions.get(sessionId)?.workspaceId ?? undefined : undefined;
+      const guards = currentRuleGuards(workspaceId);
+      if (guards.length === 0) return null;
+      return checkRuleGuards(guards, {
+        toolName,
+        args,
+        kind,
+        target,
+        workspaceRoot: resolveSessionRoot(sessionId),
+      });
+    },
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
     onToolCall: (toolName: string, sessionId: string) => memory.recordToolUsage(toolName, sessionId),

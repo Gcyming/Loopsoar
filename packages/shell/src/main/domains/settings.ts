@@ -17,6 +17,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
+import { compileRuleGuards } from "loopsoar-core/rules/guard";
 import { withProviderDefaults } from "../providerDefaults.js";
 import { resolveModelsUrl } from "../providerModels.js";
 import { describeCapabilitySources, enrichModelSpec, type ModelSpec } from "loopsoar-core/modelCapabilities";
@@ -638,6 +639,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       entries,
       merged: mergeRules(ruleSourcesFromEntries(entries)),
       claudeCompat: entries.some((entry) => entry.scope === "workspace" && entry.name === CLAUDE_COMPAT_FILE_NAME),
+      guards: compileRuleGuards(entries.filter((entry) => entry.enabled && entry.content.trim()).map((entry) => ({ id: entry.id, text: entry.content }))),
       workspaces: deps.workspaces?.list() ?? [],
       activeWorkspaceId: activeWorkspaceId ?? null,
       guardrail: rulesForPrompt({ text: "…", included: [], skipped: [], totalBytes: 0 }).split("\n")[0],
@@ -673,6 +675,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       content,
       // 合并预览跟随所选项目，否则切换项目后下方仍显示活动项目的规则。
       merged: mergeRules(ruleSourcesFromEntries(entries)),
+      guards: compileRuleGuards(entries.filter((entry) => entry.enabled && entry.content.trim()).map((entry) => ({ id: entry.id, text: entry.content }))),
     };
   });
 

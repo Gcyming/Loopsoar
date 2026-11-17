@@ -2555,6 +2555,21 @@
 - **补充（2026-11-16，第三版）**：分类改为「规范 key + 本地化标签」：新增只读 `settings.memory.category.<key>` 文案（general/convention/lesson/fact/preference/episode/demo/project），下拉与列表徽标显示当前语言下的标签，选择/失焦时还原成规范 key 入库；自定义分类原样保存。语言切换后标签即时更新（未聚焦时直接按当前语言渲染）。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。
 
+## ADR-0133 把路径禁令编译成工具守卫
+
+- **背景**：ADR-0132 让规则能进入 system prompt，但「不要修改 dist/」仍然只是自然语言；模型可以无视，权限层也不知道这条规则。规则只有被工具执行，才真正成为边界。
+- **决策**：新增 core/rules/guard 编译器，只把「明确的路径写入/读取禁令」编译成执行前守卫。
+  1. **识别范围**：中文「不要/禁止/不得/不能 + 修改/编辑/写入/读取 + 路径」，英文 never/do not + edit/write/read + path；只接受含 /、以 . 开头、含 * 或已知目录名（dist/build/node_modules/.env…）的路径；问句、假设、无路径规则一律不编译。
+  2. **执行位置**：ChatService 的 InternalToolExecutor 在沙箱明确拒绝之后、权限确认之前调用 guardToolCall；命中返回 rule-denied，工具不执行。规则 deny 优先于「本次会话总是允许」，不会被确认弹窗绕过。
+  3. **作用域**：按会话所属工作区读取启用规则（全局 + 项目）；绝对路径按会话根归一化后匹配；项目规则只影响该项目。
+  4. **可见性**：settings:getRules / getWorkspaceRule 返回 guards 摘要，规则页显示「已把 N 条路径禁令编译成工具守卫」。
+- **理由**：路径禁令是最可判定、最不容易误杀的一类规则。先做这一类，能验证「规则 → 权限」的完整链路，而不引入命令语义解析的高误报。
+- **替代方案**：① 全量自然语言 → 权限策略：误报高，容易把正常命令拦死；② 只在 prompt 里重复「必须遵守」：没有执行边界；③ 直接 deny 所有写操作：太粗，用户无法工作。
+- **验证方式**：tests/core/ruleGuard.spec.ts 6 条（中文/英文、绝对路径归一化、读取 vs 写入、无路径、问句）；tests/services/chat-guard.spec.ts 3 条（守卫 deny 不执行、未命中执行、无守卫不变）；settings 域新增 1 条（getRules/getWorkspaceRule 返回 guards）；E2E e2e-evidence/rules-guards.png（规则页显示 1 条守卫）。全量 vitest 213 文件 / 1738 用例全绿；typecheck 5/5、build 5/5、gen/check 一致。
+- **状态**：✅ 第一版（2026-11-16）
+- **已知取舍**：只支持路径守卫，不支持「只能用 pnpm」这类命令守卫（需要命令解析与白名单，误报风险高，留 P2）；不处理路径符号链接逃逸（沙箱仍兜底）；规则文本改动后缓存按内容重编译。
+
+
 ## ADR-0132 规则候选：从对话学习，但由人确认
 
 - **背景**：规则页只能手工编辑；用户在对话里说「必须/只能/不要」时，约束只留在当轮上下文，下一轮就消失。调研（docs/research/rule-documents.md）显示：Claude 的自动记忆写 MEMORY.md 不写 CLAUDE.md；WorkBuddy 的 Rules 是手动文件、Memory 才自动抽取；Copilot Dreaming 可以改仓库 instruction，但以 PR 形式提案。直接让模型静默改写 AGENTS.md 会把一次性纠正、例外和噪声写成永久规则——CLR-Bench 显示这类「例外清单」几乎学不到规则本身。

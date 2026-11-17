@@ -123,6 +123,7 @@ export interface RulesSnapshot {
   };
   claudeCompat: boolean;
   guardrail: string;
+  guards: { id: string; rule: string; path: string; actions: ("read" | "write")[] }[];
 }
 
 export interface MemoryFactView {
@@ -1092,6 +1093,7 @@ export interface LoopsoarAPI {
       enabled: boolean;
       content: string;
       merged: RulesSnapshot["merged"];
+      guards: RulesSnapshot["guards"];
     }>;
     diagnostics(): Promise<DiagnosticsInfo>;
     about(): Promise<AboutInfo>;

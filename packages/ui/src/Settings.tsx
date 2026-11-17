@@ -1484,6 +1484,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       case "rules":
         return rules ? (<div>
           <Head t={tr("settings.rules.head")} h={tr("settings.rules.headHint")} />
+          {rules.guards.length > 0 ? (
+            <div style={S.note} title={rules.guards.map((guard) => guard.rule + " → " + guard.path).join("\n")}>
+              {tr("settings.rules.guards", { count: rules.guards.length })}
+            </div>
+          ) : null}
           {drafts.length === 0 ? <div style={S.dashed}>{tr("settings.rules.empty")}</div> : null}
           {drafts.map((d) => <RuleCard key={d.key} d={d} max={rules.maxFileBytes} workspaces={rules.workspaces}
             on={(p) => setDrafts((v) => v.map((x) => x.key === d.key ? { ...x, ...p } : x))} onDel={() => removeDraft(d)}

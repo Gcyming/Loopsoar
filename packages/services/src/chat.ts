@@ -60,6 +60,22 @@ export interface SteerDeliveryResult {
  */
 export type ChatLoopRunner = (input: ToolLoopOpts & { sessionId: string }) => Promise<ToolLoopOutcome>;
 
+export interface ToolGuardInput {
+  toolName: string;
+  args: Record<string, unknown>;
+  sessionId: string;
+  kind?: string;
+  target?: string;
+  workspaceRoot?: string;
+}
+
+export interface ToolGuardOutput {
+  action: "allow" | "deny";
+  reason?: string;
+}
+
+export type ToolGuardHook = (input: ToolGuardInput) => ToolGuardOutput | null | undefined;
+
 export interface ChatServiceOptions {
   /** 未注入时 stream 返回可读错误（不崩溃）——装配层负责注入。 */
   llm?: LlmClient;
@@ -70,6 +86,8 @@ export interface ChatServiceOptions {
   toolAllowlist?: string[];
   /** 规则文件注入（AGENTS.md 合并文本）；每次 stream 时调用，保存规则后即时生效。 */
   getSystemRules?: (sessionId?: string) => string;
+  /** 规则守卫：工具执行前调用；返回 deny 时直接拒绝（规则编译成权限边界）。 */
+  guardToolCall?: ToolGuardHook;
   /** 记忆召回注入（按用户消息取相关记忆，放进 volatile 段）。 */
   getMemoryFor?: (userText: string, sessionId?: string) => string;
   /** 每次工具调用（E-M1）：用于记录 tool/session 使用事件，不改变循环行为。 */
@@ -268,6 +286,8 @@ export class InternalToolExecutor {
       resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
       /** 敏感步骤写死确认开关（默认 true；仅调试/兼容旧行为可关）。 */
       sensitiveAlwaysConfirm?: () => boolean;
+      /** 规则守卫（按会话解析当前规则并编译）。 */
+      guardToolCall?: ToolGuardHook;
     },
   ) {}
 
@@ -335,6 +355,18 @@ export class InternalToolExecutor {
 
     if (decision.action === "deny") {
       return { ok: false, content: `[错误] 权限拒绝：${decision.reason}`, error: decision.reason };
+    }
+    // 规则守卫：沙箱明确拒绝已经返回；这里拦截「规则禁止但权限允许」的动作。
+    const ruleGuard = this.opts.guardToolCall?.({
+      toolName: toolCall.name,
+      args: (toolCall.args ?? {}) as Record<string, unknown>,
+      sessionId: this.opts.sessionId,
+      kind,
+      target,
+      workspaceRoot: sessionRoot,
+    });
+    if (ruleGuard?.action === "deny") {
+      return { ok: false, content: `[错误] 规则禁止：${ruleGuard.reason ?? "被规则拦截"}`, error: "rule-denied" };
     }
     // 需要确认的三种来源：①敏感步骤写死确认（策略 allow 也要问）②沙箱 confirm（策略非 allow 时）③策略 confirm
     const needsConfirm = forceSensitiveConfirm || (decision.action === "confirm" && policyDecision !== "allow");
@@ -551,6 +583,7 @@ export class ChatService {
       sessionId,
       resolveWorkspaceRoot: this.opts.resolveWorkspaceRoot,
       sensitiveAlwaysConfirm: this.opts.sensitiveAlwaysConfirm,
+      guardToolCall: this.opts.guardToolCall,
     });
 
     let outcome: LoopRunStatus = "error";

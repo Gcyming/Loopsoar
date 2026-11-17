@@ -263,6 +263,24 @@ describe("settings 域：项目规则按工作区隔离", () => {
     expect(readRuleEntries(deps, "b").find((e) => e.scope === "workspace")?.enabled).toBe(false);
   });
 
+  it("路径禁令编译成工具守卫，并随 getRules 返回", async () => {
+    const ws = workspacesOf();
+    const { handlers } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+    });
+    writeFileSync(path.join(ws.a, "AGENTS.md"), "# 规则\n- 不要修改 dist/ 下的文件\n- 只能使用 pnpm\n", "utf8");
+    const snapshot = (await invoke(handlers, "settings:getRules")) as {
+      guards: { path: string; actions: string[] }[];
+    };
+    expect(snapshot.guards).toHaveLength(1);
+    expect(snapshot.guards[0].path).toBe("dist/");
+    expect(snapshot.guards[0].actions).toEqual(["write"]);
+    const single = (await invoke(handlers, "settings:getWorkspaceRule", { workspaceId: "a" })) as {
+      guards: { path: string }[];
+    };
+    expect(single.guards[0].path).toBe("dist/");
+  });
+
   it("未挂载的工作区 → 拒绝保存，不写任何文件", async () => {
     const ws = workspacesOf();
     const { handlers } = makeEnv(root, {}, {
