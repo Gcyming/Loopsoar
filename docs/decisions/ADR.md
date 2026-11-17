@@ -2555,6 +2555,33 @@
 - **补充（2026-11-16，第三版）**：分类改为「规范 key + 本地化标签」：新增只读 `settings.memory.category.<key>` 文案（general/convention/lesson/fact/preference/episode/demo/project），下拉与列表徽标显示当前语言下的标签，选择/失焦时还原成规范 key 入库；自定义分类原样保存。语言切换后标签即时更新（未聚焦时直接按当前语言渲染）。
 - **复核时间**：下一阶段（真实语料/LLM 抽取）接入前复核一次。
 
+## ADR-0139 命令类规则守卫（包管理器）
+
+- **背景**：ADR-0133 只能拦路径写入/读取；「只能使用 pnpm」「不要用 npm」仍然只靠 prompt。用户已经明确写了规则，却仍可能看到 Agent 跑 npm install。
+- **决策**：
+  1. core/rules/commandGuard 只编译包管理器约束：only（只能使用 pnpm）→ 拒绝 npm/yarn/bun；ban（不要用 npm）→ 只拒绝 npm。其余命令语义一律不解析。
+  2. 只在 terminal 类别工具、且参数里有 command/cmd 时检查；命中返回 deny，reason 带原规则文本。
+  3. 与路径守卫共用同一个规则守卫缓存/命中统计；settings:getRules 返回 commandGuards，规则页的守卫数量合并展示。
+- **理由**：包管理器是最高频、最容易判定的命令约束；先做这一类，避免引入通用命令解析的高误报。
+- **替代方案**：① 不拦命令，继续靠 prompt；② 解析整条命令 AST——成本高、误报多；③ 命中即 confirm——用户已写「只能」，再问一次反而削弱规则。
+- **已知取舍**：命令里出现 npm 字符串（如 node -e "npm"）也会命中；只支持 pnpm/npm/yarn/bun 四个管理器。
+- **验证方式**：tests/core/ruleCommandGuard.spec.ts 4 条；settings 域新增 1 条返回 commandGuards；E2E rules-command-guards.png（3 条守卫同屏）。
+- **状态**：✅ 第一版（2026-11-17）
+
+## ADR-0140 会话回顾：从当前会话补候选
+
+- **背景**：afterUserTurn 只处理「下一句」；升级前的旧会话、或用户当时没显式说「必须/不要」的纠正，不会留下候选。需要一个可手动触发的会话级回顾。
+- **决策**：
+  1. 新增 rules:learnFromSession：取当前会话（或显式 sessionId）最近 20 条用户消息，逐条走候选抽取；带 ToolEvidence.recentFailures 作为证据。
+  2. 去重/证据累加沿用 RuleCandidateStore；返回 scanned/added/repeated/pending。
+  3. 规则页新增「从本会话学习」按钮，执行后刷新候选并 toast「扫描 N 条，新增 M 条」。
+- **理由**：会话结束/升级后的回顾是有价值的，但自动在删除时跑容易产生重复与竞态；先做成用户可触发的显式动作，观察效果后再考虑自动。
+- **替代方案**：① 会话删除时自动跑——生命周期异步、可能与删除竞态；② 每次切会话都跑——噪声与重复扫描；③ 不做——旧会话永远学不到。
+- **验证方式**：ruleCandidates 测试新增 1 条（会话消息 → 候选）；全量 vitest 221 文件 / 1769 用例全绿；typecheck/build/gen 一致。
+- **状态**：✅ 第一版（2026-11-17）
+- **已知取舍**：只扫最近 20 条用户消息；不做 LLM 归纳；重复执行会把同一条消息的证据再累加一次（去重但不完全幂等）。
+
+
 ## ADR-0138 候选可改写、可改作用域后再采纳
 
 - **背景**：候选是抽取器的输出，文本往往带口语（「应该用 pnpm 安装依赖」），作用域也只是启发式（提到「所有项目」才 global）。原来的「采纳」是一键原样写入，用户只能二选一：接受噪声，或忽略一条本来有用的规则。

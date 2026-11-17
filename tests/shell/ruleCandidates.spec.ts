@@ -55,6 +55,14 @@ beforeEach(() => {
     dataDir,
     store: undefined as unknown as RuleCandidateStore,
     workspaces,
+    sessions: {
+      currentId: () => "s1",
+      get: () => ({ sessionId: "s1", workspaceId: "a", messages: [] }),
+      loadMessages: () => [
+        { role: "user", text: "必须用 pnpm 安装依赖。", ts: 1 },
+        { role: "assistant", text: "好", ts: 2 },
+      ],
+    } as never,
     push: () => {},
   };
   store = new RuleCandidateStore(path.join(dataDir, "rules", "candidates.json"));
@@ -138,6 +146,13 @@ describe("规则候选：从对话里学习但不自动改写", () => {
     expect(result.candidate.text).toBe("只能使用 pnpm 安装依赖");
     expect(result.candidate.key).not.toBe(originalKey);
     expect(existsSync(path.join(wsA, "AGENTS.md"))).toBe(false);
+  });
+
+  it("从本会话回顾可以补出候选", async () => {
+    const result = (await invoke("rules:learnFromSession")) as { scanned: number; added: number; repeated: number };
+    expect(result.scanned).toBe(1);
+    expect(result.added).toBe(1);
+    expect(store.list("a").some((c) => c.text.includes("pnpm"))).toBe(true);
   });
 
   it("过短的改写文本被拒绝", async () => {

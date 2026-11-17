@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { RuleCandidateStore, StoredRuleCandidate } from "../ruleCandidates.js";
+import type { SessionStore } from "../sessionStore.js";
 
 const AGENTS_FILE = "AGENTS.md";
 const LEARNED_HEADER = "## 学到的规则（Loopsoar）";
@@ -17,6 +18,8 @@ export interface RuleLearningDeps extends TrustedIpcDeps {
   dataDir: string;
   store: RuleCandidateStore;
   workspaces?: { list(): { id: string; name: string; root: string }[]; activeId(): string | null };
+  sessions?: Pick<SessionStore, "currentId" | "get" | "loadMessages">;
+  evidenceFor?: (sessionId: string) => { toolName: string; error: string; at: number }[];
   push?: (event: string, payload: unknown) => void;
 }
 
@@ -63,6 +66,32 @@ export function registerRuleLearningDomain(deps: RuleLearningDeps): void {
       workspaces: deps.workspaces?.list() ?? [],
       activeWorkspaceId: deps.workspaces?.activeId() ?? null,
     };
+  });
+
+  handleTrusted(deps, "rules:learnFromSession", (payload) => {
+    const explicit = (payload as { sessionId?: string } | undefined)?.sessionId;
+    const sessionId = explicit ?? deps.sessions?.currentId() ?? null;
+    if (!sessionId) throw new Error("当前没有可回顾的会话");
+    const session = deps.sessions?.get(sessionId);
+    if (!session) throw new Error("会话不存在");
+    const messages = deps.sessions?.loadMessages(sessionId) ?? [];
+    const userMessages = messages.filter((message) => message.role === "user").slice(-20);
+    let added = 0;
+    let repeated = 0;
+    for (const message of userMessages) {
+      const result = deps.store.observe({
+        sessionId,
+        workspaceId: session.workspaceId ?? undefined,
+        message: message.text,
+        evidence: deps.evidenceFor?.(sessionId) ?? [],
+      });
+      added += result.added;
+      repeated += result.repeated;
+    }
+    if (added > 0 || repeated > 0) {
+      deps.push?.("rules:updated", { action: "session-review", sessionId, added, repeated });
+    }
+    return { sessionId, scanned: userMessages.length, added, repeated, pending: deps.store.pendingCount() };
   });
 
   handleTrusted(deps, "rules:acceptCandidate", (payload) => {

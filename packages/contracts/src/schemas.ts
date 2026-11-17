@@ -896,6 +896,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: z.object({ workspaceId: z.string().min(1).max(80).optional() }).optional(),
     sensitive: true,
   },
+  "rules:learnFromSession": {
+    domain: "rules",
+    method: "learnFromSession",
+    request: z.object({ sessionId: z.string().min(1).max(120).optional() }).optional(),
+    sensitive: true,
+  },
   "rules:acceptCandidate": {
     domain: "rules",
     method: "acceptCandidate",

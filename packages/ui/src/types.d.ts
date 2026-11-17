@@ -125,6 +125,7 @@ export interface RulesSnapshot {
   claudeCompat: boolean;
   guardrail: string;
   guards: { id: string; rule: string; path: string; actions: ("read" | "write")[] }[];
+  commandGuards: { id: string; rule: string; managers: string[] }[];
   conflicts: {
     type: "conflict" | "duplicate";
     a: { text: string; scope: "global" | "workspace"; name: string };
@@ -1103,6 +1104,7 @@ export interface LoopsoarAPI {
       content: string;
       merged: RulesSnapshot["merged"];
       guards: RulesSnapshot["guards"];
+      commandGuards: RulesSnapshot["commandGuards"];
       conflicts: RulesSnapshot["conflicts"];
       checklist: RulesSnapshot["checklist"];
     }>;
@@ -1115,6 +1117,13 @@ export interface LoopsoarAPI {
       pending: number;
       workspaces: { id: string; name: string; root: string }[];
       activeWorkspaceId: string | null;
+    }>;
+    learnFromSession(payload?: { sessionId?: string }): Promise<{
+      sessionId: string;
+      scanned: number;
+      added: number;
+      repeated: number;
+      pending: number;
     }>;
     acceptCandidate(payload: { id: string; target?: "workspace" | "global"; text?: string }): Promise<{
       ok: boolean;

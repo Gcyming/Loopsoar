@@ -58,6 +58,7 @@ import {
   savePreferencesPatch,
 } from "./domains/settings.js";
 import { checkRuleGuards, compileRuleGuards } from "loopsoar-core/rules/guard";
+import { checkCommandGuards, compileCommandGuards } from "loopsoar-core/rules/commandGuard";
 import { registerMemoryTools } from "./memoryTools.js";
 import { buildSessionEpisode } from "./memoryEpisode.js";
 import { registerSearchTools } from "./searchTools.js";
@@ -1838,14 +1839,22 @@ app.whenReady().then(async () => {
     },
   };
   // 规则守卫缓存：按当前 workspace 的启用规则编译；内容/路径变化才重编译。
-  let ruleGuardCache: { key: string; guards: ReturnType<typeof compileRuleGuards> } | null = null;
+  let ruleGuardCache: {
+    key: string;
+    guards: ReturnType<typeof compileRuleGuards>;
+    commandGuards: ReturnType<typeof compileCommandGuards>;
+  } | null = null;
   const currentRuleGuards = (workspaceId?: string) => {
     const entries = readRuleEntries(settingsDeps, workspaceId).filter((entry) => entry.enabled && entry.content.trim());
     const key = entries.map((entry) => entry.path + ":" + entry.content).join("\u0000");
-    if (ruleGuardCache?.key === key) return ruleGuardCache.guards;
-    const guards = compileRuleGuards(entries.map((entry) => ({ id: entry.id, text: entry.content })));
-    ruleGuardCache = { key, guards };
-    return guards;
+    if (ruleGuardCache?.key === key) return ruleGuardCache;
+    const sources = entries.map((entry) => ({ id: entry.id, text: entry.content }));
+    ruleGuardCache = {
+      key,
+      guards: compileRuleGuards(sources),
+      commandGuards: compileCommandGuards(sources),
+    };
+    return ruleGuardCache;
   };
 
   const toolEvidence = new ToolEvidence(memory);
@@ -1866,17 +1875,30 @@ app.whenReady().then(async () => {
     // 规则守卫：把「不要修改 dist/」这类可判定的规则编译成执行前的拒绝
     guardToolCall: ({ toolName, args, kind, target, sessionId }) => {
       const workspaceId = sessionId ? sessions.get(sessionId)?.workspaceId ?? undefined : undefined;
-      const guards = currentRuleGuards(workspaceId);
-      if (guards.length === 0) return null;
-      const decision = checkRuleGuards(guards, {
-        toolName,
-        args,
-        kind,
-        target,
-        workspaceRoot: resolveSessionRoot(sessionId),
-      });
-      if (decision) ruleStats.record({ text: decision.rule, toolName, target });
-      return decision;
+      const { guards, commandGuards } = currentRuleGuards(workspaceId);
+      if (guards.length === 0 && commandGuards.length === 0) return null;
+      const decision = guards.length > 0
+        ? checkRuleGuards(guards, {
+            toolName,
+            args,
+            kind,
+            target,
+            workspaceRoot: resolveSessionRoot(sessionId),
+          })
+        : null;
+      if (decision) {
+        ruleStats.record({ text: decision.rule, toolName, target });
+        return decision;
+      }
+      if (kind === "terminal" && commandGuards.length > 0) {
+        const command = typeof args.command === "string" ? args.command : typeof args.cmd === "string" ? args.cmd : "";
+        const commandDecision = checkCommandGuards(commandGuards, command);
+        if (commandDecision) {
+          ruleStats.record({ text: commandDecision.rule, toolName, target: command });
+          return commandDecision;
+        }
+      }
+      return null;
     },
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
@@ -2372,6 +2394,8 @@ app.whenReady().then(async () => {
     dataDir: dirs.dataDir,
     store: ruleCandidates,
     workspaces,
+    sessions,
+    evidenceFor: (sessionId) => toolEvidence.recentFailures(sessionId),
     push: pushToRenderer,
   });
   registerChatDomain({

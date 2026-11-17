@@ -30,6 +30,7 @@
     "./rules/guard": "./src/rules/guard.js",
     "./rules/health": "./src/rules/health.js",
     "./rules/checklist": "./src/rules/checklist.js",
+    "./rules/commandGuard": "./src/rules/commandGuard.js",
     "./tool_loop": "./src/tool_loop.js",
     "./memory": "./src/memory/index.js",
     "./loop": "./src/loop/index.js",

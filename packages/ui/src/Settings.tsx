@@ -558,6 +558,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     } catch (err) { bad(err); }
   }, [api, candidateEdits, candidateTargets, loadRuleCandidates, refreshRulesAfterLearn, ok, bad, tr]);
 
+  const learnFromSession = useCallback(async () => {
+    if (!api) return;
+    try {
+      const result = await api.rules.learnFromSession();
+      await loadRuleCandidates();
+      ok(tr("settings.rules.learnedFromSession", { scanned: result.scanned, added: result.added }));
+    } catch (err) { bad(err); }
+  }, [api, loadRuleCandidates, ok, bad, tr]);
+
   const dismissRuleCandidate = useCallback(async (candidate: RuleCandidateView) => {
     if (!api) return;
     try {
@@ -1490,9 +1499,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       case "rules":
         return rules ? (<div>
           <Head t={tr("settings.rules.head")} h={tr("settings.rules.headHint")} />
-          {rules.guards.length > 0 ? (
-            <div style={S.note} title={rules.guards.map((guard) => guard.rule + " → " + guard.path).join("\n")}>
-              {tr("settings.rules.guards", { count: rules.guards.length })}
+          {rules.guards.length + rules.commandGuards.length > 0 ? (
+            <div
+              style={S.note}
+              title={[
+                ...rules.guards.map((guard) => guard.rule + " → " + guard.path),
+                ...rules.commandGuards.map((guard) => guard.rule + " → " + guard.managers.join("/")),
+              ].join("\n")}
+            >
+              {tr("settings.rules.guards", { count: rules.guards.length + rules.commandGuards.length })}
             </div>
           ) : null}
           {rules.conflicts.length > 0 ? (
@@ -1538,6 +1553,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.btns}>
             <Btn label={tr("settings.rules.newGlobal")} onClick={() => addDraft("global")} />
             <Btn label={tr("settings.rules.newWorkspace")} onClick={() => addDraft("workspace")} />
+            <Btn label={tr("settings.rules.learnFromSession")} onClick={() => void learnFromSession()} />
           </div>
           {rulePending > 0 ? (
             <div style={S.box}>
