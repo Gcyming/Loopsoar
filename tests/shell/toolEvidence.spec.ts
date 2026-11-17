@@ -50,6 +50,17 @@ describe("工具失败证据", () => {
     expect(memory.added).toHaveLength(0);
   });
 
+  it("recentFailures 保留最近失败，成功不清空；规则拒绝不计入", async () => {
+    const memory = fakeMemory();
+    const evidence = new ToolEvidence(memory, { threshold: 2, now: (() => { let n = 0; return () => ++n; })() });
+    await evidence.observe({ sessionId: "s", toolName: "shell", ok: false, error: "boom 123" });
+    await evidence.observe({ sessionId: "s", toolName: "shell", ok: true });
+    await evidence.observe({ sessionId: "s", toolName: "write", ok: false, error: "规则禁止：x" });
+    expect(evidence.recentFailures("s")).toHaveLength(1);
+    expect(evidence.recentFailures("s")[0].toolName).toBe("shell");
+    expect(evidence.recentFailures("s", 1)).toHaveLength(1);
+  });
+
   it("不同工具互不影响", async () => {
     const memory = fakeMemory();
     const evidence = new ToolEvidence(memory, { threshold: 2 });

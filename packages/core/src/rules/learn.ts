@@ -65,6 +65,44 @@ function splitClauses(sentence: string): string[] {
     .filter((part) => part.length >= 4);
 }
 
+const CORRECTION = /(不对|不是|错了|我是说|应该说|应该是|改用|换成)\s*[，,:：]?\s*(.+)/;
+
+/**
+ * 纠正句 → 候选（只在有工具失败证据时调用）。
+ * 「不对，应该用 pnpm」本身没有「必须/只能」，但结合刚失败的工具，就是一条可沉淀的偏好。
+ */
+export function extractCorrectionCandidates(message: string): RuleCandidate[] {
+  const cleaned = message.replace(/\x60{3}[\s\S]*?\x60{3}/g, " ").replace(/\r/g, "");
+  const out = new Map<string, RuleCandidate>();
+  for (const raw of cleaned.split(/[。！？!?；;\n]+/).slice(0, 20)) {
+    const sentence = raw.trim();
+    if (!sentence || sentence.length < 4 || QUESTION.test(sentence) || UNCERTAIN.test(sentence)) continue;
+    const match = sentence.match(CORRECTION);
+    if (!match) continue;
+    let text = match[2].trim().replace(/^(应该|应当|要|得|可以)\s*/, "");
+    text = normalizeText(text);
+    if (text.length < 4 || text.length > 160 || QUESTION.test(text)) continue;
+    if (QUESTION_WORDS.test(text)) continue;
+    const key = keyOf(text);
+    if (!key || key.length < 3) continue;
+    const strength = strengthOf(text) ?? "should";
+    const scopeHint = GLOBAL_SCOPE.test(text) ? "global" : "workspace";
+    const confidence = strength === "hard" ? 0.8 : 0.55;
+    const candidate: RuleCandidate = {
+      key,
+      text,
+      quote: sentence,
+      strength,
+      scopeHint,
+      confidence,
+      tags: ["纠正", /[\p{Script=Han}]/u.test(text) ? "中文" : "English"],
+    };
+    const existing = out.get(key);
+    if (!existing || candidate.confidence > existing.confidence) out.set(key, candidate);
+  }
+  return [...out.values()];
+}
+
 /** 从一段用户消息里抽候选规则；同一句只保留一条（按 key 去重）。 */
 export function extractRuleCandidates(message: string): RuleCandidate[] {
   const cleaned = message.replace(/\x60{3}[\s\S]*?\x60{3}/g, " ").replace(/\r/g, "");

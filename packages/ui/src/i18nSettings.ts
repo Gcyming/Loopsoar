@@ -442,6 +442,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.rules.guards": { zh: "已把 {count} 条路径禁令编译成工具守卫（越权写入会被直接拒绝）", en: "{count} path rule(s) compiled into tool guards (writes are denied before execution)" },
   "settings.rules.learnedTitle": { zh: "学到 {count} 条候选规则", en: "{count} learned rule(s) to review" },
   "settings.rules.learnedHint": { zh: "从对话里的「必须 / 只能 / 不要」等硬约束识别；采纳后才写入 AGENTS.md，下一轮对话生效。", en: "Detected from hard constraints such as must / only / never. Nothing is written until you accept; accepted rules apply next turn." },
+  "settings.rules.learnedEvidenceTool": { zh: "关联工具失败：{tool} · {error}", en: "Linked tool failure: {tool} · {error}" },
   "settings.rules.learnedEvidence": { zh: "已出现 {count} 次", en: "seen {count} time(s)" },
   "settings.rules.learnedAccept": { zh: "采纳", en: "Accept" },
   "settings.rules.learnedDismiss": { zh: "忽略", en: "Dismiss" },

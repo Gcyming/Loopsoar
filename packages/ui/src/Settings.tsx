@@ -1545,6 +1545,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       {tr("settings.rules.learnedEvidence", { count: candidate.seenCount })}
                       {candidate.workspaceId ? ` · ${rules?.workspaces.find((w) => w.id === candidate.workspaceId)?.name ?? candidate.workspaceId}` : ` · ${tr("settings.rules.scopeGlobal")}`}
                     </div>
+                    {candidate.evidence?.length ? (
+                      <div style={{ ...S.tag, marginTop: 3 }}>
+                        {tr("settings.rules.learnedEvidenceTool", {
+                          tool: candidate.evidence[candidate.evidence.length - 1].toolName,
+                          error: candidate.evidence[candidate.evidence.length - 1].error.slice(0, 60),
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                   <div style={S.icons}>
                     <Btn label={tr("settings.rules.learnedAccept")} small primary onClick={() => void acceptRuleCandidate(candidate)} />

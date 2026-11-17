@@ -39,8 +39,15 @@ function signatureOf(error: string): string {
     .slice(0, 120);
 }
 
+export interface RecentFailure {
+  toolName: string;
+  error: string;
+  at: number;
+}
+
 export class ToolEvidence {
   private failures = new Map<string, FailureState>();
+  private recent = new Map<string, RecentFailure[]>();
 
   constructor(
     private readonly memory?: MemoryWriter,
@@ -66,6 +73,13 @@ export class ToolEvidence {
 
     const key = prefix + signature;
     const at = (this.opts.now ?? Date.now)();
+    const history = this.recent.get(input.sessionId) ?? [];
+    history.push({ toolName: input.toolName, error, at });
+    this.recent.set(input.sessionId, history.slice(-20));
+    if (this.recent.size > 50) {
+      const oldest = [...this.recent.keys()][0];
+      if (oldest) this.recent.delete(oldest);
+    }
     const state = this.failures.get(key) ?? { count: 0, reported: false, lastAt: at, error };
     state.count += 1;
     state.lastAt = at;
@@ -104,7 +118,13 @@ export class ToolEvidence {
     }
   }
 
+  /** 最近失败（给规则候选做证据）；不因成功清空，便于「失败后用户纠正」关联。 */
+  recentFailures(sessionId: string, limit = 3): RecentFailure[] {
+    return (this.recent.get(sessionId) ?? []).slice(-Math.max(1, limit));
+  }
+
   clear(): void {
     this.failures.clear();
+    this.recent.clear();
   }
 }

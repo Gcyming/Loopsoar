@@ -2380,7 +2380,12 @@ app.whenReady().then(async () => {
     push: pushToRenderer,
     memory,
     sessions,
-    ruleLearning: ruleCandidates,
+    ruleLearning: {
+      observe: (input) => ruleCandidates.observe({
+        ...input,
+        evidence: toolEvidence.recentFailures(input.sessionId),
+      }),
+    },
     shouldAutoCapture: () => loadPreferences(dirs.configDir).memoryAutoCapture,
     getActiveWorkspaceId: () => workspaces.activeId(),
     getDefaultWorkspaceId: () => {

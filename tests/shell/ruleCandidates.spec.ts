@@ -91,6 +91,20 @@ describe("规则候选：从对话里学习但不自动改写", () => {
     expect(existsSync(path.join(wsA, "AGENTS.md"))).toBe(false);
   });
 
+  it("工具失败后的纠正句 → 候选并带证据", () => {
+    const result = store.observe({
+      sessionId: "s1",
+      workspaceId: "a",
+      message: "不对，应该用 pnpm 安装依赖。",
+      evidence: [{ toolName: "shell", error: "npm ERR! missing script", at: 1 }],
+    });
+    expect(result.added).toBe(1);
+    const candidate = store.list("a").find((c) => c.text.includes("pnpm"))!;
+    expect(candidate.strength).toBe("should");
+    expect(candidate.text).toContain("pnpm 安装依赖");
+    expect(candidate.evidence?.[0]).toMatchObject({ toolName: "shell", error: "npm ERR! missing script" });
+  });
+
   it("不同工作区各自独立", () => {
     store.observe({ sessionId: "s1", workspaceId: "a", message: "这个项目必须用 pnpm。" });
     store.observe({ sessionId: "s2", workspaceId: "b", message: "这个项目必须用 npm。" });

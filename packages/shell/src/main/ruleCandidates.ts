@@ -7,7 +7,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { extractRuleCandidates, type RuleCandidate } from "loopsoar-core/rules/learn";
+import { extractCorrectionCandidates, extractRuleCandidates, type RuleCandidate } from "loopsoar-core/rules/learn";
+import type { RecentFailure } from "./toolEvidence.js";
 
 export type RuleCandidateStatus = "pending" | "accepted" | "dismissed";
 
@@ -21,6 +22,8 @@ export interface StoredRuleCandidate extends RuleCandidate {
   lastSeenAt: number;
   acceptedAt?: number;
   promotedTo?: string;
+  /** 触发这条候选的最近工具失败（只在有失败证据时出现）。 */
+  evidence?: RecentFailure[];
 }
 
 interface CandidateFile {
@@ -90,12 +93,21 @@ export class RuleCandidateStore {
   }
 
   /** 观察一条用户消息：同工作区同 key 只累加证据，不重复建条目。 */
-  observe(input: { sessionId: string; workspaceId?: string; message: string }): {
+  observe(input: {
+    sessionId: string;
+    workspaceId?: string;
+    message: string;
+    evidence?: RecentFailure[];
+  }): {
     added: number;
     repeated: number;
     candidates: StoredRuleCandidate[];
   } {
-    const extracted = extractRuleCandidates(input.message);
+    const evidence = (input.evidence ?? []).slice(-3);
+    const extracted = [
+      ...extractRuleCandidates(input.message),
+      ...(evidence.length > 0 ? extractCorrectionCandidates(input.message) : []),
+    ];
     if (extracted.length === 0) return { added: 0, repeated: 0, candidates: [] };
     const now = this.now();
     let added = 0;
@@ -115,6 +127,14 @@ export class RuleCandidateStore {
         existing.lastSeenAt = now;
         existing.confidence = Math.min(0.95, Math.round((existing.confidence + 0.02) * 100) / 100);
         existing.quote = candidate.quote;
+        if (evidence.length > 0) {
+          const merged = [...(existing.evidence ?? [])];
+          for (const item of evidence) {
+            if (!merged.some((old) => old.toolName === item.toolName && old.error === item.error)) merged.push(item);
+          }
+          existing.evidence = merged.slice(-3);
+          existing.confidence = Math.min(0.95, Math.round((existing.confidence + 0.02) * 100) / 100);
+        }
         if (existing.status === "pending") repeated += 1;
         touched.push(existing);
         continue;
@@ -125,6 +145,7 @@ export class RuleCandidateStore {
         status: "pending",
         ...(candidate.scopeHint === "workspace" && input.workspaceId ? { workspaceId: input.workspaceId } : {}),
         sessionId: input.sessionId,
+        ...(evidence.length > 0 ? { evidence } : {}),
         seenCount: 1,
         createdAt: now,
         lastSeenAt: now,

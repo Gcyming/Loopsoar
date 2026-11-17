@@ -146,6 +146,10 @@ Markdown 仍是唯一可读真相；sidecar 只存机器需要的数据（统计
     tool:result { sessionId, tool, ok, errorClass, durationMs }
     rule:violation { ruleId, tool, sessionId, evidence }
 
+### 5.2.1 失败 + 纠正（第一版已实现）
+
+工具失败证据现在会关联到规则候选：用户说「不对，应该用 pnpm」时，即使没有「必须/只能」，也会生成一条 how 候选，并在规则页显示最近的失败工具与错误。仍然只进候选，不自动写规则。
+
 ### 5.3 afterSession（P1）
 
 会话结束/切换时做一次轻量反思：

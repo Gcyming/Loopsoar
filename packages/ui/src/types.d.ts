@@ -107,6 +107,7 @@ export interface RuleCandidateView {
   lastSeenAt: number;
   acceptedAt?: number;
   promotedTo?: string;
+  evidence?: { toolName: string; error: string; at: number }[];
 }
 
 export interface RulesSnapshot {
