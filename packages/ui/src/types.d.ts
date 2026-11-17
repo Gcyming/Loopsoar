@@ -110,6 +110,14 @@ export interface RuleCandidateView {
   evidence?: { toolName: string; error: string; at: number }[];
 }
 
+export interface RuleRevisionView {
+  id: string;
+  at: number;
+  action: "save" | "accept" | "rollback";
+  summary: string;
+  files: { path: string; before: string; after: string }[];
+}
+
 export interface RulesSnapshot {
   maxFileBytes: number;
   maxTotalBytes: number;
@@ -132,7 +140,7 @@ export interface RulesSnapshot {
     b: { text: string; scope: "global" | "workspace"; name: string };
     reason: string;
   }[];
-  stats: { text: string; count: number; firstAt: number; lastAt: number; lastTool?: string; lastTarget?: string }[];
+  stats: { text: string; count: number; injected: number; firstAt: number; lastAt: number; lastTool?: string; lastTarget?: string }[];
   checklist: { items: string[]; text: string };
 }
 
@@ -1118,6 +1126,9 @@ export interface LoopsoarAPI {
       workspaces: { id: string; name: string; root: string }[];
       activeWorkspaceId: string | null;
     }>;
+    reviewSession(payload?: { sessionId?: string }): Promise<{ sessionId: string; scanned: number; added: number; proposals: number }>;
+    history(payload?: { limit?: number }): Promise<{ revisions: RuleRevisionView[] }>;
+    rollback(payload: { id: string }): Promise<{ ok: boolean; restored: number }>;
     learnFromSession(payload?: { sessionId?: string }): Promise<{
       sessionId: string;
       scanned: number;

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { __resetHandlerRegistryForTests } from "../../packages/shell/src/main/trustedIpc.ts";
 import { RuleStatsStore } from "../../packages/shell/src/main/ruleStats.ts";
+import { RuleHistoryStore } from "../../packages/shell/src/main/ruleHistory.ts";
 import {
   currentRulesPrompt,
   loadPermissions,
@@ -190,6 +191,18 @@ describe("settings 域：规则条目（逐条增删）", () => {
     expect(existsSync(file)).toBe(false);
   });
 
+  it("保存规则记录 before/after 历史", async () => {
+    const history = new RuleHistoryStore(path.join(root, "data", "rules", "history.json"));
+    const { handlers } = makeEnv(root, {}, { ruleHistory: history });
+    await invoke(handlers, "settings:setRules", {
+      entries: [{ scope: "global", name: "style.md", enabled: true, content: "必须使用 pnpm" }],
+    });
+    const revision = history.list()[0];
+    expect(revision.action).toBe("save");
+    expect(revision.files[0].before).toBe("");
+    expect(revision.files[0].after).toContain("必须使用 pnpm");
+  });
+
   it("非法文件名 → 拒绝整体保存（不写半截）", async () => {
     const { deps, handlers } = makeEnv(root);
     await expect(
@@ -329,6 +342,19 @@ describe("settings 域：项目规则按工作区隔离", () => {
       checklist: { items: string[] };
     };
     expect(single.checklist.items).toEqual(["必须使用 pnpm"]);
+  });
+
+  it("构建 prompt 时记录规则注入次数", async () => {
+    const ws = workspacesOf();
+    const stats = new RuleStatsStore(path.join(root, "data", "rules", "stats.json"));
+    const { deps } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+      ruleStats: stats,
+    });
+    writeFileSync(path.join(ws.a, "AGENTS.md"), "# 规则\n- 必须使用 pnpm\n", "utf8");
+    currentRulesPrompt(deps, "a");
+    stats.flush();
+    expect(stats.list().find((hit) => hit.text === "必须使用 pnpm")?.injected).toBe(1);
   });
 
   it("未挂载的工作区 → 拒绝保存，不写任何文件", async () => {

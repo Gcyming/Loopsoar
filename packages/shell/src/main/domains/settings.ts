@@ -22,6 +22,7 @@ import { compileCommandGuards } from "loopsoar-core/rules/commandGuard";
 import { analyzeRuleConflicts } from "loopsoar-core/rules/health";
 import { buildRuleChecklist, type Checklist } from "loopsoar-core/rules/checklist";
 import type { RuleHit } from "../ruleStats.js";
+import type { RuleHistoryStore } from "../ruleHistory.js";
 import { withProviderDefaults } from "../providerDefaults.js";
 import { resolveModelsUrl } from "../providerModels.js";
 import { describeCapabilitySources, enrichModelSpec, type ModelSpec } from "loopsoar-core/modelCapabilities";
@@ -71,7 +72,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   /** 已挂载工作区：项目规则按工作区选择、按会话注入；未注入时退回 workspaceRoot 单项目。 */
   workspaces?: { list(): { id: string; name: string; root: string }[]; activeId(): string | null };
   /** 规则守卫命中统计（可选）；缺省时设置页显示空。 */
-  ruleStats?: { list(): RuleHit[] };
+  ruleStats?: { list(): RuleHit[]; recordInjection?(texts: string[]): void };
+  ruleHistory?: RuleHistoryStore;
   env: Record<string, string | undefined>;
   appVersion: string;
   diagnosticsExtra?: () => Record<string, unknown>;
@@ -290,6 +292,15 @@ export function currentRulesPrompt(deps: SettingsDeps, workspaceId?: string): st
   const entries = readRuleEntries(deps, workspaceId);
   const merged = rulesForPrompt(mergeRules(ruleSourcesFromEntries(entries)));
   const checklist = checklistFor(entries);
+  // 只统计真正进入 prompt 的规则行；命中/注入构成效能分母。
+  deps.ruleStats?.recordInjection?.(
+    entries
+      .filter((entry) => entry.enabled && entry.content.trim())
+      .flatMap((entry) => entry.content.split(/\r?\n/))
+      .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+      .filter((line) => line.length >= 4 && !line.startsWith("#"))
+      .slice(0, 200),
+  );
   return checklist.text ? merged + "\n\n" + checklist.text : merged;
 }
 
@@ -732,6 +743,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     const errors: string[] = [];
     let totalBytes = 0;
     const pendingWrites: { file: string; content: string }[] = [];
+    const deletions: { file: string; before: string }[] = [];
 
     for (const entry of data.entries ?? []) {
       const content = entry.content ?? "";
@@ -778,7 +790,10 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       if (scope === "global" && RULE_FILE_RE.test(name)) {
         const file = path.join(paths.globalRulesDir, name);
         try {
-          if (fs.existsSync(file)) fs.unlinkSync(file);
+          if (fs.existsSync(file)) {
+            deletions.push({ file, before: fs.readFileSync(file, "utf8") });
+            fs.unlinkSync(file);
+          }
         } catch {
           errors.push(`删除全局规则「${name}」失败`);
         }
@@ -798,11 +813,41 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     }
 
     fs.mkdirSync(paths.globalRulesDir, { recursive: true });
+    const revisions: { path: string; before: string; after: string }[] = [];
     for (const write of pendingWrites) {
       fs.mkdirSync(path.dirname(write.file), { recursive: true });
+      let before = "";
+      try {
+        if (fs.existsSync(write.file)) before = fs.readFileSync(write.file, "utf8");
+      } catch {
+        before = "";
+      }
+      if (before !== write.content) revisions.push({ path: write.file, before, after: write.content });
       fs.writeFileSync(write.file, write.content, "utf8");
     }
+    for (const deletion of deletions) {
+      if (deletion.before) revisions.push({ path: deletion.file, before: deletion.before, after: "" });
+    }
+    let stateBefore = "";
+    try {
+      if (fs.existsSync(paths.rulesState)) stateBefore = fs.readFileSync(paths.rulesState, "utf8");
+    } catch {
+      stateBefore = "";
+    }
     writeJsonFile(paths.rulesState, { disabled: [...disabled] });
+    try {
+      const stateAfter = fs.readFileSync(paths.rulesState, "utf8");
+      if (stateBefore !== stateAfter) revisions.push({ path: paths.rulesState, before: stateBefore, after: stateAfter });
+    } catch {
+      // 读不到状态文件就不记录这一项
+    }
+    if (revisions.length > 0) {
+      deps.ruleHistory?.add({
+        action: "save",
+        summary: "保存 " + revisions.length + " 个规则文件",
+        files: revisions,
+      });
+    }
 
     const entries = readRuleEntries(deps, deps.workspaces?.activeId() ?? undefined);
     return { saved: true, entries, merged: mergeRules(ruleSourcesFromEntries(entries)) };

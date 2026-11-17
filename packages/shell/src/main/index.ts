@@ -75,8 +75,10 @@ import { registerMemoryDomain } from "./domains/memory.js";
 import { registerRuleLearningDomain } from "./domains/ruleLearning.js";
 import { RuleCandidateStore } from "./ruleCandidates.js";
 import { RuleStatsStore } from "./ruleStats.js";
+import { RuleHistoryStore } from "./ruleHistory.js";
 import { ToolEvidence } from "./toolEvidence.js";
 import { reviewMemory } from "./memoryReview.js";
+import { reviewSessionRules } from "./ruleReview.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
 import { WorkspaceStore } from "./workspaceStore.js";
@@ -1789,10 +1791,12 @@ app.whenReady().then(async () => {
   const defaultAgent = agents.defaultAgent();
   bootTrace.mark("stores");
   const ruleStats = new RuleStatsStore(path.join(dirs.dataDir, "rules", "stats.json"));
+  const ruleHistory = new RuleHistoryStore(path.join(dirs.dataDir, "rules", "history.json"));
   const settingsDeps = {
     ...deps,
     platform,
     ruleStats,
+    ruleHistory,
     workspaces,
     dataDir: dirs.dataDir,
     configDir: dirs.configDir,
@@ -2393,9 +2397,11 @@ app.whenReady().then(async () => {
     ...deps,
     dataDir: dirs.dataDir,
     store: ruleCandidates,
+    history: ruleHistory,
     workspaces,
     sessions,
     evidenceFor: (sessionId) => toolEvidence.recentFailures(sessionId),
+    review: (messages) => reviewSessionRules(buildLlmFromActive() ?? llmRef, messages),
     push: pushToRenderer,
   });
   registerChatDomain({

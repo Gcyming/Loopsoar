@@ -456,6 +456,27 @@
       "hasRequest": true
     },
     {
+      "channel": "rules:reviewSession",
+      "domain": "rules",
+      "method": "reviewSession",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "rules:history",
+      "domain": "rules",
+      "method": "history",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "rules:rollback",
+      "domain": "rules",
+      "method": "rollback",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "rules:learnFromSession",
       "domain": "rules",
       "method": "learnFromSession",

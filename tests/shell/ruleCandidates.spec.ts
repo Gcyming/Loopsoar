@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { __resetHandlerRegistryForTests } from "../../packages/shell/src/main/trustedIpc.ts";
 import { RuleCandidateStore } from "../../packages/shell/src/main/ruleCandidates.ts";
+import { RuleHistoryStore } from "../../packages/shell/src/main/ruleHistory.ts";
 import { registerRuleLearningDomain } from "../../packages/shell/src/main/domains/ruleLearning.ts";
 import { currentRulesPrompt, registerSettingsDomain, type SettingsDeps } from "../../packages/shell/src/main/domains/settings.ts";
 
@@ -15,6 +16,7 @@ const TRUSTED = { senderFrame: { url: "loopsoar://app/index.html" } };
 let root: string;
 let handlers: Map<string, (event: unknown, payload: unknown) => Promise<unknown>>;
 let store: RuleCandidateStore;
+let history: RuleHistoryStore;
 let settingsDeps: SettingsDeps;
 let dataDir: string;
 let wsA: string;
@@ -54,6 +56,7 @@ beforeEach(() => {
     audit: () => {},
     dataDir,
     store: undefined as unknown as RuleCandidateStore,
+    history: undefined as unknown as RuleHistoryStore,
     workspaces,
     sessions: {
       currentId: () => "s1",
@@ -66,7 +69,9 @@ beforeEach(() => {
     push: () => {},
   };
   store = new RuleCandidateStore(path.join(dataDir, "rules", "candidates.json"));
+  history = new RuleHistoryStore(path.join(dataDir, "rules", "history.json"));
   deps.store = store;
+  deps.history = history;
   settingsDeps = {
     ipc,
     audit: () => {},
@@ -176,6 +181,31 @@ describe("规则候选：从对话里学习但不自动改写", () => {
     await invoke("rules:dismissCandidate", { id: candidate.id });
     expect(store.get(candidate.id)?.status).toBe("dismissed");
     expect(store.list("a").filter((c) => c.status === "pending")).toHaveLength(0);
+  });
+
+  it("采纳记录历史，回滚恢复文件", async () => {
+    store.observe({ sessionId: "s1", workspaceId: "a", message: "必须用 pnpm 安装依赖。" });
+    const candidate = store.list("a").find((c) => c.status === "pending")!;
+    await invoke("rules:acceptCandidate", { id: candidate.id });
+    const file = path.join(wsA, "AGENTS.md");
+    expect(readFileSync(file, "utf8")).toContain("必须用 pnpm 安装依赖");
+    const listed = (await invoke("rules:history")) as { revisions: { id: string; action: string }[] };
+    const accepted = listed.revisions.find((revision) => revision.action === "accept")!;
+    expect(accepted).toBeTruthy();
+    const rolled = (await invoke("rules:rollback", { id: accepted.id })) as { restored: number };
+    expect(rolled.restored).toBe(1);
+    expect(readFileSync(file, "utf8")).not.toContain("必须用 pnpm 安装依赖");
+    const after = (await invoke("rules:history")) as { revisions: { action: string }[] };
+    expect(after.revisions[0].action).toBe("rollback");
+  });
+
+  it("历史里出现非规则路径 → 拒绝回滚", async () => {
+    const revision = history.add({
+      action: "save",
+      summary: "tampered",
+      files: [{ path: "C:/Windows/System32/drivers/etc/hosts", before: "x", after: "y" }],
+    });
+    await expect(invoke("rules:rollback", { id: revision.id })).rejects.toThrow(/非规则路径/);
   });
 
   it("未知 id → 拒绝", async () => {

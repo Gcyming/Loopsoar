@@ -30,6 +30,26 @@ describe("规则命中统计", () => {
     expect(again.list()[0].count).toBe(1);
   });
 
+  it("注入计数去重合并，flush 后可重载", () => {
+    root = mkdtempSync(path.join(tmpdir(), "loopsoar-rule-stats-"));
+    const file = path.join(root, "stats.json");
+    const store = new RuleStatsStore(file);
+    store.recordInjection(["必须用 pnpm", "必须用 pnpm", "提交信息用中文"]);
+    store.recordInjection(["必须用 pnpm"]);
+    store.flush();
+    const again = new RuleStatsStore(file);
+    expect(again.list().find((hit) => hit.text === "必须用 pnpm")?.injected).toBe(2);
+    expect(again.list().find((hit) => hit.text === "提交信息用中文")?.injected).toBe(1);
+  });
+
+  it("旧 stats 没有 injected 字段也能读（迁移为 0）", () => {
+    root = mkdtempSync(path.join(tmpdir(), "loopsoar-rule-stats-"));
+    const file = path.join(root, "stats.json");
+    require("node:fs").writeFileSync(file, JSON.stringify({ version: 1, hits: [{ text: "旧规则", count: 2, firstAt: 1, lastAt: 2 }] }));
+    const store = new RuleStatsStore(file);
+    expect(store.list()[0]).toMatchObject({ text: "旧规则", count: 2, injected: 0 });
+  });
+
   it("空文本忽略；clear 清空", () => {
     root = mkdtempSync(path.join(tmpdir(), "loopsoar-rule-stats-"));
     const store = new RuleStatsStore(path.join(root, "stats.json"));

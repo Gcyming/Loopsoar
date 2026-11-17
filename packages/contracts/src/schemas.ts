@@ -896,6 +896,24 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: z.object({ workspaceId: z.string().min(1).max(80).optional() }).optional(),
     sensitive: true,
   },
+  "rules:reviewSession": {
+    domain: "rules",
+    method: "reviewSession",
+    request: z.object({ sessionId: z.string().min(1).max(120).optional() }).optional(),
+    sensitive: true,
+  },
+  "rules:history": {
+    domain: "rules",
+    method: "history",
+    request: z.object({ limit: z.number().int().min(1).max(100).optional() }).optional(),
+    sensitive: true,
+  },
+  "rules:rollback": {
+    domain: "rules",
+    method: "rollback",
+    request: z.object({ id: z.string().min(1).max(80) }),
+    sensitive: true,
+  },
   "rules:learnFromSession": {
     domain: "rules",
     method: "learnFromSession",

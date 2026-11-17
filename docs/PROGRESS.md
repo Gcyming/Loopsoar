@@ -1308,5 +1308,9 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 候选编辑（ADR-0138）：采纳前可改写文本、选择项目/全局；改写后重算去重 key，原 quote 保留为证据。
 - 命令守卫（ADR-0139）：只能使用 pnpm/不要用 npm 编译成 terminal deny；规则页守卫数量合并路径+命令。
 - 会话回顾（ADR-0140）：规则页「从本会话学习」扫描最近 20 条用户消息补候选。
+- 规则历史/回滚（ADR-0141）：保存/采纳记录 before/after，rules:history / rules:rollback，只允许规则路径。
+- 注入统计（ADR-0142）：currentRulesPrompt 记录规则行注入次数，旧 stats 缺字段迁移为 0。
+- AI 回顾（ADR-0143）：rules:reviewSession 用当前模型提炼 0-3 条候选，仍走人工确认。
+- 架构复核：docs/research/architecture-review.md（依赖方向、IPC、兼容性、自然性逐项审查）。
 - 调研：docs/research/rule-documents.md（规则文档形态/加载/自迭代机制）；设计：docs/规划/规则-记忆-工具-Loop协同.md（四层闭环、守卫编译、清单、路线图）。
 

@@ -18,7 +18,7 @@ import type {
   AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
   LoopListResult, LoopsoarAPI, McpServerInfo, MemoryGraphNodeView, MemoryGraphResult, MemoryListResult,
   PermissionCategory, PermissionsState, Preferences,
-  ProviderItem, ProviderModel, ProviderStatus, RuleCandidateView, RulesSnapshot, SkillRecord, TestProviderResult,
+  ProviderItem, ProviderModel, ProviderStatus, RuleCandidateView, RuleRevisionView, RulesSnapshot, SkillRecord, TestProviderResult,
 } from "./types.js";
 
 /**
@@ -181,6 +181,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [rulePending, setRulePending] = useState(0);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateTargets, setCandidateTargets] = useState<Record<string, "workspace" | "global">>({});
+  const [ruleHistory, setRuleHistory] = useState<RuleRevisionView[]>([]);
   const [mem, setMem] = useState<MemoryListResult | null>(null);
   // 启动后的索引核对在后台进行：轮询到 idle 为止，让「最终一致窗口」可见并自动消失。
   useEffect(() => {
@@ -273,6 +274,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     }
   }, [api]);
 
+  const loadRuleHistory = useCallback(async () => {
+    if (!api) return;
+    try {
+      const result = await api.rules.history({ limit: 20 });
+      setRuleHistory(result.revisions);
+    } catch {
+      // 历史只是辅助信息
+    }
+  }, [api]);
+
   const applyRules = useCallback((r: RulesSnapshot) => {
     setRules(r);
     setDrafts(r.entries.map((x) => ({
@@ -288,11 +299,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api) { setLoading(false); return; }
     void (async () => {
       try {
-        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc, rc] = await Promise.allSettled([
+        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc, rc, rh] = await Promise.allSettled([
           api.settings.getPreferences(), api.settings.getPermissions(), api.settings.getProvider(),
           api.settings.getRules(), api.settings.diagnostics(), api.settings.about(), api.memory.list(),
           api.settings.listProviders(), api.extensions.list(), api.skills.list(), api.mcp.list(),
           api.rules.candidates(),
+          api.rules.history({ limit: 20 }),
         ]);
         if (p.status === "fulfilled") { setPrefs(p.value.preferences); setLocations(p.value.locations); }
         if (pm.status === "fulfilled") setPerms(pm.value);
@@ -326,6 +338,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setRuleCandidates(rc.value.candidates);
           setRulePending(rc.value.pending);
         }
+        if (rh.status === "fulfilled") setRuleHistory(rh.value.revisions);
       } catch (e) { bad(e); } finally { setLoading(false); }
     })();
   }, [api, applyRules, bad]);
@@ -575,6 +588,25 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       ok(tr("settings.rules.learnedDismissed"));
     } catch (err) { bad(err); }
   }, [api, loadRuleCandidates, ok, bad, tr]);
+
+  const reviewSessionWithAi = useCallback(async () => {
+    if (!api) return;
+    try {
+      const result = await api.rules.reviewSession();
+      await loadRuleCandidates();
+      ok(tr("settings.rules.reviewedWithAi", { scanned: result.scanned, added: result.added }));
+    } catch (err) { bad(err); }
+  }, [api, loadRuleCandidates, ok, bad, tr]);
+
+  const rollbackRule = useCallback(async (revision: RuleRevisionView) => {
+    if (!api) return;
+    try {
+      const result = await api.rules.rollback({ id: revision.id });
+      await loadRuleHistory();
+      applyRules(await api.settings.getRules());
+      ok(tr("settings.rules.rollbackDone", { count: result.restored }));
+    } catch (err) { bad(err); }
+  }, [api, loadRuleHistory, applyRules, ok, bad, tr]);
 
   const addDraft = (scope: "global" | "workspace") => {
     const key = `new-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
@@ -1540,7 +1572,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <div style={S.boxTitle}>{tr("settings.rules.hits", { count: rules.stats.length })}</div>
               {rules.stats.slice(0, 5).map((hit) => (
                 <div key={hit.text} style={S.meta}>
-                  {hit.text} · {tr("settings.rules.hitCount", { count: hit.count })}
+                  {hit.text} · {tr("settings.rules.hitStats", { injected: hit.injected, count: hit.count })}
                   {hit.lastTool ? " · " + hit.lastTool : ""}
                 </div>
               ))}
@@ -1554,7 +1586,19 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Btn label={tr("settings.rules.newGlobal")} onClick={() => addDraft("global")} />
             <Btn label={tr("settings.rules.newWorkspace")} onClick={() => addDraft("workspace")} />
             <Btn label={tr("settings.rules.learnFromSession")} onClick={() => void learnFromSession()} />
+            <Btn label={tr("settings.rules.reviewWithAi")} onClick={() => void reviewSessionWithAi()} />
           </div>
+          {ruleHistory.length > 0 ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.rules.history", { count: ruleHistory.length })}</div>
+              {ruleHistory.slice(0, 5).map((revision) => (
+                <div key={revision.id} style={{ ...S.meta, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <span>{revision.summary}</span>
+                  <Btn label={tr("settings.rules.rollback")} small onClick={() => void rollbackRule(revision)} />
+                </div>
+              ))}
+            </div>
+          ) : null}
           {rulePending > 0 ? (
             <div style={S.box}>
               <div style={S.boxTitle}>{tr("settings.rules.learnedTitle", { count: rulePending })}</div>

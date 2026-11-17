@@ -24,6 +24,8 @@ export interface StoredRuleCandidate extends RuleCandidate {
   promotedTo?: string;
   /** 触发这条候选的最近工具失败（只在有失败证据时出现）。 */
   evidence?: RecentFailure[];
+  /** 来源：规则抽取 / 会话回顾（LLM）。 */
+  origin?: "rule" | "llm-review";
 }
 
 interface CandidateFile {
@@ -158,6 +160,44 @@ export class RuleCandidateStore {
     this.prune();
     if (added > 0 || repeated > 0) this.save();
     return { added, repeated, candidates: touched };
+  }
+
+  /** 直接写入一条已由上层校验的候选（LLM 回顾用）；仍走同 key 去重。 */
+  addCandidate(candidate: RuleCandidate, input: { sessionId: string; workspaceId?: string; origin?: "rule" | "llm-review" }): {
+    added: boolean;
+    item: StoredRuleCandidate;
+  } {
+    const scopeId = candidate.scopeHint === "global" ? "global" : input.workspaceId ?? "default";
+    const existing = this.items.find(
+      (item) =>
+        item.key === candidate.key &&
+        item.status !== "dismissed" &&
+        (item.scopeHint === "global" ? "global" : item.workspaceId ?? "default") === scopeId,
+    );
+    const now = this.now();
+    if (existing) {
+      existing.seenCount += 1;
+      existing.lastSeenAt = now;
+      existing.quote = candidate.quote;
+      existing.confidence = Math.max(existing.confidence, candidate.confidence);
+      this.save();
+      return { added: false, item: existing };
+    }
+    const item: StoredRuleCandidate = {
+      ...candidate,
+      id: "rc-" + randomUUID().slice(0, 8),
+      status: "pending",
+      ...(candidate.scopeHint === "workspace" && input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      sessionId: input.sessionId,
+      origin: input.origin ?? "llm-review",
+      seenCount: 1,
+      createdAt: now,
+      lastSeenAt: now,
+    };
+    this.items.push(item);
+    this.prune();
+    this.save();
+    return { added: true, item };
   }
 
   list(workspaceId?: string): StoredRuleCandidate[] {
