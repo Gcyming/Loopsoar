@@ -73,6 +73,7 @@ import { registerPageSaveDomain } from "./domains/pageSave.js";
 import { registerMemoryDomain } from "./domains/memory.js";
 import { registerRuleLearningDomain } from "./domains/ruleLearning.js";
 import { RuleCandidateStore } from "./ruleCandidates.js";
+import { RuleStatsStore } from "./ruleStats.js";
 import { reviewMemory } from "./memoryReview.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
@@ -1785,9 +1786,11 @@ app.whenReady().then(async () => {
   agents.registerBuiltin(BUILTIN_AGENT);
   const defaultAgent = agents.defaultAgent();
   bootTrace.mark("stores");
+  const ruleStats = new RuleStatsStore(path.join(dirs.dataDir, "rules", "stats.json"));
   const settingsDeps = {
     ...deps,
     platform,
+    ruleStats,
     workspaces,
     dataDir: dirs.dataDir,
     configDir: dirs.configDir,
@@ -1863,13 +1866,15 @@ app.whenReady().then(async () => {
       const workspaceId = sessionId ? sessions.get(sessionId)?.workspaceId ?? undefined : undefined;
       const guards = currentRuleGuards(workspaceId);
       if (guards.length === 0) return null;
-      return checkRuleGuards(guards, {
+      const decision = checkRuleGuards(guards, {
         toolName,
         args,
         kind,
         target,
         workspaceRoot: resolveSessionRoot(sessionId),
       });
+      if (decision) ruleStats.record({ text: decision.rule, toolName, target });
+      return decision;
     },
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。

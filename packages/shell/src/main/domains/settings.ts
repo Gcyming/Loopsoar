@@ -18,6 +18,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
 import { compileRuleGuards } from "loopsoar-core/rules/guard";
+import { analyzeRuleConflicts } from "loopsoar-core/rules/health";
+import type { RuleHit } from "../ruleStats.js";
 import { withProviderDefaults } from "../providerDefaults.js";
 import { resolveModelsUrl } from "../providerModels.js";
 import { describeCapabilitySources, enrichModelSpec, type ModelSpec } from "loopsoar-core/modelCapabilities";
@@ -66,6 +68,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   workspaceRoot: string;
   /** 已挂载工作区：项目规则按工作区选择、按会话注入；未注入时退回 workspaceRoot 单项目。 */
   workspaces?: { list(): { id: string; name: string; root: string }[]; activeId(): string | null };
+  /** 规则守卫命中统计（可选）；缺省时设置页显示空。 */
+  ruleStats?: { list(): RuleHit[] };
   env: Record<string, string | undefined>;
   appVersion: string;
   diagnosticsExtra?: () => Record<string, unknown>;
@@ -640,6 +644,12 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       merged: mergeRules(ruleSourcesFromEntries(entries)),
       claudeCompat: entries.some((entry) => entry.scope === "workspace" && entry.name === CLAUDE_COMPAT_FILE_NAME),
       guards: compileRuleGuards(entries.filter((entry) => entry.enabled && entry.content.trim()).map((entry) => ({ id: entry.id, text: entry.content }))),
+      conflicts: analyzeRuleConflicts(
+        entries
+          .filter((entry) => entry.enabled && entry.content.trim())
+          .map((entry) => ({ id: entry.id, scope: entry.scope, name: entry.name, text: entry.content })),
+      ),
+      stats: deps.ruleStats?.list() ?? [],
       workspaces: deps.workspaces?.list() ?? [],
       activeWorkspaceId: activeWorkspaceId ?? null,
       guardrail: rulesForPrompt({ text: "…", included: [], skipped: [], totalBytes: 0 }).split("\n")[0],
@@ -676,6 +686,11 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
       // 合并预览跟随所选项目，否则切换项目后下方仍显示活动项目的规则。
       merged: mergeRules(ruleSourcesFromEntries(entries)),
       guards: compileRuleGuards(entries.filter((entry) => entry.enabled && entry.content.trim()).map((entry) => ({ id: entry.id, text: entry.content }))),
+      conflicts: analyzeRuleConflicts(
+        entries
+          .filter((entry) => entry.enabled && entry.content.trim())
+          .map((entry) => ({ id: entry.id, scope: entry.scope, name: entry.name, text: entry.content })),
+      ),
     };
   });
 

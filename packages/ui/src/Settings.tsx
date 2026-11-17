@@ -482,7 +482,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         enabled: r.enabled,
         persisted: r.exists,
       } : d));
-      setRules((prev) => prev ? { ...prev, merged: r.merged } : prev);
+      setRules((prev) => prev ? { ...prev, merged: r.merged, conflicts: r.conflicts } : prev);
     } catch (e) { bad(e); }
   }, [api, bad]);
 
@@ -1487,6 +1487,31 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           {rules.guards.length > 0 ? (
             <div style={S.note} title={rules.guards.map((guard) => guard.rule + " → " + guard.path).join("\n")}>
               {tr("settings.rules.guards", { count: rules.guards.length })}
+            </div>
+          ) : null}
+          {rules.conflicts.length > 0 ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.rules.conflicts", { count: rules.conflicts.length })}</div>
+              {rules.conflicts.slice(0, 6).map((conflict, index) => (
+                <div key={index} style={{ ...S.meta, display: "block", padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div>
+                    <span style={BADGE.neutral}>{conflict.type === "conflict" ? tr("settings.rules.conflict") : tr("settings.rules.duplicate")}</span>
+                    {" "}{conflict.a.text} ↔ {conflict.b.text}
+                  </div>
+                  <div style={S.tag}>{conflict.reason}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {rules.stats.length > 0 ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.rules.hits", { count: rules.stats.length })}</div>
+              {rules.stats.slice(0, 5).map((hit) => (
+                <div key={hit.text} style={S.meta}>
+                  {hit.text} · {tr("settings.rules.hitCount", { count: hit.count })}
+                  {hit.lastTool ? " · " + hit.lastTool : ""}
+                </div>
+              ))}
             </div>
           ) : null}
           {drafts.length === 0 ? <div style={S.dashed}>{tr("settings.rules.empty")}</div> : null}

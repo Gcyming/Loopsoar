@@ -124,6 +124,13 @@ export interface RulesSnapshot {
   claudeCompat: boolean;
   guardrail: string;
   guards: { id: string; rule: string; path: string; actions: ("read" | "write")[] }[];
+  conflicts: {
+    type: "conflict" | "duplicate";
+    a: { text: string; scope: "global" | "workspace"; name: string };
+    b: { text: string; scope: "global" | "workspace"; name: string };
+    reason: string;
+  }[];
+  stats: { text: string; count: number; firstAt: number; lastAt: number; lastTool?: string; lastTarget?: string }[];
 }
 
 export interface MemoryFactView {
@@ -1094,6 +1101,7 @@ export interface LoopsoarAPI {
       content: string;
       merged: RulesSnapshot["merged"];
       guards: RulesSnapshot["guards"];
+      conflicts: RulesSnapshot["conflicts"];
     }>;
     diagnostics(): Promise<DiagnosticsInfo>;
     about(): Promise<AboutInfo>;

@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { __resetHandlerRegistryForTests } from "../../packages/shell/src/main/trustedIpc.ts";
+import { RuleStatsStore } from "../../packages/shell/src/main/ruleStats.ts";
 import {
   currentRulesPrompt,
   loadPermissions,
@@ -279,6 +280,28 @@ describe("settings 域：项目规则按工作区隔离", () => {
       guards: { path: string }[];
     };
     expect(single.guards[0].path).toBe("dist/");
+  });
+
+  it("冲突与守卫命中进入规则体检", async () => {
+    const ws = workspacesOf();
+    const stats = new RuleStatsStore(path.join(root, "data", "rules", "stats.json"), () => 1);
+    const { deps, handlers } = makeEnv(root, {}, {
+      workspaces: { list: () => ws.list, activeId: () => "a" },
+      ruleStats: stats,
+    });
+    const rulesDir = settingsPaths(deps).globalRulesDir;
+    mkdirSync(rulesDir, { recursive: true });
+    writeFileSync(path.join(rulesDir, "conflict.md"), "# 全局\n- 不要使用 npm\n", "utf8");
+    writeFileSync(path.join(ws.a, "AGENTS.md"), "# 项目\n- 必须使用 npm\n", "utf8");
+    stats.record({ text: "不要使用 npm", toolName: "write_file", target: "dist/a.js" });
+
+    const snapshot = (await invoke(handlers, "settings:getRules")) as {
+      conflicts: { type: string }[];
+      stats: { text: string; count: number }[];
+    };
+    expect(snapshot.conflicts).toHaveLength(1);
+    expect(snapshot.conflicts[0].type).toBe("conflict");
+    expect(snapshot.stats[0]).toMatchObject({ text: "不要使用 npm", count: 1 });
   });
 
   it("未挂载的工作区 → 拒绝保存，不写任何文件", async () => {
