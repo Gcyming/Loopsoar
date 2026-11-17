@@ -179,6 +179,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [deleted, setDeleted] = useState<string[]>([]);
   const [ruleCandidates, setRuleCandidates] = useState<RuleCandidateView[]>([]);
   const [rulePending, setRulePending] = useState(0);
+  const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
+  const [candidateTargets, setCandidateTargets] = useState<Record<string, "workspace" | "global">>({});
   const [mem, setMem] = useState<MemoryListResult | null>(null);
   // 启动后的索引核对在后台进行：轮询到 idle 为止，让「最终一致窗口」可见并自动消失。
   useEffect(() => {
@@ -545,12 +547,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const acceptRuleCandidate = useCallback(async (candidate: RuleCandidateView) => {
     if (!api) return;
     try {
-      const r = await api.rules.acceptCandidate({ id: candidate.id });
+      const text = (candidateEdits[candidate.id] ?? candidate.text).trim();
+      const target = candidateTargets[candidate.id] ?? (candidate.scopeHint === "global" ? "global" : "workspace");
+      const r = await api.rules.acceptCandidate({ id: candidate.id, target, text });
+      setCandidateEdits((prev) => { const next = { ...prev }; delete next[candidate.id]; return next; });
+      setCandidateTargets((prev) => { const next = { ...prev }; delete next[candidate.id]; return next; });
       await loadRuleCandidates();
       await refreshRulesAfterLearn(candidate);
       ok(tr("settings.rules.learnedAccepted", { path: r.path }));
     } catch (err) { bad(err); }
-  }, [api, loadRuleCandidates, refreshRulesAfterLearn, ok, bad, tr]);
+  }, [api, candidateEdits, candidateTargets, loadRuleCandidates, refreshRulesAfterLearn, ok, bad, tr]);
 
   const dismissRuleCandidate = useCallback(async (candidate: RuleCandidateView) => {
     if (!api) return;
@@ -1539,8 +1545,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <div style={S.note}>{tr("settings.rules.learnedHint")}</div>
               {ruleCandidates.filter((candidate) => candidate.status === "pending").map((candidate) => (
                 <div key={candidate.id} style={{ ...S.rowBetween, alignItems: "flex-start", gap: 12, padding: "8px 0", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13 }}>{candidate.text}</div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <textarea
+                      style={{ ...S.input, width: "100%", boxSizing: "border-box", minHeight: 34, resize: "vertical" }}
+                      rows={2}
+                      value={candidateEdits[candidate.id] ?? candidate.text}
+                      onChange={(event) => setCandidateEdits((prev) => ({ ...prev, [candidate.id]: event.target.value }))}
+                      title={tr("settings.rules.learnedEditHint")}
+                    />
                     <div style={S.meta}>
                       {tr("settings.rules.learnedEvidence", { count: candidate.seenCount })}
                       {candidate.workspaceId ? ` · ${rules?.workspaces.find((w) => w.id === candidate.workspaceId)?.name ?? candidate.workspaceId}` : ` · ${tr("settings.rules.scopeGlobal")}`}
@@ -1554,7 +1566,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       </div>
                     ) : null}
                   </div>
-                  <div style={S.icons}>
+                  <div style={{ ...S.icons, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 180 }}>
+                    <select
+                      style={{ ...S.input, width: "auto", maxWidth: 92, paddingRight: 4 }}
+                      value={candidateTargets[candidate.id] ?? (candidate.scopeHint === "global" ? "global" : "workspace")}
+                      onChange={(event) => setCandidateTargets((prev) => ({ ...prev, [candidate.id]: event.target.value as "workspace" | "global" }))}
+                    >
+                      <option value="workspace">{tr("settings.rules.targetWorkspace")}</option>
+                      <option value="global">{tr("settings.rules.targetGlobal")}</option>
+                    </select>
                     <Btn label={tr("settings.rules.learnedAccept")} small primary onClick={() => void acceptRuleCandidate(candidate)} />
                     <Btn label={tr("settings.rules.learnedDismiss")} small onClick={() => void dismissRuleCandidate(candidate)} />
                   </div>

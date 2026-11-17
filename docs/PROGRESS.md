@@ -1305,5 +1305,6 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 工具失败证据（ADR-0135）：同一工具同特征连续失败两次写 lesson 记忆，成功清零；ChatService 新增 onToolResult。
 - 自检清单（ADR-0136）：软规则投影成提交前 checkbox，排除守卫规则与冲突规则；随 currentRulesPrompt 注入并在规则页预览。
 - 失败+纠正→候选（ADR-0137）：工具失败证据关联到规则候选，纠正句可生成弱候选；候选卡显示关联工具失败。
+- 候选编辑（ADR-0138）：采纳前可改写文本、选择项目/全局；改写后重算去重 key，原 quote 保留为证据。
 - 调研：docs/research/rule-documents.md（规则文档形态/加载/自迭代机制）；设计：docs/规划/规则-记忆-工具-Loop协同.md（四层闭环、守卫编译、清单、路线图）。
 

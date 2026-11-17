@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { extractCorrectionCandidates, extractRuleCandidates, type RuleCandidate } from "loopsoar-core/rules/learn";
+import { extractCorrectionCandidates, extractRuleCandidates, ruleKey, type RuleCandidate } from "loopsoar-core/rules/learn";
 import type { RecentFailure } from "./toolEvidence.js";
 
 export type RuleCandidateStatus = "pending" | "accepted" | "dismissed";
@@ -177,9 +177,15 @@ export class RuleCandidateStore {
     return this.items.find((item) => item.id === id) ?? null;
   }
 
-  accept(id: string, promotedTo?: string): StoredRuleCandidate | null {
+  accept(id: string, promotedTo?: string, text?: string): StoredRuleCandidate | null {
     const item = this.get(id);
     if (!item) return null;
+    if (text !== undefined) {
+      const trimmed = text.trim();
+      if (trimmed.length < 4 || trimmed.length > 240) throw new Error("规则文本长度需在 4–240 字之间");
+      item.text = trimmed;
+      item.key = ruleKey(trimmed);
+    }
     item.status = "accepted";
     item.acceptedAt = this.now();
     if (promotedTo) item.promotedTo = promotedTo;

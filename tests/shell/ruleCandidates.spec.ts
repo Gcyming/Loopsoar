@@ -124,6 +124,28 @@ describe("规则候选：从对话里学习但不自动改写", () => {
     await expect(invoke("rules:acceptCandidate", { id: candidate.id })).rejects.toThrow(/已处理/);
   });
 
+  it("采纳前可改写文本，并可选择全局目标", async () => {
+    store.observe({ sessionId: "s1", workspaceId: "a", message: "必须用 pnpm 安装依赖。" });
+    const candidate = store.list("a").find((c) => c.status === "pending")!;
+    const originalKey = candidate.key;
+    const result = (await invoke("rules:acceptCandidate", {
+      id: candidate.id,
+      target: "global",
+      text: "只能使用 pnpm 安装依赖",
+    })) as { path: string; candidate: { text: string; key: string } };
+    expect(result.path).toContain(path.join("rules", "learned-rules.md"));
+    expect(readFileSync(result.path, "utf8")).toContain("- 只能使用 pnpm 安装依赖");
+    expect(result.candidate.text).toBe("只能使用 pnpm 安装依赖");
+    expect(result.candidate.key).not.toBe(originalKey);
+    expect(existsSync(path.join(wsA, "AGENTS.md"))).toBe(false);
+  });
+
+  it("过短的改写文本被拒绝", async () => {
+    store.observe({ sessionId: "s1", workspaceId: "a", message: "必须用 pnpm。" });
+    const candidate = store.list("a").find((c) => c.status === "pending")!;
+    await expect(invoke("rules:acceptCandidate", { id: candidate.id, text: "x" })).rejects.toThrow(/参数校验失败/);
+  });
+
   it("所有项目的约束采纳到全局 learned-rules.md", async () => {
     store.observe({ sessionId: "s1", workspaceId: "a", message: "所有项目都必须加中文注释。" });
     const candidate = store.list("a").find((c) => c.text.includes("中文注释"))!;

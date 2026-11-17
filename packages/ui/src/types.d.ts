@@ -1116,7 +1116,7 @@ export interface LoopsoarAPI {
       workspaces: { id: string; name: string; root: string }[];
       activeWorkspaceId: string | null;
     }>;
-    acceptCandidate(payload: { id: string; target?: "workspace" | "global" }): Promise<{
+    acceptCandidate(payload: { id: string; target?: "workspace" | "global"; text?: string }): Promise<{
       ok: boolean;
       candidate: RuleCandidateView | null;
       path: string;

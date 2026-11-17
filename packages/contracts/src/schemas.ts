@@ -902,6 +902,7 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: z.object({
       id: z.string().min(1).max(80),
       target: z.enum(["workspace", "global"]).optional(),
+      text: z.string().trim().min(4).max(240).optional(),
     }),
     sensitive: true,
   },

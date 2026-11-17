@@ -103,6 +103,11 @@ export function extractCorrectionCandidates(message: string): RuleCandidate[] {
   return [...out.values()];
 }
 
+/** 供采纳时改文本后重算去重键。 */
+export function ruleKey(text: string): string {
+  return keyOf(text);
+}
+
 /** 从一段用户消息里抽候选规则；同一句只保留一条（按 key 去重）。 */
 export function extractRuleCandidates(message: string): RuleCandidate[] {
   const cleaned = message.replace(/\x60{3}[\s\S]*?\x60{3}/g, " ").replace(/\r/g, "");
