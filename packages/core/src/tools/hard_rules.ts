@@ -1,11 +1,13 @@
 /**
  * 危险命令规则（§4.3 S4）
  * DANGEROUS_COMMAND_RE：10 条正则（来源 slime 安全审计）
+ * analyzeDangerousCommand：词法/argv 语义层，补正则可绕过的变形（P1-2）
  */
+import { analyzeDangerousCommand } from "./command_safety.js";
 
 export const DANGEROUS_COMMAND_RE = [
-  // 1. rm -rf / (根目录删除)
-  /\brm\s+-rf\s+\//i,
+  // 1. rm -rf /（只命中根/家目录，不误杀 /tmp 等绝对路径；变形由语义层补）
+  /\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:\/(?:\s|$|\*)|~(?:\s|$|\/)|(?:\$HOME|\$\{HOME\})(?:\s|$|\/))/i,
   // 2. dd (磁盘覆盖)
   /\bdd\b/i,
   // 3. mkfs (格式化文件系统)
@@ -32,6 +34,8 @@ export function hardRuleCheck(cmd: string): { blocked: boolean; reason?: string 
       return { blocked: true, reason: `匹配危险规则 #${i + 1}` };
     }
   }
+  const semantic = analyzeDangerousCommand(cmd);
+  if (semantic) return { blocked: true, reason: semantic };
   return { blocked: false };
 }
 

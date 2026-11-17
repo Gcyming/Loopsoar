@@ -125,6 +125,11 @@ export interface ChatServiceOptions {
   };
   /** 会话历史（持久化消息，按时间正序）；缺省则单轮对话。 */
   getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string; ts?: number }[];
+  /**
+   * 读取图片附件（当前用户轮的 `【附件】<path>`）：返回 base64 供多模态消息使用。
+   * 由壳层注入（扩展名白名单 + 6MB 上限在 imageRead 内）；services 不直接碰 fs。
+   */
+  readImageAttachment?: (path: string) => { mime: string; base64: string } | null;
   /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
   onPermissionRequest?: (request: PermissionRequestEvent) => void;
   agent?: ChatAgent;
@@ -354,6 +359,7 @@ export class InternalToolExecutor {
     const decision = sandbox.checkPermission(
       {
         agentId: this.opts.agentId,
+        sessionId: this.opts.sessionId,
         toolName: toolCall.name,
         target,
         kind,
@@ -400,7 +406,7 @@ export class InternalToolExecutor {
       }
       // 敏感步骤**不写会话白名单**：allow-session 对敏感动作降级为 allow-once，下一次仍须单独确认。
       if (result.choice === "allow-session" && !forceSensitiveConfirm) {
-        sandbox.approveToolForSession(this.opts.agentId, toolCall.name);
+        sandbox.approveToolForSession(this.opts.agentId, toolCall.name, this.opts.sessionId);
       }
     }
     if (!tool) {
@@ -421,6 +427,23 @@ export class InternalToolExecutor {
  * 事件以 ChunkItem 形式交给 sink（meta.type = chunk/reasoning/tool/progress/done/error/heartbeat），
  * shell 层据此映射到 chat:stream:<type> 推送；batcher 负责 40ms/24000 字合批。
  */
+function imageAttachmentParts(
+  text: string,
+  read: ((path: string) => { mime: string; base64: string } | null) | undefined,
+): { type: "image"; mime: string; base64: string }[] {
+  if (!read) return [];
+  const parts: { type: "image"; mime: string; base64: string }[] = [];
+  const re = /【附件】([^\n]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const path = match[1]?.trim();
+    if (!path) continue;
+    const image = read(path);
+    if (image) parts.push({ type: "image", mime: image.mime, base64: image.base64 });
+  }
+  return parts;
+}
+
 export class ChatService {
   private permBus: PermRequestBus;
   /** sessionId → 当前运行中的转向总线（steer 注入用） */
@@ -564,10 +587,17 @@ export class ChatService {
         });
       }
     }
+    const userText = `${withWallClockPrefix(input.message, requestNow)}\n\n${volatileContent}`;
+    const imageParts = imageAttachmentParts(input.message, this.opts.readImageAttachment);
     const messages = [
       { role: "system" as const, content: stableContent },
       ...compression.messages,
-      { role: "user" as const, content: `${withWallClockPrefix(input.message, requestNow)}\n\n${volatileContent}` },
+      {
+        role: "user" as const,
+        content: imageParts.length > 0
+          ? [{ type: "text" as const, text: userText }, ...imageParts]
+          : userText,
+      },
     ];
 
     const controller = new AbortController();

@@ -22,7 +22,7 @@ import {
 } from "loopsoar-core/extensionWorker";
 import type { ToolDefinition, ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import type { ExtensionHost } from "./extensions.js";
-import type { InstalledExtension } from "loopsoar-core/extension";
+import { resolveExtensionToolPermissions, type InstalledExtension } from "loopsoar-core/extension";
 
 export type ExtensionRuntimeState = "idle" | "starting" | "ready" | "error";
 
@@ -141,7 +141,7 @@ export class ExtensionRuntime {
         state: run.ready ? "ready" : "starting",
         tools: [...run.tools],
         // 冲突原因优先于最后一行日志：loadFailed 展示时用户才能知道「为什么少了工具」
-        error: run.ready && run.conflicts.length > 0 ? `工具名冲突（fail-closed 未覆盖）：${run.conflicts.join("；")}` : run.stderrRing.at(-1),
+        error: run.ready && run.conflicts.length > 0 ? `扩展工具未注册（fail-closed）：${run.conflicts.join("；")}` : run.stderrRing.at(-1),
       };
     }
     return this.statusMap.get(id) ?? { state: "idle", tools: [] };
@@ -158,7 +158,7 @@ export class ExtensionRuntime {
     const item = this.opts.extensions.list().find((candidate) => candidate.manifest.id === id);
     if (!item) return this.setStatus(id, { state: "error", tools: [], error: `扩展不存在：${id}` });
     const main = item.manifest.main?.trim();
-    if (!main) return this.setStatus(id, { state: "error", tools: [], error: "该扩展未声明 main 入口（纯声明式扩展）" });
+    if (!main) return this.setStatus(id, { state: "error", tools: [], error: "该扩展未声明 main 入口（当前版本不支持仅声明式扩展）" });
     // 入口必须位于扩展目录内且真实存在：提前给出可读原因（worker 侧也有一层防线，这里避免盲起进程）
     const entryPath = path.resolve(item.dir, main);
     const dirPath = path.resolve(item.dir);
@@ -215,7 +215,7 @@ export class ExtensionRuntime {
             state: "ready",
             tools: [...run.tools],
             // 有冲突仍算 ready（其余工具可用），但必须让 UI 可见「被 fail-closed 跳过了什么」
-            ...(run.conflicts.length > 0 ? { error: `工具名冲突（fail-closed 未覆盖）：${run.conflicts.join("；")}` } : {}),
+            ...(run.conflicts.length > 0 ? { error: `扩展工具未注册（fail-closed）：${run.conflicts.join("；")}` } : {}),
           });
           return;
         }
@@ -298,10 +298,16 @@ export class ExtensionRuntime {
         run.conflicts.push(`工具名已存在：${toolName}`);
         continue;
       }
+      // 权限交集：manifest 授权 ∩ 工具声明；未声明/越权一律不注册。
+      const resolved = resolveExtensionToolPermissions(item.manifest.permissions, def.permissions);
+      if (resolved.errors.length > 0) {
+        run.conflicts.push(`权限拒绝 ${def.name}：${resolved.errors.join("；")}`);
+        continue;
+      }
       const definition: ToolDefinition = {
         name: toolName,
         description: def.description ?? `扩展工具：${def.name}`,
-        permissions: def.permissions ?? {},
+        permissions: resolved.permissions,
         schema: z.any(),
         parameters: def.parameters,
         execute: async (ctx) => this.call(item.manifest.id, def.name, ctx.params),

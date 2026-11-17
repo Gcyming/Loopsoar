@@ -586,7 +586,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     zh: "未启动（点「启动」或打开开关）",
     en: "Not started (click “Start” or toggle the switch)",
   },
-  "settings.extensions.declarative": { zh: "纯声明式扩展（无入口）", en: "Declarative extension (no entry)" },
+  "settings.extensions.declarative": { zh: "缺少入口（当前不支持仅声明式扩展）", en: "Missing entry (declarative-only not supported)" },
   "settings.extensions.tools": { zh: "工具", en: "Tools" },
 
   /* ── 浏览器扩展（Chrome/Edge） ── */

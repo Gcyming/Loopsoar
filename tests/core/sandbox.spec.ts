@@ -49,6 +49,53 @@ describe("沙箱：八步决策链（fail-closed）", () => {
     expect(last?.reason).toContain("异常检测");
   });
 
+  it("③ 限流按 session+agent 隔离：A 会话写满不误伤 B 会话", () => {
+    const sm = freshSandbox();
+    sm.syncKnownTools(["file_write"]);
+    for (let i = 0; i < 101; i++) {
+      sm.checkPermission({
+        agentId: "a",
+        sessionId: "s1",
+        toolName: "file_write",
+        kind: "write",
+        target: "C:/loopsoar-work/f.txt",
+      });
+    }
+    const denied = sm.checkPermission({
+      agentId: "a",
+      sessionId: "s1",
+      toolName: "file_write",
+      kind: "write",
+      target: "C:/loopsoar-work/f.txt",
+    });
+    expect(denied.action).toBe("deny");
+    expect(denied.reason).toContain("写入频率");
+
+    const other = sm.checkPermission({
+      agentId: "a",
+      sessionId: "s2",
+      toolName: "file_write",
+      kind: "write",
+      target: "C:/loopsoar-work/f.txt",
+    });
+    expect(other.action).toBe("confirm"); // 不受 s1 的 100 次影响
+  });
+
+  it("③ 删除会话时一并清空限流历史（同 id 重建不继承计数）", () => {
+    const sm = freshSandbox();
+    sm.syncKnownTools(["file_write"]);
+    for (let i = 0; i < 101; i++) {
+      sm.checkPermission({ agentId: "a", sessionId: "s1", toolName: "file_write", kind: "write" });
+    }
+    expect(sm.checkPermission({ agentId: "a", sessionId: "s1", toolName: "file_write", kind: "write" }).action).toBe(
+      "deny",
+    );
+    sm.clearSessionApprovals("s1");
+    expect(sm.checkPermission({ agentId: "a", sessionId: "s1", toolName: "file_write", kind: "write" }).action).toBe(
+      "confirm",
+    );
+  });
+
   it("③ 危险命令（rm -rf /）→ deny", () => {
     const sm = freshSandbox();
     const d = sm.checkPermission({
@@ -113,6 +160,29 @@ describe("沙箱：八步决策链（fail-closed）", () => {
     const d = sm.checkPermission({ agentId: "a", toolName: "file_write", kind: "write" });
     expect(d.action).toBe("allow");
     expect(d.reason).toContain("会话白名单");
+  });
+
+  it("⑥ 会话白名单按 session+agent 隔离：A 会话授权不泄漏到 B；删除会话即撤销", () => {
+    const sm = freshSandbox();
+    sm.syncKnownTools(["file_write"]);
+    sm.approveToolForSession("a", "file_write", "s1");
+
+    expect(
+      sm.checkPermission({ agentId: "a", sessionId: "s1", toolName: "file_write", kind: "write" }).action,
+    ).toBe("allow");
+    // 同 Agent 的另一个会话：仍应确认
+    expect(
+      sm.checkPermission({ agentId: "a", sessionId: "s2", toolName: "file_write", kind: "write" }).action,
+    ).toBe("confirm");
+    // 同会话的另一个 Agent：仍应确认
+    expect(
+      sm.checkPermission({ agentId: "b", sessionId: "s1", toolName: "file_write", kind: "write" }).action,
+    ).toBe("confirm");
+
+    sm.clearSessionApprovals("s1");
+    expect(
+      sm.checkPermission({ agentId: "a", sessionId: "s1", toolName: "file_write", kind: "write" }).action,
+    ).toBe("confirm");
   });
 
   it("⑦ 等级策略：L0 读自动放行 / L2 写需确认 / L4 网络需确认", () => {

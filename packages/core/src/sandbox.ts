@@ -6,7 +6,7 @@
  *   ③ 异常检测（写频率 >100/min、危险命令正则、循环 >1000）→ deny
  *   ④ deny_tools → deny
  *   ⑤ require_approval_tools → confirm
- *   ⑥ auto_approve_tools 或会话白名单（approveToolForSession）→ allow
+ *   ⑥ auto_approve_tools 或会话白名单（按 sessionId + agentId）→ allow
  *   ⑦ 按当前安全等级策略（DEFAULT_LEVEL_POLICY）：auto→allow / deny→deny / confirm→confirm
  *   ⑧ 兜底 → deny（fail-closed；未知工具名也是 deny，不抛错——「判不了≠不存在」在注册表层区分）
  */
@@ -49,6 +49,8 @@ export interface SandboxDecision {
 
 export interface PermissionReq {
   agentId: string;
+  /** 会话 id：会话白名单按 session+agent 隔离；缺省时退回旧的 agent 级白名单（兼容单测/旧装配）。 */
+  sessionId?: string;
   toolName: string;
   target?: string;
   kind: PermissionKind;
@@ -68,12 +70,13 @@ export interface SandboxScope {
 export class SandboxManager {
   private workspaceRoot: string = process.cwd();
   private allowedDirs: string[] = [];
-  private sessionApprovals = new Map<string, Set<string>>(); // agentId -> toolNames
+  /** key = `${sessionId}\0${agentId}`；无会话时用 `\0${agentId}` 兼容旧行为。 */
+  private sessionApprovals = new Map<string, Set<string>>();
   private denyTools = new Set<string>();
   private requireApprovalTools = new Set<string>();
   private autoApproveTools = new Set<string>();
-  private writeHistory = new Map<string, number[]>(); // agentId -> 写操作时间戳
-  private terminalCount = new Map<string, number>(); // agentId -> 终端调用计数
+  private writeHistory = new Map<string, number[]>(); // `${sessionId}\0${agentId}` -> 写操作时间戳
+  private terminalCount = new Map<string, number>(); // `${sessionId}\0${agentId}` -> 终端调用计数
   private knownTools = new Set<string>(); // 已装配工具名（由 ToolRegistry 同步）
   private assemblyDone = false; // 「判不了 ≠ 不存在」：未装配完成时不因空清单而全拒
 
@@ -86,10 +89,31 @@ export class SandboxManager {
     this.allowedDirs.push(dir);
   }
 
-  /** 会话白名单：用户点「本次会话总是允许」后，同 Agent 同工具不再询问。 */
-  approveToolForSession(agentId: string, toolName: string): void {
-    if (!this.sessionApprovals.has(agentId)) this.sessionApprovals.set(agentId, new Set());
-    this.sessionApprovals.get(agentId)!.add(toolName);
+  /** 会话白名单 key：会话 + Agent 双维度，避免 A 会话的授权泄漏到 B 会话。 */
+  private approvalKey(agentId: string, sessionId?: string): string {
+    return `${sessionId ?? ""}\u0000${agentId}`;
+  }
+
+  /** 会话白名单：用户点「本次会话总是允许」后，同会话同 Agent 同工具不再询问。 */
+  approveToolForSession(agentId: string, toolName: string, sessionId?: string): void {
+    const key = this.approvalKey(agentId, sessionId);
+    if (!this.sessionApprovals.has(key)) this.sessionApprovals.set(key, new Set());
+    this.sessionApprovals.get(key)!.add(toolName);
+  }
+
+  /** 删除会话时清理该会话的全部会话白名单（不传则保持旧行为，不清）。 */
+  clearSessionApprovals(sessionId: string): void {
+    const prefix = `${sessionId}\u0000`;
+    for (const key of [...this.sessionApprovals.keys()]) {
+      if (key.startsWith(prefix)) this.sessionApprovals.delete(key);
+    }
+    // 限流历史同样按会话隔离；会话删除后一并清掉，避免内存驻留和同 id 重建时继承旧计数。
+    for (const key of [...this.writeHistory.keys()]) {
+      if (key.startsWith(prefix)) this.writeHistory.delete(key);
+    }
+    for (const key of [...this.terminalCount.keys()]) {
+      if (key.startsWith(prefix)) this.terminalCount.delete(key);
+    }
   }
 
   addDenyTool(tool: string): void {
@@ -134,17 +158,18 @@ export class SandboxManager {
   }
 
   /** 异常检测：三条规则真正生效（写频率、危险命令、循环），任何命中即拒。 */
-  private checkAnomaly(agentId: string, kind: PermissionKind, target?: string): string | null {
+  private checkAnomaly(agentId: string, kind: PermissionKind, target?: string, sessionId?: string): string | null {
+    const key = this.approvalKey(agentId, sessionId);
     if (kind === "write") {
       const now = Date.now();
-      const window = (this.writeHistory.get(agentId) ?? []).filter((t) => now - t < 60_000);
+      const window = (this.writeHistory.get(key) ?? []).filter((t) => now - t < 60_000);
       window.push(now);
-      this.writeHistory.set(agentId, window);
+      this.writeHistory.set(key, window);
       if (window.length > 100) return "写入频率超过 100 次/分钟";
     }
     if (kind === "terminal") {
-      const count = (this.terminalCount.get(agentId) ?? 0) + 1;
-      this.terminalCount.set(agentId, count);
+      const count = (this.terminalCount.get(key) ?? 0) + 1;
+      this.terminalCount.set(key, count);
       if (count > 1000) return "循环操作超过 1000 次";
       if (typeof target === "string" && target.length > 0) {
         const r = hardRuleCheck(target);
@@ -159,7 +184,7 @@ export class SandboxManager {
    * （保留 setWorkspaceRoot 兼容旧装配：未传作用域时仍用全局根）。
    */
   checkPermission(req: PermissionReq, opts?: SandboxScope): SandboxDecision {
-    const { agentId, toolName, target, kind } = req;
+    const { agentId, sessionId, toolName, target, kind } = req;
     const level = kindToLevel(kind);
     // 显式传入且非空才覆盖；空串视为未传（fail-safe，避免把根解析成 cwd 之外的空路径）
     const scopeRoot = opts?.workspaceRoot?.trim() ? opts.workspaceRoot : this.workspaceRoot;
@@ -180,7 +205,7 @@ export class SandboxManager {
     }
 
     // ③ 异常检测 → 拒绝
-    const anomaly = this.checkAnomaly(agentId, kind, target);
+    const anomaly = this.checkAnomaly(agentId, kind, target, sessionId);
     if (anomaly) {
       return { action: "deny", level: 5, reason: `异常检测：${anomaly}` };
     }
@@ -201,7 +226,7 @@ export class SandboxManager {
     }
 
     // ⑥ auto_approve_tools 或会话白名单 → 放行
-    const sessionApproved = this.sessionApprovals.get(agentId)?.has(toolName) ?? false;
+    const sessionApproved = this.sessionApprovals.get(this.approvalKey(agentId, sessionId))?.has(toolName) ?? false;
     if (this.autoApproveTools.has(toolName) || sessionApproved) {
       return { action: "allow", level, reason: sessionApproved ? "会话白名单" : "自动批准" };
     }

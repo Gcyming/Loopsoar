@@ -11,8 +11,12 @@
  * }
  */
 import { z } from "zod";
+import type { ToolPermissions } from "./tools/registry.js";
 
 export const EXTENSION_MANIFEST_FILE = "loopsoar.extension.json";
+
+export const EXTENSION_PERMISSION_KEYS = ["read", "write", "terminal", "network"] as const;
+export type ExtensionPermission = (typeof EXTENSION_PERMISSION_KEYS)[number];
 
 export const ExtensionManifestSchema = z.object({
   id: z
@@ -24,14 +28,58 @@ export const ExtensionManifestSchema = z.object({
   version: z.string().min(1).max(40),
   description: z.string().max(4000).optional(),
   author: z.string().max(200).optional(),
-  /** 入口文件（相对扩展目录）；留空表示纯声明式扩展（仅给 Agent 提供提示词/规则）。 */
+  /** 入口文件（相对扩展目录）；当前版本必须提供——纯声明式扩展（仅提示词/规则）尚未实现。 */
   main: z.string().max(300).optional(),
-  /** 声明的权限类别，安装时展示；实际执行仍走沙箱与确认流程。 */
-  permissions: z.array(z.enum(["read", "write", "terminal", "network"])).max(4).optional(),
+  /**
+   * 扩展工具可用的权限上限。未声明 = 扩展工具全部拒绝（fail-closed）。
+   * 注意：它只约束桥接进 ToolRegistry 的工具；worker 进程本身仍是完整 Node 权限，
+   * 安装第三方扩展等同于信任其代码。OS 级隔离见审计报告 P1-8。
+   */
+  permissions: z.array(z.enum(EXTENSION_PERMISSION_KEYS)).max(4).optional(),
   keywords: z.array(z.string().max(80)).max(50).optional(),
 });
 
 export type ExtensionManifest = z.infer<typeof ExtensionManifestSchema>;
+
+/**
+ * 计算某个扩展工具的实际权限：manifest 授权 ∩ 工具声明，fail-closed。
+ *
+ * 规则：
+ *   · manifest 未声明权限 → 拒绝（不能靠“工具自己说自己只读”放行）；
+ *   · 工具未声明任何权限 → 拒绝（空权限在 kindOfTool 里会被误判成 read）；
+ *   · 工具声明了 manifest 未授予的权限 → 拒绝整个工具（不做静默降级）；
+ *   · 全部通过 → 返回交集，供 ToolRegistry/沙箱按类别判定。
+ */
+export function resolveExtensionToolPermissions(
+  manifestPermissions: readonly string[] | undefined,
+  declared: Record<string, unknown> | undefined,
+): { permissions: ToolPermissions; errors: string[] } {
+  const granted = new Set<string>(manifestPermissions ?? []);
+  const errors: string[] = [];
+  if (granted.size === 0) {
+    errors.push("manifest 未声明 permissions，扩展工具一律拒绝");
+  }
+
+  const declaredTrue = Object.entries(declared ?? {}).filter(([, value]) => value === true);
+  if (declaredTrue.length === 0) {
+    errors.push("工具未声明任何 permissions");
+  }
+
+  const permissions: ToolPermissions = {};
+  for (const [key] of declaredTrue) {
+    if (!(EXTENSION_PERMISSION_KEYS as readonly string[]).includes(key)) {
+      errors.push(`工具声明了未知权限：${key}`);
+      continue;
+    }
+    if (!granted.has(key)) {
+      errors.push(`工具声明了 manifest 未授权的权限：${key}`);
+      continue;
+    }
+    permissions[key as ExtensionPermission] = true;
+  }
+
+  return errors.length > 0 ? { permissions: {}, errors } : { permissions, errors };
+}
 
 export interface InstalledExtension {
   manifest: ExtensionManifest;

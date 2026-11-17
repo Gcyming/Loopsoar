@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { LoopRegistry, type LoopDefinition, type LoopRunContext } from "../../packages/core/src/loop/loopRegistry.ts";
-import type { ToolLoopOutcome } from "../../packages/core/src/tool_loop.ts";
+import type { ToolLoopOutcome, ToolExecutor } from "../../packages/core/src/tool_loop.ts";
 
 function outcome(status: ToolLoopOutcome["status"], text: string): ToolLoopOutcome {
   return {
@@ -92,6 +92,79 @@ describe("Agent-Loop 注册表（安全模式后备）", () => {
     expect(result.finalText).toContain("safeMode=true");
     expect(reasons[0]).toContain("boom");
     expect(ctx.marker).toBe("keep-me"); // ctx 未被替换/清空
+  });
+
+  it("runner 已执行工具后抛错 → 不回退、不重放副作用，返回 error", async () => {
+    let builtinCalled = false;
+    const reg = new LoopRegistry({ silentTimeoutMs: 1000 });
+    reg.registerBuiltin({
+      id: "core-loop",
+      name: "builtin",
+      runner: async () => {
+        builtinCalled = true;
+        return outcome("done", "builtin");
+      },
+    });
+    reg.register({
+      id: "side-effect",
+      name: "已产生副作用的 loop",
+      runner: async (ctx) => {
+        const exec = ctx.executeTool as ToolExecutor;
+        await exec.invoke({ id: "call-1", name: "file_write", args: { path: "a.txt", content: "x" } });
+        throw new Error("写完之后崩了");
+      },
+    });
+    const result = await reg.run("side-effect", {
+      sessionId: "s2b",
+      executeTool: { invoke: async () => ({ ok: true, content: "written" }) },
+    });
+    expect(result.status).toBe("error");
+    expect(result.reason).toContain("已执行 1 个工具");
+    expect(result.reason).toContain("未自动回退");
+    expect(builtinCalled).toBe(false);
+    expect(reg.fallbackLog()).toHaveLength(0);
+  });
+
+  it("runner 已执行工具后静默挂起 → 先 abort，再停止（不回退）", async () => {
+    let builtinCalled = false;
+    let sawAbort = false;
+    const reg = new LoopRegistry({ silentTimeoutMs: 30 });
+    reg.registerBuiltin({
+      id: "core-loop",
+      name: "builtin",
+      runner: async () => {
+        builtinCalled = true;
+        return outcome("done", "builtin");
+      },
+    });
+    reg.register({
+      id: "slow-side-effect",
+      name: "执行工具后挂起",
+      runner: async (ctx) => {
+        const exec = ctx.executeTool as ToolExecutor;
+        await exec.invoke({ id: "call-1", name: "file_write", args: {} });
+        return await new Promise<ToolLoopOutcome>((_, reject) => {
+          (ctx.signal as AbortSignal).addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+              reject(new Error("runner aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    const result = await reg.run("slow-side-effect", {
+      sessionId: "s2c",
+      executeTool: { invoke: async () => ({ ok: true, content: "written" }) },
+    });
+    expect(sawAbort).toBe(true);
+    expect(result.status).toBe("error");
+    expect(result.reason).toContain("已执行 1 个工具");
+    expect(result.reason).toContain("静默超时");
+    expect(builtinCalled).toBe(false);
+    expect(reg.fallbackLog()).toHaveLength(0);
   });
 
   it("静默超时 → 回退 builtin", async () => {

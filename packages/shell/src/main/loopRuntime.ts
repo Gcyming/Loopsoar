@@ -6,7 +6,8 @@
  *
  * 铁律（复用 core LoopRegistry 既有能力，不在壳层重造）：
  *   ① builtin core-loop 不可删改，是任何自定义 loop 的最后兜底；
- *   ② 自定义 loop（L2/L3）跑挂（静态校验失败/抛错/静默超时/worker 崩溃）→ 自动回退 builtin，同一 ctx 重跑；
+ *   ② 自定义 loop（L2/L3）跑挂（静态校验失败/抛错/静默超时/worker 崩溃）→ 只有「尚未执行任何工具」时
+ *      才自动回退 builtin；已执行工具则停止并显式报错，避免重放副作用；
  *   ③ 回退必须可见：push loop:fallback（UI 显著提示 + 诊断）。
  *
  * 三档来源：

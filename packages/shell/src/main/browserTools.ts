@@ -16,7 +16,8 @@ import type { NetAdapter } from "loopsoar-core/platform";
 import { classifySensitiveStep } from "loopsoar-core/sensitiveSteps";
 import { agentLoopbackAllowed, isLoopbackTarget } from "./browserRequestGuard.js";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
-import type { BrowserHost, TabState } from "./browserHost.js";
+import type { BrowserBackend } from "./browserBackend.js";
+import type { TabState } from "./browserHost.js";
 import type { BrowserElementSnapshot } from "../browserAdapter/types.js";
 import {
   MAX_VISIBLE_ELEMENTS,
@@ -65,7 +66,7 @@ function tokenKey(sessionId: string | undefined, tabId: string | null | undefine
 }
 
 /** 目标标签（缺省活动标签）；宿主未提供 activeTabId（老实现/测试假件）时返回 null。 */
-function activeTabOf(host: BrowserHost, sessionId?: string): string | null {
+function activeTabOf(host: BrowserBackend, sessionId?: string): string | null {
   try {
     return typeof host.activeTabId === "function" ? host.activeTabId(sessionId) : null;
   } catch {
@@ -114,7 +115,7 @@ interface SettledState {
 }
 
 /** 读标签状态；宿主没有 getTab / 标签已消失时返回 null（状态行降级，不抛错）。 */
-function readTab(host: BrowserHost, sessionId: string | undefined, tabId: string | null): TabStatus | null {
+function readTab(host: BrowserBackend, sessionId: string | undefined, tabId: string | null): TabStatus | null {
   if (!tabId) return null;
   const getter = (host as unknown as { getTab?: (sessionId?: string, tabId?: string) => TabState | null }).getTab;
   if (typeof getter !== "function") return null;
@@ -134,7 +135,7 @@ function readTab(host: BrowserHost, sessionId: string | undefined, tabId: string
  *  · 「发生导航」= URL 变化，或本次动作让标签进入加载。
  */
 async function settleTab(
-  host: BrowserHost,
+  host: BrowserBackend,
   sessionId: string | undefined,
   tabId: string | null,
   before: TabStatus | null,
@@ -327,11 +328,11 @@ export interface BrowserToolHooks {
  */
 export function registerBrowserTools(
   registry: ToolRegistry,
-  browserHost: () => BrowserHost | null,
+  browserHost: () => BrowserBackend | null,
   resolveSessionRoot?: (sessionId?: string) => string,
   hooks?: BrowserToolHooks,
 ): void {
-  const needHost = (): BrowserHost => {
+  const needHost = (): BrowserBackend => {
     const host = browserHost();
     if (!host) throw new Error("浏览器未就绪");
     return host;
@@ -342,7 +343,7 @@ export function registerBrowserTools(
    * 返回 null = 不画（没有覆盖层 / 该会话的网页不在前台）。
    */
   const pointPointer = (
-    host: BrowserHost,
+    host: BrowserBackend,
     sessionId: string | undefined,
     tabId: string | null,
     point: { x: number; y: number; width?: number; height?: number },

@@ -506,7 +506,7 @@ export interface InstalledExtension {
     version: string;
     description?: string;
     author?: string;
-    /** 入口文件（相对扩展目录）；为空表示纯声明式扩展 */
+    /** 入口文件（相对扩展目录）；当前版本必须提供，仅声明式扩展尚未实现 */
     main?: string;
     permissions?: string[];
   };

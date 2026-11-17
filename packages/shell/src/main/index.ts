@@ -62,6 +62,7 @@ import { checkCommandGuards, compileCommandGuards } from "loopsoar-core/rules/co
 import { registerMemoryTools } from "./memoryTools.js";
 import { buildSessionEpisode } from "./memoryEpisode.js";
 import { registerSearchTools } from "./searchTools.js";
+import { readImageDataUrl } from "./imageRead.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
 import { AskBus } from "./askBus.js";
@@ -601,7 +602,13 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             });
             if (pointerWin) {
               try {
-                const img = await pointerWin.capturePage();
+                // 透明指针窗口的 BrowserWindow.capturePage 在 Windows 上也可能永久挂起：加超时，失败不阻断主截图/退出。
+                const img = await Promise.race([
+                  pointerWin.webContents.capturePage(),
+                  new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error("pointer capturePage 超时 5000ms")), 5_000);
+                  }),
+                ]);
                 if (!img.isEmpty()) {
                   fs.writeFileSync(process.env.LOOPSOAR_E2E_POINTER_SHOT, img.toPNG());
                   console.log("POINTER_SHOT_SAVED", process.env.LOOPSOAR_E2E_POINTER_SHOT);
@@ -1016,12 +1023,15 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             }
           }
 
-          // 整窗截图：优先 BrowserWindow.capturePage（含子视图合成），否则退回 webContents
-          const anyWin = win as unknown as { capturePage?: () => Promise<{ toPNG(): Buffer }> };
-          const image =
-            typeof anyWin.capturePage === "function"
-              ? await anyWin.capturePage()
-              : await win.webContents.capturePage();
+          // 整窗截图：用 webContents.capturePage（BrowserWindow.capturePage 在带 WebContentsView 的 Windows 会话里会卡死）。
+          // 合成层仍可能挂起：加 5s 超时，超时走 catch → finally app.quit()；浏览器子视图另拍。
+          const capture = win.webContents.capturePage();
+          const image = await Promise.race([
+            capture,
+            new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error("capturePage 超时 5000ms")), 5_000);
+            }),
+          ]);
           fs.mkdirSync(path.dirname(shotPath), { recursive: true });
           fs.writeFileSync(shotPath, image.toPNG());
           console.log(`GUI_SHOT_SAVED ${shotPath}`);
@@ -1029,7 +1039,12 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           // 原生浏览器视图单独截图（Electron 的窗口截图不含子视图；受限会话下可能拿不到合成层，失败不中断）
           if (navUrl && browserHost) {
             try {
-              const base64 = await browserHost.screenshot();
+              const base64 = await Promise.race([
+                browserHost.screenshot(),
+                new Promise<never>((_, reject) => {
+                  setTimeout(() => reject(new Error("browserHost.screenshot 超时 5000ms")), 5_000);
+                }),
+              ]);
               if (base64) {
                 const viewShot = shotPath.replace(/\.png$/, "-browser-view.png");
                 fs.writeFileSync(viewShot, Buffer.from(base64, "base64"));
@@ -1870,6 +1885,17 @@ app.whenReady().then(async () => {
     runLoop: (input) => loopRuntime.run(input),
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
+    readImageAttachment: (filePath: string) => {
+      // 非视觉模型不注入图片：否则 text-only 上游会直接 400（比“看不到图”更糟）。
+      const active = providers.active();
+      const spec = active?.models?.find((m) => m.id === active.model);
+      if (spec?.vision !== true && !spec?.inputModalities?.includes("image")) return null;
+      const image = readImageDataUrl(filePath);
+      if (!image.ok || !image.dataUrl) return null;
+      const comma = image.dataUrl.indexOf(",");
+      if (comma < 0) return null;
+      return { mime: image.mime ?? "image/png", base64: image.dataUrl.slice(comma + 1) };
+    },
     // 规则文件（AGENTS.md）：每次 stream 重新读取；项目规则按会话所属工作区解析。
     getSystemRules: (sessionId?: string) =>
       currentRulesPrompt(
@@ -2561,6 +2587,8 @@ app.whenReady().then(async () => {
       sessions.setWorktree(sessionId, null);
     },
     onSessionDeleted: async (sessionId, nextSessionId) => {
+      // 会话删除即撤销该会话的全部「总是允许」，避免残留授权影响后续复用同名会话。
+      sandbox.clearSessionApprovals(sessionId);
       browserStates.delete(sessionId);
       if (!browserHost) return;
       await browserHost.deleteSession(sessionId).catch(() => undefined);

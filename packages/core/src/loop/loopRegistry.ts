@@ -2,12 +2,12 @@
  * Agent-Loop 注册表（ADR-0010）：可插拔 loop + 安全模式后备。
  * 铁律：
  *   ① builtin loop 不可删除、不可原位修改——只能「复制为新 loop 再改」，原件永远是最后兜底；
- *   ② 任何自定义 loop 跑挂（静态校验失败 / 抛错 / 静默超时）→ 自动回退 builtin，用同一 ctx 重跑，
- *      且 ctx 保持不变（会话与工具结果不丢，任务继续而不是重来）；
+ *   ② 自定义 loop 跑挂时，只有**尚未执行任何工具**才自动回退 builtin；已执行工具则停止并显式报错，
+ *      避免把 file_write / terminal_run / 浏览器点击等副作用重放一遍；
  *   ③ 回退必须可见：onFallback 回调上报原因（界面显著提示 + 诊断）。
  */
 import { LOOP_HEALTH } from "loopsoar-contracts/security-policy";
-import type { ToolLoopOutcome } from "../tool_loop.js";
+import type { ToolLoopOutcome, ToolExecutor } from "../tool_loop.js";
 
 /** loop 运行上下文：会被原样透传给 runner（回退时同一对象重跑）。 */
 export interface LoopRunContext {
@@ -121,8 +121,9 @@ export class LoopRegistry {
   /**
    * 运行 loop（安全模式后备在这里）：
    * ① 未知 id / 静态校验失败 → 回退 builtin；
-   * ② runner 抛错 / 静默超时 → 回退 builtin 用同一 ctx 重跑（safeMode=true）；
-   * ③ 回退不丢 ctx；回退原因进 fallbackLog + onFallback。
+   * ② runner 抛错 / 静默超时 → 先 abort；未执行过工具才回退 builtin，已执行过工具则停止并报错；
+   * ③ 外部中止 → 直接返回 aborted，绝不触发回退；
+   * ④ 回退不丢 ctx；回退原因进 fallbackLog + onFallback。
    */
   async run(id: string | undefined, ctx: LoopRunContext): Promise<ToolLoopOutcome> {
     const targetId = id ?? this.currentId;
@@ -135,25 +136,102 @@ export class LoopRegistry {
     if (staticErrors.length > 0) {
       return this.fallbackFrom(def, ctx, `静态校验失败：${staticErrors.join("；")}`);
     }
+
+    const parentSignal = ctx.signal as AbortSignal | undefined;
+    if (parentSignal?.aborted) return this.abortedOutcome(0);
+
+    const controller = new AbortController();
+    const unlink = this.linkAbort(parentSignal, controller);
+    let toolCalls = 0;
+    const baseExecutor = ctx.executeTool as ToolExecutor | undefined;
+    const runCtx: LoopRunContext = {
+      ...ctx,
+      safeMode: false,
+      signal: controller.signal,
+      ...(baseExecutor
+        ? {
+            executeTool: {
+              invoke: async (toolCall) => {
+                toolCalls += 1;
+                return baseExecutor.invoke(toolCall);
+              },
+            } satisfies ToolExecutor,
+          }
+        : {}),
+    };
+    const runner = Promise.resolve().then(() => def.runner(runCtx));
     try {
-      return await this.withTimeout(def, { ...ctx, safeMode: false });
+      return await this.withTimeout(runner, controller);
     } catch (err) {
-      return this.fallbackFrom(def, ctx, err instanceof Error ? err.message : String(err));
+      const reason = err instanceof Error ? err.message : String(err);
+      controller.abort();
+      await this.settle(runner);
+      // 用户主动停止：不是 loop 故障，绝不能回退重跑。
+      if (parentSignal?.aborted) return this.abortedOutcome(toolCalls);
+      // 已经产生工具副作用：回退会让 builtin 从原始消息重放一遍；停止比“假装继续”安全。
+      if (toolCalls > 0 && !def.builtin) return this.sideEffectStop(reason, toolCalls);
+      return this.fallbackFrom(def, ctx, reason);
+    } finally {
+      unlink();
     }
   }
 
-  private withTimeout(def: LoopDefinition, ctx: LoopRunContext): Promise<ToolLoopOutcome> {
+  /** 外部中止信号联到本次运行的内部 controller；返回解绑函数。 */
+  private linkAbort(parent: AbortSignal | undefined, controller: AbortController): () => void {
+    if (!parent) return () => undefined;
+    if (parent.aborted) {
+      controller.abort();
+      return () => undefined;
+    }
+    const onAbort = (): void => controller.abort();
+    parent.addEventListener("abort", onAbort, { once: true });
+    return () => parent.removeEventListener("abort", onAbort);
+  }
+
+  /** 静默超时：先 abort 让守规矩的 runner 停下，再以 reject 进入回退/停止判定。 */
+  private async withTimeout(runner: Promise<ToolLoopOutcome>, controller: AbortController): Promise<ToolLoopOutcome> {
     const timeoutMs = this.opts.silentTimeoutMs ?? LOOP_HEALTH.silentTimeoutMs;
     let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<ToolLoopOutcome>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`静默超时 ${timeoutMs}ms（心跳缺失/判死 → 安全模式条件）`)),
-        timeoutMs,
-      );
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`静默超时 ${timeoutMs}ms（心跳缺失/判死 → 安全模式条件）`));
+        controller.abort();
+      }, timeoutMs);
     });
-    return Promise.race([def.runner(ctx), timeout]).finally(() => {
+    try {
+      return await Promise.race([runner, timeout]);
+    } finally {
       if (timer) clearTimeout(timer);
-    });
+    }
+  }
+
+  /** 失败后最多再等 250ms，给收到 abort 的 runner 一点收尾时间；不阻塞主流程。 */
+  private async settle(runner: Promise<unknown>): Promise<void> {
+    await Promise.race([
+      runner.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 250);
+      }),
+    ]);
+  }
+
+  private abortedOutcome(toolCalls: number): ToolLoopOutcome {
+    return {
+      status: "aborted",
+      reason: "用户已停止本轮生成",
+      finalText: "",
+      usage: { rounds: 0, toolCalls, totalTokens: 0, wallClockMs: 0 },
+    };
+  }
+
+  /** 已产生副作用后的“安全停止”：不回退、不假装成功，把原因交给 ChatService 呈现。 */
+  private sideEffectStop(reason: string, toolCalls: number): ToolLoopOutcome {
+    return {
+      status: "error",
+      reason: `自定义 loop 失败且已执行 ${toolCalls} 个工具；为避免重复副作用，未自动回退内置 loop。请重试或切回内置 loop（原因：${reason}）`,
+      finalText: "",
+      usage: { rounds: 0, toolCalls, totalTokens: 0, wallClockMs: 0 },
+    };
   }
 
   private async fallbackFrom(

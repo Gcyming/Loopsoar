@@ -6,7 +6,7 @@
  * 重试纪律：未产出任何 chunk 前可重试（网络错误/429/5xx），已开始流式输出后不重试
  * （避免重复内容）；Retry-After 截断到 60s。
  */
-import type { LlmChunk, LlmClient, LlmRequest } from "./index.js";
+import type { LlmChunk, LlmClient, LlmMessage, LlmRequest } from "./index.js";
 import {
   classifyFatalUpstreamError,
   humanizeWait,
@@ -95,6 +95,20 @@ function safeParseArgs(raw: string | undefined): unknown {
   }
 }
 
+function toOpenAiContent(content: LlmMessage["content"]): unknown {
+  if (typeof content === "string") return content;
+  return content.map((part) =>
+    part.type === "text"
+      ? { type: "text", text: part.text }
+      : { type: "image_url", image_url: { url: `data:${part.mime};base64,${part.base64}` } },
+  );
+}
+
+function textContent(content: LlmMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
 export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
   const endpoint = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const maxRetries = opts.maxRetries ?? 3;
@@ -153,7 +167,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
               return {
                 role: "assistant",
-                content: m.content,
+                content: toOpenAiContent(m.content),
                 tool_calls: m.tool_calls.map((call) => ({
                   id: call.id,
                   type: "function",
@@ -162,9 +176,9 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
               };
             }
             if (m.role === "tool") {
-              return { role: "tool", tool_call_id: m.tool_call_id, content: m.content };
+              return { role: "tool", tool_call_id: m.tool_call_id, content: textContent(m.content) };
             }
-            return { role: m.role, content: m.content };
+            return { role: m.role, content: toOpenAiContent(m.content) };
           }),
           stream: true,
           ...(req.tools && req.tools.length > 0

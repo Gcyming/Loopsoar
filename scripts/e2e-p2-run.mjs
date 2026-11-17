@@ -10,7 +10,7 @@
  * 产物：e2e-evidence/p2-agent-browser.log、e2e-evidence/p2-agent-browser-window.png
  */
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = process.cwd();
@@ -18,6 +18,7 @@ const PAGE_PORT = 19443;
 const MOCK_PORT = 19500;
 const DATA_DIR = path.join(ROOT, ".loopsoar-data-p2-e2e");
 const OUT_DIR = path.join(ROOT, "e2e-evidence");
+const STARTED = Date.now();
 const LOG = path.join(OUT_DIR, "p2-agent-browser.log");
 const SHOT = path.join(OUT_DIR, "p2-agent-browser-window.png");
 
@@ -45,7 +46,10 @@ async function waitForPort(port, timeoutMs = 20000) {
 
 mkdirSync(OUT_DIR, { recursive: true });
 if (existsSync(DATA_DIR)) rmSync(DATA_DIR, { recursive: true, force: true });
+// 旧截图不能复用：本次没产出就不要再打印上一次的路径。
+rmSync(SHOT, { force: true });
 
+let evalSessionId = null;
 const logStream = createWriteStream(LOG, { flags: "w" });
 const children = [];
 function start(name, args, env = {}) {
@@ -53,6 +57,15 @@ function start(name, args, env = {}) {
   children.push(child);
   child.stdout.on("data", (buf) => {
     const text = buf.toString();
+    const match = text.match(/E2E_EVAL (\{.*\})/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (typeof parsed.sessionId === "string") evalSessionId = parsed.sessionId;
+      } catch {
+        // 日志截断/多行：verify 阶段仍可回退按消息数选
+      }
+    }
     logStream.write(text);
     process.stdout.write(`[${name}] ${text}`);
   });
@@ -126,18 +139,31 @@ try {
     if (existsSync(sessionsDir)) {
       const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".json") && f !== "index.json");
       let best = null;
+      let evalDoc = null;
+      let branch = null;
       for (const file of files) {
         const raw = JSON.parse(readFileSync(path.join(sessionsDir, file), "utf8"));
         if (!best || (raw.messages?.length ?? 0) > (best.messages?.length ?? 0)) best = raw;
+        if (evalSessionId && raw.sessionId === evalSessionId) evalDoc = raw;
+        if (evalSessionId && raw.forkedFrom?.sessionId === evalSessionId) {
+          if (!branch || (raw.messages?.length ?? 0) > (branch.messages?.length ?? 0)) branch = raw;
+        }
       }
-      if (best) {
-        const texts = (best.messages ?? []).map((m) => String(m.text ?? "")).join("\n");
+      // 首个浏览器动作会触发任务分支：优先校验分支，但必须能追溯到 E2E_EVAL 的源会话。
+      const target = branch ?? evalDoc ?? best;
+      if (target) {
+        const texts = (target.messages ?? []).map((m) => String(m.text ?? "")).join("\n");
         log(
           "E2E_SESSION_VERIFY " +
             JSON.stringify({
-              sessionId: best.sessionId,
-              browserControl: best.browserControl === true,
-              messages: best.messages?.length ?? 0,
+              sessionId: target.sessionId,
+              evalSessionId,
+              forkedFrom: target.forkedFrom?.sessionId ?? null,
+              sessionMatch: Boolean(
+                evalDoc && (target.sessionId === evalSessionId || target.forkedFrom?.sessionId === evalSessionId),
+              ),
+              browserControl: target.browserControl === true,
+              messages: target.messages?.length ?? 0,
               navigated: texts.includes("127.0.0.1:19443") || texts.includes("Loopsoar E2E 本地页"),
               snapshotWithRefs: /快照 #\d+/.test(texts) && texts.includes("#e"),
               clickedMarker: texts.includes("按钮已点击"),
@@ -151,4 +177,5 @@ try {
 
 log(`Electron 退出码=${exitCode}`);
 log(`日志：${LOG}`);
-if (existsSync(SHOT)) log(`截图：${SHOT}`);
+if (existsSync(SHOT) && statSync(SHOT).mtimeMs >= STARTED) log(`截图：${SHOT}`);
+else log("截图：未产出（本次运行没有新截图，可能是 capturePage 超时）");

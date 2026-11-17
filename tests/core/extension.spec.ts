@@ -1,6 +1,10 @@
 /** 扩展清单校验 + 注册表（纯逻辑）。 */
 import { describe, expect, it } from "vitest";
-import { ExtensionRegistry, ExtensionManifestSchema } from "../../packages/core/src/extension.ts";
+import {
+  ExtensionRegistry,
+  ExtensionManifestSchema,
+  resolveExtensionToolPermissions,
+} from "../../packages/core/src/extension.ts";
 
 describe("扩展清单与注册表", () => {
   it("合法清单通过校验，非法 id 被拒", () => {
@@ -21,5 +25,36 @@ describe("扩展清单与注册表", () => {
     expect(reg.promptSummary()).toContain("甲");
     expect(reg.remove("a")?.manifest.id).toBe("a");
     expect(reg.list().length).toBe(0);
+  });
+});
+
+describe("扩展工具权限：manifest 授权 ∩ 工具声明（fail-closed）", () => {
+  it("正常交集：manifest 授权 read + 工具声明 read → 通过", () => {
+    const r = resolveExtensionToolPermissions(["read"], { read: true });
+    expect(r.errors).toEqual([]);
+    expect(r.permissions).toEqual({ read: true });
+  });
+
+  it("manifest 未声明权限 → 工具一律拒绝", () => {
+    const r = resolveExtensionToolPermissions(undefined, { read: true });
+    expect(r.permissions).toEqual({});
+    expect(r.errors.join("；")).toContain("manifest 未声明 permissions");
+  });
+
+  it("工具未声明权限 → 拒绝（不能默认按 read 放行）", () => {
+    const r = resolveExtensionToolPermissions(["read"], {});
+    expect(r.permissions).toEqual({});
+    expect(r.errors.join("；")).toContain("工具未声明任何 permissions");
+  });
+
+  it("工具越权（声明 write 但 manifest 只给 read）→ 拒绝整个工具", () => {
+    const r = resolveExtensionToolPermissions(["read"], { read: true, write: true });
+    expect(r.errors.join("；")).toContain("未授权的权限：write");
+    expect(r.permissions).toEqual({});
+  });
+
+  it("未知权限键（如 browser）→ 拒绝", () => {
+    const r = resolveExtensionToolPermissions(["read"], { read: true, browser: true });
+    expect(r.errors.join("；")).toContain("未知权限：browser");
   });
 });

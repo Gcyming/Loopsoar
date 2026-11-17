@@ -7,10 +7,16 @@
  * 为什么：统一抽象让 tool_loop 不依赖任何具体 LLM 提供商，MockLlmClient 让测试可完全脱离真实网络和模型服务运行。
  */
 
+// LLM 内容块：文本或图片。字符串仍是默认形态（历史/工具消息不受影响）；
+// 图片只在当前用户轮出现，避免把 base64 写进历史/上下文压缩。
+export type LlmContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mime: string; base64: string };
+
 // LLM 消息：标准化的消息格式，与工具执行上下文兼容。
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | LlmContentPart[];
   /** assistant 轮的工具调用（多轮工具对话必需） */
   tool_calls?: { id: string; name: string; args: unknown }[];
   /** role="tool" 时对应的工具调用 id */

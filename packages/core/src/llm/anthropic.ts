@@ -64,18 +64,32 @@ class RetryableHttpError extends Error {
   }
 }
 
+function textOf(content: LlmMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
+function anthropicContent(content: LlmMessage["content"]): unknown[] {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  return content.map((part) =>
+    part.type === "text"
+      ? { type: "text", text: part.text }
+      : { type: "image", source: { type: "base64", media_type: part.mime, data: part.base64 } },
+  );
+}
+
 function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages: { role: "user" | "assistant"; content: unknown[] }[] } {
   const systemParts: string[] = [];
   const out: { role: "user" | "assistant"; content: unknown[] }[] = [];
   for (const msg of messages) {
     if (msg.role === "system") {
-      systemParts.push(msg.content);
+      systemParts.push(textOf(msg.content));
       continue;
     }
     if (msg.role === "tool") {
       out.push({
         role: "user",
-        content: [{ type: "tool_result", tool_use_id: msg.tool_call_id ?? "unknown", content: msg.content }],
+        content: [{ type: "tool_result", tool_use_id: msg.tool_call_id ?? "unknown", content: textOf(msg.content) }],
       });
       continue;
     }
@@ -83,13 +97,13 @@ function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages
       out.push({
         role: "assistant",
         content: [
-          ...(msg.content ? [{ type: "text", text: msg.content }] : []),
+          ...(textOf(msg.content) ? [{ type: "text", text: textOf(msg.content) }] : []),
           ...msg.tool_calls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: call.args ?? {} })),
         ],
       });
       continue;
     }
-    out.push({ role: msg.role, content: [{ type: "text", text: msg.content }] });
+    out.push({ role: msg.role, content: anthropicContent(msg.content) });
   }
   return { system: systemParts.join("\n\n"), messages: out };
 }

@@ -26,14 +26,14 @@ afterAll(() => {
   for (const dir of roots) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function makeExtension(id: string, source: string): string {
+function makeExtension(id: string, source: string, permissions: string[] = ["read"]): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `loopsoar-ext-${id}-`));
   roots.push(root);
   const dir = path.join(root, "extensions", id);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "loopsoar.extension.json"),
-    JSON.stringify({ id, name: id, version: "0.1.0", main: "index.mjs" }, null, 2),
+    JSON.stringify({ id, name: id, version: "0.1.0", main: "index.mjs", permissions }, null, 2),
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "index.mjs"), source, "utf8");
@@ -93,7 +93,7 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
     const goodRoot = makeExtension(
       "good",
       `export async function activate(api) {
-        api.registerTool({ name: "ping", execute: async () => "pong" });
+        api.registerTool({ name: "ping", permissions: { read: true }, execute: async () => "pong" });
       }`,
     );
     // 同一个 extensions 根下再加一个坏扩展
@@ -101,7 +101,7 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
     fs.mkdirSync(badDir, { recursive: true });
     fs.writeFileSync(
       path.join(badDir, "loopsoar.extension.json"),
-      JSON.stringify({ id: "bad", name: "bad", version: "0.1.0", main: "index.mjs" }),
+      JSON.stringify({ id: "bad", name: "bad", version: "0.1.0", main: "index.mjs", permissions: ["read"] }),
       "utf8",
     );
     fs.writeFileSync(path.join(badDir, "index.mjs"), `throw new Error("boom from bad extension");`, "utf8");
@@ -227,7 +227,7 @@ function addExtensionDir(root: string, id: string, source = ""): string {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "loopsoar.extension.json"),
-    JSON.stringify({ id, name: id, version: "0.1.0", main: "index.mjs" }, null, 2),
+    JSON.stringify({ id, name: id, version: "0.1.0", main: "index.mjs", permissions: ["read"] }, null, 2),
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "index.mjs"), source, "utf8");
@@ -248,16 +248,29 @@ describe("扩展运行时 · 合并插件能力后的确定性回归（fake spaw
     host.setEnabled("conflict-ext", true);
     const started = runtime.start("conflict-ext");
     fake.children[0].emitReady([
-      { name: "clash", description: "扩展想覆盖" },
-      { name: "extra", description: "另一个工具" },
+      { name: "clash", description: "扩展想覆盖", permissions: { read: true } },
+      { name: "extra", description: "另一个工具", permissions: { read: true } },
     ]);
     const status = await started;
     expect(status.state).toBe("ready");
-    expect(status.error).toContain("工具名冲突");
+    expect(status.error).toContain("工具名已存在");
     expect(registry.get("ext__conflict-ext__clash")?.description).toBe("内置占位（不可被覆盖）");
     expect(registry.has("ext__conflict-ext__extra")).toBe(true);
     expect(status.tools).toEqual(["ext__conflict-ext__extra"]);
-    expect(runtime.status("conflict-ext").error).toContain("工具名冲突");
+    expect(runtime.status("conflict-ext").error).toContain("工具名已存在");
+  });
+
+  it("扩展工具权限越权（manifest 只给 read，工具声明 write）→ fail-closed 不注册", async () => {
+    const root = makeExtension("perm-ext", "");
+    const { registry, host, runtime, fake } = makeFakeRuntime(root);
+    host.setEnabled("perm-ext", true);
+    const started = runtime.start("perm-ext");
+    fake.children[0].emitReady([{ name: "write-tool", permissions: { write: true } }]);
+    const status = await started;
+    expect(status.state).toBe("ready");
+    expect(status.tools).toEqual([]);
+    expect(status.error).toContain("未授权的权限：write");
+    expect(registry.has("ext__perm-ext__write-tool")).toBe(false);
   });
 
   it("调用超时：worker 不返回时按超时失败（不悬挂）", async () => {
@@ -265,7 +278,7 @@ describe("扩展运行时 · 合并插件能力后的确定性回归（fake spaw
     const { registry, host, runtime, fake } = makeFakeRuntime(root, { callTimeoutMs: 30 });
     host.setEnabled("slow-ext", true);
     const started = runtime.start("slow-ext");
-    fake.children[0].emitReady([{ name: "slow-tool" }]);
+    fake.children[0].emitReady([{ name: "slow-tool", permissions: { read: true } }]);
     await started;
     const result = await registry.get("ext__slow-ext__slow-tool")!.execute({ agentId: "a", params: {}, platform: {} });
     expect(result.ok).toBe(false);
@@ -302,10 +315,10 @@ describe("扩展运行时 · 合并插件能力后的确定性回归（fake spaw
     third.host.setEnabled("crash-a", true);
     third.host.setEnabled("crash-b", true);
     const a = third.runtime.start("crash-a");
-    third.fake.children[0].emitReady([{ name: "tool-a" }]);
+    third.fake.children[0].emitReady([{ name: "tool-a", permissions: { read: true } }]);
     await a;
     const b = third.runtime.start("crash-b");
-    third.fake.children[1].emitReady([{ name: "tool-b" }]);
+    third.fake.children[1].emitReady([{ name: "tool-b", permissions: { read: true } }]);
     await b;
     third.fake.children[0].emitExit(1);
     expect(third.runtime.status("crash-a").state).toBe("error");
@@ -319,7 +332,7 @@ describe("扩展运行时 · 合并插件能力后的确定性回归（fake spaw
     const { registry, host, runtime, fake } = makeFakeRuntime(root);
     host.setEnabled("stop-ext", true);
     const started = runtime.start("stop-ext");
-    fake.children[0].emitReady([{ name: "greet" }, { name: "bye" }]);
+    fake.children[0].emitReady([{ name: "greet", permissions: { read: true } }, { name: "bye", permissions: { read: true } }]);
     await started;
     expect(registry.has("ext__stop-ext__greet")).toBe(true);
 

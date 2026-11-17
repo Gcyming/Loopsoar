@@ -78,7 +78,8 @@ function makeHarness(policy: Permissions, opts: { sensitiveAlwaysConfirm?: () =>
       sandboxCalls.push({ toolName: req.toolName, kind: req.kind });
       return real.checkPermission(req, scope);
     },
-    approveToolForSession: (agentId: string, toolName: string) => real.approveToolForSession(agentId, toolName),
+    approveToolForSession: (agentId: string, toolName: string, sessionId?: string) =>
+      real.approveToolForSession(agentId, toolName, sessionId),
   } as unknown as SandboxManager;
 
   const permBus = new PermRequestBus(120); // 极短超时：漏 resolve 时快速 deny，不挂 300s
