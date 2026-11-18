@@ -482,12 +482,17 @@ export class ChatService {
    *   · 独立 ChatService 实例，不污染父会话的 steer/abort 映射。
    * 只供壳层内部使用，不暴露 IPC。
    */
-  async runScoped(input: ChatInput, allowlist: string[], signal?: AbortSignal): Promise<ChatStreamResult> {
+  async runScoped(
+    input: ChatInput,
+    allowlist: string[],
+    signal?: AbortSignal,
+    history: { role: "user" | "assistant"; content: string; ts?: number }[] = [],
+  ): Promise<ChatStreamResult> {
     const scoped = new ChatService({
       ...this.opts,
       toolAllowlist: allowlist,
       getToolAllowlist: () => allowlist,
-      getHistory: () => [],
+      getHistory: () => history,
     });
     return scoped.stream({ ...input, signal });
   }

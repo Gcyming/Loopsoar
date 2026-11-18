@@ -11,14 +11,22 @@ import path from "node:path";
 
 export type SubagentTaskStatus = "running" | "done" | "failed" | "aborted";
 
+/** 子会话可恢复的最小会话记录：只保存用户目标与子代理最终答复，不伪装成完整工具轨迹。 */
+export interface SubagentHistoryEntry {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface SubagentTaskRecord {
   id: string;
   parentSessionId: string;
-  kind: "research" | "parallel" | "tree";
+  kind: "research" | "parallel" | "tree" | "child";
   goal: string;
   context?: string;
   /** 任务树中的父任务 id；根任务为空。 */
   parentTaskId?: string;
+  /** 子会话历史（用户目标 + 子代理答复）；用于 fork/恢复上下文。 */
+  history?: SubagentHistoryEntry[];
   status: SubagentTaskStatus;
   result?: string;
   error?: string;
@@ -28,15 +36,36 @@ export interface SubagentTaskRecord {
 
 export interface NewSubagentTask {
   parentSessionId: string;
-  kind: "research" | "parallel" | "tree";
+  kind: "research" | "parallel" | "tree" | "child";
   goal: string;
   context?: string;
   parentTaskId?: string;
+  history?: SubagentHistoryEntry[];
 }
 
 const MAX_GOAL_CHARS = 4_000;
 const MAX_RESULT_CHARS = 12_000;
 const MAX_TASKS_PER_SESSION = 200;
+const MAX_HISTORY_ENTRIES = 20;
+const MAX_HISTORY_CHARS = 24_000;
+
+/** 历史只保留最近若干轮，且总字符有上限，避免恢复上下文反过来撑爆任务文件。 */
+function clampHistory(history?: SubagentHistoryEntry[]): SubagentHistoryEntry[] | undefined {
+  if (!history?.length) return undefined;
+  const entries: SubagentHistoryEntry[] = [];
+  let total = 0;
+  for (let i = history.length - 1; i >= 0 && entries.length < MAX_HISTORY_ENTRIES; i--) {
+    const entry = history[i];
+    const content = entry.content.trim();
+    if (!content) continue;
+    const remaining = MAX_HISTORY_CHARS - total;
+    if (remaining <= 0) break;
+    const clipped = content.slice(0, remaining);
+    entries.unshift({ role: entry.role, content: clipped });
+    total += clipped.length;
+  }
+  return entries.length > 0 ? entries : undefined;
+}
 
 function safeSegment(value: string): string {
   const clean = value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
@@ -64,6 +93,7 @@ export class SubagentTaskStore {
   }
 
   create(input: NewSubagentTask): SubagentTaskRecord {
+    const history = clampHistory(input.history);
     const record: SubagentTaskRecord = {
       id: randomUUID(),
       parentSessionId: input.parentSessionId || "_default",
@@ -71,6 +101,7 @@ export class SubagentTaskStore {
       goal: input.goal.trim().slice(0, MAX_GOAL_CHARS),
       ...(input.context?.trim() ? { context: input.context.trim().slice(0, MAX_GOAL_CHARS) } : {}),
       ...(input.parentTaskId ? { parentTaskId: input.parentTaskId } : {}),
+      ...(history ? { history } : {}),
       status: "running",
       startedAt: Date.now(),
     };
@@ -84,6 +115,7 @@ export class SubagentTaskStore {
     status: SubagentTaskStatus,
     result?: string,
     error?: string,
+    history?: SubagentHistoryEntry[],
   ): SubagentTaskRecord | null {
     const record = this.read(parentSessionId, id);
     if (!record) return null;
@@ -91,6 +123,8 @@ export class SubagentTaskStore {
     record.finishedAt = Date.now();
     if (result !== undefined) record.result = result.slice(0, MAX_RESULT_CHARS);
     if (error) record.error = error.slice(0, 4_000);
+    const clamped = clampHistory(history);
+    if (clamped) record.history = clamped;
     this.write(record);
     return record;
   }

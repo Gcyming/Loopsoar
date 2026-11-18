@@ -10,10 +10,11 @@
  * 因此可以先安全落地，再单独设计子代理的权限转发。
  */
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import type { ChatService, ChatStreamResult } from "loopsoar-services/chat";
-import type { SubagentTaskStore } from "./subagentTaskStore.js";
+import type { SubagentHistoryEntry, SubagentTaskStore } from "./subagentTaskStore.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_GOAL_CHARS = 4_000;
@@ -24,6 +25,34 @@ const MAX_PARALLEL_OUTPUT_CHARS = 24_000;
 const MAX_TREE_TASKS = 12;
 const MAX_TREE_DEPTH = 2;
 const MAX_TREE_CHILDREN = 4;
+/** 动态再委派最多再下钻 2 层（根子代理 depth=1，孙代理 depth=2 不可再委派）。 */
+const MAX_DYNAMIC_DEPTH = 2;
+
+/** 子代理运行上下文：只通过 AsyncLocalStorage 传递，避免子代理工具读到父会话闭包。 */
+interface DelegationContext {
+  depth: number;
+  sessionId: string;
+  taskId: string;
+  history: SubagentHistoryEntry[];
+  /** 当前子会话的初始目标；动态再委派时作为父轮用户消息注入孙会话。 */
+  goal: string;
+  /** 当前子会话的中止信号；动态再委派时继续向下传播。 */
+  signal: AbortSignal;
+  /** 当前子会话已发起的动态子任务数；防止一个子代理无限顺序委派。 */
+  dynamicChildren: number;
+}
+const MAX_DYNAMIC_CHILDREN = 2;
+
+const delegationContext = new AsyncLocalStorage<DelegationContext>();
+
+/** 把一轮子会话追加为可恢复历史；裁剪交给任务存储。 */
+function appendHistory(
+  history: SubagentHistoryEntry[] | undefined,
+  goal: string,
+  answer: string,
+): SubagentHistoryEntry[] {
+  return [...(history ?? []), { role: "user", content: goal }, { role: "assistant", content: answer }];
+}
 
 /** 预定义只读任务树节点；子代理不会在运行时再委派，树由父代理一次给出。 */
 export interface DelegatedTreeTask {
@@ -66,6 +95,14 @@ export interface SubagentRunInput {
   goal: string;
   context?: string;
   sessionId: string;
+  /** 运行深度：根子代理为 1；动态再委派时递增。 */
+  depth?: number;
+  /** 当前子任务记录 id；动态再委派用它写 parentTaskId。 */
+  taskId?: string;
+  /** 子会话历史（恢复/分叉时注入）。 */
+  history?: SubagentHistoryEntry[];
+  /** 父级中止信号；动态再委派时把父超时传播给孙任务。 */
+  signal?: AbortSignal;
 }
 
 export interface SubagentRunner {
@@ -101,17 +138,20 @@ export function registerSubagentTools(
         const result = await runner.run({
           goal: prompt,
           sessionId: parent,
+          depth: 1,
+          ...(record ? { taskId: record.id } : {}),
         });
         const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+        const history = appendHistory(undefined, goal, text);
         if (result.status === "aborted") {
-          if (record) store?.finish(parent, record.id, "aborted", text, `超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止`);
+          if (record) store?.finish(parent, record.id, "aborted", text, `超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止`, history);
           return { ok: false, content: `[子代理中止] 超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止。${text}${tag}` };
         }
         if (result.status !== "done") {
-          if (record) store?.finish(parent, record.id, "failed", text, result.reason);
+          if (record) store?.finish(parent, record.id, "failed", text, result.reason, history);
           return { ok: false, content: `[子代理${result.status}] ${result.reason}\n${text}${tag}` };
         }
-        if (record) store?.finish(parent, record.id, "done", text);
+        if (record) store?.finish(parent, record.id, "done", text, undefined, history);
         return {
           ok: true,
           content: `[只读子代理完成]\n${text || "（子代理未返回正文）"}${tag}`,
@@ -168,16 +208,22 @@ export function registerSubagentTools(
           if (index >= tasks.length) return;
           const record = records[index];
           try {
-            const result = await runner.run({ goal: tasks[index].prompt, sessionId: parent });
+            const result = await runner.run({
+              goal: tasks[index].prompt,
+              sessionId: parent,
+              depth: 1,
+              ...(record ? { taskId: record.id } : {}),
+            });
             const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+            const history = appendHistory(undefined, tasks[index].goal, text);
             if (result.status === "done") {
-              if (record) store?.finish(parent, record.id, "done", text);
+              if (record) store?.finish(parent, record.id, "done", text, undefined, history);
               results[index] = { ok: true, text: text || "（子代理未返回正文）" };
             } else if (result.status === "aborted") {
-              if (record) store?.finish(parent, record.id, "aborted", text, "超时或父任务已停止");
+              if (record) store?.finish(parent, record.id, "aborted", text, "超时或父任务已停止", history);
               results[index] = { ok: false, text: `[中止] 超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止。${text}` };
             } else {
-              if (record) store?.finish(parent, record.id, "failed", text, result.reason);
+              if (record) store?.finish(parent, record.id, "failed", text, result.reason, history);
               results[index] = { ok: false, text: `[${result.status}] ${result.reason}\n${text}` };
             }
           } catch (err) {
@@ -241,17 +287,23 @@ export function registerSubagentTools(
         let status = "failed";
         let body = "";
         try {
-          const result = await runner.run({ goal: prompt, sessionId: parent });
+          const result = await runner.run({
+            goal: prompt,
+            sessionId: parent,
+            depth: MAX_DYNAMIC_DEPTH, // 任务树节点不再动态委派，保持预定义结构
+            ...(record ? { taskId: record.id } : {}),
+          });
           body = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+          const history = appendHistory(undefined, task.goal, body);
           if (result.status === "done") {
             status = "done";
             completed += 1;
-            if (record) store?.finish(parent, record.id, "done", body);
+            if (record) store?.finish(parent, record.id, "done", body, undefined, history);
           } else if (result.status === "aborted") {
             status = "aborted";
-            if (record) store?.finish(parent, record.id, "aborted", body, "超时或父任务已停止");
+            if (record) store?.finish(parent, record.id, "aborted", body, "超时或父任务已停止", history);
           } else {
-            if (record) store?.finish(parent, record.id, "failed", body, result.reason);
+            if (record) store?.finish(parent, record.id, "failed", body, result.reason, history);
           }
         } catch (err) {
           body = err instanceof Error ? err.message : String(err);
@@ -278,9 +330,80 @@ export function registerSubagentTools(
   });
 
   registry.register({
+    name: "delegate_child",
+    description:
+      "子代理在运行时再委派一个只读子任务（动态再委派）。只有子代理可调用，最多再下钻 2 层；子任务使用同一只读工具面、独立超时，结果回灌当前子轮，并按 parentTaskId 记录到任务树。父代理不要调用。",
+    permissions: { read: true },
+    schema: z.object({
+      goal: z.string().min(4).max(MAX_GOAL_CHARS),
+      context: z.string().max(MAX_GOAL_CHARS).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const runCtx = delegationContext.getStore();
+      if (!runCtx || runCtx.depth < 1) {
+        return { ok: false, content: "[错误] delegate_child 仅可由子代理在运行时调用；父代理请用 delegate_research/parallel/tree" };
+      }
+      if (runCtx.depth >= MAX_DYNAMIC_DEPTH) {
+        return { ok: false, content: `[错误] 动态再委派最多 ${MAX_DYNAMIC_DEPTH} 层，当前已到第 ${runCtx.depth} 层` };
+      }
+      if (runCtx.dynamicChildren >= MAX_DYNAMIC_CHILDREN) {
+        return { ok: false, content: `[错误] 当前子代理最多再委派 ${MAX_DYNAMIC_CHILDREN} 个动态子任务` };
+      }
+      runCtx.dynamicChildren += 1;
+      const allowlist = readOnlyToolAllowlist(registry);
+      if (allowlist.length === 0) return { ok: false, content: "[错误] 没有可用的只读工具，子代理未启动" };
+      const params = ctx.params as { goal: string; context?: string };
+      const goal = params.goal.trim();
+      const parent = runCtx.sessionId || ctx.sessionId || "";
+      const inherited: SubagentHistoryEntry[] = [
+        ...runCtx.history,
+        ...(runCtx.goal.trim() ? [{ role: "user" as const, content: runCtx.goal }] : []),
+      ];
+      const record = store?.create({
+        parentSessionId: parent,
+        kind: "child",
+        goal,
+        ...(params.context?.trim() ? { context: params.context.trim() } : {}),
+        ...(runCtx.taskId ? { parentTaskId: runCtx.taskId } : {}),
+        history: inherited,
+      });
+      const tag = record ? `\n[任务记录] ${record.id}` : "";
+      const prompt = params.context?.trim()
+        ? `${goal}\n\n参考上下文（父代理提供，仅作线索，需自行核实）：\n${params.context.trim()}`
+        : goal;
+      try {
+        const result = await runner.run({
+          goal: prompt,
+          sessionId: parent,
+          depth: runCtx.depth + 1,
+          ...(record ? { taskId: record.id } : {}),
+          history: inherited,
+          signal: runCtx.signal,
+        });
+        const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+        const history = appendHistory(inherited, goal, text);
+        if (result.status === "done") {
+          if (record) store?.finish(parent, record.id, "done", text, undefined, history);
+          return { ok: true, content: `[子代理动态委派完成]\n${text || "（子代理未返回正文）"}${tag}` };
+        }
+        if (result.status === "aborted") {
+          if (record) store?.finish(parent, record.id, "aborted", text, "超时或父任务已停止", history);
+          return { ok: false, content: `[子代理动态委派中止] ${text}${tag}` };
+        }
+        if (record) store?.finish(parent, record.id, "failed", text, result.reason, history);
+        return { ok: false, content: `[子代理动态委派失败] ${result.reason}\n${text}${tag}` };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (record) store?.finish(parent, record.id, "failed", undefined, message);
+        return { ok: false, content: `[子代理动态委派失败] ${message}${tag}` };
+      }
+    },
+  });
+
+  registry.register({
     name: "subagent_tasks",
     description:
-      "列出当前父会话派出的子代理任务记录（research/parallel/tree，含状态、目标、时间、任务 id）。用于找回之前委派的结果；只读。",
+      "列出当前父会话派出的子代理任务记录（research/parallel/tree/child，含状态、目标、时间、任务 id）。用于找回之前委派的结果；只读。",
     permissions: { read: true },
     schema: z.object({
       sessionId: z.string().max(200).optional(),
@@ -323,7 +446,7 @@ export function registerSubagentTools(
   registry.register({
     name: "subagent_resume",
     description:
-      "按已落盘的任务记录重跑一次只读子任务（不是恢复子会话历史）：新任务记录以原任务为 parentTaskId，便于失败/超时后复查或重试。任务树节点缺少树结构，暂不支持恢复。",
+      "按已落盘的任务记录恢复子会话上下文并重跑一次只读子任务：把原记录的历史（用户目标 + 子代理答复）注入新子会话，新记录以原任务为 parentTaskId。任务树节点缺少树结构，暂不支持恢复；完整工具轨迹不重放。",
     permissions: { read: true },
     schema: z.object({
       taskId: z.string().min(8).max(120),
@@ -344,22 +467,27 @@ export function registerSubagentTools(
         goal: source.goal,
         ...(source.context ? { context: source.context } : {}),
         parentTaskId: source.id,
+        history: source.history,
       });
       try {
         const result = await runner.run({
           goal: source.context ? `${source.goal}\n\n参考上下文：\n${source.context}` : source.goal,
           sessionId: parent,
+          depth: 1,
+          taskId: record.id,
+          history: source.history,
         });
         const body = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+        const history = appendHistory(source.history, source.goal, body);
         if (result.status === "done") {
-          store.finish(parent, record.id, "done", body);
+          store.finish(parent, record.id, "done", body, undefined, history);
           return { ok: true, content: `[恢复任务完成] ${record.id}（基于 ${source.id}）\n${body}` };
         }
         if (result.status === "aborted") {
-          store.finish(parent, record.id, "aborted", body, "超时或父任务已停止");
+          store.finish(parent, record.id, "aborted", body, "超时或父任务已停止", history);
           return { ok: false, content: `[恢复任务中止] ${record.id}：超时或父任务已停止` };
         }
-        store.finish(parent, record.id, "failed", body, result.reason);
+        store.finish(parent, record.id, "failed", body, result.reason, history);
         return { ok: false, content: `[恢复任务失败] ${record.id}：${result.reason || "未知原因"}` };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -383,14 +511,34 @@ export function createChatSubagentRunner(
       const allowlist = readOnlyToolAllowlist(registry);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+      const parentSignal = input.signal;
+      const abortFromParent = () => controller.abort();
+      if (parentSignal) {
+        if (parentSignal.aborted) controller.abort();
+        else parentSignal.addEventListener("abort", abortFromParent, { once: true });
+      }
+      const depth = input.depth ?? 1;
+      const context: DelegationContext = {
+        depth,
+        sessionId: input.sessionId,
+        taskId: input.taskId ?? "",
+        history: input.history ?? [],
+        goal: input.goal,
+        signal: controller.signal,
+        dynamicChildren: 0,
+      };
       try {
-        return await chatService.runScoped(
-          { message: input.goal, sessionId: input.sessionId || `sub-${randomUUID()}`, mode: "build" },
-          allowlist,
-          controller.signal,
+        return await delegationContext.run(context, () =>
+          chatService.runScoped(
+            { message: input.goal, sessionId: input.sessionId || `sub-${randomUUID()}`, mode: "build" },
+            allowlist,
+            controller.signal,
+            input.history ?? [],
+          ),
         );
       } finally {
         clearTimeout(timer);
+        parentSignal?.removeEventListener("abort", abortFromParent);
       }
     },
   };

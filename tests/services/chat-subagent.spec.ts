@@ -59,6 +59,22 @@ describe("ChatService.runScoped 子代理边界（P1-5）", () => {
     expect(JSON.stringify(requests[0].messages)).not.toContain("父会话机密");
   });
 
+  it("恢复历史注入子会话，父会话历史仍不泄漏", async () => {
+    const calls: string[] = [];
+    const requests: LlmRequest[] = [];
+    const service = makeService(calls, requests, "父会话机密");
+    const result = await service.runScoped(
+      { message: "继续查" },
+      ["file_read"],
+      undefined,
+      [{ role: "assistant", content: "子会话旧答复" }],
+    );
+    expect(result.status).toBe("done");
+    const seen = JSON.stringify(requests[0].messages);
+    expect(seen).toContain("子会话旧答复");
+    expect(seen).not.toContain("父会话机密");
+  });
+
   it("allowlist 内的读工具可以执行", async () => {
     const calls: string[] = [];
     const requests: LlmRequest[] = [];
