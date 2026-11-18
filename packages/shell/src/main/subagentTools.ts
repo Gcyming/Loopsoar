@@ -279,7 +279,7 @@ export function registerSubagentTools(
   registry.register({
     name: "subagent_tasks",
     description:
-      "列出当前父会话派出的子代理任务记录（research/parallel，含状态、目标、时间、任务 id）。用于找回之前委派的结果；只读。",
+      "列出当前父会话派出的子代理任务记录（research/parallel/tree，含状态、目标、时间、任务 id）。用于找回之前委派的结果；只读。",
     permissions: { read: true },
     schema: z.object({
       sessionId: z.string().max(200).optional(),
