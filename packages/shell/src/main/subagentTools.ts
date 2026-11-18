@@ -21,6 +21,24 @@ const MAX_RESULT_CHARS = 12_000;
 const MAX_PARALLEL_TASKS = 4;
 const MAX_PARALLEL_CONCURRENCY = 3;
 const MAX_PARALLEL_OUTPUT_CHARS = 24_000;
+const MAX_TREE_TASKS = 12;
+const MAX_TREE_DEPTH = 2;
+const MAX_TREE_CHILDREN = 4;
+
+/** 预定义只读任务树节点；子代理不会在运行时再委派，树由父代理一次给出。 */
+export interface DelegatedTreeTask {
+  goal: string;
+  context?: string;
+  children?: DelegatedTreeTask[];
+}
+
+const DelegatedTreeTaskSchema: z.ZodType<DelegatedTreeTask> = z.lazy(() =>
+  z.object({
+    goal: z.string().min(4).max(MAX_GOAL_CHARS),
+    context: z.string().max(MAX_GOAL_CHARS).optional(),
+    children: z.array(DelegatedTreeTaskSchema).max(MAX_TREE_CHILDREN).optional(),
+  }),
+);
 
 /** 从注册表挑出可安全委派的只读工具；浏览器/联网/询问用户/子代理自身都排除。 */
 export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
@@ -35,6 +53,7 @@ export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
         !tool.permissions.browser &&
         tool.name !== "delegate_research" &&
         tool.name !== "delegate_parallel" &&
+        tool.name !== "delegate_tree" &&
         tool.name !== "subagent_tasks" &&
         tool.name !== "subagent_read" &&
         tool.name !== "ask_user",
@@ -181,6 +200,79 @@ export function registerSubagentTools(
         ok: completed > 0,
         content: `[并行只读子代理 ${completed}/${results.length} 完成]\n\n${body}`,
       };
+    },
+  });
+
+  registry.register({
+    name: "delegate_tree",
+    description:
+      "按预定义树结构委派只读子任务：父任务下可挂 0–4 个子任务，树最多 3 层/12 个任务。子代理只读、独立上下文，每个节点单独超时并记录 taskId；子代理不能在运行时再委派。结果按深度优先顺序回灌。",
+    permissions: { read: true },
+    schema: z.object({ task: DelegatedTreeTaskSchema }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = ctx.params as { task: DelegatedTreeTask };
+      const allowlist = readOnlyToolAllowlist(registry);
+      if (allowlist.length === 0) return { ok: false, content: "[错误] 没有可用的只读工具，子代理未启动" };
+      const parent = ctx.sessionId ?? "";
+      let total = 0;
+      let completed = 0;
+
+      const runNode = async (
+        task: DelegatedTreeTask,
+        depth: number,
+        parentTaskId?: string,
+      ): Promise<string[]> => {
+        if (depth > MAX_TREE_DEPTH) throw new Error(`任务树超过 ${MAX_TREE_DEPTH + 1} 层`);
+        total += 1;
+        if (total > MAX_TREE_TASKS) throw new Error(`任务树超过 ${MAX_TREE_TASKS} 个任务`);
+        const record = store?.create({
+          parentSessionId: parent,
+          kind: "tree",
+          goal: task.goal,
+          ...(task.context?.trim() ? { context: task.context } : {}),
+          ...(parentTaskId ? { parentTaskId } : {}),
+        });
+        const indent = "  ".repeat(depth);
+        const tag = record ? ` · ${record.id}` : "";
+        const prompt = task.context?.trim()
+          ? `${task.goal.trim()}\n\n参考上下文（父代理提供，仅作线索，需自行核实）：\n${task.context.trim()}`
+          : task.goal.trim();
+        let status = "failed";
+        let body = "";
+        try {
+          const result = await runner.run({ goal: prompt, sessionId: parent });
+          body = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+          if (result.status === "done") {
+            status = "done";
+            completed += 1;
+            if (record) store?.finish(parent, record.id, "done", body);
+          } else if (result.status === "aborted") {
+            status = "aborted";
+            if (record) store?.finish(parent, record.id, "aborted", body, "超时或父任务已停止");
+          } else {
+            if (record) store?.finish(parent, record.id, "failed", body, result.reason);
+          }
+        } catch (err) {
+          body = err instanceof Error ? err.message : String(err);
+          if (record) store?.finish(parent, record.id, "failed", undefined, body);
+        }
+        const lines = [`${indent}- [${status}] ${task.goal.slice(0, 160)}${tag}`];
+        if (body) lines.push(`${indent}  ${body.replace(/\s+/g, " ").slice(0, 300)}`);
+        for (const child of task.children ?? []) {
+          lines.push(...(await runNode(child, depth + 1, record?.id)));
+        }
+        return lines;
+      };
+
+      try {
+        const lines = await runNode(params.task, 0);
+        return {
+          ok: completed > 0,
+          content: `[子代理任务树 ${completed}/${total} 完成]\n${lines.join("\n").slice(0, MAX_PARALLEL_OUTPUT_CHARS)}`,
+        };
+      } catch (err) {
+        return { ok: false, content: `[子代理任务树失败] ${err instanceof Error ? err.message : String(err)}` };
+      }
     },
   });
 

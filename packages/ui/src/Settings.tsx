@@ -12,6 +12,7 @@ import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCo
 import { Icon } from "./Icon.js";
 import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
 import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
+import SkillsSection from "./SkillsSection.js";
 import { setLanguage, useT } from "./i18n.js";
 import MemoryGraphView from "./MemoryGraphView.js";
 import type {
@@ -2073,55 +2074,30 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
 
       case "skills":
         return (
-          <div>
-            <Head t={tr("settings.skills.head")} h={tr("settings.skills.headHint")} />
-            <div style={S.note}>{tr("settings.skills.dir")}<code style={S.code}>{skillsDir || "—"}</code></div>
-            <div style={S.btns}>
-              <Btn
-                label={tr("settings.skills.openDir")}
-                onClick={() =>
-                  void api.skills
-                    .openDir()
-                    .then((r) => {
-                      if (!r.ok) bad(tr("settings.extensions.openFailed", { dir: r.dir }));
-                    })
-                    .catch(bad)
-                }
-              />
-              <Btn label={tr("settings.rescan")} onClick={() => void api.skills.reload().then((r) => { setSkills(r.skills); setSkillSkips(r.skipped); })} />
-            </div>
-            {skillSkips.length > 0 ? (
-              <div style={S.note}>
-                {tr("settings.skills.skipped", { count: skillSkips.length })}
-                {skillSkips.map((x) => <div key={x.dir} style={S.errText}>{tr("settings.skipItem", { path: x.dir, reason: x.reason })}</div>)}
-              </div>
-            ) : null}
-            {skills.length === 0 ? (
-              <div style={S.dashed}>{tr("settings.skills.empty")}</div>
-            ) : (
-              skills.map((sk) => (
-                <div key={sk.id} className="panel-card" style={S.card}>
-                  <div style={S.rowBetween}>
-                    <span style={S.meta}>
-                      <span style={S.metaTitle}>{sk.frontmatter.name}</span>
-                      {sk.frontmatter.version ? <span style={BADGE.neutral}>v{sk.frontmatter.version}</span> : null}
-                      {sk.warnings && sk.warnings.length > 0 ? <span style={BADGE.warn} title={sk.warnings.join(" / ")}>{tr("settings.skills.tolerance")}</span> : null}
-                      {(sk.frontmatter.tags ?? []).map((tag) => <span key={tag} style={S.tag}>#{tag}</span>)}
-                    </span>
-                    <span style={S.icons}>
-                      <Toggle v={sk.enabled} on={(next) => void api.skills.setEnabled({ id: sk.id, enabled: next }).then(() => void api.skills.list().then((r) => setSkills(r.skills)))} />
-                    </span>
-                  </div>
-                  <div style={S.providerVal}>{sk.frontmatter.description}</div>
-                  <div style={S.providerRows}>
-                    {sk.frontmatter.whenToUse ? <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.skills.whenToUse")}</span><span style={S.providerVal}>{sk.frontmatter.whenToUse}</span></div> : null}
-                    <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.skills.body")}</span><span style={S.providerVal}>{tr("settings.bytes", { bytes: sk.bytes })}</span></div>
-                  </div>
-                </div>
-              ))
-            )}
-            <div style={S.note}>{tr("settings.skills.isolation")}</div>
-          </div>
+          <SkillsSection
+            skills={skills}
+            skillsDir={skillsDir}
+            skillSkips={skillSkips}
+            onOpenDir={() =>
+              api.skills
+                .openDir()
+                .then((result) => {
+                  if (!result.ok) bad(tr("settings.extensions.openFailed", { dir: result.dir }));
+                })
+                .catch(bad)
+            }
+            onReload={() =>
+              api.skills.reload().then((result) => {
+                setSkills(result.skills);
+                setSkillSkips(result.skipped);
+              })
+            }
+            onToggle={(id, enabled) =>
+              api.skills.setEnabled({ id, enabled }).then(() =>
+                api.skills.list().then((result) => setSkills(result.skills)),
+              )
+            }
+          />
         );
 
       case "browser-extensions":

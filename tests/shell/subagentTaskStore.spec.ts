@@ -93,4 +93,50 @@ describe("子代理任务记录（P1-5 第二步）", () => {
     expect(read.ok).toBe(true);
     expect(JSON.parse(read.content).result).toBe("持久化结论");
   });
+
+  it("预定义任务树按深度优先执行，并记录父子关系", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "file_read",
+      description: "read",
+      permissions: { read: true },
+      schema: { parse: (v: unknown) => v } as never,
+      execute: async () => ({ ok: true, content: "" }),
+    });
+    const store = tempStore();
+    const goals: string[] = [];
+    registerSubagentTools(
+      registry,
+      {
+        async run(input) {
+          goals.push(input.goal.split("\n")[0]);
+          return done(`结论：${input.goal.split("\n")[0]}`);
+        },
+      },
+      store,
+    );
+    const result = await registry.get("delegate_tree")!.execute({
+      agentId: "test",
+      sessionId: "sess-tree",
+      params: {
+        task: {
+          goal: "根任务",
+          children: [
+            { goal: "子任务甲" },
+            { goal: "子任务乙", children: [{ goal: "孙任务" }] },
+          ],
+        },
+      },
+      platform: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("[子代理任务树 4/4 完成]");
+    expect(goals).toEqual(["根任务", "子任务甲", "子任务乙", "孙任务"]);
+    const records = store.list("sess-tree");
+    expect(records).toHaveLength(4);
+    const byGoal = new Map(records.map((record) => [record.goal, record]));
+    expect(byGoal.get("根任务")?.parentTaskId).toBeUndefined();
+    expect(byGoal.get("子任务甲")?.parentTaskId).toBe(byGoal.get("根任务")?.id);
+    expect(byGoal.get("孙任务")?.parentTaskId).toBe(byGoal.get("子任务乙")?.id);
+  });
 });

@@ -14,9 +14,11 @@ export type SubagentTaskStatus = "running" | "done" | "failed" | "aborted";
 export interface SubagentTaskRecord {
   id: string;
   parentSessionId: string;
-  kind: "research" | "parallel";
+  kind: "research" | "parallel" | "tree";
   goal: string;
   context?: string;
+  /** 任务树中的父任务 id；根任务为空。 */
+  parentTaskId?: string;
   status: SubagentTaskStatus;
   result?: string;
   error?: string;
@@ -26,9 +28,10 @@ export interface SubagentTaskRecord {
 
 export interface NewSubagentTask {
   parentSessionId: string;
-  kind: "research" | "parallel";
+  kind: "research" | "parallel" | "tree";
   goal: string;
   context?: string;
+  parentTaskId?: string;
 }
 
 const MAX_GOAL_CHARS = 4_000;
@@ -67,6 +70,7 @@ export class SubagentTaskStore {
       kind: input.kind,
       goal: input.goal.trim().slice(0, MAX_GOAL_CHARS),
       ...(input.context?.trim() ? { context: input.context.trim().slice(0, MAX_GOAL_CHARS) } : {}),
+      ...(input.parentTaskId ? { parentTaskId: input.parentTaskId } : {}),
       status: "running",
       startedAt: Date.now(),
     };
