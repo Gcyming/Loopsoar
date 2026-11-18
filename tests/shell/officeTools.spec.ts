@@ -74,6 +74,11 @@ describe("统一办公文档读取（P1-6 增强）", () => {
     expect(extractDelimitedText(csv, ".csv")).toBe('姓名\t备注\n张,三\t他说"好"');
   });
 
+  it("CSV 无 BOM 的 GBK 自动回退", () => {
+    const gbk = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0x2c, 0x31, 0x0a]);
+    expect(extractDelimitedText(gbk, ".csv")).toBe("测试\t1");
+  });
+
   it("按内容识别格式；office_read 返回可读错误而非抛异常", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-office-"));
     try {
@@ -100,7 +105,7 @@ describe("统一办公文档读取（P1-6 增强）", () => {
         platform: {},
       });
       expect(legacy.ok).toBe(false);
-      expect(legacy.content).toContain("旧版二进制");
+      expect(legacy.content).toContain("OLE 复合文档");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

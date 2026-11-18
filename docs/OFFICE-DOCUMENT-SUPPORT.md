@@ -16,7 +16,7 @@
 | OpenDocument 图形 | `.odg` | `content.xml` 的文本对象 | 仅文本，不读图形结构 |
 | Flat OpenDocument | `.fodt` `.fods` `.fodp` | 非 ZIP 的 flat XML 正文 | 同对应 ODF 格式 |
 | RTF | `.rtf` | 正文、段落、制表符、`\uN`、GBK/ANSI 字节 | 不读图片/嵌入对象/域结果；复杂表格可能退化为文本 |
-| CSV / TSV | `.csv` `.tsv` | RFC4180 引号/转义/CRLF、BOM、UTF-16 BOM；输出制表符分隔 | 最多 10,000 行；不推断列类型 |
+| CSV / TSV | `.csv` `.tsv` | RFC4180 引号/转义/CRLF、BOM、UTF-16 BOM；无 BOM 时 `encoding:auto` 先 UTF-8，失败回退 GBK/GB18030；输出制表符分隔 | 最多 10,000 行；不推断列类型 |
 | PDF | `.pdf` | PDF 文本层，逐页换行 | 扫描件无文本层时提示 OCR；不还原版面/表格/图片 |
 | 旧版二进制 Office | `.doc` `.xls` `.ppt` | **不支持** | 检测到 OLE 复合文档会提示另存为 OOXML/PDF |
 

@@ -91,6 +91,19 @@ describe("XLSX 文本读取（P1-6）", () => {
     }
   });
 
+  it("畸形列引用不撑爆行数组", () => {
+    const buffer = zipStore([
+      {
+        name: "xl/worksheets/sheet1.xml",
+        data: Buffer.from(
+          '<worksheet><sheetData><row r="1"><c r="ZZZZZZZZZZ" t="inlineStr"><is><t>越界</t></is></c><c r="A1" t="inlineStr"><is><t>正常</t></is></c></row></sheetData></worksheet>',
+          "utf8",
+        ),
+      },
+    ]);
+    expect(extractXlsxText(buffer)).toBe("正常");
+  });
+
   it("按 workbook/rels 读取指定工作表或全部工作表", () => {
     const workbookXml =
       '<workbook><sheets><sheet name="第一张" sheetId="1" r:id="rId1"/><sheet name="第二张" sheetId="2" r:id="rId2"/></sheets></workbook>';

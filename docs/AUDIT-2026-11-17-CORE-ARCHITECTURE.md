@@ -292,7 +292,7 @@
 - [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 作为后续增量，不属于本轮文本读取。
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
 - [~] P1-5 子 Agent/任务树（第二步）：`delegate_research` 只读子代理（独立 `ChatService`/独立历史、只读 allowlist、60s 超时中止）；新增 `delegate_parallel` 并行 2–4 个互不依赖的只读任务、最多 3 并发、逐任务独立超时、结果按任务顺序回灌；仍无任务树/子会话持久化。
-- [x] P1-6 工具面补齐：`web_search` 已有；新增 `office_read` 统一读取 DOCX/DOCM、XLSX/XLSM、PPTX/PPTM、ODT/ODS/ODP/ODG、FODT/FODS/FODP、RTF、CSV/TSV、PDF 文本层；`docx_read`/`xlsx_read`/`pdf_read` 保留。ZIP 层加条目/解压上限、加密/zip64/压缩方法校验，防 zip bomb；XLSX 支持指定/全部工作表。旧版二进制 .doc/.xls/.ppt 明确提示另存；扫描 PDF、OCR、版面/图表不还原。
+- [x] P1-6 工具面补齐：`web_search` 已有；新增 `office_read` 统一读取 DOCX/DOCM、XLSX/XLSM、PPTX/PPTM、ODT/ODS/ODP/ODG、FODT/FODS/FODP、RTF、CSV/TSV（UTF-8/GBK/GB18030 自动回退）、PDF 文本层；`docx_read`/`xlsx_read`/`pdf_read` 保留。ZIP 层加条目/解压上限、加密/zip64/压缩方法校验，防 zip bomb；XLSX 支持指定/全部工作表。旧版二进制 .doc/.xls/.ppt 与加密 OOXML 明确提示另存/解密；扫描 PDF、OCR、版面/图表不还原。
 - [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 写入 `skills/<id>/SKILL.md` 并默认禁用；补 `skill_list`/`skill_read` 只读查看技能库（含禁用候选），用户在设置·技能启用后才注入；尚未做任务结束自动生成。
 - [~] P1-8 扩展贡献点协议 / worker OS 隔离（第一步）：manifest 新增 `isolation:"node"`，worker 用 Node permission model 启动（只读扩展目录/worker 目录、写仅扩展目录、`terminal` 才允许子进程）；默认仍为 `none`，强隔离/容器化与 commands/UI/hooks 贡献点未做。
 
@@ -331,7 +331,7 @@
 
 - 2026-11-17：初版审计记录；只读，未修改源码。
 - 2026-11-17：完成 P0 修补（P0-1 / P0-2 / P0-3），全量 **222 文件 / 1,791 用例**通过；typecheck 5/5、build 5/5。P0-3 仅覆盖工具桥接权限，worker OS 级隔离仍留 P1-8。
-- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理与并行委派、P1-6 Office/PDF 文本读取（DOCX/XLSX/PPTX/ODF/RTF/CSV/PDF）、P1-7 技能候选与技能库读取、P1-8 扩展 Node permission 隔离第一步、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成、P2-1 设置页纯模型拆分第一步；P1-1/P1-6 的“缺失”经复核为误判。全量 **234 文件 / 1,856 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理与并行委派、P1-6 Office/PDF 文本读取（DOCX/XLSX/PPTX/ODF/RTF/CSV/PDF）、P1-7 技能候选与技能库读取、P1-8 扩展 Node permission 隔离第一步、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成、P2-1 设置页纯模型拆分第一步；P1-1/P1-6 的“缺失”经复核为误判。全量 **234 文件 / 1,858 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -366,4 +366,4 @@
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
 | P2-1/P2-3 拆巨型文件 | 🟡 第一步 | 设置页纯模型/格式化抽成 `settingsModel.ts`（`Settings.tsx` 2,894 → 2,835 行）并加单测；`App.tsx`/`main/index.ts` 仍未拆。 |
 
-**本轮验证**：`npx vitest run` **234 文件 / 1,856 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **234 文件 / 1,858 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

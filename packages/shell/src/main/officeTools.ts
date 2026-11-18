@@ -43,15 +43,44 @@ function attr(attrs: string, name: string): string | undefined {
   return new RegExp(`\\b${pattern}\\s*=\\s*"([^"]*)"`, "i").exec(attrs)?.[1];
 }
 
-function decodeTextBuffer(buffer: Buffer): string {
-  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
-    return buffer.subarray(2).toString("utf16le");
+export type TextEncoding = "auto" | "utf-8" | "utf-16le" | "utf-16be" | "gbk" | "gb18030";
+
+function replacementCount(text: string): number {
+  let count = 0;
+  for (const char of text) if (char === "\uFFFD") count += 1;
+  return count;
+}
+
+function decodeTextBuffer(buffer: Buffer, encoding: TextEncoding = "auto"): string {
+  if (encoding === "utf-16le" || (encoding === "auto" && buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe)) {
+    return buffer.subarray(buffer[0] === 0xff && buffer[1] === 0xfe ? 2 : 0).toString("utf16le");
   }
-  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
-    return Buffer.from(buffer.subarray(2)).swap16().toString("utf16le");
+  if (encoding === "utf-16be" || (encoding === "auto" && buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff)) {
+    return Buffer.from(buffer.subarray(buffer[0] === 0xfe && buffer[1] === 0xff ? 2 : 0)).swap16().toString("utf16le");
   }
   const start = buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf ? 3 : 0;
-  return buffer.subarray(start).toString("utf8");
+  const body = buffer.subarray(start);
+  if (encoding === "utf-8") return body.toString("utf8");
+  if (encoding === "gbk" || encoding === "gb18030") {
+    try {
+      return new TextDecoder(encoding).decode(body);
+    } catch {
+      return body.toString("utf8");
+    }
+  }
+  // auto：优先 UTF-8；出现替换字符时再试 GBK/GB18030，选替换字符更少的解码。
+  const utf8 = body.toString("utf8");
+  const bad = replacementCount(utf8);
+  if (bad === 0) return utf8;
+  for (const label of ["gb18030", "gbk"] as const) {
+    try {
+      const decoded = new TextDecoder(label).decode(body);
+      if (replacementCount(decoded) < bad) return decoded;
+    } catch {
+      // 当前 Node 不支持该编码时继续用 UTF-8。
+    }
+  }
+  return utf8;
 }
 
 /* ── PPTX ── */
@@ -226,6 +255,9 @@ export function extractRtfText(buffer: Buffer): string {
     .replace(/\\tab\b\s?/g, "\t")
     .replace(/\\cell\b\s?/g, "\t")
     .replace(/\\row\b\s?/g, "\n")
+    .replace(/\\~/g, " ")
+    .replace(/\\-/g, "")
+    .replace(/\\_/g, "-")
     .replace(/\\emdash\b\s?/g, "—")
     .replace(/\\endash\b\s?/g, "–")
     .replace(/\\bullet\b\s?/g, "•")
@@ -296,8 +328,8 @@ export function parseDelimitedText(text: string, delimiter?: string): string[][]
   return rows;
 }
 
-export function extractDelimitedText(buffer: Buffer, ext: string): string {
-  const text = decodeTextBuffer(buffer);
+export function extractDelimitedText(buffer: Buffer, ext: string, encoding: TextEncoding = "auto"): string {
+  const text = decodeTextBuffer(buffer, encoding);
   const rows = parseDelimitedText(text, ext === ".tsv" ? "\t" : undefined)
     .slice(0, MAX_CSV_ROWS)
     .map((row) => row.map((cell) => cell.replace(/[\t\r\n]+/g, " ")).join("\t"));
@@ -312,9 +344,8 @@ export function detectOfficeKind(buffer: Buffer, file: string): OfficeKind {
   if (ext === ".csv" || ext === ".tsv") return "delimited";
   if (ext === ".rtf" || buffer.subarray(0, 5).toString("latin1").toLowerCase() === "{\\rtf") return "rtf";
   if (ext === ".fodt" || ext === ".fods" || ext === ".fodp") return "odf";
-  if (ext === ".doc" || ext === ".xls" || ext === ".ppt") {
-    if (buffer.length >= 8 && buffer.readUInt32BE(0) === 0xd0cf11e0) return "legacy";
-  }
+  // OLE 复合文档：旧版 .doc/.xls/.ppt，或加密的 OOXML（扩展名仍是 .docx 等）。
+  if (buffer.length >= 8 && buffer.readUInt32BE(0) === 0xd0cf11e0) return "legacy";
   if (!hasZipMagic(buffer)) return "unknown";
   if (readZipEntry(buffer, "word/document.xml")) return "docx";
   if (readZipEntry(buffer, "xl/workbook.xml") || readZipEntry(buffer, "xl/worksheets/sheet1.xml")) return "xlsx";
@@ -330,6 +361,8 @@ export interface OfficeReadOptions {
   maxSheets?: number;
   maxPages?: number;
   maxSlides?: number;
+  /** 仅 CSV/TSV：auto 默认先 UTF-8，出现替换字符时回退 GBK/GB18030。 */
+  encoding?: TextEncoding;
 }
 
 export interface OfficeReadResult {
@@ -360,14 +393,14 @@ export async function extractOfficeText(file: string, options: OfficeReadOptions
     case "rtf":
       return { kind, text: extractRtfText(buffer) };
     case "delimited":
-      return { kind, text: extractDelimitedText(buffer, path.extname(file).toLowerCase()) };
+      return { kind, text: extractDelimitedText(buffer, path.extname(file).toLowerCase(), options.encoding) };
     case "pdf": {
       const result = await extractPdfText(buffer, options.maxPages);
       const note = result.parsedPages < result.pages ? `\n（已解析前 ${result.parsedPages}/${result.pages} 页）` : "";
       return { kind, text: result.text ? `${result.text}${note}` : `[空文本] PDF 共 ${result.pages} 页，未找到文本层（可能是扫描件，需要 OCR）${note}` };
     }
     case "legacy":
-      throw new Error("检测到旧版二进制 Office（.doc/.xls/.ppt）；请用 Office/LibreOffice 另存为 .docx/.xlsx/.pptx 或 PDF 后再读取");
+      throw new Error("检测到 OLE 复合文档（旧版 .doc/.xls/.ppt，或加密的 OOXML）；请先解密/另存为 .docx/.xlsx/.pptx 或 PDF 后再读取");
     default:
       throw new Error("无法识别的办公文档格式（支持 DOCX/XLSX/PPTX/ODT/ODS/ODP/RTF/CSV/TSV/PDF）");
   }
@@ -391,6 +424,7 @@ export function registerOfficeTools(registry: ToolRegistry): void {
       maxSheets: z.number().int().min(1).max(50).optional(),
       maxPages: z.number().int().min(1).max(500).optional(),
       maxSlides: z.number().int().min(1).max(200).optional(),
+      encoding: z.enum(["auto", "utf-8", "utf-16le", "utf-16be", "gbk", "gb18030"]).optional(),
     }),
     execute: async (ctx): Promise<ToolResult> => {
       const params = ctx.params as {
@@ -401,6 +435,7 @@ export function registerOfficeTools(registry: ToolRegistry): void {
         maxSheets?: number;
         maxPages?: number;
         maxSlides?: number;
+        encoding?: TextEncoding;
       };
       try {
         const file = path.resolve(params.path);

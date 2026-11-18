@@ -53,7 +53,8 @@ function cellColumn(attrs: string): number {
   const ref = /\br="([A-Z]+)\d+"/i.exec(attrs)?.[1] ?? "";
   let index = 0;
   for (const char of ref.toUpperCase()) index = index * 26 + (char.charCodeAt(0) - 64);
-  return Math.max(0, index - 1);
+  // Excel 列上限 16,384；越界/畸形引用直接丢弃，避免恶意 r="ZZZZ..." 撑爆行数组。
+  return index >= 1 && index <= 16_384 ? index - 1 : -1;
 }
 
 export interface XlsxReadOptions {
@@ -109,10 +110,16 @@ function workbookSheets(buffer: Buffer): SheetRef[] {
 /** 单张工作表 XML → 制表符分列、换行分行的纯文本。 */
 function worksheetXmlToText(sheet: string, shared: string[]): string {
   const rows = [...sheet.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map((row) => {
-    const cells = [...row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)].map((cell) => ({
-      column: cellColumn(cell[1]),
-      text: cellText(cell[2], cell[1], shared),
-    }));
+    const cells = [...row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)]
+      .map((cell, index) => {
+        const column = cellColumn(cell[1]);
+        return {
+          // 缺 r 的合法单元格按出现顺序落列；显式引用越界则丢弃。
+          column: column >= 0 ? column : cell[1].includes("r=") ? -1 : index,
+          text: cellText(cell[2], cell[1], shared),
+        };
+      })
+      .filter((cell) => cell.column >= 0);
     const width = cells.reduce((max, cell) => Math.max(max, cell.column + 1), 0);
     const line = Array.from({ length: width }, () => "");
     for (const cell of cells) line[cell.column] = cell.text.replace(/\r?\n/g, " ");
@@ -168,7 +175,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
   registry.register({
     name: "docx_read",
     description:
-      "读取 WordprocessingML（.docx/.docm/.dotx）的纯文本：解包 word/document.xml，保留段落/换行/制表符，去掉样式；适合读需求文档、会议纪要。更多格式用 office_read。",
+      "读取 WordprocessingML（.docx/.docm/.dotx/.dotm）的纯文本：解包 word/document.xml，保留段落/换行/制表符，去掉样式；适合读需求文档、会议纪要。更多格式用 office_read。",
     permissions: { read: true },
     schema: z.object({
       path: z.string().min(1).max(1000),
@@ -178,8 +185,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       const params = ctx.params as { path: string; maxChars?: number };
       try {
         const file = path.resolve(params.path);
-        if (![".docx", ".docm", ".dotx"].includes(path.extname(file).toLowerCase())) {
-          return { ok: false, content: "[错误] 只支持 .docx/.docm/.dotx（旧版 .doc 请先另存为 .docx）" };
+        if (![".docx", ".docm", ".dotx", ".dotm"].includes(path.extname(file).toLowerCase())) {
+          return { ok: false, content: "[错误] 只支持 .docx/.docm/.dotx/.dotm（旧版 .doc 请先另存为 .docx）" };
         }
         let stat: fs.Stats;
         try {
@@ -204,7 +211,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
   registry.register({
     name: "xlsx_read",
     description:
-      "读取 Excel（.xlsx/.xlsm/.xltx）为纯文本：制表符分列、换行分行，共享/内联字符串都支持；默认第一张工作表，可指定 sheet 或 allSheets；公式取缓存值。",
+      "读取 Excel（.xlsx/.xlsm/.xltx/.xltm）为纯文本：制表符分列、换行分行，共享/内联字符串都支持；默认第一张工作表，可指定 sheet 或 allSheets；公式取缓存值。",
     permissions: { read: true },
     schema: z.object({
       path: z.string().min(1).max(1000),
@@ -217,8 +224,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       const params = ctx.params as { path: string; maxChars?: number; sheet?: string | number; allSheets?: boolean; maxSheets?: number };
       try {
         const file = path.resolve(params.path);
-        if (![".xlsx", ".xlsm", ".xltx"].includes(path.extname(file).toLowerCase())) {
-          return { ok: false, content: "[错误] 只支持 .xlsx/.xlsm/.xltx（旧版 .xls 请先另存为 .xlsx）" };
+        if (![".xlsx", ".xlsm", ".xltx", ".xltm"].includes(path.extname(file).toLowerCase())) {
+          return { ok: false, content: "[错误] 只支持 .xlsx/.xlsm/.xltx/.xltm（旧版 .xls 请先另存为 .xlsx）" };
         }
         let stat: fs.Stats;
         try {
