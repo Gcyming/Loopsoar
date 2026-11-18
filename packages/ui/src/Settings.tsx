@@ -4,15 +4,15 @@ import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND, BADGE } from "./theme.js";
 import {
   HEADER_TEMPLATE_VARIABLES,
-  unknownHeaderTemplateVariables,
 } from "loopsoar-contracts/headerTemplate";
+import { formatHeaderLines, formatWhen, localized, loopKindOf, parseHeaderLines, type DraftRule } from "./settingsModel.js";
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
 import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
 import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
-import { getLanguage, setLanguage, useT } from "./i18n.js";
+import { setLanguage, useT } from "./i18n.js";
 import MemoryGraphView from "./MemoryGraphView.js";
 import type {
   AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
@@ -29,9 +29,6 @@ import type {
  * i18n：界面文案全部走 `tr("settings.*")`，词典在 i18nSettings.ts（zh/en 成对）；
  * 语言切换由 i18n.ts 的 setLanguage 广播，本组件通过 useT 订阅即时重渲染。
  */
-
-/** 翻译函数签名（与 i18n.ts 的 useT 返回一致）。 */
-type TFunc = (key: string, params?: Record<string, string | number>) => string;
 
 type SectionId =
   | "general"
@@ -75,29 +72,6 @@ const SEARCH_ENGINE_OPTIONS: { id: Preferences["searchEngine"]; name: string; ho
   { id: "google", name: "Google", host: "google.com" },
   { id: "baidu", name: "百度", host: "baidu.com" },
 ];
-
-interface DraftRule {
-  key: string; name: string; scope: "global" | "workspace";
-  enabled: boolean; content: string; persisted: boolean; path: string;
-  workspaceId?: string; workspaceName?: string; workspaceRoot?: string;
-}
-
-/** 取翻译；key 缺失（词典未覆盖）时回退到调用方给的原文，绝不显示裸 key。 */
-function localized(tr: TFunc, key: string, fallback: string): string {
-  const text = tr(key);
-  return text === key ? fallback : text;
-}
-
-/** Agent-Loop 类型推导：builtin 标记优先，其余按 id 约定（声明式 decl… / 脚本 script…）。 */
-function loopKindOf(loop: LoopInfo): "builtin" | "declarative" | "script" | "custom" {
-  if (loop.builtin) return "builtin";
-  // 后端已带真实 kind 时直接用（L2 声明式 / L3 脚本），否则按 id 约定兜底
-  if (loop.kind === "declarative" || loop.kind === "script") return loop.kind;
-  const id = loop.id.toLowerCase();
-  if (id.includes("decl")) return "declarative";
-  if (id.includes("script") || /\.(m?js|cjs|ts|py)$/.test(id)) return "script";
-  return "custom";
-}
 
 export default function Settings({ api, onClose, onPreferencesSaved, initialSection, onOpenOnboarding, onOpenUrl, fullPage = false }: {
   api: LoopsoarAPI | null; onClose: () => void; onPreferencesSaved?: (p: Preferences) => void; initialSection?: SectionId;
@@ -2345,39 +2319,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
 /* ── 小控件 ── */
 function Head({ t, h }: { t: string; h: string }) {
   return <div style={{ marginBottom: 14 }}><div style={{ fontSize: 15, fontWeight: 700 }}>{t}</div><div style={{ marginTop: 4, fontSize: 11.5, color: BRAND.linenMuted, lineHeight: 1.6 }}>{h}</div></div>;
-}
-/** 请求头文本 ⇄ 对象：每行一条 `Key: Value`；空行忽略，非法行抛可读错误（文案走 i18n）。 */
-function parseHeaderLines(text: string, tr: TFunc): Record<string, string> | undefined {
-  const headers: Record<string, string> = {};
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  for (const [index, line] of lines.entries()) {
-    const colon = line.indexOf(":");
-    if (colon <= 0) throw new Error(tr("settings.providers.headerFormatError", { line: index + 1 }));
-    const key = line.slice(0, colon).trim();
-    const value = line.slice(colon + 1).trim();
-    if (!key || /\s/.test(key)) throw new Error(tr("settings.providers.headerKeyError", { line: index + 1 }));
-    headers[key] = value;
-  }
-  if (Object.keys(headers).length > 30) throw new Error(tr("settings.providers.headerMax"));
-  const unknown = unknownHeaderTemplateVariables(headers);
-  if (unknown.length > 0) {
-    throw new Error(tr("settings.providers.headerUnknownVars", {
-      names: unknown.map((name) => `{{${name}}}`).join(", "),
-      available: HEADER_TEMPLATE_VARIABLES.join(" / "),
-    }));
-  }
-  return Object.keys(headers).length > 0 ? headers : undefined;
-}
-
-function formatHeaderLines(headers?: Record<string, string>): string {
-  if (!headers) return "";
-  return Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n");
-}
-
-/** 时间戳展示（回退记录等；按当前语言短格式，非法值显示「时间未知」）。 */
-function formatWhen(at: number, tr: TFunc): string {
-  if (!Number.isFinite(at) || at <= 0) return tr("settings.timeUnknown");
-  return new Date(at).toLocaleString(getLanguage() === "en-US" ? "en-US" : "zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function Field({ l, h, children }: { l: string; h?: string; children: React.ReactNode }) {
