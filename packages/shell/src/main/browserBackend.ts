@@ -2,8 +2,9 @@
  * 浏览器后端端口（P1-3 第一步）。
  *
  * 工具层只依赖这个接口，不再依赖 Electron 的 BrowserHost 具体类；
- * 当前唯一实现是 BrowserHost（Electron WebContentsView）。后续接 Playwright/CDP 时，
- * 新适配器实现同一组方法即可，浏览器工具不用改。
+ * 当前有两个实现：BrowserHost（Electron WebContentsView，主窗口）与
+ * CdpBrowserBackend（Node 原生 WebSocket/CDP，远端/无头自动化）。
+ * 浏览器工具不用改即可切换后端。
  *
  * 注意：这不是完整引擎替换——会话生命周期、原生视图布局仍在 shell 的 BrowserHost 里。
  * 但工具面（导航/快照/点击/输入/截图/标签）已经收口到端口，避免继续扩散 Electron 依赖。

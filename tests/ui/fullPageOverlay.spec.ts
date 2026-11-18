@@ -40,7 +40,10 @@ const MARKER_FILES: [string, string][] = [
 describe("全屏覆盖层从标题栏下方开始", () => {
   it("内联覆盖层使用 LAYOUT.TITLE_BAR_HEIGHT，且不再 inset:0 铺满整窗", () => {
     for (const file of INLINE_OVERLAY_FILES) {
-      const text = read(file);
+      // Settings 的覆盖层样式/控件已拆到 settingsUi.tsx：两文件合并校验，防止拆分后回退。
+      const text = file.endsWith("Settings.tsx")
+        ? `${read(file)}\n${read("packages/ui/src/settingsUi.tsx")}`
+        : read(file);
       expect(text, `${file} 未 import LAYOUT / 未使用 LAYOUT.TITLE_BAR_HEIGHT`).toContain("LAYOUT.TITLE_BAR_HEIGHT");
       expect(text, `${file} 仍有铺满整窗的 inset: 0`).not.toMatch(/inset:\s*0\b/);
     }

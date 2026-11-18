@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CdpBrowserBackend, type CdpTransport } from "../../packages/shell/src/main/cdpBrowserBackend.ts";
+import { CdpBrowserBackend, createCdpBrowserBackendFromEnv, type CdpTransport } from "../../packages/shell/src/main/cdpBrowserBackend.ts";
 
 /** 只验证 CDP 命令映射的假 transport；真实 WebSocket 由 createWebSocketTransport 承担。 */
 function fakeTransport(): { transport: CdpTransport; calls: Array<{ method: string; params?: Record<string, unknown>; sessionId?: string }> } {
@@ -81,5 +81,29 @@ describe("CdpBrowserBackend（P1-3 第二后端）", () => {
     expect(await backend.closeTab(created.tabId)).toBe(true);
     expect(backend.activeTabId()).toBeNull();
     expect(calls.some((call) => call.method === "Target.closeTarget")).toBe(true);
+  });
+
+  it("会话标签隔离：不同 sessionId 的标签与激活项互不串线", async () => {
+    const { transport } = fakeTransport();
+    const backend = new CdpBrowserBackend("ws://fake", { transport, loadTimeoutMs: 500 });
+    const a = await backend.newTab("https://a.example/", "session-a");
+    const b = await backend.newTab("https://b.example/", "session-b");
+    expect(backend.listTabs("session-a").map((tab) => tab.id)).toEqual([a.tabId]);
+    expect(backend.listTabs("session-b").map((tab) => tab.id)).toEqual([b.tabId]);
+    expect(backend.activeTabId("session-a")).toBe(a.tabId);
+    expect(backend.activeTabId("session-b")).toBe(b.tabId);
+    backend.selectTab(a.tabId, "session-a");
+    expect(backend.activeTabId("session-a")).toBe(a.tabId);
+    expect(backend.activeTabId("session-b")).toBe(b.tabId);
+    await backend.closeTab(a.tabId, "session-a");
+    expect(backend.listTabs("session-a")).toHaveLength(0);
+    expect(backend.listTabs("session-b")).toHaveLength(1);
+  });
+
+  it("env 选择器默认关闭，显式 endpoint 才启用", async () => {
+    expect(createCdpBrowserBackendFromEnv({})).toBeNull();
+    const backend = createCdpBrowserBackendFromEnv({ LOOPSOAR_BROWSER_CDP_ENDPOINT: "ws://127.0.0.1:9222" });
+    expect(backend).toBeInstanceOf(CdpBrowserBackend);
+    await backend?.close();
   });
 });

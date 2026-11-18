@@ -18,7 +18,7 @@ const ROOT = process.cwd();
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
 describe("供应商编辑大弹窗（避免跳页、提示可见、无挤压截断）", () => {
-  const source = read("packages/ui/src/Settings.tsx");
+  const source = read("packages/ui/src/Settings.tsx") + "\n" + read("packages/ui/src/settingsUi.tsx");
 
   it("编辑区使用弹窗容器（遮罩 + dialog + 固定底部操作栏）而不是列表末尾内联卡片", () => {
     expect(source).toContain("S.modalBackdrop");

@@ -92,6 +92,7 @@ import { SkillHost } from "./skills.js";
 import { maybeAutoSkillCandidate } from "./skillAutoCapture.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
+import { createCdpBrowserBackendFromEnv, type CdpBrowserBackend } from "./cdpBrowserBackend.js";
 import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
@@ -176,6 +177,8 @@ function pushToRenderer(event: string, payload: unknown): void {
 
 let mainWindow: BrowserWindow | null = null;
 let browserHost: BrowserHost | null = null;
+/** 远端 CDP 浏览器后端（仅显式设置 LOOPSOAR_BROWSER_CDP_ENDPOINT 时存在；不接管原生标签 UI）。 */
+let remoteBrowserBackend: CdpBrowserBackend | null = null;
 /** 浏览器扩展宿主（浏览器 preload 的「商店安装」IPC 需要模块级访问）。 */
 let browserExtensionsHost: BrowserExtensionHost | null = null;
 /** 底部开发者工具面板（main() 内创建；主窗口 closed 时释放）。 */
@@ -1139,7 +1142,10 @@ app.whenReady().then(async () => {
   };
 
   // Agent 浏览器工具（快照/导航/点击/输入/滚动/抓取）：在浏览器宿主创建后注册
-  registerBrowserTools(registry, () => browserHost, resolveSessionRoot, {
+  // 远端 CDP 模式：显式 env 时工具面走 CdpBrowserBackend；原生标签 UI 仍由 BrowserHost 提供。
+  remoteBrowserBackend = createCdpBrowserBackendFromEnv();
+  if (remoteBrowserBackend) console.log(`[Loopsoar] 浏览器工具使用 CDP 后端：${process.env.LOOPSOAR_BROWSER_CDP_ENDPOINT}`);
+  registerBrowserTools(registry, () => remoteBrowserBackend ?? browserHost, resolveSessionRoot, {
     beforeOpenPage: beforeOpenBrowserPage,
     // 敏感步骤二次确认：策略层只看到 target（多为 #e12），只有定位后拿到真实文案才判得出
     // 「立即支付 / 确认转账」。返回 false（含取消/超时/异常）= 不点击（fail-closed）。
@@ -1689,6 +1695,7 @@ app.whenReady().then(async () => {
       askBus.clearAll("应用退出，按取消处理");
       chromePopover.dispose();
       agentWindow?.dispose();
+      void remoteBrowserBackend?.close();
     },
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });

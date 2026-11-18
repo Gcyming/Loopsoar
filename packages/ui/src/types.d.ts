@@ -506,7 +506,6 @@ export interface InstalledExtension {
     version: string;
     description?: string;
     author?: string;
-    /** 入口文件（相对扩展目录）；当前版本必须提供，仅声明式扩展尚未实现 */
     main?: string;
     permissions?: string[];
     /** Node permission 隔离（opt-in）；strict 额外去掉 addons。 */
@@ -514,16 +513,13 @@ export interface InstalledExtension {
     /** 声明式贡献点：命令只填提示词，不执行扩展代码。 */
     contributes?: {
       commands?: Array<{ id: string; title: string; description?: string; prompt: string }>;
-      /** 启用后注入 Agent 的声明式指令。 */
       instructions?: string;
-      /** 设置页只读面板（纯文本/键值）。 */
       ui?: Array<{
         id: string;
         title: string;
         description?: string;
         items?: Array<{ label: string; value: string }>;
       }>;
-      /** 每轮会话开始注入的声明式提示。 */
       hooks?: Array<{ event: "turn.start"; prompt: string }>;
     };
   };

@@ -142,7 +142,8 @@ function tabState(tab: CdpTab, active: boolean): TabState {
 export class CdpBrowserBackend implements BrowserBackend {
   private transport: CdpTransport | null;
   private tabs = new Map<string, CdpTab>();
-  private active: string | null = null;
+  /** 每个会话独立的标签组与激活项；远端 CDP 没有原生视图，但仍保持工具面的会话隔离。 */
+  private sessions = new Map<string, { tabIds: string[]; active: string | null }>();
   private nextTab = 0;
   private connected: Promise<void> | null = null;
   private readonly loadTimeoutMs: number;
@@ -153,6 +154,16 @@ export class CdpBrowserBackend implements BrowserBackend {
   ) {
     this.transport = opts.transport ?? null;
     this.loadTimeoutMs = opts.loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS;
+  }
+
+  private group(sessionId?: string): { tabIds: string[]; active: string | null } {
+    const key = sessionId || "default";
+    let group = this.sessions.get(key);
+    if (!group) {
+      group = { tabIds: [], active: null };
+      this.sessions.set(key, group);
+    }
+    return group;
   }
 
   private async connect(): Promise<CdpTransport> {
@@ -191,13 +202,13 @@ export class CdpBrowserBackend implements BrowserBackend {
     return sessionId;
   }
 
-  private async addTab(targetId: string): Promise<CdpTab> {
-    const sessionId = await this.attach(targetId);
+  private async addTab(targetId: string, sessionId?: string): Promise<CdpTab> {
+    const sessionIdForTab = await this.attach(targetId);
     const refs = createTabRegistry();
     const tab: CdpTab = {
       tabId: `cdp-tab-${++this.nextTab}`,
       targetId,
-      sessionId,
+      sessionId: sessionIdForTab,
       url: "about:blank",
       title: "",
       loading: false,
@@ -206,16 +217,18 @@ export class CdpBrowserBackend implements BrowserBackend {
       registry: refs.registry,
     };
     this.tabs.set(tab.tabId, tab);
-    this.active = tab.tabId;
+    const group = this.group(sessionId);
+    group.tabIds.push(tab.tabId);
+    group.active = tab.tabId;
     await this.refreshTab(tab).catch(() => undefined);
     return tab;
   }
 
-  private async createTarget(url = "about:blank"): Promise<CdpTab> {
+  private async createTarget(url = "about:blank", sessionId?: string): Promise<CdpTab> {
     const result = await this.send("Target.createTarget", { url });
     const targetId = typeof result.targetId === "string" ? result.targetId : "";
     if (!targetId) throw new Error("CDP 创建标签失败");
-    return this.addTab(targetId);
+    return this.addTab(targetId, sessionId);
   }
 
   /** 把 emulation/Page 的当前状态同步到标签缓存；失败不抛（页面可能正在导航）。 */
@@ -235,15 +248,20 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  private async tabOrCreate(tabId?: string): Promise<CdpTab> {
-    const existing = tabId ? this.tabs.get(tabId) : this.tabs.get(this.active ?? "");
-    if (existing) return existing;
-    if (this.tabs.size > 0) {
-      const first = this.tabs.values().next().value as CdpTab;
-      this.active = first.tabId;
+  private async tabOrCreate(tabId?: string, sessionId?: string): Promise<CdpTab> {
+    if (tabId) {
+      const existing = this.tabs.get(tabId);
+      if (existing) return existing;
+    }
+    const group = this.group(sessionId);
+    const active = group.active ? this.tabs.get(group.active) : undefined;
+    if (active) return active;
+    const first = group.tabIds.map((id) => this.tabs.get(id)).find((tab): tab is CdpTab => Boolean(tab));
+    if (first) {
+      group.active = first.tabId;
       return first;
     }
-    return this.createTarget();
+    return this.createTarget("about:blank", sessionId);
   }
 
   private async waitReady(tab: CdpTab): Promise<void> {
@@ -263,17 +281,21 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  listTabs(): TabState[] {
-    return [...this.tabs.values()].map((tab) => tabState(tab, tab.tabId === this.active));
+  listTabs(sessionId?: string): TabState[] {
+    const group = this.group(sessionId);
+    return group.tabIds
+      .map((id) => this.tabs.get(id))
+      .filter((tab): tab is CdpTab => Boolean(tab))
+      .map((tab) => tabState(tab, tab.tabId === group.active));
   }
 
-  activeTabId(): string | null {
-    return this.active;
+  activeTabId(sessionId?: string): string | null {
+    return this.group(sessionId).active;
   }
 
-  async navigate(rawUrl: string, tabId?: string): Promise<NavigateOutcome> {
+  async navigate(rawUrl: string, tabId?: string, sessionId?: string): Promise<NavigateOutcome> {
     try {
-      const tab = await this.tabOrCreate(tabId);
+      const tab = await this.tabOrCreate(tabId, sessionId);
       tab.registry.clear();
       const result = await this.send("Page.navigate", { url: rawUrl }, tab.sessionId);
       if (typeof result.errorText === "string" && result.errorText) {
@@ -289,9 +311,9 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  async newTab(rawUrl = "about:blank"): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+  async newTab(rawUrl = "about:blank", sessionId?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
     try {
-      const tab = await this.createTarget(rawUrl);
+      const tab = await this.createTarget(rawUrl, sessionId);
       await this.waitReady(tab);
       await this.refreshTab(tab);
       return { tabId: tab.tabId, url: tab.url, ok: true };
@@ -300,28 +322,32 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  selectTab(tabId: string): boolean {
+  selectTab(tabId: string, sessionId?: string): boolean {
     if (!this.tabs.has(tabId)) return false;
-    this.active = tabId;
+    const group = this.group(sessionId);
+    if (!group.tabIds.includes(tabId)) group.tabIds.push(tabId);
+    group.active = tabId;
     return true;
   }
 
-  async closeTab(tabId: string): Promise<boolean> {
+  async closeTab(tabId: string, sessionId?: string): Promise<boolean> {
     const tab = this.tabs.get(tabId);
     if (!tab) return false;
     this.tabs.delete(tabId);
+    const group = this.group(sessionId);
+    group.tabIds = group.tabIds.filter((id) => id !== tabId);
     try {
       await this.send("Target.closeTarget", { targetId: tab.targetId });
     } catch {
       // 已关闭
     }
-    if (this.active === tabId) this.active = this.tabs.keys().next().value ?? null;
+    if (group.active === tabId) group.active = group.tabIds[0] ?? null;
     return true;
   }
 
-  private async history(tabId: string | undefined, delta: number): Promise<{ ok: boolean; url?: string; error?: string }> {
+  private async history(tabId: string | undefined, delta: number, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
     try {
-      const tab = await this.tabOrCreate(tabId);
+      const tab = await this.tabOrCreate(tabId, sessionId);
       const raw = (await this.send("Page.getNavigationHistory", {}, tab.sessionId)) as {
         currentIndex?: number;
         entries?: Array<{ id?: number }>;
@@ -338,17 +364,17 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  goBack(tabId?: string) {
-    return this.history(tabId, -1);
+  goBack(tabId?: string, sessionId?: string) {
+    return this.history(tabId, -1, sessionId);
   }
 
-  goForward(tabId?: string) {
-    return this.history(tabId, 1);
+  goForward(tabId?: string, sessionId?: string) {
+    return this.history(tabId, 1, sessionId);
   }
 
-  async reload(tabId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+  async reload(tabId?: string, sessionId?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
     try {
-      const tab = await this.tabOrCreate(tabId);
+      const tab = await this.tabOrCreate(tabId, sessionId);
       await this.send("Page.reload", {}, tab.sessionId);
       await this.waitReady(tab);
       await this.refreshTab(tab);
@@ -358,9 +384,9 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  async screenshot(): Promise<string | null> {
+  async screenshot(sessionId?: string): Promise<string | null> {
     try {
-      const tab = await this.tabOrCreate();
+      const tab = await this.tabOrCreate(undefined, sessionId);
       const raw = (await this.send("Page.captureScreenshot", { format: "png" }, tab.sessionId)) as { data?: string };
       return typeof raw.data === "string" ? raw.data : null;
     } catch {
@@ -368,9 +394,9 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  async snapshot(_sessionId?: string, tabId?: string): Promise<BrowserSnapshot | null> {
+  async snapshot(sessionId?: string, tabId?: string): Promise<BrowserSnapshot | null> {
     try {
-      const tab = await this.tabOrCreate(tabId);
+      const tab = await this.tabOrCreate(tabId, sessionId);
       const raw = (await this.send(
         "Runtime.evaluate",
         { expression: SNAPSHOT_SCRIPT, returnByValue: true, awaitPromise: true },
@@ -400,25 +426,25 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  private async mouse(tabId: string | undefined, type: string, x: number, y: number, extra: Record<string, unknown> = {}) {
-    const tab = await this.tabOrCreate(tabId);
+  private async mouse(tabId: string | undefined, type: string, x: number, y: number, extra: Record<string, unknown> = {}, sessionId?: string) {
+    const tab = await this.tabOrCreate(tabId, sessionId);
     await this.send("Input.dispatchMouseEvent", { type, x, y, ...extra }, tab.sessionId);
   }
 
-  async agentClick(_sessionId: string | undefined, tabId: string | undefined, point: { x: number; y: number }): Promise<boolean> {
+  async agentClick(sessionId: string | undefined, tabId: string | undefined, point: { x: number; y: number }): Promise<boolean> {
     try {
-      await this.mouse(tabId, "mouseMoved", point.x, point.y);
-      await this.mouse(tabId, "mousePressed", point.x, point.y, { button: "left", clickCount: 1 });
-      await this.mouse(tabId, "mouseReleased", point.x, point.y, { button: "left", clickCount: 1 });
+      await this.mouse(tabId, "mouseMoved", point.x, point.y, {}, sessionId);
+      await this.mouse(tabId, "mousePressed", point.x, point.y, { button: "left", clickCount: 1 }, sessionId);
+      await this.mouse(tabId, "mouseReleased", point.x, point.y, { button: "left", clickCount: 1 }, sessionId);
       return true;
     } catch {
       return false;
     }
   }
 
-  async agentType(_sessionId: string | undefined, tabId: string | undefined, text: string): Promise<boolean> {
+  async agentType(sessionId: string | undefined, tabId: string | undefined, text: string): Promise<boolean> {
     try {
-      const tab = await this.tabOrCreate(tabId);
+      const tab = await this.tabOrCreate(tabId, sessionId);
       await this.send("Input.insertText", { text }, tab.sessionId);
       return true;
     } catch {
@@ -426,18 +452,18 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  async agentHover(_sessionId: string | undefined, tabId: string | undefined, point: { x: number; y: number }): Promise<boolean> {
+  async agentHover(sessionId: string | undefined, tabId: string | undefined, point: { x: number; y: number }): Promise<boolean> {
     try {
-      await this.mouse(tabId, "mouseMoved", point.x, point.y);
+      await this.mouse(tabId, "mouseMoved", point.x, point.y, {}, sessionId);
       return true;
     } catch {
       return false;
     }
   }
 
-  async getViewportCenter(): Promise<{ x: number; y: number } | null> {
+  async getViewportCenter(sessionId?: string, tabId?: string): Promise<{ x: number; y: number } | null> {
     try {
-      const tab = await this.tabOrCreate();
+      const tab = await this.tabOrCreate(tabId, sessionId);
       const raw = (await this.send(
         "Runtime.evaluate",
         { expression: "({x: window.innerWidth / 2, y: window.innerHeight / 2})", returnByValue: true },
@@ -452,40 +478,40 @@ export class CdpBrowserBackend implements BrowserBackend {
   }
 
   async agentDrag(
-    _sessionId: string | undefined,
+    sessionId: string | undefined,
     tabId: string | undefined,
     from: { x: number; y: number },
     to: { x: number; y: number },
     steps = 8,
   ): Promise<boolean> {
     try {
-      await this.mouse(tabId, "mouseMoved", from.x, from.y);
-      await this.mouse(tabId, "mousePressed", from.x, from.y, { button: "left", clickCount: 1 });
+      await this.mouse(tabId, "mouseMoved", from.x, from.y, {}, sessionId);
+      await this.mouse(tabId, "mousePressed", from.x, from.y, { button: "left", clickCount: 1 }, sessionId);
       const count = Math.max(2, Math.min(32, Math.floor(steps)));
       for (let i = 1; i <= count; i += 1) {
         const x = from.x + ((to.x - from.x) * i) / count;
         const y = from.y + ((to.y - from.y) * i) / count;
-        await this.mouse(tabId, "mouseMoved", x, y, { button: "left", buttons: 1 });
+        await this.mouse(tabId, "mouseMoved", x, y, { button: "left", buttons: 1 }, sessionId);
       }
-      await this.mouse(tabId, "mouseReleased", to.x, to.y, { button: "left", clickCount: 1 });
+      await this.mouse(tabId, "mouseReleased", to.x, to.y, { button: "left", clickCount: 1 }, sessionId);
       return true;
     } catch {
       return false;
     }
   }
 
-  async agentWheel(_sessionId: string | undefined, tabId: string | undefined, deltaY: number): Promise<boolean> {
+  async agentWheel(sessionId: string | undefined, tabId: string | undefined, deltaY: number): Promise<boolean> {
     try {
-      await this.mouse(tabId, "mouseWheel", 0, 0, { deltaY, deltaX: 0 });
+      await this.mouse(tabId, "mouseWheel", 0, 0, { deltaY, deltaX: 0 }, sessionId);
       return true;
     } catch {
       return false;
     }
   }
 
-  async agentKey(_sessionId: string | undefined, tabId: string | undefined, key: string): Promise<boolean> {
+  async agentKey(sessionId: string | undefined, tabId: string | undefined, key: string): Promise<boolean> {
     try {
-      const tab = await this.tabOrCreate(tabId);
+      const tab = await this.tabOrCreate(tabId, sessionId);
       const named: Record<string, { key: string; code: string; keyCode: number }> = {
         Enter: { key: "Enter", code: "Enter", keyCode: 13 },
         Tab: { key: "Tab", code: "Tab", keyCode: 9 },
@@ -506,8 +532,8 @@ export class CdpBrowserBackend implements BrowserBackend {
     }
   }
 
-  async executeScript(script: string, _sessionId?: string, tabId?: string): Promise<unknown> {
-    const tab = await this.tabOrCreate(tabId);
+  async executeScript(script: string, sessionId?: string, tabId?: string): Promise<unknown> {
+    const tab = await this.tabOrCreate(tabId, sessionId);
     const raw = (await this.send(
       "Runtime.evaluate",
       { expression: script, returnByValue: true, awaitPromise: true },
@@ -521,14 +547,15 @@ export class CdpBrowserBackend implements BrowserBackend {
     return 1;
   }
 
-  isSessionVisible(): boolean {
-    return true;
+  isSessionVisible(sessionId?: string): boolean {
+    return this.sessions.has(sessionId || "default");
   }
 
-  async ensureAgentTab(): Promise<string | null> {
-    if (this.active && this.tabs.has(this.active)) return this.active;
-    const tab = this.tabs.size > 0 ? (this.tabs.values().next().value as CdpTab) : await this.createTarget();
-    this.active = tab.tabId;
+  async ensureAgentTab(sessionId?: string): Promise<string | null> {
+    const group = this.group(sessionId);
+    if (group.active && this.tabs.has(group.active)) return group.active;
+    const tab = await this.tabOrCreate(undefined, sessionId);
+    group.active = tab.tabId;
     return tab.tabId;
   }
 
@@ -537,6 +564,17 @@ export class CdpBrowserBackend implements BrowserBackend {
     this.transport = null;
     this.connected = null;
     this.tabs.clear();
-    this.active = null;
+    this.sessions.clear();
   }
+}
+
+/**
+ * 环境选择器：只有显式设置 `LOOPSOAR_BROWSER_CDP_ENDPOINT` 才启用远端 CDP 后端。
+ * 默认返回 null，Electron 主窗口继续用 BrowserHost，行为不变。
+ * 远端模式是自动化/无头场景：原生 BrowserHost 的标签 UI 不接管远端页面。
+ */
+export function createCdpBrowserBackendFromEnv(env: NodeJS.ProcessEnv = process.env): CdpBrowserBackend | null {
+  const endpoint = env.LOOPSOAR_BROWSER_CDP_ENDPOINT?.trim();
+  if (!endpoint) return null;
+  return new CdpBrowserBackend(endpoint);
 }
