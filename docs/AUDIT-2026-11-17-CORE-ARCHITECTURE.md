@@ -218,9 +218,9 @@
 | P1-2 | 终端危险命令靠正则黑名单 | `core/tools/hard_rules.ts`、`rules/commandGuard.ts` | `r''m`、`${IFS}`、`bash -c` 等变形可绕过 | 改为 argv 解析 + 命令 allowlist/分级确认；黑名单只做补充 |
 | P1-3 | 浏览器引擎不可替换 | `browserHost.ts` 直接依赖 Electron `WebContentsView` | 无法无头/服务器运行，无法用 Playwright/CDP 后端 | 定义 `BrowserBackend` 端口；Electron 与 Playwright 两个适配器 |
 | P1-4 | 无多模态输入 | LLM 消息类型只有文本；附件走文本读取 | 不能看图/截图/PDF 版面 | 消息 content 支持 image parts；截图工具回灌图像；PDF 渲染/OCR |
-| P1-5 | 单 Agent，无子 Agent/并行任务 | 只读子代理：独立 ChatService/独立历史，工具面收窄到只读 allowlist，60s 超时可中止；`delegate_parallel` 并行 2–4 个只读任务、最多 3 并发；任务记录落盘并可回查 | 复杂任务吞吐仍无任务树/子会话分叉恢复 | 后续补任务树与子会话恢复 |
+| P1-5 | 单 Agent，无子 Agent/并行任务 | 只读子代理：独立 ChatService/独立历史，工具面收窄到只读 allowlist，60s 超时可中止；`delegate_parallel` 2–4 任务/≤3 并发；`delegate_tree` 预定义 3 层/12 节点；任务记录落盘、可回查、可 `subagent_resume` 重跑（非子会话恢复） | 仍无运行时动态再委派/子会话分叉恢复 | 后续补动态委派与子会话恢复 |
 | P1-6 | 工具面偏窄（部分误判） | `shell/main/searchTools.ts` 已有内置 `web_search`；新增 `office_read` 统一读取 DOCX/XLSX/PPTX/ODF/RTF/CSV/TSV/PDF，`docx_read`/`xlsx_read`/`pdf_read` 保留 | 旧版二进制 .doc/.xls/.ppt、扫描件 OCR、版面/图表仍缺 | 已完成文本层；见 `docs/OFFICE-DOCUMENT-SUPPORT.md` |
-| P1-7 | 技能只有“注入”，没有“生成/演化” | 技能扫描/注入存在；新增候选写入与 `skill_list`/`skill_read`，但无自动创建/修订 | 无法形成“越用越强”的闭环 | 任务结束后候选技能草稿 + 人工确认入库 |
+| P1-7 | 技能只有“注入”，没有“生成/演化” | 技能扫描/注入存在；`skill_candidate` 写候选默认禁用，`skill_list`/`skill_read` 可查；设置·通用可选自动候选（默认关闭、每会话 10 分钟节流） | 候选质量/自动修订/淘汰仍未形成闭环 | 人工启用已通；后续做修订与淘汰 |
 | P1-8 | 扩展生态只有 tools，且 worker 权限过大 | manifest 已加 `contributes.commands`（Composer 提示词命令）、`contributes.instructions`（启用后注入 volatile 段）与 `isolation:"node"` 第一层；UI/hooks 未做；默认 worker 仍是完整 Node 权限 | 离“高兼容性插件生态”最远；第三方扩展可越权读写 | 继续定 UI/hooks 协议；强隔离/容器化 |
 
 ---
