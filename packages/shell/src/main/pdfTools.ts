@@ -34,6 +34,44 @@ export interface PdfTextResult {
   truncated: boolean;
 }
 
+interface PdfTextItem {
+  str: string;
+  transform?: number[];
+  width?: number;
+}
+
+/** 按 y 聚合文本项、按 x 排序；用字宽估算词间距，避免把同一行拆成 "HelloWorld"。 */
+function pageLines(items: ReadonlyArray<unknown>): string[] {
+  const lines: Array<{ y: number; parts: Array<{ x: number; width: number; text: string }> }> = [];
+  for (const raw of items) {
+    const item = raw as PdfTextItem;
+    if (typeof item.str !== "string" || !item.str) continue;
+    const x = Array.isArray(item.transform) ? Number(item.transform[4]) : 0;
+    const y = Array.isArray(item.transform) ? Number(item.transform[5]) : 0;
+    const width = Number(item.width ?? 0);
+    let line = lines.find((candidate) => Math.abs(candidate.y - y) <= 2);
+    if (!line) {
+      line = { y, parts: [] };
+      lines.push(line);
+    }
+    line.parts.push({ x, width, text: item.str });
+  }
+  lines.sort((a, b) => b.y - a.y);
+  return lines
+    .map((line) => {
+      line.parts.sort((a, b) => a.x - b.x);
+      let text = "";
+      let previousEnd = Number.NaN;
+      for (const part of line.parts) {
+        if (text && Number.isFinite(previousEnd) && part.x - previousEnd > 1.5 && !text.endsWith(" ")) text += " ";
+        text += part.text;
+        previousEnd = part.x + part.width;
+      }
+      return text.trim();
+    })
+    .filter(Boolean);
+}
+
 /**
  * PDF.js 的文本项：不同页面可能把同一行拆成多个 item；用 transform[5] 的 y 坐标
  * 判断换行，比只依赖 hasEOL 更稳（很多生成器不写 hasEOL）。
@@ -56,25 +94,7 @@ export async function extractPdfText(buffer: Buffer, maxPages = MAX_PAGES): Prom
     for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent();
-      let lastY: number | null = null;
-      let line = "";
-      const lines: string[] = [];
-      for (const item of content.items) {
-        if (!("str" in item)) continue;
-        const y = Array.isArray(item.transform) ? Number(item.transform[5]) : null;
-        if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && line.trim()) {
-          lines.push(line.trim());
-          line = "";
-        }
-        line += item.str;
-        if ("hasEOL" in item && item.hasEOL) {
-          if (line.trim()) lines.push(line.trim());
-          line = "";
-        }
-        if (y !== null) lastY = y;
-      }
-      if (line.trim()) lines.push(line.trim());
-      const pageText = lines.join("\n");
+      const pageText = pageLines(content.items).join("\n");
       if (pageText) {
         chunks.push(pageText);
         totalChars += pageText.length + 2;

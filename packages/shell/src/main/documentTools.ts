@@ -36,7 +36,7 @@ export function extractDocxText(buffer: Buffer): string {
   return docxXmlToText(document.toString("utf8"));
 }
 
-function cellText(inner: string, attrs: string, shared: string[]): string {
+function cellText(inner: string, attrs: string, shared: string[], styles?: XlsxStyles): string {
   const type = /\bt="([^"]+)"/.exec(attrs)?.[1] ?? "";
   if (type === "inlineStr") {
     const texts = [...inner.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]);
@@ -46,6 +46,13 @@ function cellText(inner: string, attrs: string, shared: string[]): string {
   if (!value) return "";
   if (type === "s") return shared[Number(value)] ?? "";
   if (type === "b") return value === "1" ? "TRUE" : "FALSE";
+  if ((!type || type === "n") && styles) {
+    const style = Number(/\bs="(\d+)"/.exec(attrs)?.[1] ?? -1);
+    if (style >= 0 && style < styles.dateStyles.length) {
+      const date = excelDateText(Number(value), style, styles);
+      if (date) return date;
+    }
+  }
   return decodeXmlEntities(value);
 }
 
@@ -64,6 +71,48 @@ export interface XlsxReadOptions {
   allSheets?: boolean;
   maxSheets?: number;
   maxChars?: number;
+}
+
+interface XlsxStyles {
+  /** cellXfs 下标 → 是否日期/时间格式。 */
+  dateStyles: boolean[];
+  date1904: boolean;
+}
+
+const BUILTIN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58]);
+
+function isDateFormat(code: string, id: number): boolean {
+  if (BUILTIN_DATE_FORMATS.has(id)) return true;
+  const clean = code.replace(/"[^"]*"/g, "").replace(/\[[^\]]*\]/g, "");
+  return /[ydhs]/i.test(clean) || (/m/i.test(clean) && /[/:.-]/.test(clean));
+}
+
+function readXlsxStyles(buffer: Buffer, workbook: string): XlsxStyles {
+  const stylesXml = readZipEntry(buffer, "xl/styles.xml")?.toString("utf8") ?? "";
+  const custom = new Map<number, string>();
+  for (const match of stylesXml.matchAll(/<numFmt\b([^>]*)\/?>/g)) {
+    const id = Number(/numFmtId="(\d+)"/.exec(match[1])?.[1] ?? NaN);
+    const code = /formatCode="([^"]*)"/.exec(match[1])?.[1] ?? "";
+    if (Number.isFinite(id)) custom.set(id, decodeXmlEntities(code));
+  }
+  const cellXfs = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(stylesXml)?.[1] ?? "";
+  const dateStyles = [...cellXfs.matchAll(/<xf\b([^>]*)\/?>/g)].map((match) => {
+    const id = Number(/numFmtId="(\d+)"/.exec(match[1])?.[1] ?? 0);
+    return isDateFormat(custom.get(id) ?? "", id);
+  });
+  const date1904 = /<workbookPr\b[^>]*date1904="(1|true)"/i.test(workbook);
+  return { dateStyles, date1904 };
+}
+
+function excelDateText(serial: number, style: number, styles: XlsxStyles): string | null {
+  if (!styles.dateStyles[style] || !Number.isFinite(serial) || serial < 0 || serial > 2_958_465) return null;
+  const epoch = styles.date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30);
+  const date = new Date(epoch + Math.round(serial * 86_400_000));
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const ymd = `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+  if (serial % 1 === 0) return ymd;
+  return `${ymd} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
 interface SheetRef {
@@ -108,7 +157,7 @@ function workbookSheets(buffer: Buffer): SheetRef[] {
 }
 
 /** 单张工作表 XML → 制表符分列、换行分行的纯文本。 */
-function worksheetXmlToText(sheet: string, shared: string[]): string {
+function worksheetXmlToText(sheet: string, shared: string[], styles: XlsxStyles): string {
   const rows = [...sheet.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map((row) => {
     const cells = [...row[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)]
       .map((cell, index) => {
@@ -116,7 +165,7 @@ function worksheetXmlToText(sheet: string, shared: string[]): string {
         return {
           // 缺 r 的合法单元格按出现顺序落列；显式引用越界则丢弃。
           column: column >= 0 ? column : cell[1].includes("r=") ? -1 : index,
-          text: cellText(cell[2], cell[1], shared),
+          text: cellText(cell[2], cell[1], shared, styles),
         };
       })
       .filter((cell) => cell.column >= 0);
@@ -136,6 +185,7 @@ export function extractXlsxText(buffer: Buffer, options: XlsxReadOptions = {}): 
     return texts.join("");
   });
   const all = workbookSheets(buffer);
+  const styles = readXlsxStyles(buffer, readZipEntry(buffer, "xl/workbook.xml")?.toString("utf8") ?? "");
   const maxSheets = Math.min(Math.max(1, options.maxSheets ?? 20), 50);
   let selected: SheetRef[];
   if (options.sheet !== undefined) {
@@ -161,7 +211,7 @@ export function extractXlsxText(buffer: Buffer, options: XlsxReadOptions = {}): 
   for (const sheet of selected) {
     const xml = readZipEntry(buffer, sheet.path)?.toString("utf8");
     if (!xml) throw new Error(`工作表文件缺失：${sheet.path}`);
-    const text = worksheetXmlToText(xml, shared);
+    const text = worksheetXmlToText(xml, shared, styles);
     sections.push(selected.length > 1 ? `## Sheet: ${sheet.name}\n${text || "（空工作表）"}` : text);
     if (sections.join("\n\n").length >= limit) break;
   }

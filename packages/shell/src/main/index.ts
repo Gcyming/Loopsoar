@@ -97,6 +97,7 @@ import { registerFileTools } from "./fileTools.js";
 import { registerDocumentTools } from "./documentTools.js";
 import { registerPdfTools } from "./pdfTools.js";
 import { registerOfficeTools } from "./officeTools.js";
+import { registerOfficeConvertTools } from "./officeConvert.js";
 import { registerSkillTools } from "./skillTools.js";
 import { createChatSubagentRunner, registerSubagentTools } from "./subagentTools.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
@@ -2367,6 +2368,7 @@ app.whenReady().then(async () => {
   registerDocumentTools(registry);
   registerPdfTools(registry);
   registerOfficeTools(registry);
+  registerOfficeConvertTools(registry);
   registerSkillTools(registry, skills);
   registerSubagentTools(registry, createChatSubagentRunner(chatService, registry));
   // 记忆工具（设置·记忆同源数据）：读工具 plan 可用，写工具按 sandbox L2 确认

@@ -104,6 +104,26 @@ describe("XLSX 文本读取（P1-6）", () => {
     expect(extractXlsxText(buffer)).toBe("正常");
   });
 
+  it("日期样式按日期输出而非 Excel 序列号", () => {
+    const buffer = zipStore([
+      {
+        name: "xl/styles.xml",
+        data: Buffer.from(
+          '<styleSheet><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
+          "utf8",
+        ),
+      },
+      {
+        name: "xl/worksheets/sheet1.xml",
+        data: Buffer.from(
+          '<worksheet><sheetData><row r="1"><c r="A1" s="1"><v>45292</v></c><c r="B1" s="1"><v>45292.5</v></c></row></sheetData></worksheet>',
+          "utf8",
+        ),
+      },
+    ]);
+    expect(extractXlsxText(buffer)).toBe("2024-01-01\t2024-01-01 12:00:00");
+  });
+
   it("按 workbook/rels 读取指定工作表或全部工作表", () => {
     const workbookXml =
       '<workbook><sheets><sheet name="第一张" sheetId="1" r:id="rId1"/><sheet name="第二张" sheetId="2" r:id="rId2"/></sheets></workbook>';

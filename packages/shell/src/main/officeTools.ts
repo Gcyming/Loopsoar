@@ -90,11 +90,30 @@ function relationships(xml: string, baseDir: string): Map<string, string> {
   for (const match of xml.matchAll(/<Relationship\b([^>]*)\/?>/g)) {
     const id = attr(match[1], "Id");
     const target = attr(match[1], "Target");
-    if (!id || !target || /\/chart$|\/chart\//.test(attr(match[1], "Type") ?? "")) continue;
+    if (!id || !target) continue;
     const clean = target.replace(/^\/+/, "");
     map.set(id, path.posix.normalize(clean.startsWith("ppt/") ? clean : `${baseDir}/${clean}`));
   }
   return map;
+}
+
+/** 幻灯片关联的图表/图示文本；只读文本缓存，不渲染图形。 */
+function slideExtras(buffer: Buffer, slidePath: string): string[] {
+  const dir = path.posix.dirname(slidePath);
+  const relsPath = path.posix.join(dir, "_rels", `${path.posix.basename(slidePath)}.rels`);
+  const relsXml = readZipEntry(buffer, relsPath)?.toString("utf8") ?? "";
+  const extras: string[] = [];
+  for (const target of relationships(relsXml, dir).values()) {
+    if (!/(?:^|\/)charts\/|(?:^|\/)diagrams\/data\d+\.xml$/.test(target)) continue;
+    const xml = readZipEntry(buffer, target)?.toString("utf8");
+    if (!xml) continue;
+    const texts = [...xml.matchAll(/<(c:v|a:t)\b[^>]*>([\s\S]*?)<\/\1>/g)]
+      .map((match) => normalizeOfficeText(decodeXmlEntities(match[2])))
+      .filter(Boolean);
+    const unique = [...new Set(texts)].slice(0, 40).join(" · ").slice(0, 2_000);
+    if (unique) extras.push(unique);
+  }
+  return extras;
 }
 
 function slideRefs(buffer: Buffer): string[] {
@@ -137,7 +156,9 @@ export function extractPptxText(buffer: Buffer, maxSlides = MAX_SLIDES): string 
     const xml = readZipEntry(buffer, ref)?.toString("utf8");
     if (!xml) continue;
     const text = slideXmlToText(xml);
-    sections.push(`## Slide ${index + 1}\n${text || "（无文本）"}`);
+    const extras = slideExtras(buffer, ref);
+    const extraText = extras.length > 0 ? `\n[图表/图示] ${extras.join("\n")}` : "";
+    sections.push(`## Slide ${index + 1}\n${text || "（无文本）"}${extraText}`);
     if (sections.join("\n\n").length >= MAX_PPTX_CHARS) break;
   }
   if (sections.length === 0) throw new Error("不是有效的 PPTX：幻灯片均为空");

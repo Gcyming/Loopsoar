@@ -28,6 +28,18 @@ function pptxFixture(): Buffer {
       ),
     },
     {
+      name: "ppt/slides/_rels/slide1.xml.rels",
+      data: Buffer.from(
+        '<Relationships><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>',
+      ),
+    },
+    {
+      name: "ppt/charts/chart1.xml",
+      data: Buffer.from(
+        '<c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>销售趋势</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:cat><c:strRef><c:strCache><c:pt><c:v>一月</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:pt><c:v>42</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>',
+      ),
+    },
+    {
       name: "ppt/slides/slide1.xml",
       data: Buffer.from('<p:sld><a:p><a:t>第一页</a:t></a:p></p:sld>'),
     },
@@ -43,6 +55,9 @@ describe("统一办公文档读取（P1-6 增强）", () => {
     const text = extractPptxText(pptxFixture());
     expect(text).toContain("## Slide 1\nSecond\nLine");
     expect(text).toContain("## Slide 2\n第一页");
+    expect(text).toContain("销售趋势");
+    expect(text).toContain("一月");
+    expect(text).toContain("42");
     expect(text.indexOf("Second")).toBeLessThan(text.indexOf("第一页"));
   });
 
