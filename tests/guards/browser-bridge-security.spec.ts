@@ -21,6 +21,7 @@ function read(rel: string): string {
 
 const ELECTRON_BROWSER = "packages/shell/src/main/electronBrowser.ts";
 const INDEX = "packages/shell/src/main/index.ts";
+const MAIN_WINDOW = "packages/shell/src/main/mainWindowFactory.ts";
 const PRELOAD = "packages/shell/src/preload/index.cjs";
 const TRUSTED_IPC = "packages/shell/src/main/trustedIpc.ts";
 const NAVIGATION = "packages/contracts/src/navigation.ts";
@@ -82,7 +83,7 @@ describe("守卫：浏览器桥隔离（发布门 2 四攻击路径）", () => {
     expect(src).toContain("sandbox: true");
     expect(src).toContain("contextIsolation: true");
     expect(src).toContain("nodeIntegration: false");
-    const index = read(INDEX);
+    const index = read(MAIN_WINDOW);
     expect(index).toContain("contextIsolation: true");
     expect(index).toContain("sandbox: true");
     expect(index).toContain("nodeIntegration: false");

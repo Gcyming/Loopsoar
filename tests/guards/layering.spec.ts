@@ -121,6 +121,9 @@ describe("守卫：分层依赖（contracts ← core ← services ← shell ← 
         file.pkg === "shell" &&
         (file.rel === "src/main/index.ts" ||
           file.rel === "src/main/electronBrowser.ts" ||
+          // E2E 钩子与主窗口生命周期：P2-3 从入口拆出的 Electron 适配层
+          file.rel === "src/main/e2eHooks.ts" ||
+          file.rel === "src/main/mainWindowFactory.ts" ||
           // 浮层管理器：为「工具栏浮层浮在原生网页之上」而创建 Electron 子窗口（惰性 require）
           file.rel === "src/main/chromePopover.ts" ||
           // Agent 会话栏「真·窗口化」：创建独立顶层 BrowserWindow（惰性 require，可注入假窗口测试）

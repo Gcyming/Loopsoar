@@ -33,7 +33,7 @@
 | `contracts` | 2,100 | 共享类型、IPC 契约、生成物 | 健康；type-only 设计正确 |
 | `core` | 10,570 | 平台无关内核：LLM、工具循环、沙箱、规则、loop、MCP、记忆 | 基本健康；工具循环与规则是核心资产 |
 | `services` | 868 | 会话/轮次编排，注入平台端口 | 健康；薄而清晰 |
-| `shell` | 26,118 | Electron 主进程：窗口、浏览器、文件、终端、扩展、IPC | 功能全，但过重；`index.ts` 2,906 行 |
+| `shell` | 26,118 | Electron 主进程：窗口、浏览器、文件、终端、扩展、IPC | 功能全，但仍重；入口 `index.ts` 2,939 → 1,754 行（E2E 钩子/窗口生命周期已拆） |
 | `ui` | 24,358 | React 界面 | 功能全，但巨型组件明显 |
 | 合计 | **64,014** | | |
 
@@ -43,7 +43,7 @@
 |---|---:|---|
 | `packages/ui/src/App.tsx` | 2,984 | 状态、布局、会话、权限、浏览器面板全在一个组件 |
 | `packages/ui/src/Settings.tsx` | 2,835 | 设置页巨型化；本轮已抽出 `settingsModel.ts` 纯模型/格式化（59 行），仍需按领域拆 container/hook |
-| `packages/shell/src/main/index.ts` | 2,906 | 装配、IPC、生命周期、E2E 钩子全在一个入口 |
+| `packages/shell/src/main/index.ts` | 1,754 | 入口只做装配；E2E 钩子拆至 `e2eHooks.ts`（1,167 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行） |
 | `packages/ui/src/StartPage.tsx` | 1,639 | 启动页承担了过多产品逻辑 |
 | `packages/shell/src/main/browserHost.ts` | 1,579 | 浏览器宿主与标签/视图/导航耦合 |
 | `packages/contracts/src/schemas.ts` | 1,537 | 契约集中可接受，但已接近该拆分的临界点 |
@@ -231,7 +231,7 @@
 |---|---|---|---|
 | P2-1 | UI 巨型组件 | `App.tsx` 2,984 行、`Settings.tsx` 2,835 行 | 按领域拆 container/hook；先拆权限、浏览器、会话列表；本轮已把设置页纯模型/格式化抽成 `settingsModel.ts` |
 | P2-2 | 主包过大、无代码分割 | 原 `index-CDRREsyZ.js` 649.52 kB；已加 `manualChunks` → `index-wxKnb0O7.js` 424.17 kB + `react-vendor` 223.22 kB，>500 kB 警告消失 | 继续按路由/设置/终端/浏览器面板 dynamic import |
-| P2-3 | shell 入口过重 | `main/index.ts` 2,864 行 | 把 E2E 钩子、IPC 注册、窗口生命周期拆文件；入口只做装配 |
+| P2-3 | shell 入口过重 | `main/index.ts` 2,939 行，E2E 钩子、入口装配、窗口生命周期混在一起 | 已拆：E2E 钩子 → `e2eHooks.ts`（1,167 行），窗口生命周期 → `mainWindowFactory.ts`（126 行），入口降至 1,754 行；IPC 注册在 `domains/*` + `trustedIpc`（仅保留一条受信浏览器安装例外） |
 | P2-4 | E2E 收尾不可靠 | 功能 `ok:true`，但 300s 后强杀 Electron、退出码 2；无 `GUI_SHOT_SAVED`，截图仍是 11/15 旧图 | 给 `capturePage()` 加超时；跑前删旧图；只在 mtime 更新后打印路径 |
 | P2-5 | E2E 会话校验没绑定 eval 会话 | eval `sess-...y5ia`，verify `sess-...vtt9`；runner 按消息数选文件 | eval 返回 sessionId，verify 按 id 精确读取；分支需显式断言 |
 | P2-6 | 规则/记忆提交集中，安全切片停滞 | 最近 12 提交 11 个 rules/memory | 设“安全/产品/规则”配额，避免单方向过度投资 |
@@ -337,6 +337,7 @@
 - 2026-11-18：P1-8 新增 `contributes.instructions`（仅启用扩展注入 volatile 段，单条 ≤4,000/合计 ≤12,000 字符）；P2-1 扩展分区拆为 `ExtensionsSection.tsx`（自取数据/监听运行态，`Settings.tsx` 2,819 → 2,646 行）。全量 **236 文件 / 1,870 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-7 自动候选生成后发 `skills:updated`，设置页技能列表即时刷新；P2-1 `App.tsx` 顶层样式抽成 `appStyles.ts`（2,985 → 2,920 行）。全量 **237 文件 / 1,874 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-7 完成候选生命周期：`replaceId` 修订未启用候选、同名自动候选不重复生成、设置页删除未启用候选（已启用拒绝）、`skills:remove` IPC。全量 **237 文件 / 1,876 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-18：P2-3 完成入口拆分：E2E 钩子 → `e2eHooks.ts`（1,167 行）、窗口生命周期 → `mainWindowFactory.ts`（126 行），`main/index.ts` 2,939 → 1,754 行，只做装配；IPC 保持 `domains/*` + `trustedIpc`。全量 **237 文件 / 1,876 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -369,6 +370,7 @@
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
 | P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
-| P2-1/P2-3 拆巨型文件 | 🟡 第四步 | 设置页纯模型抽成 `settingsModel.ts`，技能/扩展分区抽成 `SkillsSection.tsx`/`ExtensionsSection.tsx`（`Settings.tsx` 2,894 → 2,646 行）；`App.tsx` 顶层样式抽成 `appStyles.ts`（2,985 → 2,920 行）；`main/index.ts` 仍未拆。 |
+| P2-1 UI 巨型组件 | 🟡 第四步 | 设置页纯模型抽成 `settingsModel.ts`，技能/扩展分区抽成 `SkillsSection.tsx`/`ExtensionsSection.tsx`（`Settings.tsx` 2,894 → 2,646 行）；`App.tsx` 顶层样式抽成 `appStyles.ts`（2,985 → 2,920 行）；App 状态编排仍未按权限/浏览器/会话拆 hook。 |
+| P2-3 shell 入口 | ✅ | E2E 钩子拆至 `e2eHooks.ts`（1,167 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行）；入口 `main/index.ts` 2,939 → 1,754 行，只做装配；IPC 在 `domains/*` + `trustedIpc`。 |
 
 **本轮验证**：`npx vitest run` **237 文件 / 1,876 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
