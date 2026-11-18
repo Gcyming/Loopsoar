@@ -89,6 +89,7 @@ import { ProviderStore } from "./providerStore.js";
 import { SecretStore } from "./secretStore.js";
 import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
+import { maybeAutoSkillCandidate } from "./skillAutoCapture.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
 import { registerTerminalTools } from "./terminalTools.js";
@@ -1885,6 +1886,9 @@ app.whenReady().then(async () => {
   };
 
   const toolEvidence = new ToolEvidence(memory);
+  // 自动技能候选：每会话 10 分钟最多一次，避免连续任务刷出一堆低质量草稿。
+  const autoSkillLastAt = new Map<string, number>();
+  const AUTO_SKILL_COOLDOWN_MS = 10 * 60 * 1000;
   const chatService = new ChatService({
     platform,
     registry,
@@ -1957,6 +1961,23 @@ app.whenReady().then(async () => {
       memory.recallPrompt(text, (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default"),
     // 技能：独立子系统，只注入 SKILL.md 文本（不提供工具）
     getSkillPrompt: (text: string) => skills.promptFor(text),
+    // 自动候选：显式开启 + 每会话 10 分钟节流；只写默认禁用的草稿，不影响本轮结果
+    onTurnComplete: ({ sessionId, userText, result }) => {
+      if (loadPreferences(dirs.configDir).skillAutoCandidate !== true) return;
+      const key = sessionId || "default";
+      const now = Date.now();
+      if (now - (autoSkillLastAt.get(key) ?? 0) < AUTO_SKILL_COOLDOWN_MS) return;
+      const candidate = maybeAutoSkillCandidate(
+        {
+          status: result.status,
+          toolCalls: result.usage.toolCalls,
+          userText,
+          finalText: result.finalText,
+        },
+        skills,
+      );
+      if (candidate) autoSkillLastAt.set(key, now);
+    },
     // 扩展声明式指令：仅启用扩展，注入 volatile 段；不提供工具/代码执行
     getExtensionPrompt: () => extensions.instructionsPrompt(),
     // 权限策略：设置面板保存后即时生效

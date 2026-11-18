@@ -56,6 +56,7 @@ export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
         tool.name !== "delegate_tree" &&
         tool.name !== "subagent_tasks" &&
         tool.name !== "subagent_read" &&
+        tool.name !== "subagent_resume" &&
         tool.name !== "ask_user",
     )
     .map((tool) => tool.name);
@@ -316,6 +317,55 @@ export function registerSubagentTools(
       const task = store.read(parent, params.taskId);
       if (!task) return { ok: false, content: `[错误] 未找到任务 ${params.taskId}（会话 ${parent}）` };
       return { ok: true, content: JSON.stringify(task, null, 2) };
+    },
+  });
+
+  registry.register({
+    name: "subagent_resume",
+    description:
+      "按已落盘的任务记录重跑一次只读子任务（不是恢复子会话历史）：新任务记录以原任务为 parentTaskId，便于失败/超时后复查或重试。任务树节点缺少树结构，暂不支持恢复。",
+    permissions: { read: true },
+    schema: z.object({
+      taskId: z.string().min(8).max(120),
+      sessionId: z.string().max(200).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      if (!store) return { ok: false, content: "[错误] 子代理任务记录未装配" };
+      const params = ctx.params as { taskId: string; sessionId?: string };
+      const parent = params.sessionId ?? ctx.sessionId ?? "_default";
+      const source = store.read(parent, params.taskId);
+      if (!source) return { ok: false, content: `[错误] 未找到任务 ${params.taskId}（会话 ${parent}）` };
+      if (source.kind === "tree") {
+        return { ok: false, content: "[错误] 任务树子节点缺少树结构，暂不支持按记录恢复；请重新调用 delegate_tree" };
+      }
+      const record = store.create({
+        parentSessionId: parent,
+        kind: source.kind,
+        goal: source.goal,
+        ...(source.context ? { context: source.context } : {}),
+        parentTaskId: source.id,
+      });
+      try {
+        const result = await runner.run({
+          goal: source.context ? `${source.goal}\n\n参考上下文：\n${source.context}` : source.goal,
+          sessionId: parent,
+        });
+        const body = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+        if (result.status === "done") {
+          store.finish(parent, record.id, "done", body);
+          return { ok: true, content: `[恢复任务完成] ${record.id}（基于 ${source.id}）\n${body}` };
+        }
+        if (result.status === "aborted") {
+          store.finish(parent, record.id, "aborted", body, "超时或父任务已停止");
+          return { ok: false, content: `[恢复任务中止] ${record.id}：超时或父任务已停止` };
+        }
+        store.finish(parent, record.id, "failed", body, result.reason);
+        return { ok: false, content: `[恢复任务失败] ${record.id}：${result.reason || "未知原因"}` };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        store.finish(parent, record.id, "failed", undefined, message);
+        return { ok: false, content: `[恢复任务失败] ${record.id}：${message}` };
+      }
     },
   });
 }

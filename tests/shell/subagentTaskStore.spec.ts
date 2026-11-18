@@ -94,6 +94,46 @@ describe("子代理任务记录（P1-5 第二步）", () => {
     expect(JSON.parse(read.content).result).toBe("持久化结论");
   });
 
+  it("可按落盘记录重跑任务，并关联原任务；任务树拒绝恢复", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "file_read",
+      description: "read",
+      permissions: { read: true },
+      schema: { parse: (v: unknown) => v } as never,
+      execute: async () => ({ ok: true, content: "" }),
+    });
+    const store = tempStore();
+    registerSubagentTools(
+      registry,
+      { async run(input) { return done(`重跑：${input.goal}`); } },
+      store,
+    );
+    const source = store.create({ parentSessionId: "sess-resume", kind: "research", goal: "原始任务" });
+    const resumed = await registry.get("subagent_resume")!.execute({
+      agentId: "test",
+      sessionId: "sess-resume",
+      params: { taskId: source.id },
+      platform: {},
+    });
+    expect(resumed.ok).toBe(true);
+    expect(resumed.content).toContain("[恢复任务完成]");
+    const records = store.list("sess-resume");
+    const rerun = records.find((record) => record.parentTaskId === source.id);
+    expect(rerun?.goal).toBe("原始任务");
+    expect(rerun?.status).toBe("done");
+
+    const tree = store.create({ parentSessionId: "sess-resume", kind: "tree", goal: "树节点" });
+    const rejected = await registry.get("subagent_resume")!.execute({
+      agentId: "test",
+      sessionId: "sess-resume",
+      params: { taskId: tree.id },
+      platform: {},
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.content).toContain("暂不支持按记录恢复");
+  });
+
   it("预定义任务树按深度优先执行，并记录父子关系", async () => {
     const registry = new ToolRegistry();
     registry.register({

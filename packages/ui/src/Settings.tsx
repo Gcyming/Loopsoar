@@ -848,6 +848,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             />
           </Field>
           <Field l={tr("settings.general.memoryAuto")} h={tr("settings.general.memoryAutoHint")}><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
+          <Field l={tr("settings.general.skillAuto")} h={tr("settings.general.skillAutoHint")}><Toggle v={prefs.skillAutoCandidate ?? false} on={(x) => setPrefs({ ...prefs, skillAutoCandidate: x })} /></Field>
           <Field l={tr("settings.general.loop")} h={tr("settings.general.loopHint")}>
             <div className="loop-picker" aria-busy={loopBusy}>
               <div style={S.rowEnd}>

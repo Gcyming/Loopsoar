@@ -104,6 +104,8 @@ export interface ChatServiceOptions {
   getSkillPrompt?: (userText: string) => string;
   /** 扩展声明式指令（仅已启用扩展）；放 volatile 段，不提供工具/代码执行。 */
   getExtensionPrompt?: (sessionId?: string) => string;
+  /** 流结束后的旁路回调（自动技能候选等）；不得阻塞/改变聊天结果。 */
+  onTurnComplete?: (event: { sessionId: string; userText: string; result: ChatStreamResult }) => void;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
   permissionPolicy?: () => Permissions;
   /** 当前会话的工作根目录（工作区 / worktree）；作为每次工具权限判定的作用域根（不修改沙箱全局根）。 */
@@ -813,7 +815,14 @@ export class ChatService {
       batcher.close();
     }
 
-    return { status: outcome, reason, finalText, usage, chunks, claims };
+    const result: ChatStreamResult = { status: outcome, reason, finalText, usage, chunks, claims };
+    // 旁路回调：自动技能候选等失败不能影响本轮聊天结果
+    try {
+      this.opts.onTurnComplete?.({ sessionId, userText: input.message, result });
+    } catch {
+      // 忽略：候选生成属于尽力而为
+    }
+    return result;
   }
 
   /**

@@ -189,6 +189,8 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   },
   "settings.general.memoryAuto": { zh: "自动记忆汇总", en: "Automatic memory capture" },
   "settings.general.memoryAutoHint": { zh: "每轮对话结束自动抽取记忆", en: "Capture memories at the end of each turn" },
+  "settings.general.skillAuto": { zh: "自动技能候选（实验）", en: "Automatic skill candidates (experimental)" },
+  "settings.general.skillAutoHint": { zh: "成功任务后生成默认禁用的候选技能，需在设置·技能中人工启用；每会话 10 分钟最多一次", en: "Create disabled skill candidates after successful tasks; enable manually in Skills; at most once per session per 10 min" },
   "settings.general.loop": { zh: "Agent Loop", en: "Agent loop" },
   "settings.general.loopHint": {
     zh: "Agent 执行循环。内置 loop 不可删除、不可原位修改；自定义 loop 失败会自动回退到内置（同一上下文重跑，任务不重来）",

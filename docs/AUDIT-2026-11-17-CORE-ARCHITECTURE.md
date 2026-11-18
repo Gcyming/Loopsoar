@@ -291,9 +291,9 @@
 - [x] P1-1 API key 加密/钥匙串：审计误判，已有 `secretStore.ts`（safeStorage + AES-GCM 回退）与 13 个测试；本轮只核对，不改代码。
 - [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 作为后续增量，不属于本轮文本读取。
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
-- [~] P1-5 子 Agent/任务树（第三步）：`delegate_research` 只读子代理（独立 `ChatService`/独立历史、只读 allowlist、60s 超时中止）；`delegate_parallel` 并行 2–4 个互不依赖的只读任务、最多 3 并发、逐任务独立超时、结果按任务顺序回灌；`delegate_tree` 支持预定义 3 层/12 节点任务树、深度优先回灌；`SubagentTaskStore` 落盘 `<dataDir>/subagents/<parent>/<task>.json`（含 `parentTaskId`），`subagent_tasks`/`subagent_read` 可回查；仍无子代理运行时动态再委派、子会话分叉恢复。
+- [~] P1-5 子 Agent/任务树（第四步）：`delegate_research` 只读子代理（独立 `ChatService`/独立历史、只读 allowlist、60s 超时中止）；`delegate_parallel` 并行 2–4 个互不依赖的只读任务、最多 3 并发、逐任务独立超时、结果按任务顺序回灌；`delegate_tree` 支持预定义 3 层/12 节点任务树、深度优先回灌；`SubagentTaskStore` 落盘 `<dataDir>/subagents/<parent>/<task>.json`（含 `parentTaskId`），`subagent_tasks`/`subagent_read` 可回查，`subagent_resume` 可按记录重跑（新记录关联原任务；不是恢复子会话历史，任务树节点拒绝）；仍无运行时动态再委派/子会话分叉恢复。
 - [x] P1-6 工具面补齐：`web_search` 已有；新增 `office_read` 统一读取 DOCX/DOCM、XLSX/XLSM、PPTX/PPTM、ODT/ODS/ODP/ODG、FODT/FODS/FODP、RTF、CSV/TSV（UTF-8/GBK/GB18030 自动回退）、PDF 文本层；新增 `office_convert`（LibreOffice/terminal 权限，旧版 .doc/.xls/.ppt 转 OOXML）；XLSX 还原常见日期/时间格式、PPTX 读取图表/图示缓存文本、PDF 按坐标聚合行距。ZIP 层加条目/解压上限、加密/zip64/压缩方法校验；XLSX 指定/全部工作表；旧版/加密 OOXML 给出可读提示；扫描 PDF OCR、视觉版面/图形坐标仍不内置。
-- [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 写入 `skills/<id>/SKILL.md` 并默认禁用；补 `skill_list`/`skill_read` 只读查看技能库（含禁用候选），用户在设置·技能启用后才注入；尚未做任务结束自动生成。
+- [~] P1-7 技能候选生成（第二步）：`skill_candidate` 写入 `skills/<id>/SKILL.md` 并默认禁用；`skill_list`/`skill_read` 只读查看技能库（含禁用候选）；新增设置·通用「自动技能候选（实验）」默认关闭，成功后（≥2 次工具调用、用户目标 ≥16 字、答复 ≥40 字）生成候选草稿，每会话 10 分钟最多一次，草稿仍默认禁用，需人工在设置·技能启用；纯规则不额外调用模型。自动修订/淘汰仍未做。
 - [~] P1-8 扩展贡献点协议 / worker OS 隔离（第三步）：manifest 新增 `contributes.commands`（title/description/prompt，最多 32 条，纯声明式、无需 main）；已启用扩展的命令以 `/extId.commandId` 进入 Composer 斜杠面板，选中只填提示词、不执行扩展代码；新增 `contributes.instructions`（≤4,000 字符），仅启用扩展注入 ChatService volatile 段（总计 ≤12,000 字符），不提供工具/代码执行；`isolation:"node"` 保持 opt-in。UI/hooks 贡献点、命令执行型 API、强隔离/容器化仍未做。
 
 ### 第三批：P2
@@ -335,6 +335,7 @@
 - 2026-11-18：P1-5 子代理任务记录落盘（`SubagentTaskStore` + `subagent_tasks`/`subagent_read`）；P1-8 声明式 `contributes.commands` 进入 Composer 斜杠面板（只填 prompt，不执行代码；纯声明式扩展无需 main）。全量 **236 文件 / 1,868 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-5 增加预定义任务树 `delegate_tree`（3 层/12 节点、深度优先、`parentTaskId` 落盘）；P2-1 设置页技能分区拆为 `SkillsSection.tsx`（`Settings.tsx` 2,835 → 2,819 行）。全量 **236 文件 / 1,869 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-8 新增 `contributes.instructions`（仅启用扩展注入 volatile 段，单条 ≤4,000/合计 ≤12,000 字符）；P2-1 扩展分区拆为 `ExtensionsSection.tsx`（自取数据/监听运行态，`Settings.tsx` 2,819 → 2,646 行）。全量 **236 文件 / 1,870 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-18：P1-7 新增自动技能候选（默认关闭、每会话 10 分钟节流、候选默认禁用）；P1-5 新增 `subagent_resume` 按记录重跑并关联原任务（明确不是恢复子会话历史）。全量 **237 文件 / 1,874 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -354,9 +355,9 @@
 | P1-1 Key 加密 | ✅ 已有 | 初版审计误判。`secretStore.ts` 已用 `safeStorage`，不可用时 AES-256-GCM + 机器绑定回退；13 个测试通过。未改代码。 |
 | P1-4 多模态 | ✅ | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 注入，壳层 `readImageDataUrl` 负责 6MB/扩展名白名单；`browser_screenshot` 对视觉模型回灌 PNG（仅 1 张/轮、解码后 ≤1.5MB，不写历史、不塞 UI IPC），text-only 模型只回路径。PDF 版面/OCR 作为后续增量。 |
 | P1-3 BrowserBackend | 🟡 端口第一步 | 新增 `shell/main/browserBackend.ts`：工具层只依赖 `BrowserBackend`，不再依赖 `BrowserHost` 类；`BrowserHost` 直接满足接口，新增非 Electron 假后端测试可注册并执行 `browser_tabs`。**未做**：真正的第二后端（Playwright/CDP）与会话生命周期/视图布局迁移。 |
-| P1-5 子 Agent | 🟡 第三步 | `delegate_research` + `delegate_parallel`（≤3 并发/逐任务超时/按序回灌）+ `delegate_tree`（预定义 3 层/12 节点、深度优先）；独立 `ChatService`/只读 allowlist；`SubagentTaskStore` 落盘并记录 `parentTaskId`，`subagent_tasks`/`subagent_read` 回查；仍无运行时动态再委派/子会话分叉恢复。 |
+| P1-5 子 Agent | 🟡 第四步 | `delegate_research` + `delegate_parallel`（≤3 并发/逐任务超时/按序回灌）+ `delegate_tree`（预定义 3 层/12 节点、深度优先）；独立 `ChatService`/只读 allowlist；`SubagentTaskStore` 落盘并记录 `parentTaskId`，`subagent_tasks`/`subagent_read` 回查，`subagent_resume` 可重跑（新记录关联原任务，非子会话恢复）；仍无运行时动态再委派/子会话分叉恢复。 |
 | P1-6 工具面 | ✅ | `web_search` 已有；`office_read` 统一读取 DOCX/XLSX/PPTX（OOXML）、ODT/ODS/ODP/ODG（OpenDocument）、Flat ODF、RTF、CSV/TSV、PDF 文本层；XLSX 可指定/全部工作表并还原常见日期；PPTX 读图表/图示文本；PDF 按坐标聚合行距；`office_convert` 可转换旧版 .doc/.xls/.ppt。扫描 OCR、视觉版面/图形坐标不内置，矩阵见 `docs/OFFICE-DOCUMENT-SUPPORT.md`。 |
-| P1-7 技能候选 | 🟡 第一步 | 新增 `skill_candidate`（默认禁用）+ `skill_list`/`skill_read` 只读查看；未做任务结束自动生成/修订。 |
+| P1-7 技能候选 | 🟡 第二步 | `skill_candidate`（默认禁用）+ `skill_list`/`skill_read`；设置·通用新增自动候选（默认关闭），成功任务后按规则生成草稿、每会话 10 分钟最多一次，仍需人工启用；自动修订/淘汰未做。 |
 | P1-8 扩展生态/隔离 | 🟡 第三步 | `contributes.commands` 声明式命令已进入 Composer 斜杠面板（只填 prompt，不执行代码）；`contributes.instructions` 仅在扩展启用后注入 volatile 段（≤4k/合计 ≤12k）；`isolation:"node"` opt-in：Node permission model 只读扩展目录/worker 目录，`write` 才允许写扩展目录，`terminal` 才允许子进程。默认仍 `none`；UI/hooks 贡献点、命令执行型 API、强隔离未做。 |
 
 ### 11.2 P2 进度
@@ -369,4 +370,4 @@
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
 | P2-1/P2-3 拆巨型文件 | 🟡 第三步 | 设置页纯模型/格式化抽成 `settingsModel.ts`，技能分区抽成 `SkillsSection.tsx`，扩展分区抽成 `ExtensionsSection.tsx`（`Settings.tsx` 2,894 → 2,646 行）；`App.tsx`/`main/index.ts` 仍未拆。 |
 
-**本轮验证**：`npx vitest run` **236 文件 / 1,870 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **237 文件 / 1,874 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

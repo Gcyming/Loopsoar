@@ -380,6 +380,8 @@ export const PreferencesSchema = z.object({
   memoryStorePath: z.string().max(1024).optional(),
   /** 会话结束时自动从对话抽取记忆。 */
   memoryAutoCapture: z.boolean(),
+  /** 任务成功后自动生成低置信度技能候选（默认关闭；候选默认禁用，需人工启用）。 */
+  skillAutoCandidate: z.boolean().optional(),
   /** 右侧 Agent 面板宽度（可拖拽调整，持久化）。 */
   sidebarWidth: z.number().int().min(240).max(720),
   /** Vibecoding 模式侧栏宽度（独立于标准宽度；约标准最小宽度的一半~3/5）。 */

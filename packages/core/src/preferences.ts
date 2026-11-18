@@ -23,6 +23,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   workspaceRoot: "",
   memoryStorePath: "",
   memoryAutoCapture: true,
+  skillAutoCandidate: false,
   sidebarWidth: 360,
   theme: "soft",
   sidebarMode: "docked",
