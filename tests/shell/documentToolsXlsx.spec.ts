@@ -90,4 +90,22 @@ describe("XLSX 文本读取（P1-6）", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("按 workbook/rels 读取指定工作表或全部工作表", () => {
+    const workbookXml =
+      '<workbook><sheets><sheet name="第一张" sheetId="1" r:id="rId1"/><sheet name="第二张" sheetId="2" r:id="rId2"/></sheets></workbook>';
+    const relsXml =
+      '<Relationships><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="worksheet" Target="worksheets/sheet2.xml"/></Relationships>';
+    const sheet1 = '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>甲</t></is></c></row></sheetData></worksheet>';
+    const sheet2 = '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>乙</t></is></c></row></sheetData></worksheet>';
+    const buffer = zipStore([
+      { name: "xl/workbook.xml", data: Buffer.from(workbookXml, "utf8") },
+      { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(relsXml, "utf8") },
+      { name: "xl/worksheets/sheet1.xml", data: Buffer.from(sheet1, "utf8") },
+      { name: "xl/worksheets/sheet2.xml", data: Buffer.from(sheet2, "utf8") },
+    ]);
+    expect(extractXlsxText(buffer)).toBe("甲");
+    expect(extractXlsxText(buffer, { sheet: "第二张" })).toBe("乙");
+    expect(extractXlsxText(buffer, { allSheets: true })).toContain("## Sheet: 第二张\n乙");
+  });
 });
