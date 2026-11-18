@@ -289,7 +289,7 @@
 
 - [x] P1-2 终端命令解析与分级：新增 `command_safety.ts` 词法/argv 语义层，覆盖引号拼接、转义、拆参数、sudo/env/timeout/xargs、bash -c/cmd /c/PowerShell 嵌套、Windows rd/del/Remove-Item；45 个 hard_rules 用例通过。
 - [x] P1-1 API key 加密/钥匙串：审计误判，已有 `secretStore.ts`（safeStorage + AES-GCM 回退）与 13 个测试；本轮只核对，不改代码。
-- [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 归 P1-6。
+- [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 作为后续增量，不属于本轮文本读取。
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
 - [~] P1-5 子 Agent/任务树（第一步）：新增 `delegate_research` 只读子代理——独立 `ChatService`/独立历史、只读工具 allowlist、60s 超时可中止；无并行/任务树/子会话持久化。
 - [x] P1-6 工具面补齐：`web_search` 已有；新增 `docx_read`/`xlsx_read` 原生文档文本抽取（纯 Node ZIP+XML，无新依赖）；新增 `pdf_read`（`pdfjs-dist` legacy 构建懒加载，30MB/200 页/20k 字符上限，只抽文本层，不渲染版面/OCR）。
@@ -349,7 +349,7 @@
 |---|---|---|
 | P1-2 终端命令解析 | ✅ | 新增 `core/tools/command_safety.ts`：引号拼接、反斜杠转义、`; && \|` 分段、`sudo/env/timeout/xargs` 解包、`bash -c`/`cmd /c`/PowerShell 嵌套、Windows `rd`/`del`/`Remove-Item` 根路径；`hard_rules.ts` 保留 10 条正则做兜底。45 个 `hard_rules` 用例通过（含 `r''m`、`rm${IFS}-rf${IFS}/`、`rm -r -f /`、`rm --recursive --force /`、`sudo bash -c`、`xargs rm -rf /` 等变体）。 |
 | P1-1 Key 加密 | ✅ 已有 | 初版审计误判。`secretStore.ts` 已用 `safeStorage`，不可用时 AES-256-GCM + 机器绑定回退；13 个测试通过。未改代码。 |
-| P1-4 多模态 | ✅ | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 注入，壳层 `readImageDataUrl` 负责 6MB/扩展名白名单；`browser_screenshot` 对视觉模型回灌 PNG（仅 1 张/轮、解码后 ≤1.5MB，不写历史、不塞 UI IPC），text-only 模型只回路径。PDF 版面/OCR 仍归 P1-6。 |
+| P1-4 多模态 | ✅ | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 注入，壳层 `readImageDataUrl` 负责 6MB/扩展名白名单；`browser_screenshot` 对视觉模型回灌 PNG（仅 1 张/轮、解码后 ≤1.5MB，不写历史、不塞 UI IPC），text-only 模型只回路径。PDF 版面/OCR 作为后续增量。 |
 | P1-3 BrowserBackend | 🟡 端口第一步 | 新增 `shell/main/browserBackend.ts`：工具层只依赖 `BrowserBackend`，不再依赖 `BrowserHost` 类；`BrowserHost` 直接满足接口，新增非 Electron 假后端测试可注册并执行 `browser_tabs`。**未做**：真正的第二后端（Playwright/CDP）与会话生命周期/视图布局迁移。 |
 | P1-5 子 Agent | 🟡 第一步 | `delegate_research`：独立 `ChatService` + 独立历史 + 只读工具 allowlist + 60s 超时中止；无并行/任务树/持久化子会话。 |
 | P1-6 工具面 | ✅ | `web_search` 已有；`docx_read`/`xlsx_read`（纯 Node 解 ZIP+XML，25MB/20k 字符上限）+ `pdf_read`（pdfjs legacy 懒加载，30MB/200 页/20k 字符，文本层；扫描件/版面/OCR 明确不支持）。 |
