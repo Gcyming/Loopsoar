@@ -17,6 +17,9 @@ import type { ChatService, ChatStreamResult } from "loopsoar-services/chat";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_GOAL_CHARS = 4_000;
 const MAX_RESULT_CHARS = 12_000;
+const MAX_PARALLEL_TASKS = 4;
+const MAX_PARALLEL_CONCURRENCY = 3;
+const MAX_PARALLEL_OUTPUT_CHARS = 24_000;
 
 /** 从注册表挑出可安全委派的只读工具；浏览器/联网/询问用户/子代理自身都排除。 */
 export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
@@ -30,6 +33,7 @@ export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
         !tool.permissions.network &&
         !tool.permissions.browser &&
         tool.name !== "delegate_research" &&
+        tool.name !== "delegate_parallel" &&
         tool.name !== "ask_user",
     )
     .map((tool) => tool.name);
@@ -82,6 +86,70 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
       } catch (err) {
         return { ok: false, content: `[子代理失败] ${err instanceof Error ? err.message : String(err)}` };
       }
+    },
+  });
+
+  registry.register({
+    name: "delegate_parallel",
+    description:
+      "并行委派 2–4 个只读调研任务（独立上下文、同一只读工具面；最多同时跑 3 个）。适合互不依赖的读代码/查资料；每个任务单独超时，结果按任务顺序回灌。需要写文件/终端/浏览器/联网时不要用本工具。",
+    permissions: { read: true },
+    schema: z.object({
+      tasks: z
+        .array(
+          z.object({
+            goal: z.string().min(4).max(MAX_GOAL_CHARS),
+            context: z.string().max(MAX_GOAL_CHARS).optional(),
+          }),
+        )
+        .min(2)
+        .max(MAX_PARALLEL_TASKS),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = ctx.params as { tasks: Array<{ goal: string; context?: string }> };
+      const allowlist = readOnlyToolAllowlist(registry);
+      if (allowlist.length === 0) return { ok: false, content: "[错误] 没有可用的只读工具，子代理未启动" };
+      const tasks = params.tasks.map((task) => ({
+        goal: task.goal.trim(),
+        prompt: task.context?.trim()
+          ? `${task.goal.trim()}\n\n参考上下文（父代理提供，仅作线索，需自行核实）：\n${task.context.trim()}`
+          : task.goal.trim(),
+      }));
+      const results: Array<{ ok: boolean; text: string }> = new Array(tasks.length);
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        while (true) {
+          const index = next;
+          next += 1;
+          if (index >= tasks.length) return;
+          try {
+            const result = await runner.run({ goal: tasks[index].prompt, sessionId: ctx.sessionId ?? "" });
+            const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+            if (result.status === "done") {
+              results[index] = { ok: true, text: text || "（子代理未返回正文）" };
+            } else if (result.status === "aborted") {
+              results[index] = { ok: false, text: `[中止] 超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止。${text}` };
+            } else {
+              results[index] = { ok: false, text: `[${result.status}] ${result.reason}\n${text}` };
+            }
+          } catch (err) {
+            results[index] = { ok: false, text: `[失败] ${err instanceof Error ? err.message : String(err)}` };
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(MAX_PARALLEL_CONCURRENCY, tasks.length) }, () => worker()),
+      );
+      const sections = results.map((result, index) => {
+        const label = `## 任务 ${index + 1}：${tasks[index].goal.slice(0, 120)}`;
+        return `${label}\n${result.ok ? "" : "（未完成）"}${result.text}`;
+      });
+      const completed = results.filter((result) => result.ok).length;
+      const body = sections.join("\n\n").slice(0, MAX_PARALLEL_OUTPUT_CHARS);
+      return {
+        ok: completed > 0,
+        content: `[并行只读子代理 ${completed}/${results.length} 完成]\n\n${body}`,
+      };
     },
   });
 }

@@ -218,7 +218,7 @@
 | P1-2 | 终端危险命令靠正则黑名单 | `core/tools/hard_rules.ts`、`rules/commandGuard.ts` | `r''m`、`${IFS}`、`bash -c` 等变形可绕过 | 改为 argv 解析 + 命令 allowlist/分级确认；黑名单只做补充 |
 | P1-3 | 浏览器引擎不可替换 | `browserHost.ts` 直接依赖 Electron `WebContentsView` | 无法无头/服务器运行，无法用 Playwright/CDP 后端 | 定义 `BrowserBackend` 端口；Electron 与 Playwright 两个适配器 |
 | P1-4 | 无多模态输入 | LLM 消息类型只有文本；附件走文本读取 | 不能看图/截图/PDF 版面 | 消息 content 支持 image parts；截图工具回灌图像；PDF 渲染/OCR |
-| P1-5 | 单 Agent，无子 Agent/并行任务 | 新增只读子代理：独立 ChatService/独立历史，工具面收窄到只读 allowlist，60s 超时可中止；无并行/任务树/持久化子会话 | 复杂任务吞吐与隔离仍不足 | 后续补任务树、并行与子会话持久化 |
+| P1-5 | 单 Agent，无子 Agent/并行任务 | 只读子代理：独立 ChatService/独立历史，工具面收窄到只读 allowlist，60s 超时可中止；新增 `delegate_parallel` 并行 2–4 个只读任务、最多 3 并发、逐任务超时 | 复杂任务吞吐仍无任务树/持久化子会话 | 后续补任务树与子会话持久化 |
 | P1-6 | 工具面偏窄（部分误判） | `shell/main/searchTools.ts` 已有内置 `web_search`；新增 `office_read` 统一读取 DOCX/XLSX/PPTX/ODF/RTF/CSV/TSV/PDF，`docx_read`/`xlsx_read`/`pdf_read` 保留 | 旧版二进制 .doc/.xls/.ppt、扫描件 OCR、版面/图表仍缺 | 已完成文本层；见 `docs/OFFICE-DOCUMENT-SUPPORT.md` |
 | P1-7 | 技能只有“注入”，没有“生成/演化” | 技能扫描/注入存在；新增候选写入与 `skill_list`/`skill_read`，但无自动创建/修订 | 无法形成“越用越强”的闭环 | 任务结束后候选技能草稿 + 人工确认入库 |
 | P1-8 | 扩展生态只有 tools，且 worker 权限过大 | manifest 只有 main/permissions；无 commands/UI/hooks；默认 worker 仍是完整 Node 权限 | 离“高兼容性插件生态”最远；第三方扩展可越权读写 | 先定贡献点协议；OS 隔离已加 `isolation:"node"` 第一层（opt-in），强隔离/容器化仍缺 |
@@ -291,7 +291,7 @@
 - [x] P1-1 API key 加密/钥匙串：审计误判，已有 `secretStore.ts`（safeStorage + AES-GCM 回退）与 13 个测试；本轮只核对，不改代码。
 - [x] P1-4 图片输入 + 截图回灌：LLM content 支持 image parts，OpenAI/Anthropic 适配；当前用户轮 `【附件】图片` 转多模态；`browser_screenshot` 在视觉模型下把 PNG 作为工具图片注入当前轮（仅 1 张、解码后 ≤1.5MB，不写历史、不塞 UI IPC）；text-only 模型自动跳过，只回路径。PDF 版面/OCR 作为后续增量，不属于本轮文本读取。
 - [~] P1-3 BrowserBackend 端口化（第一步）：新增 `browserBackend.ts`，工具层脱离 `BrowserHost` 类并加假后端测试；第二后端与生命周期迁移未做。
-- [~] P1-5 子 Agent/任务树（第一步）：新增 `delegate_research` 只读子代理——独立 `ChatService`/独立历史、只读工具 allowlist、60s 超时可中止；无并行/任务树/子会话持久化。
+- [~] P1-5 子 Agent/任务树（第二步）：`delegate_research` 只读子代理（独立 `ChatService`/独立历史、只读 allowlist、60s 超时中止）；新增 `delegate_parallel` 并行 2–4 个互不依赖的只读任务、最多 3 并发、逐任务独立超时、结果按任务顺序回灌；仍无任务树/子会话持久化。
 - [x] P1-6 工具面补齐：`web_search` 已有；新增 `office_read` 统一读取 DOCX/DOCM、XLSX/XLSM、PPTX/PPTM、ODT/ODS/ODP/ODG、FODT/FODS/FODP、RTF、CSV/TSV、PDF 文本层；`docx_read`/`xlsx_read`/`pdf_read` 保留。ZIP 层加条目/解压上限、加密/zip64/压缩方法校验，防 zip bomb；XLSX 支持指定/全部工作表。旧版二进制 .doc/.xls/.ppt 明确提示另存；扫描 PDF、OCR、版面/图表不还原。
 - [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 写入 `skills/<id>/SKILL.md` 并默认禁用；补 `skill_list`/`skill_read` 只读查看技能库（含禁用候选），用户在设置·技能启用后才注入；尚未做任务结束自动生成。
 - [~] P1-8 扩展贡献点协议 / worker OS 隔离（第一步）：manifest 新增 `isolation:"node"`，worker 用 Node permission model 启动（只读扩展目录/worker 目录、写仅扩展目录、`terminal` 才允许子进程）；默认仍为 `none`，强隔离/容器化与 commands/UI/hooks 贡献点未做。
@@ -331,7 +331,7 @@
 
 - 2026-11-17：初版审计记录；只读，未修改源码。
 - 2026-11-17：完成 P0 修补（P0-1 / P0-2 / P0-3），全量 **222 文件 / 1,791 用例**通过；typecheck 5/5、build 5/5。P0-3 仅覆盖工具桥接权限，worker OS 级隔离仍留 P1-8。
-- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理、P1-6 Office/PDF 文本读取（DOCX/XLSX/PPTX/ODF/RTF/CSV/PDF）、P1-7 技能候选与技能库读取、P1-8 扩展 Node permission 隔离第一步、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成、P2-1 设置页纯模型拆分第一步；P1-1/P1-6 的“缺失”经复核为误判。全量 **234 文件 / 1,854 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理与并行委派、P1-6 Office/PDF 文本读取（DOCX/XLSX/PPTX/ODF/RTF/CSV/PDF）、P1-7 技能候选与技能库读取、P1-8 扩展 Node permission 隔离第一步、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成、P2-1 设置页纯模型拆分第一步；P1-1/P1-6 的“缺失”经复核为误判。全量 **234 文件 / 1,856 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -351,7 +351,7 @@
 | P1-1 Key 加密 | ✅ 已有 | 初版审计误判。`secretStore.ts` 已用 `safeStorage`，不可用时 AES-256-GCM + 机器绑定回退；13 个测试通过。未改代码。 |
 | P1-4 多模态 | ✅ | `LlmMessage.content` 支持 `text`/`image` parts；OpenAI 映射 `image_url` 数据 URL，Anthropic 映射 base64 image block；`ChatService` 从当前用户轮 `【附件】<图片路径>` 注入，壳层 `readImageDataUrl` 负责 6MB/扩展名白名单；`browser_screenshot` 对视觉模型回灌 PNG（仅 1 张/轮、解码后 ≤1.5MB，不写历史、不塞 UI IPC），text-only 模型只回路径。PDF 版面/OCR 作为后续增量。 |
 | P1-3 BrowserBackend | 🟡 端口第一步 | 新增 `shell/main/browserBackend.ts`：工具层只依赖 `BrowserBackend`，不再依赖 `BrowserHost` 类；`BrowserHost` 直接满足接口，新增非 Electron 假后端测试可注册并执行 `browser_tabs`。**未做**：真正的第二后端（Playwright/CDP）与会话生命周期/视图布局迁移。 |
-| P1-5 子 Agent | 🟡 第一步 | `delegate_research`：独立 `ChatService` + 独立历史 + 只读工具 allowlist + 60s 超时中止；无并行/任务树/持久化子会话。 |
+| P1-5 子 Agent | 🟡 第二步 | `delegate_research`（单任务）+ `delegate_parallel`（2–4 任务、≤3 并发、逐任务 60s 超时、结果按序回灌）：独立 `ChatService` + 独立历史 + 只读 allowlist；仍无任务树/持久化子会话。 |
 | P1-6 工具面 | ✅ | `web_search` 已有；`office_read` 统一读取 DOCX/XLSX/PPTX（OOXML）、ODT/ODS/ODP/ODG（OpenDocument）、Flat ODF、RTF、CSV/TSV、PDF 文本层；XLSX 可指定/全部工作表；ZIP 层有加密/zip64/条目数/解压大小防护。旧版 `.doc/.xls/.ppt`、扫描件 OCR、版面/图表不还原，矩阵见 `docs/OFFICE-DOCUMENT-SUPPORT.md`。 |
 | P1-7 技能候选 | 🟡 第一步 | 新增 `skill_candidate`（默认禁用）+ `skill_list`/`skill_read` 只读查看；未做任务结束自动生成/修订。 |
 | P1-8 扩展生态/隔离 | 🟡 第一步 | manifest `isolation:"node"` opt-in：Node permission model 只读扩展目录/worker 目录，`write` 才允许写扩展目录，`terminal` 才允许子进程；真实 worker 测试验证扩展目录可读、外部写入 `ERR_ACCESS_DENIED`。默认仍 `none`；commands/UI/hooks 贡献点与强隔离未做。 |
@@ -366,4 +366,4 @@
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
 | P2-1/P2-3 拆巨型文件 | 🟡 第一步 | 设置页纯模型/格式化抽成 `settingsModel.ts`（`Settings.tsx` 2,894 → 2,835 行）并加单测；`App.tsx`/`main/index.ts` 仍未拆。 |
 
-**本轮验证**：`npx vitest run` **234 文件 / 1,854 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **234 文件 / 1,856 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
