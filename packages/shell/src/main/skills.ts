@@ -10,6 +10,29 @@ interface SkillsState {
   enabled: Record<string, boolean>;
 }
 
+export interface CandidateInput {
+  name: string;
+  description: string;
+  whenToUse?: string;
+  body: string;
+  tags?: string[];
+}
+
+function candidateBase(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "candidate"
+  );
+}
+
+function isInside(root: string, target: string): boolean {
+  return target !== root && target.startsWith(`${root}${path.sep}`);
+}
+
 export class SkillHost {
   private registry = new SkillRegistry();
   private stateFile: string;
@@ -108,23 +131,61 @@ export class SkillHost {
    * 生成候选技能：写入 skills/<id>/SKILL.md，并在 skills.json 里默认禁用。
    * 候选不会进入提示词注入，直到用户在设置·技能里启用——避免 Agent 自动“学会”未审阅的流程。
    */
-  createCandidate(input: {
-    name: string;
-    description: string;
-    whenToUse?: string;
-    body: string;
-    tags?: string[];
-  }): SkillRecord | null {
-    const base =
-      input.name
-        .toLowerCase()
-        .normalize("NFKD")
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 48) || "candidate";
+  createCandidate(input: CandidateInput): SkillRecord | null {
+    const base = candidateBase(input.name);
     let id = base;
     let suffix = 2;
     while (fs.existsSync(path.join(this.dir, id))) id = `${base}-${suffix++}`;
+    this.writeCandidate(id, input);
+    return this.registry.list().find((item) => item.id === id) ?? null;
+  }
+
+  /**
+   * 修订候选：只允许未启用候选，保留 id，写回后仍禁用。
+   * 已启用的技能拒绝自动改写，避免 Agent 改掉用户正在使用的规则。
+   */
+  replaceCandidate(id: string, input: CandidateInput): SkillRecord | null {
+    const existing = this.registry.get(id);
+    if (!existing || existing.enabled) return null;
+    const target = path.resolve(this.dir, id);
+    if (!isInside(path.resolve(this.dir), target)) return null;
+    this.writeCandidate(id, input);
+    return this.registry.list().find((item) => item.id === id) ?? null;
+  }
+
+  /** 删除候选：只允许未启用项；防止误删已启用技能或越界路径。 */
+  remove(id: string): boolean {
+    const existing = this.registry.get(id);
+    if (!existing || existing.enabled) return false;
+    const root = path.resolve(this.dir);
+    const target = path.resolve(root, id);
+    if (!isInside(root, target)) return false;
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+    } catch {
+      return false;
+    }
+    const state = this.readState();
+    delete state.enabled[id];
+    this.writeState(state);
+    this.scan();
+    return true;
+  }
+
+  /** 自动候选去重：只找带 auto-candidate 标签的同名候选。 */
+  findAutoCandidateByName(name: string): SkillRecord | null {
+    const base = candidateBase(name);
+    return this.registry
+      .list()
+      .find(
+        (item) =>
+          item.frontmatter.name === name &&
+          (item.id === base || item.id.startsWith(`${base}-`)) &&
+          (item.frontmatter.tags ?? []).includes("auto-candidate"),
+      ) ?? null;
+  }
+
+  private writeCandidate(id: string, input: CandidateInput): void {
     const dir = path.join(this.dir, id);
     fs.mkdirSync(dir, { recursive: true });
     const frontmatter = [
@@ -143,7 +204,6 @@ export class SkillHost {
     state.enabled[id] = false;
     this.writeState(state);
     this.scan();
-    return this.registry.list().find((item) => item.id === id) ?? null;
   }
 
   dirPath(): string {

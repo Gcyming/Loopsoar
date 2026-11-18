@@ -78,6 +78,9 @@ export function maybeAutoSkillCandidate(input: AutoCandidateInput, skills: Skill
   const draft = buildAutoSkillDraft(input);
   if (!draft) return null;
   try {
+    const existing = skills.findAutoCandidateByName(draft.name);
+    // 同名自动候选已存在：跳过，避免自动覆盖人工改过的草稿；需要修订走 skill_candidate.replaceId。
+    if (existing) return null;
     return skills.createCandidate(draft);
   } catch {
     return null;

@@ -31,6 +31,13 @@ export function registerSkillsDomain(deps: SkillsDeps): void {
     return { ok: item !== null, skill: item };
   });
 
+  handleTrusted(deps, "skills:remove", (payload) => {
+    const p = payload as { id: string };
+    const ok = deps.skills?.remove(p.id) ?? false;
+    if (ok) deps.push?.("skills:updated", { action: "remove", id: p.id });
+    return { ok };
+  });
+
   handleTrusted(deps, "skills:openDir", async () => {
     const ok = (await deps.openSkillsDir?.()) ?? false;
     return { ok, dir: deps.skills?.dirPath() ?? "" };

@@ -47,4 +47,14 @@ describe("自动技能候选", () => {
     expect(record!.enabled).toBe(false);
     expect(host.promptFor("登录接口")).toBe("");
   });
+
+  it("同名自动候选不重复生成（不自动覆盖人工草稿）", () => {
+    const dir = tempSkillDir();
+    const host = new SkillHost(dir);
+    const first = maybeAutoSkillCandidate(base, host);
+    const second = maybeAutoSkillCandidate({ ...base, finalText: `${base.finalText} 补充：新增边界用例。` }, host);
+    expect(second).toBeNull();
+    expect(host.list()).toHaveLength(1);
+    expect(host.list()[0].body).toBe(first!.body);
+  });
 });

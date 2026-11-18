@@ -1939,6 +1939,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 api.skills.list().then((result) => setSkills(result.skills)),
               )
             }
+            onRemove={(id) => {
+              if (!window.confirm(tr("settings.skills.removeConfirm"))) return Promise.resolve();
+              return api.skills.remove({ id }).then((result) => {
+                if (!result.ok) bad(tr("settings.skills.removeFailed"));
+              });
+            }}
           />
         );
 

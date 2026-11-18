@@ -1162,6 +1162,7 @@ export interface LoopsoarAPI {
     list(): Promise<{ skills: SkillRecord[]; dir: string; skipped: { dir: string; reason: string }[] }>;
     reload(): Promise<{ skills: SkillRecord[]; skipped: { dir: string; reason: string }[] }>;
     setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; skill: SkillRecord | null }>;
+    remove(payload: { id: string }): Promise<{ ok: boolean }>;
     openDir(): Promise<{ ok: boolean; dir: string }>;
   };
   mcp: LoopsoarDomain & {
@@ -1185,6 +1186,7 @@ export interface LoopsoarAPI {
     list(): Promise<{ skills: SkillRecord[]; dir: string; skipped: { dir: string; reason: string }[] }>;
     reload(): Promise<{ skills: SkillRecord[]; skipped: { dir: string; reason: string }[] }>;
     setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; skill: SkillRecord | null }>;
+    remove(payload: { id: string }): Promise<{ ok: boolean }>;
     openDir(): Promise<{ ok: boolean; dir: string }>;
   };
   mcp: LoopsoarDomain & {

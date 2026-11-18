@@ -32,6 +32,14 @@ const S = {
   providerRows: { display: "flex", flexDirection: "column" as const, gap: 4, marginTop: 6 },
   providerRow: { display: "flex", gap: 8, fontSize: 11.5 },
   providerKey: { width: 54, flexShrink: 0, color: BRAND.linenFaint },
+  remove: {
+    border: "none",
+    background: "transparent",
+    color: BRAND.danger,
+    fontSize: 11,
+    cursor: "pointer",
+    padding: "2px 4px",
+  },
   toggle: {
     width: 40,
     height: 22,
@@ -70,9 +78,10 @@ export interface SkillsSectionProps {
   onOpenDir: () => Promise<void>;
   onReload: () => Promise<void>;
   onToggle: (id: string, enabled: boolean) => Promise<void>;
+  onRemove: (id: string) => Promise<void>;
 }
 
-export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir, onReload, onToggle }: SkillsSectionProps): React.ReactElement {
+export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir, onReload, onToggle, onRemove }: SkillsSectionProps): React.ReactElement {
   const tr = useT();
   return (
     <div>
@@ -103,6 +112,11 @@ export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir
               </span>
               <span style={S.icons}>
                 <Toggle value={skill.enabled} onChange={(next) => void onToggle(skill.id, next)} />
+                {!skill.enabled ? (
+                  <button type="button" style={S.remove} onClick={() => void onRemove(skill.id)}>
+                    {tr("settings.skills.remove")}
+                  </button>
+                ) : null}
               </span>
             </div>
             <div style={S.providerVal}>{skill.frontmatter.description}</div>

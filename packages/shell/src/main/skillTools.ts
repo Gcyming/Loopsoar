@@ -49,9 +49,10 @@ export function registerSkillTools(registry: ToolRegistry, skills: SkillHost): v
   registry.register({
     name: "skill_candidate",
     description:
-      "把一个可复用的工作流程沉淀为技能候选：写入 SKILL.md 草稿并默认禁用，需用户在设置·技能里审阅启用。适合任务完成后由用户明确要求“把这个流程存成技能”。",
+      "把一个可复用的工作流程沉淀为技能候选：写入 SKILL.md 草稿并默认禁用，需用户在设置·技能里审阅启用。传 replaceId 可修订未启用的已有候选；适合任务完成后由用户明确要求“把这个流程存成技能”。",
     permissions: { write: true },
     schema: z.object({
+      replaceId: z.string().min(1).max(120).optional(),
       name: z.string().min(1).max(120),
       description: z.string().min(1).max(500),
       whenToUse: z.string().max(500).optional(),
@@ -60,6 +61,7 @@ export function registerSkillTools(registry: ToolRegistry, skills: SkillHost): v
     }),
     execute: async (ctx): Promise<ToolResult> => {
       const params = ctx.params as {
+        replaceId?: string;
         name: string;
         description: string;
         whenToUse?: string;
@@ -67,17 +69,20 @@ export function registerSkillTools(registry: ToolRegistry, skills: SkillHost): v
         tags?: string[];
       };
       try {
-        const skill = skills.createCandidate({
+        const input = {
           name: params.name.trim(),
           description: params.description.trim(),
           whenToUse: params.whenToUse?.trim() || undefined,
           body: params.body,
           tags: params.tags?.map((tag) => tag.trim()).filter(Boolean),
-        });
-        if (!skill) return { ok: false, content: "[错误] 候选技能写入后未能被扫描到" };
+        };
+        const skill = params.replaceId
+          ? skills.replaceCandidate(params.replaceId, input)
+          : skills.createCandidate(input);
+        if (!skill) return { ok: false, content: "[错误] 候选技能写入后未能被扫描到（已启用技能不允许改写）" };
         return {
           ok: true,
-          content: `已生成候选技能：${skill.frontmatter.name}\nID：${skill.id}\n路径：${skill.path}\n状态：默认禁用\n\n到「设置 · 技能」审阅正文并启用后才会生效。`,
+          content: `${params.replaceId ? "已修订候选技能" : "已生成候选技能"}：${skill.frontmatter.name}\nID：${skill.id}\n路径：${skill.path}\n状态：默认禁用\n\n到「设置 · 技能」审阅正文并启用后才会生效。`,
         };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };

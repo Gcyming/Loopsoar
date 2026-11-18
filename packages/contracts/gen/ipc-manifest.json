@@ -820,6 +820,13 @@
       "hasRequest": true
     },
     {
+      "channel": "skills:remove",
+      "domain": "skills",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "skills:openDir",
       "domain": "skills",
       "method": "openDir",

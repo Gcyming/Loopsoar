@@ -56,4 +56,41 @@ describe("技能候选（P1-7）", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("候选可修订/删除；已启用技能拒绝改写或删除", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-skill-lifecycle-"));
+    try {
+      const host = new SkillHost(path.join(root, "skills"));
+      const registry = new ToolRegistry();
+      registerSkillTools(registry, host);
+      const created = await registry.get("skill_candidate")!.execute({
+        agentId: "test",
+        sessionId: "s1",
+        params: { name: "候选生命周期", description: "旧描述", body: "旧正文" },
+        platform: {},
+      });
+      expect(created.ok).toBe(true);
+      const skill = host.list()[0];
+      const revised = await registry.get("skill_candidate")!.execute({
+        agentId: "test",
+        sessionId: "s1",
+        params: { replaceId: skill.id, name: "候选生命周期", description: "新描述", body: "新正文" },
+        platform: {},
+      });
+      expect(revised.ok).toBe(true);
+      expect(revised.content).toContain("已修订候选技能");
+      expect(host.list()).toHaveLength(1);
+      expect(host.list()[0].body).toContain("新正文");
+      expect(host.remove(skill.id)).toBe(true);
+      expect(host.list()).toHaveLength(0);
+
+      const enabled = host.createCandidate({ name: "已启用", description: "x", body: "x" })!;
+      host.setEnabled(enabled.id, true);
+      expect(host.replaceCandidate(enabled.id, { name: "已启用", description: "y", body: "y" })).toBeNull();
+      expect(host.remove(enabled.id)).toBe(false);
+      expect(host.list().find((item) => item.id === enabled.id)?.enabled).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

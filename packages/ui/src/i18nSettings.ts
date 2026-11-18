@@ -659,6 +659,9 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.skills.tolerance": { zh: "容错", en: "lenient" },
   "settings.skills.whenToUse": { zh: "何时用", en: "When to use" },
   "settings.skills.body": { zh: "正文", en: "Body" },
+  "settings.skills.remove": { zh: "删除候选", en: "Delete candidate" },
+  "settings.skills.removeConfirm": { zh: "删除这个未启用的候选技能？", en: "Delete this disabled skill candidate?" },
+  "settings.skills.removeFailed": { zh: "删除失败：仅未启用候选可删除", en: "Delete failed: only disabled candidates can be removed" },
   "settings.skills.isolation": {
     zh: "隔离：技能只影响提示词，不注册工具、不读写文件、不启动进程；与扩展/MCP 互不影响。",
     en: "Isolation: skills only affect prompts — they register no tools, touch no files and start no processes; independent of extensions and MCP.",

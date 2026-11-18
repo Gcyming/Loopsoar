@@ -1219,6 +1219,12 @@ export const CHANNEL_BINDINGS: Record<string, ChannelBinding> = {
     request: SkillToggleSchema,
     sensitive: true,
   },
+  "skills:remove": {
+    domain: "skills",
+    method: "remove",
+    request: SkillIdSchema,
+    sensitive: true,
+  },
   "skills:openDir": {
     domain: "skills",
     method: "openDir",
