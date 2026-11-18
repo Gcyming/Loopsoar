@@ -249,11 +249,12 @@ export class CdpBrowserBackend implements BrowserBackend {
   }
 
   private async tabOrCreate(tabId?: string, sessionId?: string): Promise<CdpTab> {
+    const group = this.group(sessionId);
     if (tabId) {
       const existing = this.tabs.get(tabId);
-      if (existing) return existing;
+      // 只接受本会话组内的标签，防止跨会话通过 snapshot 返回的 tabId 串线。
+      if (existing && group.tabIds.includes(tabId)) return existing;
     }
-    const group = this.group(sessionId);
     const active = group.active ? this.tabs.get(group.active) : undefined;
     if (active) return active;
     const first = group.tabIds.map((id) => this.tabs.get(id)).find((tab): tab is CdpTab => Boolean(tab));
