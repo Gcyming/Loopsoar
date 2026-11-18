@@ -102,6 +102,8 @@ export interface ChatServiceOptions {
   }) => void;
   /** 技能注入（与扩展/MCP 隔离：仅 SKILL.md 文本，不提供工具）。 */
   getSkillPrompt?: (userText: string) => string;
+  /** 扩展声明式指令（仅已启用扩展）；放 volatile 段，不提供工具/代码执行。 */
+  getExtensionPrompt?: (sessionId?: string) => string;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
   permissionPolicy?: () => Permissions;
   /** 当前会话的工作根目录（工作区 / worktree）；作为每次工具权限判定的作用域根（不修改沙箱全局根）。 */
@@ -575,9 +577,10 @@ export class ChatService {
     // 记忆召回 + 技能注入：都放 volatile 段（不进稳定前缀，避免破坏 KV 缓存）
     const memoryText = this.opts.getMemoryFor?.(input.message, sessionId) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
+    const extensionText = this.opts.getExtensionPrompt?.(sessionId) ?? "";
     // 当前墙钟时间放 volatile 段（每轮刷新、不进 stable 前缀，不破坏 KV 缓存）
     const requestNow = Date.now();
-    const volatileContent = [currentWallClockLine(requestNow), segments.volatile, memoryText, skillText]
+    const volatileContent = [currentWallClockLine(requestNow), segments.volatile, memoryText, skillText, extensionText]
       .filter((t) => t.trim())
       .join("\n\n");
     // 历史消息加模型可见时间戳（确定性前缀，同一历史每轮生成一致 → KV 前缀缓存不受影响）

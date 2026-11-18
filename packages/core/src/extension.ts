@@ -29,9 +29,11 @@ export const ExtensionCommandSchema = z.object({
 });
 export type ExtensionCommand = z.infer<typeof ExtensionCommandSchema>;
 
-/** 声明式贡献点（当前只开放 commands；UI/hooks 后续单独加，避免过早承诺）。 */
+/** 声明式贡献点（当前开放 commands / instructions；UI/hooks 后续单独加，避免过早承诺）。 */
 export const ExtensionContributionsSchema = z.object({
   commands: z.array(ExtensionCommandSchema).max(32).optional(),
+  /** 启用后注入 Agent volatile 段的系统指令（不是工具，不执行代码）。 */
+  instructions: z.string().max(4_000).optional(),
 });
 export type ExtensionContributions = z.infer<typeof ExtensionContributionsSchema>;
 
@@ -204,6 +206,18 @@ export class ExtensionRegistry {
     if (items.length === 0) return "";
     const lines = items.map((e) => `- ${e.manifest.name} (${e.manifest.id}@${e.manifest.version})${e.manifest.description ? `：${e.manifest.description}` : ""}`);
     return ["## 可用扩展", ...lines].join("\n");
+  }
+
+  /** 已启用扩展的声明式指令；注入 volatile 段，不执行代码。 */
+  instructionsPrompt(): string {
+    const blocks = this.enabled()
+      .map((item) => {
+        const text = item.manifest.contributes?.instructions?.trim();
+        return text ? `### ${item.manifest.name}（${item.manifest.id}）\n${text}` : "";
+      })
+      .filter(Boolean);
+    if (blocks.length === 0) return "";
+    return ["## 扩展指令", ...blocks].join("\n\n").slice(0, 12_000);
   }
 
   clear(): void {

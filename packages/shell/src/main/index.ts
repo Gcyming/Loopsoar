@@ -1957,6 +1957,8 @@ app.whenReady().then(async () => {
       memory.recallPrompt(text, (sessionId ? sessions.get(sessionId)?.workspaceId : null) ?? "default"),
     // 技能：独立子系统，只注入 SKILL.md 文本（不提供工具）
     getSkillPrompt: (text: string) => skills.promptFor(text),
+    // 扩展声明式指令：仅启用扩展，注入 volatile 段；不提供工具/代码执行
+    getExtensionPrompt: () => extensions.instructionsPrompt(),
     // 权限策略：设置面板保存后即时生效
     permissionPolicy: () => loadPermissions(dirs.configDir),
     // 敏感步骤（登录/支付/不可撤销）始终强制确认；用户在设置里显式关闭才放行（缺省 true）

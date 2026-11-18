@@ -221,7 +221,7 @@
 | P1-5 | 单 Agent，无子 Agent/并行任务 | 只读子代理：独立 ChatService/独立历史，工具面收窄到只读 allowlist，60s 超时可中止；`delegate_parallel` 并行 2–4 个只读任务、最多 3 并发；任务记录落盘并可回查 | 复杂任务吞吐仍无任务树/子会话分叉恢复 | 后续补任务树与子会话恢复 |
 | P1-6 | 工具面偏窄（部分误判） | `shell/main/searchTools.ts` 已有内置 `web_search`；新增 `office_read` 统一读取 DOCX/XLSX/PPTX/ODF/RTF/CSV/TSV/PDF，`docx_read`/`xlsx_read`/`pdf_read` 保留 | 旧版二进制 .doc/.xls/.ppt、扫描件 OCR、版面/图表仍缺 | 已完成文本层；见 `docs/OFFICE-DOCUMENT-SUPPORT.md` |
 | P1-7 | 技能只有“注入”，没有“生成/演化” | 技能扫描/注入存在；新增候选写入与 `skill_list`/`skill_read`，但无自动创建/修订 | 无法形成“越用越强”的闭环 | 任务结束后候选技能草稿 + 人工确认入库 |
-| P1-8 | 扩展生态只有 tools，且 worker 权限过大 | manifest 已加 `contributes.commands`（Composer 提示词命令）与 `isolation:"node"` 第一层；UI/hooks 未做；默认 worker 仍是完整 Node 权限 | 离“高兼容性插件生态”最远；第三方扩展可越权读写 | 继续定 UI/hooks 协议；强隔离/容器化 |
+| P1-8 | 扩展生态只有 tools，且 worker 权限过大 | manifest 已加 `contributes.commands`（Composer 提示词命令）、`contributes.instructions`（启用后注入 volatile 段）与 `isolation:"node"` 第一层；UI/hooks 未做；默认 worker 仍是完整 Node 权限 | 离“高兼容性插件生态”最远；第三方扩展可越权读写 | 继续定 UI/hooks 协议；强隔离/容器化 |
 
 ---
 
@@ -294,7 +294,7 @@
 - [~] P1-5 子 Agent/任务树（第三步）：`delegate_research` 只读子代理（独立 `ChatService`/独立历史、只读 allowlist、60s 超时中止）；`delegate_parallel` 并行 2–4 个互不依赖的只读任务、最多 3 并发、逐任务独立超时、结果按任务顺序回灌；`delegate_tree` 支持预定义 3 层/12 节点任务树、深度优先回灌；`SubagentTaskStore` 落盘 `<dataDir>/subagents/<parent>/<task>.json`（含 `parentTaskId`），`subagent_tasks`/`subagent_read` 可回查；仍无子代理运行时动态再委派、子会话分叉恢复。
 - [x] P1-6 工具面补齐：`web_search` 已有；新增 `office_read` 统一读取 DOCX/DOCM、XLSX/XLSM、PPTX/PPTM、ODT/ODS/ODP/ODG、FODT/FODS/FODP、RTF、CSV/TSV（UTF-8/GBK/GB18030 自动回退）、PDF 文本层；新增 `office_convert`（LibreOffice/terminal 权限，旧版 .doc/.xls/.ppt 转 OOXML）；XLSX 还原常见日期/时间格式、PPTX 读取图表/图示缓存文本、PDF 按坐标聚合行距。ZIP 层加条目/解压上限、加密/zip64/压缩方法校验；XLSX 指定/全部工作表；旧版/加密 OOXML 给出可读提示；扫描 PDF OCR、视觉版面/图形坐标仍不内置。
 - [~] P1-7 技能候选生成（第一步）：新增 `skill_candidate` 写入 `skills/<id>/SKILL.md` 并默认禁用；补 `skill_list`/`skill_read` 只读查看技能库（含禁用候选），用户在设置·技能启用后才注入；尚未做任务结束自动生成。
-- [~] P1-8 扩展贡献点协议 / worker OS 隔离（第二步）：manifest 新增 `contributes.commands`（title/description/prompt，最多 32 条，纯声明式、无需 main）；已启用扩展的命令以 `/extId.commandId` 进入 Composer 斜杠面板，选中只填提示词、不执行扩展代码；`isolation:"node"` 保持 opt-in。UI/hooks 贡献点、命令执行型 API、强隔离/容器化仍未做。
+- [~] P1-8 扩展贡献点协议 / worker OS 隔离（第三步）：manifest 新增 `contributes.commands`（title/description/prompt，最多 32 条，纯声明式、无需 main）；已启用扩展的命令以 `/extId.commandId` 进入 Composer 斜杠面板，选中只填提示词、不执行扩展代码；新增 `contributes.instructions`（≤4,000 字符），仅启用扩展注入 ChatService volatile 段（总计 ≤12,000 字符），不提供工具/代码执行；`isolation:"node"` 保持 opt-in。UI/hooks 贡献点、命令执行型 API、强隔离/容器化仍未做。
 
 ### 第三批：P2
 
@@ -334,6 +334,7 @@
 - 2026-11-17：P1-2 命令语义层、P1-3 BrowserBackend 端口第一步、P1-4 图片附件 + 视觉模型截图回灌、P1-5 只读子代理与并行委派、P1-6 Office/PDF 文本读取（DOCX/XLSX/PPTX/ODF/RTF/CSV/PDF）、P1-7 技能候选与技能库读取、P1-8 扩展 Node permission 隔离第一步、P2-2 UI 分包、P2-4/P2-5 E2E 收尾、P2-7 限流 key 完成、P2-1 设置页纯模型拆分第一步；P1-1/P1-6 的“缺失”经复核为误判。全量 **235 文件 / 1,863 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-5 子代理任务记录落盘（`SubagentTaskStore` + `subagent_tasks`/`subagent_read`）；P1-8 声明式 `contributes.commands` 进入 Composer 斜杠面板（只填 prompt，不执行代码；纯声明式扩展无需 main）。全量 **236 文件 / 1,868 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-5 增加预定义任务树 `delegate_tree`（3 层/12 节点、深度优先、`parentTaskId` 落盘）；P2-1 设置页技能分区拆为 `SkillsSection.tsx`（`Settings.tsx` 2,835 → 2,819 行）。全量 **236 文件 / 1,869 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-18：P1-8 新增 `contributes.instructions`（仅启用扩展注入 volatile 段，单条 ≤4,000/合计 ≤12,000 字符）；P2-1 扩展分区拆为 `ExtensionsSection.tsx`（自取数据/监听运行态，`Settings.tsx` 2,819 → 2,646 行）。全量 **236 文件 / 1,870 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -356,7 +357,7 @@
 | P1-5 子 Agent | 🟡 第三步 | `delegate_research` + `delegate_parallel`（≤3 并发/逐任务超时/按序回灌）+ `delegate_tree`（预定义 3 层/12 节点、深度优先）；独立 `ChatService`/只读 allowlist；`SubagentTaskStore` 落盘并记录 `parentTaskId`，`subagent_tasks`/`subagent_read` 回查；仍无运行时动态再委派/子会话分叉恢复。 |
 | P1-6 工具面 | ✅ | `web_search` 已有；`office_read` 统一读取 DOCX/XLSX/PPTX（OOXML）、ODT/ODS/ODP/ODG（OpenDocument）、Flat ODF、RTF、CSV/TSV、PDF 文本层；XLSX 可指定/全部工作表并还原常见日期；PPTX 读图表/图示文本；PDF 按坐标聚合行距；`office_convert` 可转换旧版 .doc/.xls/.ppt。扫描 OCR、视觉版面/图形坐标不内置，矩阵见 `docs/OFFICE-DOCUMENT-SUPPORT.md`。 |
 | P1-7 技能候选 | 🟡 第一步 | 新增 `skill_candidate`（默认禁用）+ `skill_list`/`skill_read` 只读查看；未做任务结束自动生成/修订。 |
-| P1-8 扩展生态/隔离 | 🟡 第二步 | `contributes.commands` 声明式命令已进入 Composer 斜杠面板（只填 prompt，不执行代码；纯声明式扩展无需 main）；`isolation:"node"` opt-in：Node permission model 只读扩展目录/worker 目录，`write` 才允许写扩展目录，`terminal` 才允许子进程。默认仍 `none`；UI/hooks 贡献点、命令执行型 API、强隔离未做。 |
+| P1-8 扩展生态/隔离 | 🟡 第三步 | `contributes.commands` 声明式命令已进入 Composer 斜杠面板（只填 prompt，不执行代码）；`contributes.instructions` 仅在扩展启用后注入 volatile 段（≤4k/合计 ≤12k）；`isolation:"node"` opt-in：Node permission model 只读扩展目录/worker 目录，`write` 才允许写扩展目录，`terminal` 才允许子进程。默认仍 `none`；UI/hooks 贡献点、命令执行型 API、强隔离未做。 |
 
 ### 11.2 P2 进度
 
@@ -366,6 +367,6 @@
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
 | P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
-| P2-1/P2-3 拆巨型文件 | 🟡 第二步 | 设置页纯模型/格式化抽成 `settingsModel.ts`，技能分区抽成 `SkillsSection.tsx`（`Settings.tsx` 2,894 → 2,819 行）并加单测；`App.tsx`/`main/index.ts` 仍未拆。 |
+| P2-1/P2-3 拆巨型文件 | 🟡 第三步 | 设置页纯模型/格式化抽成 `settingsModel.ts`，技能分区抽成 `SkillsSection.tsx`，扩展分区抽成 `ExtensionsSection.tsx`（`Settings.tsx` 2,894 → 2,646 行）；`App.tsx`/`main/index.ts` 仍未拆。 |
 
-**本轮验证**：`npx vitest run` **236 文件 / 1,869 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
+**本轮验证**：`npx vitest run` **236 文件 / 1,870 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

@@ -11,12 +11,13 @@ import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } fr
 import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
+import ExtensionsSection from "./ExtensionsSection.js";
 import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
 import SkillsSection from "./SkillsSection.js";
 import { setLanguage, useT } from "./i18n.js";
 import MemoryGraphView from "./MemoryGraphView.js";
 import type {
-  AboutInfo, DiagnosticsInfo, ExtensionRuntimeStatus, InstalledExtension, LocationsInfo, LoopInfo,
+  AboutInfo, DiagnosticsInfo, LocationsInfo, LoopInfo,
   LoopListResult, LoopsoarAPI, McpServerInfo, MemoryGraphNodeView, MemoryGraphResult, MemoryListResult,
   PermissionCategory, PermissionsState, Preferences,
   ProviderItem, ProviderModel, ProviderStatus, RuleCandidateView, RuleRevisionView, RulesSnapshot, SkillRecord, TestProviderResult,
@@ -100,8 +101,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   const [providerItems, setProviderItems] = useState<ProviderItem[]>([]);
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
-  const [extensions, setExtensions] = useState<InstalledExtension[]>([]);
-  const [extensionRuntime, setExtensionRuntime] = useState<Record<string, ExtensionRuntimeStatus>>({});
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [skillsDir, setSkillsDir] = useState("");
   const [skillSkips, setSkillSkips] = useState<{ dir: string; reason: string }[]>([]);
@@ -118,8 +117,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   /** 模型表搜索词：只过滤表格展示（按模型 ID 模糊匹配），不改动保存的数据。 */
   const [pModelQuery, setPModelQuery] = useState("");
   const [rail, setRail] = useState<RailParams>(() => (typeof window === "undefined" ? DEFAULT_CHAT_RAIL : loadRailParams()));
-  const [extensionsDir, setExtensionsDir] = useState("");
-  const [extensionSkips, setExtensionSkips] = useState<{ dir: string; reason: string }[]>([]);
   const [testRes, setTestRes] = useState<TestProviderResult | null>(null);
   /** 供应商编辑大弹窗的滚动容器：打开/切换编辑对象时回到顶部，避免"一点编辑就跳到最下面"。 */
   const editBodyRef = React.useRef<HTMLDivElement | null>(null);
@@ -274,10 +271,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     if (!api) { setLoading(false); return; }
     void (async () => {
       try {
-        const [p, pm, pv, ru, dg, ab, mm, pvList, ext, sk, mc, rc, rh] = await Promise.allSettled([
+        const [p, pm, pv, ru, dg, ab, mm, pvList, sk, mc, rc, rh] = await Promise.allSettled([
           api.settings.getPreferences(), api.settings.getPermissions(), api.settings.getProvider(),
           api.settings.getRules(), api.settings.diagnostics(), api.settings.about(), api.memory.list(),
-          api.settings.listProviders(), api.extensions.list(), api.skills.list(), api.mcp.list(),
+          api.settings.listProviders(), api.skills.list(), api.mcp.list(),
           api.rules.candidates(),
           api.rules.history({ limit: 20 }),
         ]);
@@ -293,12 +290,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setActiveProviderId(pvList.value.activeId);
           // 首次使用（无供应商）：直接展开添加表单，少一次点击
           if (pvList.value.items.length === 0) setEditingProviderId("new");
-        }
-        if (ext.status === "fulfilled") {
-          setExtensions(ext.value.extensions);
-          setExtensionsDir(ext.value.dir);
-          setExtensionSkips(ext.value.skipped);
-          setExtensionRuntime(ext.value.runtime ?? {});
         }
         if (sk.status === "fulfilled") {
           setSkills(sk.value.skills);
@@ -329,21 +320,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     }, 400);
     return () => clearTimeout(timer);
   }, [api, prefs, loading, onPreferencesSaved]);
-
-  // 扩展运行状态异步就绪：监听 extensions:updated 刷新列表（否则刚打开设置会显示「未启动」）
-  useEffect(() => {
-    if (!api) return;
-    const off = api.on("extensions:updated", () => {
-      void api.extensions
-        .list()
-        .then((r) => {
-          setExtensions(r.extensions);
-          setExtensionRuntime(r.runtime ?? {});
-        })
-        .catch(() => {});
-    });
-    return off;
-  }, [api]);
 
   /* ── Agent-Loop：打开设置时拉取；loop:changed / loop:fallback 事件同步刷新并提示 ── */
   const refreshLoops = useCallback(async (): Promise<void> => {
@@ -1921,156 +1897,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       }
 
       case "extensions":
-        return (
-          <div>
-            <Head t={tr("settings.extensions.head")} h={tr("settings.extensions.headHint")} />
-            <div style={S.note}>{tr("settings.extensions.dir")}<code style={S.code}>{extensionsDir || "—"}</code></div>
-            <div style={S.btns}>
-              <Btn
-                label={tr("settings.extensions.openDir")}
-                onClick={() =>
-                  void api.extensions
-                    .openDir()
-                    .then((r) => {
-                      if (!r.ok) bad(tr("settings.extensions.openFailed", { dir: r.dir }));
-                    })
-                    .catch(bad)
-                }
-              />
-              <Btn
-                label={tr("settings.rescan")}
-                onClick={() =>
-                  void api.extensions.list().then((r) => {
-                    setExtensions(r.extensions);
-                    setExtensionsDir(r.dir);
-                    setExtensionSkips(r.skipped);
-                    setExtensionRuntime(r.runtime ?? {});
-                  })
-                }
-              />
-            </div>
-            {extensionSkips.length > 0 ? (
-              <div style={S.note}>
-                {tr("settings.extensions.skipped", { count: extensionSkips.length })}
-                {extensionSkips.map((x) => (
-                  <div key={x.dir} style={S.errText}>{tr("settings.skipItem", { path: x.dir, reason: x.reason })}</div>
-                ))}
-              </div>
-            ) : null}
-            {extensions.length === 0 ? (
-              <div style={S.dashed}>{tr("settings.extensions.empty")}</div>
-            ) : (
-              extensions.map((ext) => (
-                <div key={ext.manifest.id} className="panel-card" style={S.card}>
-                  <div style={S.rowBetween}>
-                    <span style={S.meta}>
-                      <span style={S.metaTitle}>{ext.manifest.name}</span>
-                      <span style={BADGE.neutral}>v{ext.manifest.version}</span>
-                      {ext.manifest.author ? <span style={S.tag}>{ext.manifest.author}</span> : null}
-                    </span>
-                    <span style={S.icons}>
-                      <label style={S.tag}>
-                        <Toggle
-                          v={ext.enabled}
-                          on={(next) =>
-                            void api.extensions.setEnabled({ id: ext.manifest.id, enabled: next }).then(() =>
-                              api.extensions.list().then((r) => {
-                                setExtensions(r.extensions);
-                                setExtensionRuntime(r.runtime ?? {});
-                              }),
-                            )
-                          }
-                        />
-                      </label>
-                      {ext.manifest.main ? (
-                        (extensionRuntime[ext.manifest.id]?.state ?? "idle") === "ready" ? (
-                          <Btn
-                            label={tr("settings.stop")}
-                            small
-                            onClick={() =>
-                              void api.extensions.stop({ id: ext.manifest.id }).then(() => {
-                                void api.extensions.list().then((r) => {
-                                  setExtensions(r.extensions);
-                                  setExtensionRuntime(r.runtime ?? {});
-                                });
-                              })
-                            }
-                          />
-                        ) : (
-                          <Btn
-                            label={tr("settings.start")}
-                            small
-                            onClick={() =>
-                              void api.extensions.start({ id: ext.manifest.id }).then(() => {
-                                void api.extensions.list().then((r) => {
-                                  setExtensions(r.extensions);
-                                  setExtensionRuntime(r.runtime ?? {});
-                                });
-                              })
-                            }
-                          />
-                        )
-                      ) : null}
-                      <Btn
-                        label={tr("settings.uninstall")}
-                        small
-                        onClick={() =>
-                          void api.extensions.remove({ id: ext.manifest.id }).then(() =>
-                            void api.extensions.list().then((r) => {
-                              setExtensions(r.extensions);
-                              setExtensionRuntime(r.runtime ?? {});
-                            }),
-                          )
-                        }
-                      />
-                    </span>
-                  </div>
-                  {ext.manifest.description ? <div style={S.providerVal}>{ext.manifest.description}</div> : null}
-                  {ext.manifest.permissions && ext.manifest.permissions.length > 0 ? (
-                    <div style={S.providerRows}>
-                      <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.permissions")}</span><span style={S.providerVal}>{ext.manifest.permissions.join(" · ")}</span></div>
-                    </div>
-                  ) : null}
-                  {ext.manifest.contributes?.commands && ext.manifest.contributes.commands.length > 0 ? (
-                    <div style={S.providerRow}>
-                      <span style={S.providerKey}>{tr("settings.extensions.commands")}</span>
-                      <span style={S.providerVal}>
-                        {ext.manifest.contributes.commands.map((command) => `/${ext.manifest.id}.${command.id}`).join(" · ")}
-                      </span>
-                    </div>
-                  ) : null}
-                  <div style={S.providerRow}>
-                    <span style={S.providerKey}>{tr("settings.extensions.run")}</span>
-                    <span style={S.providerVal}>
-                      {(() => {
-                        const status = extensionRuntime[ext.manifest.id] ?? { state: "idle", tools: [] };
-                        const label =
-                          status.state === "ready"
-                            ? tr("settings.extensions.loaded", { count: status.tools.length })
-                            : status.state === "starting"
-                              ? tr("settings.extensions.starting")
-                              : status.state === "error"
-                                ? tr("settings.extensions.loadFailed", { error: status.error ?? tr("settings.unknown") })
-                                : ext.manifest.main
-                                  ? tr("settings.extensions.notStarted")
-                                  : tr("settings.extensions.declarative");
-                        return <span style={status.state === "error" ? S.errText : undefined}>{label}</span>;
-                      })()}
-                    </span>
-                  </div>
-                  {extensionRuntime[ext.manifest.id]?.tools.length ? (
-                    <div style={S.providerRow}>
-                      <span style={S.providerKey}>{tr("settings.extensions.tools")}</span>
-                      <span style={S.providerVal}>{extensionRuntime[ext.manifest.id].tools.join(" · ")}</span>
-                    </div>
-                  ) : null}
-                  <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.dirRow")}</span><span style={S.providerVal}>{ext.dir}</span></div>
-                </div>
-              ))
-            )}
-            <div style={S.note}>{tr("settings.extensions.isolation")}</div>
-          </div>
-        );
+        return <ExtensionsSection onError={bad} />;
 
       case "skills":
         return (
@@ -2250,7 +2077,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       default:
         return null;
     }
-  }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, extensions, extensionsDir, extensionSkips, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, pModelQuery, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
+  }, [section, loading, api, prefs, locations, perms, pForm, testRes, rules, drafts, deleted, mem, mForm, mEdit, diag, about, savePrefs, savePerms, saveRules, addMemory, saveMemEdit, bad, providerItems, activeProviderId, editingProviderId, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, pModelQuery, rail, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
 
   return (
     <div

@@ -514,6 +514,8 @@ export interface InstalledExtension {
     /** 声明式贡献点：命令只填提示词，不执行扩展代码。 */
     contributes?: {
       commands?: Array<{ id: string; title: string; description?: string; prompt: string }>;
+      /** 启用后注入 Agent 的声明式指令。 */
+      instructions?: string;
     };
   };
   dir: string;

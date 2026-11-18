@@ -59,6 +59,32 @@ describe("扩展清单与注册表", () => {
       }),
     ).toThrow();
   });
+
+  it("声明式 instructions 仅注入已启用扩展，并受长度上限约束", () => {
+    const reg = new ExtensionRegistry();
+    reg.install(
+      ExtensionRegistry.parseManifest({
+        id: "guide",
+        name: "指南",
+        version: "1",
+        contributes: { instructions: "先读 README，再动代码。" },
+      }),
+      "C:/ext/guide",
+      false,
+    );
+    expect(reg.instructionsPrompt()).toBe("");
+    reg.setEnabled("guide", true);
+    expect(reg.instructionsPrompt()).toContain("## 扩展指令");
+    expect(reg.instructionsPrompt()).toContain("先读 README，再动代码。");
+    expect(() =>
+      ExtensionManifestSchema.parse({
+        id: "too-long",
+        name: "长",
+        version: "1",
+        contributes: { instructions: "x".repeat(4_001) },
+      }),
+    ).toThrow();
+  });
 });
 
 describe("扩展工具权限：manifest 授权 ∩ 工具声明（fail-closed）", () => {

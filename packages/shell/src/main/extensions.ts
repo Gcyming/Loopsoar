@@ -137,4 +137,8 @@ export class ExtensionHost {
   promptSummary(): string {
     return this.registry.promptSummary();
   }
+
+  instructionsPrompt(): string {
+    return this.registry.instructionsPrompt();
+  }
 }
