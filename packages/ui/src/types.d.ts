@@ -499,30 +499,10 @@ export interface McpServerInfo {
   error?: string;
 }
 
+import type { ExtensionManifest } from "loopsoar-contracts/extension";
+
 export interface InstalledExtension {
-  manifest: {
-    id: string;
-    name: string;
-    version: string;
-    description?: string;
-    author?: string;
-    main?: string;
-    permissions?: string[];
-    /** Node permission 隔离（opt-in）；strict 额外去掉 addons。 */
-    isolation?: "none" | "node" | "strict";
-    /** 声明式贡献点：命令只填提示词，不执行扩展代码。 */
-    contributes?: {
-      commands?: Array<{ id: string; title: string; description?: string; prompt: string }>;
-      instructions?: string;
-      ui?: Array<{
-        id: string;
-        title: string;
-        description?: string;
-        items?: Array<{ label: string; value: string }>;
-      }>;
-      hooks?: Array<{ event: "turn.start"; prompt: string }>;
-    };
-  };
+  manifest: ExtensionManifest;
   dir: string;
   enabled: boolean;
   installedAt: number;
