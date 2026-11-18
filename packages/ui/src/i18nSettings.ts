@@ -578,6 +578,7 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
     en: "No extensions. The directory is empty or contains no valid loopsoar.extension.json.",
   },
   "settings.extensions.permissions": { zh: "权限", en: "Permissions" },
+  "settings.extensions.commands": { zh: "命令", en: "Commands" },
   "settings.extensions.run": { zh: "运行", en: "Runtime" },
   "settings.extensions.loaded": { zh: "已加载 · {count} 个工具", en: "Loaded · {count} tools" },
   "settings.extensions.starting": { zh: "启动中…", en: "Starting…" },

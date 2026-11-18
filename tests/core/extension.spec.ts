@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ExtensionRegistry,
   ExtensionManifestSchema,
+  collectExtensionCommands,
   resolveExtensionToolPermissions,
 } from "../../packages/core/src/extension.ts";
 
@@ -25,6 +26,38 @@ describe("扩展清单与注册表", () => {
     expect(reg.promptSummary()).toContain("甲");
     expect(reg.remove("a")?.manifest.id).toBe("a");
     expect(reg.list().length).toBe(0);
+  });
+
+  it("声明式 commands 只收集已启用扩展，并加扩展前缀", () => {
+    const manifest = ExtensionManifestSchema.parse({
+      id: "writer",
+      name: "写作扩展",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ id: "outline", title: "列大纲", description: "先列结构", prompt: "请先列出大纲" }],
+      },
+    });
+    const disabled = { manifest, dir: "C:/ext/writer", enabled: false, installedAt: 1 };
+    const enabled = { ...disabled, enabled: true };
+    expect(collectExtensionCommands([disabled])).toEqual([]);
+    expect(collectExtensionCommands([enabled])).toEqual([
+      {
+        command: "/writer.outline",
+        title: "列大纲",
+        description: "先列结构",
+        prompt: "请先列出大纲",
+        extensionId: "writer",
+        extensionName: "写作扩展",
+      },
+    ]);
+    expect(() =>
+      ExtensionManifestSchema.parse({
+        id: "bad",
+        name: "坏",
+        version: "1",
+        contributes: { commands: [{ id: "a b", title: "x", prompt: "y" }] },
+      }),
+    ).toThrow();
   });
 });
 

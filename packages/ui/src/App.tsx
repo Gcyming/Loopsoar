@@ -2628,6 +2628,7 @@ export default function App(): React.JSX.Element {
             onOpenSettings={openSettings}
             onNotice={setNotice}
             onCommand={handleSlashCommand}
+            onExtensionCommand={(prompt) => setInput(prompt)}
             modelMenuOpen={modelMenuOpen}
             onOpenModelMenu={openModelMenu}
             onCloseModelMenu={() => setModelMenuOpen(false)}

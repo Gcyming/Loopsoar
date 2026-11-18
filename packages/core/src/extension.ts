@@ -7,6 +7,7 @@
  *   "id": "my-tool", "name": "我的工具", "version": "0.1.0",
  *   "description": "...", "author": "...", "main": "index.mjs",
  *   "permissions": ["read", "network"],
+ *   "contributes": { "commands": [{ "id": "fetch", "title": "抓取", "prompt": "抓取 {{url}} 的正文" }] },
  *   "keywords": ["fetch"]
  * }
  */
@@ -17,6 +18,22 @@ export const EXTENSION_MANIFEST_FILE = "loopsoar.extension.json";
 
 export const EXTENSION_PERMISSION_KEYS = ["read", "write", "terminal", "network"] as const;
 export type ExtensionPermission = (typeof EXTENSION_PERMISSION_KEYS)[number];
+
+/** 扩展贡献的斜杠命令：只把 prompt 填进输入框，不执行任意代码，用户可编辑后再发。 */
+export const ExtensionCommandSchema = z.object({
+  id: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/i, "command id 仅允许字母数字 . _ -"),
+  title: z.string().min(1).max(160),
+  description: z.string().max(400).optional(),
+  /** 选中命令后填入 Composer 的提示词模板。 */
+  prompt: z.string().min(1).max(8_000),
+});
+export type ExtensionCommand = z.infer<typeof ExtensionCommandSchema>;
+
+/** 声明式贡献点（当前只开放 commands；UI/hooks 后续单独加，避免过早承诺）。 */
+export const ExtensionContributionsSchema = z.object({
+  commands: z.array(ExtensionCommandSchema).max(32).optional(),
+});
+export type ExtensionContributions = z.infer<typeof ExtensionContributionsSchema>;
 
 export const ExtensionManifestSchema = z.object({
   id: z
@@ -43,6 +60,8 @@ export const ExtensionManifestSchema = z.object({
    * 默认 "none" 保持旧扩展兼容；真正的强隔离/容器化仍未做。
    */
   isolation: z.enum(["none", "node"]).optional(),
+  /** 声明式贡献点；目前支持 commands（提示词模板），不执行扩展代码。 */
+  contributes: ExtensionContributionsSchema.optional(),
   keywords: z.array(z.string().max(80)).max(50).optional(),
 });
 
@@ -94,6 +113,38 @@ export interface InstalledExtension {
   dir: string;
   enabled: boolean;
   installedAt: number;
+}
+
+export interface ExtensionCommandView {
+  /** 斜杠命令名（含前导 /，已带扩展 id 防冲突）。 */
+  command: string;
+  title: string;
+  description?: string;
+  prompt: string;
+  extensionId: string;
+  extensionName: string;
+}
+
+/**
+ * 收集已启用扩展的声明式命令；扩展 id/命令 id 已由 manifest schema 限制，
+ * 这里只做前缀拼接，避免两个扩展贡献同名命令。
+ */
+export function collectExtensionCommands(extensions: readonly InstalledExtension[]): ExtensionCommandView[] {
+  const out: ExtensionCommandView[] = [];
+  for (const item of extensions) {
+    if (!item.enabled) continue;
+    for (const command of item.manifest.contributes?.commands ?? []) {
+      out.push({
+        command: `/${item.manifest.id}.${command.id}`,
+        title: command.title,
+        ...(command.description ? { description: command.description } : {}),
+        prompt: command.prompt,
+        extensionId: item.manifest.id,
+        extensionName: item.manifest.name,
+      });
+    }
+  }
+  return out;
 }
 
 export class ExtensionRegistry {

@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import type { ChatService, ChatStreamResult } from "loopsoar-services/chat";
+import type { SubagentTaskStore } from "./subagentTaskStore.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_GOAL_CHARS = 4_000;
@@ -34,6 +35,8 @@ export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
         !tool.permissions.browser &&
         tool.name !== "delegate_research" &&
         tool.name !== "delegate_parallel" &&
+        tool.name !== "subagent_tasks" &&
+        tool.name !== "subagent_read" &&
         tool.name !== "ask_user",
     )
     .map((tool) => tool.name);
@@ -49,11 +52,15 @@ export interface SubagentRunner {
   run(input: SubagentRunInput): Promise<ChatStreamResult>;
 }
 
-export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRunner): void {
+export function registerSubagentTools(
+  registry: ToolRegistry,
+  runner: SubagentRunner,
+  store?: SubagentTaskStore,
+): void {
   registry.register({
     name: "delegate_research",
     description:
-      "把一个只读调研任务委派给子代理（独立上下文、只读工具面：文件/搜索/记忆等；禁止写入、终端、联网、浏览器）。子代理完成后把结论回灌当前轮。适合大范围读代码/查资料，避免主上下文被中间过程塞满。",
+      "把一个只读调研任务委派给子代理（独立上下文、只读工具面：文件/搜索/记忆等；禁止写入、终端、联网、浏览器）。子代理完成后把结论回灌当前轮，并把任务记录到父会话（可用 subagent_tasks 回查）。适合大范围读代码/查资料，避免主上下文被中间过程塞满。",
     permissions: { read: true },
     schema: z.object({
       goal: z.string().min(4).max(MAX_GOAL_CHARS),
@@ -64,27 +71,35 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
       const allowlist = readOnlyToolAllowlist(registry);
       if (allowlist.length === 0) return { ok: false, content: "[错误] 没有可用的只读工具，子代理未启动" };
       const goal = params.goal.trim();
+      const parent = ctx.sessionId ?? "";
+      const record = store?.create({ parentSessionId: parent, kind: "research", goal, context: params.context });
+      const tag = record ? `\n[任务记录] ${record.id}` : "";
       const prompt = params.context?.trim()
         ? `${goal}\n\n参考上下文（父代理提供，仅作线索，需自行核实）：\n${params.context.trim()}`
         : goal;
       try {
         const result = await runner.run({
           goal: prompt,
-          sessionId: ctx.sessionId ?? "",
+          sessionId: parent,
         });
         const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
         if (result.status === "aborted") {
-          return { ok: false, content: `[子代理中止] 超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止。${text}` };
+          if (record) store?.finish(parent, record.id, "aborted", text, `超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止`);
+          return { ok: false, content: `[子代理中止] 超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止。${text}${tag}` };
         }
         if (result.status !== "done") {
-          return { ok: false, content: `[子代理${result.status}] ${result.reason}\n${text}` };
+          if (record) store?.finish(parent, record.id, "failed", text, result.reason);
+          return { ok: false, content: `[子代理${result.status}] ${result.reason}\n${text}${tag}` };
         }
+        if (record) store?.finish(parent, record.id, "done", text);
         return {
           ok: true,
-          content: `[只读子代理完成]\n${text || "（子代理未返回正文）"}`,
+          content: `[只读子代理完成]\n${text || "（子代理未返回正文）"}${tag}`,
         };
       } catch (err) {
-        return { ok: false, content: `[子代理失败] ${err instanceof Error ? err.message : String(err)}` };
+        const message = err instanceof Error ? err.message : String(err);
+        if (record) store?.finish(parent, record.id, "failed", undefined, message);
+        return { ok: false, content: `[子代理失败] ${message}${tag}` };
       }
     },
   });
@@ -92,7 +107,7 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
   registry.register({
     name: "delegate_parallel",
     description:
-      "并行委派 2–4 个只读调研任务（独立上下文、同一只读工具面；最多同时跑 3 个）。适合互不依赖的读代码/查资料；每个任务单独超时，结果按任务顺序回灌。需要写文件/终端/浏览器/联网时不要用本工具。",
+      "并行委派 2–4 个只读调研任务（独立上下文、同一只读工具面；最多同时跑 3 个）。适合互不依赖的读代码/查资料；每个任务单独超时，结果按任务顺序回灌，并逐条记录到父会话（可用 subagent_tasks 回查）。需要写文件/终端/浏览器/联网时不要用本工具。",
     permissions: { read: true },
     schema: z.object({
       tasks: z
@@ -109,12 +124,21 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
       const params = ctx.params as { tasks: Array<{ goal: string; context?: string }> };
       const allowlist = readOnlyToolAllowlist(registry);
       if (allowlist.length === 0) return { ok: false, content: "[错误] 没有可用的只读工具，子代理未启动" };
+      const parent = ctx.sessionId ?? "";
       const tasks = params.tasks.map((task) => ({
         goal: task.goal.trim(),
         prompt: task.context?.trim()
           ? `${task.goal.trim()}\n\n参考上下文（父代理提供，仅作线索，需自行核实）：\n${task.context.trim()}`
           : task.goal.trim(),
       }));
+      const records = params.tasks.map((task, index) =>
+        store?.create({
+          parentSessionId: parent,
+          kind: "parallel",
+          goal: tasks[index].goal,
+          ...(task.context?.trim() ? { context: task.context } : {}),
+        }),
+      );
       const results: Array<{ ok: boolean; text: string }> = new Array(tasks.length);
       let next = 0;
       const worker = async (): Promise<void> => {
@@ -122,18 +146,24 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
           const index = next;
           next += 1;
           if (index >= tasks.length) return;
+          const record = records[index];
           try {
-            const result = await runner.run({ goal: tasks[index].prompt, sessionId: ctx.sessionId ?? "" });
+            const result = await runner.run({ goal: tasks[index].prompt, sessionId: parent });
             const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
             if (result.status === "done") {
+              if (record) store?.finish(parent, record.id, "done", text);
               results[index] = { ok: true, text: text || "（子代理未返回正文）" };
             } else if (result.status === "aborted") {
+              if (record) store?.finish(parent, record.id, "aborted", text, "超时或父任务已停止");
               results[index] = { ok: false, text: `[中止] 超过 ${DEFAULT_TIMEOUT_MS / 1000}s 或父任务已停止。${text}` };
             } else {
+              if (record) store?.finish(parent, record.id, "failed", text, result.reason);
               results[index] = { ok: false, text: `[${result.status}] ${result.reason}\n${text}` };
             }
           } catch (err) {
-            results[index] = { ok: false, text: `[失败] ${err instanceof Error ? err.message : String(err)}` };
+            const message = err instanceof Error ? err.message : String(err);
+            if (record) store?.finish(parent, record.id, "failed", undefined, message);
+            results[index] = { ok: false, text: `[失败] ${message}` };
           }
         }
       };
@@ -141,7 +171,8 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
         Array.from({ length: Math.min(MAX_PARALLEL_CONCURRENCY, tasks.length) }, () => worker()),
       );
       const sections = results.map((result, index) => {
-        const label = `## 任务 ${index + 1}：${tasks[index].goal.slice(0, 120)}`;
+        const taskId = records[index]?.id ? ` · ${records[index].id}` : "";
+        const label = `## 任务 ${index + 1}${taskId}：${tasks[index].goal.slice(0, 120)}`;
         return `${label}\n${result.ok ? "" : "（未完成）"}${result.text}`;
       });
       const completed = results.filter((result) => result.ok).length;
@@ -150,6 +181,49 @@ export function registerSubagentTools(registry: ToolRegistry, runner: SubagentRu
         ok: completed > 0,
         content: `[并行只读子代理 ${completed}/${results.length} 完成]\n\n${body}`,
       };
+    },
+  });
+
+  registry.register({
+    name: "subagent_tasks",
+    description:
+      "列出当前父会话派出的子代理任务记录（research/parallel，含状态、目标、时间、任务 id）。用于找回之前委派的结果；只读。",
+    permissions: { read: true },
+    schema: z.object({
+      sessionId: z.string().max(200).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      if (!store) return { ok: false, content: "[错误] 子代理任务记录未装配" };
+      const params = ctx.params as { sessionId?: string; limit?: number };
+      const parent = params.sessionId ?? ctx.sessionId ?? "_default";
+      const tasks = store.list(parent, params.limit ?? 30);
+      if (tasks.length === 0) return { ok: true, content: `[子代理任务] 会话 ${parent} 暂无记录` };
+      const lines = tasks.map((task) => {
+        const when = new Date(task.startedAt).toISOString().replace("T", " ").slice(0, 19);
+        const result = task.result ? `\n  结果：${task.result.replace(/\s+/g, " ").slice(0, 240)}` : "";
+        const error = task.error ? `\n  错误：${task.error.slice(0, 240)}` : "";
+        return `- ${task.id} [${task.status}] ${when} ${task.kind} · ${task.goal.slice(0, 160)}${result}${error}`;
+      });
+      return { ok: true, content: `[子代理任务 ${tasks.length} 条 · 会话 ${parent}]\n${lines.join("\n")}` };
+    },
+  });
+
+  registry.register({
+    name: "subagent_read",
+    description: "读一条子代理任务记录的完整结果/错误（按 subagent_tasks 返回的 taskId）。只读。",
+    permissions: { read: true },
+    schema: z.object({
+      taskId: z.string().min(8).max(120),
+      sessionId: z.string().max(200).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      if (!store) return { ok: false, content: "[错误] 子代理任务记录未装配" };
+      const params = ctx.params as { taskId: string; sessionId?: string };
+      const parent = params.sessionId ?? ctx.sessionId ?? "_default";
+      const task = store.read(parent, params.taskId);
+      if (!task) return { ok: false, content: `[错误] 未找到任务 ${params.taskId}（会话 ${parent}）` };
+      return { ok: true, content: JSON.stringify(task, null, 2) };
     },
   });
 }

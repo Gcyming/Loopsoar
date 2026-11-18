@@ -100,6 +100,7 @@ import { registerOfficeTools } from "./officeTools.js";
 import { registerOfficeConvertTools } from "./officeConvert.js";
 import { registerSkillTools } from "./skillTools.js";
 import { createChatSubagentRunner, registerSubagentTools } from "./subagentTools.js";
+import { SubagentTaskStore } from "./subagentTaskStore.js";
 import { registerExtensionsDomain } from "./domains/extensions.js";
 import { createChromePopoverManager } from "./chromePopover.js";
 import { registerChromePopoverDomain } from "./domains/chromePopover.js";
@@ -1799,6 +1800,7 @@ app.whenReady().then(async () => {
   });
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
   const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
+  const subagentTasks = new SubagentTaskStore(path.join(dirs.dataDir, "subagents"));
   const mcp = new McpHost(
     path.join(dirs.dataDir, "mcp.json"),
     registry,
@@ -2370,7 +2372,7 @@ app.whenReady().then(async () => {
   registerOfficeTools(registry);
   registerOfficeConvertTools(registry);
   registerSkillTools(registry, skills);
-  registerSubagentTools(registry, createChatSubagentRunner(chatService, registry));
+  registerSubagentTools(registry, createChatSubagentRunner(chatService, registry), subagentTasks);
   // 记忆工具（设置·记忆同源数据）：读工具 plan 可用，写工具按 sandbox L2 确认
   registerMemoryTools(registry, memory, {
     workspaceIdForSession: (sessionId?: string) =>

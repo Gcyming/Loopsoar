@@ -2030,6 +2030,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.permissions")}</span><span style={S.providerVal}>{ext.manifest.permissions.join(" · ")}</span></div>
                     </div>
                   ) : null}
+                  {ext.manifest.contributes?.commands && ext.manifest.contributes.commands.length > 0 ? (
+                    <div style={S.providerRow}>
+                      <span style={S.providerKey}>{tr("settings.extensions.commands")}</span>
+                      <span style={S.providerVal}>
+                        {ext.manifest.contributes.commands.map((command) => `/${ext.manifest.id}.${command.id}`).join(" · ")}
+                      </span>
+                    </div>
+                  ) : null}
                   <div style={S.providerRow}>
                     <span style={S.providerKey}>{tr("settings.extensions.run")}</span>
                     <span style={S.providerVal}>

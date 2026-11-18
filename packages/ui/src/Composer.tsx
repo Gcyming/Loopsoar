@@ -51,6 +51,8 @@ export interface ComposerProps {
   onToggleBrowserControl: () => void;
   /** 斜杠命令执行入口（App 负责 /new /clear /stop /settings /compact /help 的实际动作）。 */
   onCommand?: (command: string) => void;
+  /** 扩展贡献命令：选中后把 prompt 填进输入框（不直接发送、不执行扩展代码）。 */
+  onExtensionCommand?: (prompt: string) => void;
   /** 组件内异步操作（粘贴图片/选文件/命令）的提示出口；缺省则静默。 */
   onNotice?: (text: string) => void;
   /** 工作区选择（输入框下方可展开按钮）：已有工作区 + 添加工作区。 */
@@ -70,7 +72,10 @@ const PERMISSION_CATEGORIES = [
 
 interface SlashCommand {
   cmd: string;
-  descKey: string;
+  descKey?: string;
+  description?: string;
+  prompt?: string;
+  extensionId?: string;
 }
 
 /** 本地斜杠命令清单：解析在 Composer，执行交 onCommand（App 接线）。 */
@@ -133,6 +138,7 @@ export default function Composer({
   browserControl,
   onToggleBrowserControl,
   onCommand,
+  onExtensionCommand,
   onNotice,
   workspaces = [],
   activeWorkspaceId = null,
@@ -151,13 +157,58 @@ export default function Composer({
   /** 斜杠命令面板：当前选中项 + 是否被 Esc 手动关闭（继续输入会重新展开）。 */
   const [commandIndex, setCommandIndex] = React.useState(0);
   const [commandDismissed, setCommandDismissed] = React.useState(false);
+  /** 扩展贡献的提示词命令：只填输入框，用户可改；启停扩展后自动刷新。 */
+  const [extensionCommands, setExtensionCommands] = React.useState<SlashCommand[]>([]);
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = (): void => {
+      if (!api?.extensions?.list) return;
+      void api.extensions
+        .list()
+        .then((result) => {
+          if (!alive) return;
+          const commands = result.extensions
+            .filter((extension) => extension.enabled)
+            .flatMap((extension) =>
+              (extension.manifest.contributes?.commands ?? [])
+                .filter((command) => command.prompt.trim())
+                .map((command) => ({
+                  cmd: `/${extension.manifest.id}.${command.id}`,
+                  description: `${command.title} · ${extension.manifest.name}`,
+                  prompt: command.prompt,
+                  extensionId: extension.manifest.id,
+                })),
+            );
+          setExtensionCommands(commands);
+        })
+        .catch(() => {
+          if (alive) setExtensionCommands([]);
+        });
+    };
+    load();
+    let off: (() => void) | undefined;
+    try {
+      off = api?.on("extensions:updated", load);
+    } catch {
+      off = undefined;
+    }
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [api]);
 
   // 斜杠命令：仅当输入以 / 开头且尚未出现空格/换行时展开（/new、/settings 等）
   const slashActive = value.startsWith("/") && !/[\s\n]/.test(value);
   const commandQuery = slashActive ? value.slice(1).toLowerCase() : "";
+  const allCommands = React.useMemo(
+    () => [...SLASH_COMMANDS, ...extensionCommands],
+    [extensionCommands],
+  );
   const commandItems =
     slashActive && !commandDismissed
-      ? SLASH_COMMANDS.filter((command) => command.cmd.slice(1).startsWith(commandQuery))
+      ? allCommands.filter((command) => command.cmd.slice(1).startsWith(commandQuery))
       : [];
   const commandOpen = slashActive && !commandDismissed;
   const activeCommandIndex = commandItems.length === 0 ? 0 : Math.min(commandIndex, commandItems.length - 1);
@@ -254,9 +305,17 @@ export default function Composer({
     onChange("");
     setCommandDismissed(true);
     setCommandIndex(0);
-    const known = SLASH_COMMANDS.some((item) => item.cmd === command);
-    if (!known) {
+    const selected = allCommands.find((item) => item.cmd === command);
+    if (!selected) {
       notify(tr("composer.unknownCommand", { cmd: command }));
+      return;
+    }
+    if (selected.prompt !== undefined) {
+      if (!onExtensionCommand) {
+        notify(tr("composer.commandUnwired", { cmd: command }));
+        return;
+      }
+      onExtensionCommand(selected.prompt);
       return;
     }
     if (!onCommand) {
@@ -659,7 +718,7 @@ export default function Composer({
                     onClick={() => runCommand(command.cmd)}
                   >
                     <span className="command-cmd">{command.cmd}</span>
-                    <span className="command-desc">{tr(command.descKey)}</span>
+                    <span className="command-desc">{command.descKey ? tr(command.descKey) : command.description ?? ""}</span>
                   </button>
                 ))}
               </div>

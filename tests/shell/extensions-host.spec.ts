@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ExtensionHost } from "../../packages/shell/src/main/extensions.ts";
+import { collectExtensionCommands } from "../../packages/core/src/extension.ts";
 
 let root: string;
 
@@ -47,6 +48,20 @@ describe("ExtensionHost 稳定性", () => {
     const host = new ExtensionHost(dir);
     host.setEnabled("x-ext", true);
     expect(new ExtensionHost(dir).list()[0].enabled).toBe(true);
+  });
+
+  it("纯声明式扩展可加载命令贡献（无需 main）", () => {
+    writeExt("decl", {
+      id: "decl-ext",
+      name: "声明式",
+      version: "1.0.0",
+      contributes: { commands: [{ id: "hello", title: "问候", prompt: "你好" }] },
+    });
+    const host = new ExtensionHost(path.join(root, "extensions"));
+    expect(host.list()[0].manifest.main).toBeUndefined();
+    expect(collectExtensionCommands(host.list())).toEqual([]);
+    host.setEnabled("decl-ext", true);
+    expect(collectExtensionCommands(host.list()).map((c) => c.command)).toEqual(["/decl-ext.hello"]);
   });
 
   it("卸载只允许扩展目录内；目录被删除、状态清理", () => {

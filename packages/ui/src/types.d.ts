@@ -509,6 +509,12 @@ export interface InstalledExtension {
     /** 入口文件（相对扩展目录）；当前版本必须提供，仅声明式扩展尚未实现 */
     main?: string;
     permissions?: string[];
+    /** Node permission 隔离（opt-in）。 */
+    isolation?: "none" | "node";
+    /** 声明式贡献点：命令只填提示词，不执行扩展代码。 */
+    contributes?: {
+      commands?: Array<{ id: string; title: string; description?: string; prompt: string }>;
+    };
   };
   dir: string;
   enabled: boolean;
