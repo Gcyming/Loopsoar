@@ -321,6 +321,20 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     return () => clearTimeout(timer);
   }, [api, prefs, loading, onPreferencesSaved]);
 
+  // 技能更新（重扫/启停/自动候选）：同步设置页列表，避免自动候选要重开设置才可见
+  useEffect(() => {
+    if (!api) return;
+    return api.on("skills:updated", () => {
+      void api.skills
+        .list()
+        .then((result) => {
+          setSkills(result.skills);
+          setSkillSkips(result.skipped);
+        })
+        .catch(() => {});
+    });
+  }, [api]);
+
   /* ── Agent-Loop：打开设置时拉取；loop:changed / loop:fallback 事件同步刷新并提示 ── */
   const refreshLoops = useCallback(async (): Promise<void> => {
     if (!api) return;

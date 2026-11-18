@@ -1976,7 +1976,11 @@ app.whenReady().then(async () => {
         },
         skills,
       );
-      if (candidate) autoSkillLastAt.set(key, now);
+      if (candidate) {
+        autoSkillLastAt.set(key, now);
+        // 设置页监听 skills:updated，自动候选无需重开设置即可出现
+        pushToRenderer("skills:updated", { action: "auto-candidate", id: candidate.id });
+      }
     },
     // 扩展声明式指令：仅启用扩展，注入 volatile 段；不提供工具/代码执行
     getExtensionPrompt: () => extensions.instructionsPrompt(),

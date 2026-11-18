@@ -335,7 +335,7 @@
 - 2026-11-18：P1-5 子代理任务记录落盘（`SubagentTaskStore` + `subagent_tasks`/`subagent_read`）；P1-8 声明式 `contributes.commands` 进入 Composer 斜杠面板（只填 prompt，不执行代码；纯声明式扩展无需 main）。全量 **236 文件 / 1,868 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-5 增加预定义任务树 `delegate_tree`（3 层/12 节点、深度优先、`parentTaskId` 落盘）；P2-1 设置页技能分区拆为 `SkillsSection.tsx`（`Settings.tsx` 2,835 → 2,819 行）。全量 **236 文件 / 1,869 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-8 新增 `contributes.instructions`（仅启用扩展注入 volatile 段，单条 ≤4,000/合计 ≤12,000 字符）；P2-1 扩展分区拆为 `ExtensionsSection.tsx`（自取数据/监听运行态，`Settings.tsx` 2,819 → 2,646 行）。全量 **236 文件 / 1,870 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
-- 2026-11-18：P1-7 新增自动技能候选（默认关闭、每会话 10 分钟节流、候选默认禁用）；P1-5 新增 `subagent_resume` 按记录重跑并关联原任务（明确不是恢复子会话历史）。全量 **237 文件 / 1,874 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-18：P1-7 自动候选生成后发 `skills:updated`，设置页技能列表即时刷新；P2-1 `App.tsx` 顶层样式抽成 `appStyles.ts`（2,985 → 2,920 行）。全量 **237 文件 / 1,874 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
 
@@ -368,6 +368,6 @@
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
 | P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
-| P2-1/P2-3 拆巨型文件 | 🟡 第三步 | 设置页纯模型/格式化抽成 `settingsModel.ts`，技能分区抽成 `SkillsSection.tsx`，扩展分区抽成 `ExtensionsSection.tsx`（`Settings.tsx` 2,894 → 2,646 行）；`App.tsx`/`main/index.ts` 仍未拆。 |
+| P2-1/P2-3 拆巨型文件 | 🟡 第四步 | 设置页纯模型抽成 `settingsModel.ts`，技能/扩展分区抽成 `SkillsSection.tsx`/`ExtensionsSection.tsx`（`Settings.tsx` 2,894 → 2,646 行）；`App.tsx` 顶层样式抽成 `appStyles.ts`（2,985 → 2,920 行）；`main/index.ts` 仍未拆。 |
 
 **本轮验证**：`npx vitest run` **237 文件 / 1,874 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。
