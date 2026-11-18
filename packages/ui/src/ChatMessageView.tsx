@@ -99,7 +99,7 @@ export default function ChatMessageView({
             <Icon name="reload" size={12} />
           </button>
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.forkTitle")} onClick={() => onFork(m.id)}>
-            <Icon name="layers-linked" size={12} />
+            <Icon name="git-branch-fill" size={12} />
           </button>
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.copyMessageTitle")} onClick={() => void navigator.clipboard?.writeText(m.text).catch(() => {})}>
             <Icon name="copy" size={12} />
@@ -207,7 +207,7 @@ export default function ChatMessageView({
           <span style={styles.msgTime}>· {timeText}</span>
           <span style={styles.msgHoverActions}>
             <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.forkTitle")} onClick={() => onFork(m.id)}>
-              <Icon name="layers-linked" size={12} />
+              <Icon name="git-branch-fill" size={12} />
             </button>
             <button
               type="button"

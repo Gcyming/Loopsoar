@@ -31,6 +31,12 @@ export interface PopoverProps {
   children: React.ReactNode;
 }
 
+/**
+ * 应用内浮层统一层级：高于所有页面/模态/工具栏，避免新增页面时又把菜单盖住。
+ * 原生 WebContentsView 不参与 DOM 层级，必须由 App 同时调用 browser.setOverlay 让位。
+ */
+export const POPOVER_Z_INDEX = 2_147_483_000;
+
 function readViewport(): { width: number; height: number } {
   if (typeof window === "undefined") return { width: 0, height: 0 };
   return {
@@ -128,7 +134,7 @@ export default function Popover({
         overflowX: "hidden",
         // 测量阶段先隐藏，避免未定位时闪一下
         visibility: position ? "visible" : "hidden",
-        zIndex: 2000,
+        zIndex: POPOVER_Z_INDEX,
         background: BRAND.inkRaised,
         border: `1px solid ${BRAND.borderStrong}`,
         borderRadius: 10,

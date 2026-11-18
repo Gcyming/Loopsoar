@@ -47,6 +47,13 @@ export function getOpenPopoverId(): string | null {
   return openId;
 }
 
+/** 订阅「是否有任意浮层打开」：原生 WebContentsView 等非 DOM 层需要据此让位。 */
+export function useAnyPopoverOpen(): boolean {
+  const [open, setOpen] = React.useState<boolean>(openId !== null);
+  React.useEffect(() => subscribePopovers((id) => setOpen(id !== null)), []);
+  return open;
+}
+
 /**
  * 一键收起当前所有已打开的浮层。
  *

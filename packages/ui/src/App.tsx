@@ -22,7 +22,7 @@ const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
-import { dismissAllPopovers } from "./popover.js";
+import { dismissAllPopovers, useAnyPopoverOpen } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import BrowserTabs from "./BrowserTabs.js";
 import TitleBar from "./TitleBar.js";
@@ -181,6 +181,8 @@ export default function App(): React.JSX.Element {
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  /** 任意 usePopover 列表打开时都要让原生 WebContentsView 让位，否则菜单会被网页整块盖住。 */
+  const anyPopoverOpen = useAnyPopoverOpen();
   // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
   const [, setDownloads] = useState<DownloadItem[]>([]);
   // 浏览器工具栏浮层（更多/收藏夹/历史/下载）打开：需隐藏原生 WebContentsView，否则菜单被网页遮挡
@@ -1893,9 +1895,12 @@ export default function App(): React.JSX.Element {
       // 询问与权限确认也是主窗口 DOM：原生 WebContentsView 会整块盖住它们，
       // 用户看到的会是「弹窗只露出一条边」（敏感确认尤其需要看清上下文）。
       activeAsk !== null ||
-      permReq !== null;
+      permReq !== null ||
+      // 任何 usePopover 列表（模型/权限/命令/会话/工作区）打开时，原生 WebContentsView
+      // 也必须让位；否则列表会被网页整块盖住（用户反馈的「展开列表被主页覆盖」根因）。
+      anyPopoverOpen;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, activeAsk, permReq]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, activeAsk, permReq, anyPopoverOpen]);
   useEffect(() => {
     return () => {
       void api?.browser.setOverlay({ open: false }).catch(() => undefined);

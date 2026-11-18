@@ -86,6 +86,23 @@ describe("dismissAllPopovers（全局收起入口）", () => {
     expect(text).not.toMatch(/\.stopPropagation\(/);
   });
 
+  it("所有 usePopover 列表打开时主进程原生视图让位（防止菜单被网页盖住）", () => {
+    const app = read("packages/ui/src/App.tsx");
+    expect(app).toContain("useAnyPopoverOpen()");
+    expect(app).toMatch(/anyPopoverOpen[\s\S]{0,200}setOverlay\(\{ open: overlay \}\)/);
+    const popover = read("packages/ui/src/popover.ts");
+    expect(popover).toContain("export function useAnyPopoverOpen");
+  });
+
+  it("浮层层级高于所有应用页面层级（新增页面不会再盖住列表）", () => {
+    const popover = read("packages/ui/src/AnchoredPopover.tsx");
+    const match = popover.match(/POPOVER_Z_INDEX\s*=\s*([\d_]+)/);
+    expect(match?.[1]).toBeTruthy();
+    const zIndex = Number((match?.[1] ?? "").replace(/_/g, ""));
+    expect(zIndex).toBeGreaterThan(100_000);
+    expect(popover).toContain("zIndex: POPOVER_Z_INDEX");
+  });
+
   it("App 在切界面/切会话/新会话/切标签/失焦时调用 dismissAllPopovers", () => {
     const app = read("packages/ui/src/App.tsx");
     expect(app).toContain('window.addEventListener("blur"');
