@@ -409,15 +409,20 @@ export class ExtensionRuntime {
  */
 export function extensionSpawnArgs(item: InstalledExtension, workerPath: string): string[] {
   const args: string[] = [];
-  if (item.manifest.isolation === "node") {
+  if (item.manifest.isolation === "node" || item.manifest.isolation === "strict") {
     const dir = path.resolve(item.dir);
     args.push(
       "--permission",
       `--allow-fs-read=${dir}`,
       `--allow-fs-read=${path.dirname(path.resolve(workerPath))}`,
     );
-    if (item.manifest.permissions?.includes("write")) args.push(`--allow-fs-write=${dir}`);
-    if (item.manifest.permissions?.includes("terminal")) args.push("--allow-child-process");
+    if (item.manifest.isolation === "node" && item.manifest.permissions?.includes("write")) args.push(`--allow-fs-write=${dir}`);
+    if (item.manifest.isolation === "node" && item.manifest.permissions?.includes("terminal")) args.push("--allow-child-process");
+  }
+  if (item.manifest.isolation === "strict") {
+    // strict = 在上述权限面上去掉 write/child/worker/addons/inspector；
+    // Node 的 permission model 不提供网络开关，因此网络仍需靠扩展代码审查/系统防火墙。
+    args.push("--no-addons", "--no-warnings");
   }
   args.push(workerPath, item.dir, item.manifest.main?.trim() ?? "");
   return args;

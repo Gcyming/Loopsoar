@@ -177,6 +177,21 @@ export default function ExtensionsSection({ onError }: ExtensionsSectionProps): 
                 {ext.manifest.contributes?.instructions ? (
                   <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.instructions")}</span><span style={S.providerVal}>{tr("settings.bytes", { bytes: ext.manifest.contributes.instructions.length })}</span></div>
                 ) : null}
+                {ext.manifest.contributes?.hooks?.length ? (
+                  <div style={S.providerRow}><span style={S.providerKey}>hooks</span><span style={S.providerVal}>{ext.manifest.contributes.hooks.map((hook) => hook.event).join(" · ")}</span></div>
+                ) : null}
+                {ext.manifest.contributes?.ui?.map((panel) => (
+                  <div key={panel.id} style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: BRAND.linen }}>{panel.title}</div>
+                    {panel.description ? <div style={S.note}>{panel.description}</div> : null}
+                    {panel.items?.map((item) => (
+                      <div key={`${panel.id}-${item.label}`} style={S.providerRow}>
+                        <span style={S.providerKey}>{item.label}</span>
+                        <span style={S.providerVal}>{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
                 <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.run")}</span><span style={status.state === "error" ? S.errText : S.providerVal}>{statusLabel}</span></div>
                 {status.tools.length ? <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.tools")}</span><span style={S.providerVal}>{status.tools.join(" · ")}</span></div> : null}
                 <div style={S.providerRow}><span style={S.providerKey}>{tr("settings.extensions.dirRow")}</span><span style={S.providerVal}>{ext.dir}</span></div>

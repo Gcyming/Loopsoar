@@ -29,11 +29,34 @@ export const ExtensionCommandSchema = z.object({
 });
 export type ExtensionCommand = z.infer<typeof ExtensionCommandSchema>;
 
-/** 声明式贡献点（当前开放 commands / instructions；UI/hooks 后续单独加，避免过早承诺）。 */
+/** 声明式 UI 面板：只渲染文本/键值，不接受 HTML/脚本，避免第三方扩展污染主界面。 */
+export const ExtensionPanelSchema = z.object({
+  id: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/i, "panel id 仅允许字母数字 . _ -"),
+  title: z.string().min(1).max(160),
+  description: z.string().max(2_000).optional(),
+  items: z
+    .array(z.object({ label: z.string().min(1).max(120), value: z.string().max(2_000) }))
+    .max(20)
+    .optional(),
+});
+export type ExtensionPanel = z.infer<typeof ExtensionPanelSchema>;
+
+/** 声明式 hook：当前只支持 turn.start 注入提示词，不执行扩展代码。 */
+export const ExtensionHookSchema = z.object({
+  event: z.literal("turn.start"),
+  prompt: z.string().min(1).max(4_000),
+});
+export type ExtensionHook = z.infer<typeof ExtensionHookSchema>;
+
+/** 声明式贡献点：commands / instructions / ui / hooks，均为数据，不执行扩展代码。 */
 export const ExtensionContributionsSchema = z.object({
   commands: z.array(ExtensionCommandSchema).max(32).optional(),
   /** 启用后注入 Agent volatile 段的系统指令（不是工具，不执行代码）。 */
   instructions: z.string().max(4_000).optional(),
+  /** 设置页只读面板（纯文本/键值）。 */
+  ui: z.array(ExtensionPanelSchema).max(8).optional(),
+  /** 每轮会话开始注入的声明式提示（不是回调，不执行代码）。 */
+  hooks: z.array(ExtensionHookSchema).max(8).optional(),
 });
 export type ExtensionContributions = z.infer<typeof ExtensionContributionsSchema>;
 
@@ -61,7 +84,7 @@ export const ExtensionManifestSchema = z.object({
    * 只读扩展目录与 worker 目录，写权限仅限扩展目录，子进程按 terminal 授权。
    * 默认 "none" 保持旧扩展兼容；真正的强隔离/容器化仍未做。
    */
-  isolation: z.enum(["none", "node"]).optional(),
+  isolation: z.enum(["none", "node", "strict"]).optional(),
   /** 声明式贡献点；目前支持 commands（提示词模板），不执行扩展代码。 */
   contributes: ExtensionContributionsSchema.optional(),
   keywords: z.array(z.string().max(80)).max(50).optional(),
@@ -208,7 +231,7 @@ export class ExtensionRegistry {
     return ["## 可用扩展", ...lines].join("\n");
   }
 
-  /** 已启用扩展的声明式指令；注入 volatile 段，不执行代码。 */
+  /** 已启用扩展的声明式指令 + turn.start hooks；注入 volatile 段，不执行代码。 */
   instructionsPrompt(): string {
     const blocks = this.enabled()
       .map((item) => {
@@ -216,8 +239,20 @@ export class ExtensionRegistry {
         return text ? `### ${item.manifest.name}（${item.manifest.id}）\n${text}` : "";
       })
       .filter(Boolean);
-    if (blocks.length === 0) return "";
-    return ["## 扩展指令", ...blocks].join("\n\n").slice(0, 12_000);
+    const hooks = this.enabled()
+      .flatMap((item) =>
+        (item.manifest.contributes?.hooks ?? []).map(
+          (hook) => `### ${item.manifest.name}（${item.manifest.id}）· ${hook.event}\n${hook.prompt.trim()}`,
+        ),
+      )
+      .filter(Boolean);
+    if (blocks.length === 0 && hooks.length === 0) return "";
+    return [
+      ...(blocks.length > 0 ? ["## 扩展指令", ...blocks] : []),
+      ...(hooks.length > 0 ? ["## 扩展 hooks（turn.start）", ...hooks] : []),
+    ]
+      .join("\n\n")
+      .slice(0, 12_000);
   }
 
   clear(): void {

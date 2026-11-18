@@ -170,6 +170,33 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
     expect(args.slice(-3)).toEqual([workerPath, dir, "index.mjs"]);
   });
 
+  it("isolation:strict 去掉 write/child/addons，只保留扩展目录与 worker 目录读", () => {
+    const dir = path.resolve("C:/extensions/strict");
+    const args = extensionSpawnArgs(
+      {
+        manifest: {
+          id: "strict",
+          name: "strict",
+          version: "0.1.0",
+          main: "index.mjs",
+          permissions: ["read", "write", "terminal"],
+          isolation: "strict",
+        },
+        dir,
+        enabled: true,
+        installedAt: 0,
+      },
+      workerPath,
+    );
+    expect(args).toContain("--permission");
+    expect(args).toContain(`--allow-fs-read=${dir}`);
+    expect(args).toContain(`--allow-fs-read=${path.dirname(path.resolve(workerPath))}`);
+    expect(args).toContain("--no-addons");
+    expect(args).not.toContain(`--allow-fs-write=${dir}`);
+    expect(args).not.toContain("--allow-child-process");
+    expect(args.slice(-3)).toEqual([workerPath, dir, "index.mjs"]);
+  });
+
   it("坏扩展崩溃互相隔离：一个启动失败不影响另一个", async () => {
     const goodRoot = makeExtension(
       "good",

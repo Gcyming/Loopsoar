@@ -85,6 +85,35 @@ describe("扩展清单与注册表", () => {
       }),
     ).toThrow();
   });
+
+  it("声明式 UI 面板 + turn.start hooks 只注入已启用扩展", () => {
+    const reg = new ExtensionRegistry();
+    reg.install(
+      ExtensionRegistry.parseManifest({
+        id: "panel",
+        name: "面板扩展",
+        version: "1",
+        contributes: {
+          ui: [{ id: "status", title: "状态", items: [{ label: "区域", value: "本地" }] }],
+          hooks: [{ event: "turn.start", prompt: "先检查工作区状态。" }],
+        },
+      }),
+      "C:/ext/panel",
+      false,
+    );
+    expect(reg.instructionsPrompt()).toBe("");
+    reg.setEnabled("panel", true);
+    expect(reg.instructionsPrompt()).toContain("## 扩展 hooks（turn.start）");
+    expect(reg.instructionsPrompt()).toContain("先检查工作区状态。");
+    expect(() =>
+      ExtensionManifestSchema.parse({
+        id: "bad-hook",
+        name: "坏 hook",
+        version: "1",
+        contributes: { hooks: [{ event: "turn.end", prompt: "x" }] },
+      }),
+    ).toThrow();
+  });
 });
 
 describe("扩展工具权限：manifest 授权 ∩ 工具声明（fail-closed）", () => {
