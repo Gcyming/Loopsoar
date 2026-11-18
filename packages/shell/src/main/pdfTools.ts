@@ -49,9 +49,11 @@ export async function extractPdfText(buffer: Buffer, maxPages = MAX_PAGES): Prom
   });
   const doc = await loadingTask.promise;
   try {
-    const parsedPages = Math.min(doc.numPages, Math.max(1, maxPages));
+    const pageLimit = Math.min(doc.numPages, Math.max(1, maxPages));
     const chunks: string[] = [];
-    for (let pageNumber = 1; pageNumber <= parsedPages; pageNumber += 1) {
+    let parsedPages = 0;
+    let totalChars = 0;
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent();
       let lastY: number | null = null;
@@ -72,16 +74,24 @@ export async function extractPdfText(buffer: Buffer, maxPages = MAX_PAGES): Prom
         if (y !== null) lastY = y;
       }
       if (line.trim()) lines.push(line.trim());
-      if (lines.length > 0) chunks.push(lines.join("\n"));
+      const pageText = lines.join("\n");
+      if (pageText) {
+        chunks.push(pageText);
+        totalChars += pageText.length + 2;
+      }
       page.cleanup();
+      parsedPages = pageNumber;
+      // 大 PDF 逐页解析也会占用主进程事件循环；每页让出一次，避免窗口假死。
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (totalChars >= MAX_TEXT_CHARS) break;
     }
     const joined = chunks.join("\n\n").trim();
-    const truncated = joined.length > MAX_TEXT_CHARS;
+    const charsTruncated = joined.length > MAX_TEXT_CHARS;
     return {
-      text: truncated ? `${joined.slice(0, MAX_TEXT_CHARS)}\n…（已截断，全文 ${joined.length} 字符）` : joined,
+      text: charsTruncated ? `${joined.slice(0, MAX_TEXT_CHARS)}\n…（已截断，全文 ${joined.length} 字符）` : joined,
       pages: doc.numPages,
       parsedPages,
-      truncated,
+      truncated: charsTruncated || parsedPages < doc.numPages,
     };
   } finally {
     await loadingTask.destroy();
