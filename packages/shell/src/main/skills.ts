@@ -147,6 +147,9 @@ export class SkillHost {
   replaceCandidate(id: string, input: CandidateInput): SkillRecord | null {
     const existing = this.registry.get(id);
     if (!existing || existing.enabled) return null;
+    const tags = existing.frontmatter.tags ?? [];
+    // 只允许改由 skill_candidate 生成的草稿；普通禁用技能不是候选，不能被 Agent 覆盖。
+    if (!tags.includes("candidate") && !tags.includes("auto-candidate")) return null;
     const target = path.resolve(this.dir, id);
     if (!isInside(path.resolve(this.dir), target)) return null;
     this.writeCandidate(id, input);
@@ -188,14 +191,13 @@ export class SkillHost {
   private writeCandidate(id: string, input: CandidateInput): void {
     const dir = path.join(this.dir, id);
     fs.mkdirSync(dir, { recursive: true });
+    const tags = Array.from(new Set([...(input.tags ?? []), "candidate"]));
     const frontmatter = [
       "---",
       `name: ${JSON.stringify(input.name)}`,
       `description: ${JSON.stringify(input.description)}`,
       ...(input.whenToUse ? [`whenToUse: ${JSON.stringify(input.whenToUse)}`] : []),
-      ...(input.tags && input.tags.length > 0
-        ? ["tags:", ...input.tags.map((tag) => `  - ${JSON.stringify(tag)}`)]
-        : []),
+      ...(tags.length > 0 ? ["tags:", ...tags.map((tag) => `  - ${JSON.stringify(tag)}`)] : []),
       "---",
       "",
     ].join("\n");
