@@ -26,9 +26,9 @@ describe("守卫：chrome:applyLayout 事件链路", () => {
     expect(EVENT_NAMES as readonly string[]).toContain("chrome:applyLayout");
   });
 
-  it("UI 类型声明与 App 订阅一致（订阅名必须与契约逐字相同）", () => {
+  it("UI 类型声明与订阅一致（订阅名必须与契约逐字相同）", () => {
     expect(read("packages/ui/src/types.d.ts")).toContain('"chrome:applyLayout"');
-    expect(read("packages/ui/src/App.tsx")).toContain('api.on("chrome:applyLayout"');
+    expect(read("packages/ui/src/useAgentWindowLayout.ts")).toContain('api.on("chrome:applyLayout"');
   });
 
   it("壳层按偏好推送该事件，mode 只有 docked / agentWindow，keep 不动窗口", () => {

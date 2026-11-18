@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LAYOUT, computeSidebarMaxWidth, computeSidebarMinWidth, computeVibeSidebarBounds } from "loopsoar-contracts/layout";
+import { LAYOUT } from "loopsoar-contracts/layout";
 import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
@@ -16,6 +16,8 @@ import type {
 } from "./types.js";
 import { MOTION, NO_DRAG_REGION, applyTheme } from "./theme.js";
 import { styles } from "./appStyles.js";
+import { useAgentWindowLayout } from "./useAgentWindowLayout.js";
+import { useSidebarLayout } from "./useSidebarLayout.js";
 const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
@@ -105,9 +107,6 @@ function readTerminalHeight(): number {
 
 /* ---------------------------------- 主界面 ---------------------------------- */
 
-/** 与 DOM 侧栏 CSS 过渡保持一致（MOTION.sidebarDuration = 320ms）。 */
-const SIDEBAR_ANIMATION_MS_UI = 320;
-
 export default function App(): React.JSX.Element {
   const api = useLoopsoarApi();
   const [boot, setBoot] = useState<BootStatus | null>(null);
@@ -156,149 +155,6 @@ export default function App(): React.JSX.Element {
   // 独立窗口模式：?mini=1 时本渲染器只画 Agent 会话栏（由主进程 Agent 窗口加载）
   const miniWindow =
     typeof location !== "undefined" && new URLSearchParams(location.search).get("mini") === "1";
-  const [agentWindowOpen, setAgentWindowOpen] = useState(false);
-  /**
-   * 小窗开合与偏好的「最新值」镜像：chrome:applyLayout 的事件回调只绑一次，
-   * 如果直接闭包 state 会读到开通/关窗之前的旧值（重复开窗或重复关窗）；
-   * 写进依赖数组又会让回调随每次偏好更新重订阅。用 ref 读最新值最稳。
-   */
-  const agentWindowOpenRef = useRef(false);
-  const preferencesRef = useRef<Preferences | null>(null);
-  useEffect(() => {
-    agentWindowOpenRef.current = agentWindowOpen;
-  }, [agentWindowOpen]);
-  useEffect(() => {
-    preferencesRef.current = preferences;
-  }, [preferences]);
-  /**
-   * Agent 小窗的「最小化（缩成图标按钮）」状态：由主进程事件 chrome:agentWindowIconMode 驱动。
-   * 图标模式只换视图，不卸载会话；点击图标 → ui:restoreAgentWindow 还原。
-   */
-  const [agentIconMode, setAgentIconMode] = useState(false);
-  React.useEffect(() => {
-    if (!miniWindow || !api) return;
-    return api.on("chrome:agentWindowIconMode", (payload) => {
-      setAgentIconMode(Boolean((payload as { icon?: boolean } | null)?.icon));
-    });
-  }, [miniWindow, api]);
-  /**
-   * 最小化/还原的「面板几何过渡」（Slime float 同款）：
-   *   · minimize：窗口尺寸不动；面板 left/top/width/height 从整窗过渡到图标矩形，
-   *     内容钉在原尺寸 + overflow:hidden 裁切（零重排），内容淡出、图标淡入；
-   *     过渡结束主进程把窗口一次性落到图标 bounds。
-   *   · restore：窗口已瞬间落到目标 bounds；面板从图标矩形展开成整窗，内容淡入、图标淡出。
-   */
-  const [agentFloat, setAgentFloat] = useState<{
-    phase: "minimize" | "restore";
-    durationMs: number;
-    from: { x: number; y: number; width: number; height: number };
-    to: { x: number; y: number; width: number; height: number };
-  } | null>(null);
-  const [agentFloatStarted, setAgentFloatStarted] = useState(false);
-  /** 图标态稳定后面板应停留的矩形（相对窗口）：窗口不再缩放，面板靠它保持 56px 图标位置。 */
-  const [agentIconRect, setAgentIconRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [agentFloatFreeze, setAgentFloatFreeze] = useState<{ width: number; height: number } | null>(null);
-  React.useEffect(() => {
-    if (!miniWindow || !api) return;
-    return api.on("chrome:agentWindowTransition", (payload) => {
-      const p = (payload ?? {}) as {
-        phase?: string;
-        durationMs?: number;
-        from?: { x?: number; y?: number; width?: number; height?: number };
-        to?: { x?: number; y?: number; width?: number; height?: number };
-      };
-      if (p.phase !== "minimize" && p.phase !== "restore") return;
-      const rect = (value?: { x?: number; y?: number; width?: number; height?: number }): { x: number; y: number; width: number; height: number } | null => {
-        if (!value) return null;
-        const { x, y, width, height } = value;
-        if (![x, y, width, height].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
-        return {
-          x: x as number,
-          y: y as number,
-          width: Math.max(1, width as number),
-          height: Math.max(1, height as number),
-        };
-      };
-      const from = rect(p.from);
-      const to = rect(p.to);
-      if (!from || !to) return;
-      const full = p.phase === "minimize" ? from : to;
-      if (p.phase === "restore") setAgentIconRect(null);
-      setAgentFloat({
-        phase: p.phase,
-        durationMs: Number(p.durationMs) || 400,
-        from,
-        to,
-      });
-      setAgentFloatStarted(false);
-      setAgentFloatFreeze({ width: Math.round(full.width), height: Math.round(full.height) });
-    });
-  }, [miniWindow, api]);
-  React.useEffect(() => {
-    if (!agentFloat) return;
-    // 先以起点几何挂载一帧，再切到终点 → 触发 CSS transition（Slime 用同一手法）。
-    const raf = requestAnimationFrame(() => setAgentFloatStarted(true));
-    return () => cancelAnimationFrame(raf);
-  }, [agentFloat]);
-  React.useEffect(() => {
-    if (!agentFloat) return;
-    // 兜底清理（主进程正常会在动画结束后通知 iconMode 切换，这里防丢事件卡在过渡态）。
-    const timer = window.setTimeout(() => setAgentFloat(null), agentFloat.durationMs + 240);
-    return () => window.clearTimeout(timer);
-  }, [agentFloat]);
-  React.useEffect(() => {
-    if (!agentFloat) return;
-    if (agentFloat.phase === "minimize" && agentIconMode) {
-      // 已收成图标：窗口 bounds 不变，面板固定停在图标矩形；内容保持钉住（避免在 56px 下重排整页 UI）。
-      setAgentIconRect(agentFloat.to);
-      setAgentFloat(null);
-    } else if (agentFloat.phase === "restore" && !agentIconMode) {
-      // 已展开：弹回普通布局（内容 100% 自动布局）。
-      setAgentFloat(null);
-      setAgentFloatFreeze(null);
-      setAgentIconRect(null);
-    }
-  }, [agentFloat, agentIconMode]);
-  React.useEffect(() => {
-    if (!agentFloat) return;
-    // Slime startFloatGeometryFade 同款：按面板宽度进度驱动内容透明度（不是固定时长淡出）——
-    // 宽度 > 90% 区间全亮，在 90%→45% 区间 smoothstep 淡出/淡入，避免「窗口还很大内容就没了」。
-    const node = contentRef.current;
-    if (!node) return;
-    const fromW = agentFloat.from.width;
-    const toW = agentFloat.to.width;
-    const span = Math.max(1, Math.abs(fromW - toW));
-    const minW = Math.min(fromW, toW);
-    const lo = minW + span * 0.45;
-    const hi = minW + span * 0.9;
-    const band = Math.max(1, hi - lo);
-    const duration = Math.max(1, agentFloat.durationMs);
-    const started = performance.now();
-    let raf = 0;
-    node.style.transition = "none";
-    const step = (): void => {
-      const u = Math.min(1, (performance.now() - started) / duration);
-      const width = fromW + (toW - fromW) * u;
-      const raw = Math.max(0, Math.min(1, (width - lo) / band));
-      const opacity = raw * raw * (3 - 2 * raw);
-      node.style.opacity = String(opacity);
-      if (u < 1) raf = requestAnimationFrame(step);
-      else node.style.opacity = "";
-    };
-    raf = requestAnimationFrame(step);
-    return () => {
-      cancelAnimationFrame(raf);
-      node.style.transition = "";
-      node.style.opacity = "";
-    };
-  }, [agentFloat]);
-  React.useEffect(() => {
-    if (!miniWindow) return;
-    document.documentElement.dataset.mini = "1";
-    return () => {
-      delete document.documentElement.dataset.mini;
-    };
-  }, [miniWindow]);
   // 浏览器管理整页（历史/下载/收藏夹/设置）：由浮层「查看更多」或动作打开
   const [chromePage, setChromePage] = useState<ChromePageKind | null>(null);
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
@@ -324,32 +180,6 @@ export default function App(): React.JSX.Element {
   const [askQueue, setAskQueue] = useState<AskUserRequest[]>([]);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
-  const [sidebarWidth, setSidebarWidth] = useState<number>(360);
-  /** Vibecoding 模式独立侧栏宽度（0 = 未初始化，进入时用 vibe 最小宽度）。 */
-  const [vibeSidebarWidth, setVibeSidebarWidth] = useState<number>(0);
-  /** 侧栏拖拽中：拖拽时宽度必须逐帧跟手，不能开 CSS 过渡（否则手感变「橡皮筋」）。 */
-  const [sidebarDragging, setSidebarDragging] = useState(false);
-  /** 供 IPC effect 同步读取（state 更新是异步的，拖拽时序里必须用 ref）。 */
-  const sidebarDraggingRef = React.useRef(false);
-  /** 最近一次逻辑对齐宽度（诊断/动画回退用）。 */
-  const nativeSidebarWidthRef = React.useRef<number | null>(null);
-  /** 渲染层 rAF 驱动的侧栏宽度动画（主进程逐帧 setBounds，渲染层 60/120Hz 调度比主进程计时器稳）。 */
-  const sidebarRafRef = React.useRef<number | null>(null);
-  /** 与侧栏 DOM 同一条 cubic-bezier(0.2,0,0.2,1) 曲线。 */
-  const easeSidebar = React.useCallback((t: number): number => {
-    // 牛顿迭代解 cubic-bezier(0.2, 0, 0.2, 1) 的 x→t，再取 y。
-    let x = t;
-    for (let i = 0; i < 6; i++) {
-      const cx = 3 * 0.2 * (1 - x) * (1 - x) * x + 3 * 0.2 * (1 - x) * x * x + x * x * x;
-      const dx = 3 * 0.2 * (1 - x) * (1 - 2 * x) + 3 * 0.2 * (2 * x - 3 * x * x) + 3 * x * x;
-      if (Math.abs(cx - t) < 1e-4 || Math.abs(dx) < 1e-6) break;
-      x -= (cx - t) / dx;
-      x = Math.max(0, Math.min(1, x));
-    }
-    return 3 * (1 - x) * (1 - x) * x * 0 + 3 * (1 - x) * x * x * 1 + x * x * x;
-  }, []);
-    /** 原生视图宽度是否已完成启动水合：首次同步必须瞬时落位（不播动画），之后才允许 320ms 过渡。 */
-  const nativeSidebarReadyRef = React.useRef(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
   const [, setDownloads] = useState<DownloadItem[]>([]);
@@ -363,6 +193,48 @@ export default function App(): React.JSX.Element {
   const [sessionResetToken, setSessionResetToken] = useState(0);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
+  const {
+    contentRef,
+    beginIconDrag,
+    changeSidebarMode,
+    agentWindowOpen,
+    agentIconMode,
+    agentFloat,
+    floatRect,
+    stableIconRect,
+    contentHidden,
+    iconShown,
+    contentBaseOpacity,
+    iconTransition,
+    panelTransition,
+    freezeW,
+    freezeH,
+  } = useAgentWindowLayout({
+    api,
+    miniWindow,
+    preferences,
+    setPreferences,
+    setNotice,
+    currentSession,
+    setSessionOpen,
+  });
+  const {
+    sidebarWidth,
+    setSidebarWidth,
+    vibeSidebarWidth,
+    sidebarDragging,
+    startResize,
+    activeVibeWidth,
+    effectiveSidebarWidth,
+  } = useSidebarLayout({
+    api,
+    preferences,
+    setPreferences,
+    sidebarMode,
+    vibeModeActive,
+    miniWindow,
+    agentWindowOpen,
+  });
   /**
    * 会话级「浏览器控制」开关（功能1）。真值以会话持久化（SessionMeta.browserControl）为准，
    * 这里保持即时态；草稿态（还没有会话）先记 draftBrowserControlRef，建会话后立即落库。
@@ -561,238 +433,6 @@ export default function App(): React.JSX.Element {
       window.removeEventListener("focus", refresh);
     };
   }, [api]);
-
-  // 侧栏宽度硬约束（ADR-0037）：最小宽度 = 窗口宽度 × 比例（用户裁决：当前左右栏比例即最小窄度），
-  // 最大宽度 = min(720, 窗口宽度 - 320)；窗口 resize 与偏好水合后都要重新夹紧，避免启动时
-  // 落回默认 360 而短暂窄于下限（拖拽本身的夹紧在 startResize 里，共用同一对契约函数）。
-  useEffect(() => {
-    const clamp = (): void => {
-      const min = computeSidebarMinWidth(window.innerWidth);
-      const max = computeSidebarMaxWidth(window.innerWidth);
-      setSidebarWidth((w) => Math.min(Math.max(min, w), max));
-      const vibe = computeVibeSidebarBounds(window.innerWidth);
-      setVibeSidebarWidth((w) => (w > 0 ? Math.min(Math.max(vibe.min, w), vibe.max) : vibe.min));
-    };
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [preferences?.sidebarWidth, preferences?.vibeSidebarWidth]);
-
-  // 偏好水合：读取用户上次在 Vibecoding 模式拖出的宽度（无效则回到 vibe 最小宽度）。
-  useEffect(() => {
-    const vibe = computeVibeSidebarBounds(window.innerWidth);
-    const saved = preferences?.vibeSidebarWidth;
-    setVibeSidebarWidth((w) => {
-      const base = w > 0 ? w : (typeof saved === "number" ? saved : vibe.min);
-      return Math.min(Math.max(vibe.min, base), vibe.max);
-    });
-  }, [preferences?.vibeSidebarWidth]);
-
-  // 侧栏拖拽：mousemove 实时改 DOM 宽度，松开时持久化 + 同步原生视图
-  const startResize = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>): void => {
-      event.preventDefault();
-      const startX = event.clientX;
-      // Vibecoding 模式用独立的窄区间（约为标准最小宽度的一半 ~ 3/5）；切回搜索模式后恢复标准区间。
-      const vibe = computeVibeSidebarBounds(window.innerWidth);
-      const bounds = vibeModeActive
-        ? { min: vibe.min, max: vibe.max }
-        : { min: computeSidebarMinWidth(window.innerWidth), max: computeSidebarMaxWidth(window.innerWidth) };
-      const startWidth = vibeModeActive ? Math.min(Math.max(vibe.min, vibeSidebarWidth || vibe.min), vibe.max) : sidebarWidth;
-      // 拖拽期间隐藏原生 WebContentsView，否则鼠标移入浏览器区后 mousemove 会被它吞掉
-      void api?.browser.setOverlay({ open: true }).catch(() => {});
-      sidebarDraggingRef.current = true;
-      setSidebarDragging(true);
-      const onMove = (e: MouseEvent): void => {
-        const next = Math.max(bounds.min, Math.min(bounds.max, startWidth - (e.clientX - startX)));
-        if (vibeModeActive) setVibeSidebarWidth(next);
-        else setSidebarWidth(next);
-      };
-      const onUp = (e: MouseEvent): void => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        sidebarDraggingRef.current = false;
-        setSidebarDragging(false);
-        const next = Math.max(bounds.min, Math.min(bounds.max, startWidth - (e.clientX - startX)));
-        if (vibeModeActive) setVibeSidebarWidth(next);
-        else setSidebarWidth(next);
-        void api?.browser.setOverlay({ open: false }).catch(() => {});
-        // 松手时原生视图宽度直接落位（拖拽过程视图是隐藏的，不需要补动画）
-        void api?.browser.setSidebarWidth({ width: next, animate: false }).catch(() => {});
-        if (api && preferences) {
-          void api.settings
-            .setPreferences(vibeModeActive ? { ...preferences, vibeSidebarWidth: next } : { ...preferences, sidebarWidth: next })
-            .then((r) => setPreferences(r.preferences))
-            .catch(() => {});
-        }
-      };
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-    },
-    [api, preferences, sidebarWidth, vibeModeActive, vibeSidebarWidth],
-  );
-
-  /** 侧栏模式切换：收起/展开写偏好；「小窗化」改为打开独立 Agent 窗口（真窗口化）。 */
-  const changeSidebarMode = useCallback(
-    (next: SidebarMode): void => {
-      if (!api) return;
-      setSessionOpen(false);
-      if (next === "float") {
-        if (agentWindowOpen) {
-          void api.ui.closeAgentWindow().catch(() => {});
-          return;
-        }
-        void api.ui
-          .openAgentWindow({ sessionId: currentSession ?? undefined })
-          .then((r) => {
-            if (r.ok) setAgentWindowOpen(true);
-            else setNotice(`小窗打开失败：${r.error ?? "未知错误"}`);
-          })
-          .catch(() => setNotice("小窗打开失败"));
-        return;
-      }
-      if (!preferences) return;
-      const persist = (): void => {
-        void api.settings
-          .setPreferences({ ...preferences, sidebarMode: next })
-          .then((r) => setPreferences(r.preferences))
-          .catch(() => {});
-      };
-      persist();
-    },
-    [api, preferences, agentWindowOpen, currentSession],
-  );
-
-  useEffect(() => {
-    if (!vibeModeActive) return;
-    const vibe = computeVibeSidebarBounds(window.innerWidth);
-    setVibeSidebarWidth(vibe.min);
-  }, [vibeModeActive]);
-
-  // 独立窗口被用户关闭（或主进程回收）→ 主窗口恢复侧栏
-  React.useEffect(() => {
-    if (!api || miniWindow) return;
-    return api.on("chrome:agentWindowClosed", () => {
-      agentWindowOpenRef.current = false;
-      setAgentWindowOpen(false);
-    });
-  }, [api, miniWindow]);
-
-  /**
-   * Agent 第一次打开网页前的「会话窗口布局」安排（第二阶段 Slice E · 功能②）。
-   *
-   * 壳层已经完成询问/记忆（browser_navigate 的 beforeOpenPage 钩子），这里只执行真正的窗口动作：
-   *   · agentWindow：会话独立成小窗（已打开则不重复开——主进程 open 是单实例，只聚焦）；
-   *   · docked：先收小窗，再把侧栏恢复成「常驻右侧」并落库（常规布局 = 网页占主区）。
-   * 依赖只放 api/miniWindow（稳定值），小窗状态与偏好走 ref：
-   * 直接闭包 state 会读到开窗/偏好的旧值（重复开窗、或拿半份偏好覆盖设置）。
-   */
-  React.useEffect(() => {
-    if (!api || miniWindow) return;
-    return api.on("chrome:applyLayout", (payload) => {
-      const { mode, sessionId } = (payload ?? {}) as { mode?: string; sessionId?: string };
-      if (mode === "agentWindow") {
-        if (agentWindowOpenRef.current) {
-          // 已开：不重复开窗，只让它聚焦/切到该会话（主进程 open 单实例，重复调用只 focus）。
-          void api.ui.openAgentWindow({ sessionId }).catch(() => {});
-          return;
-        }
-        // 先占位再开：同一 tick 内再来一条事件也不会并发创建两个窗口。
-        agentWindowOpenRef.current = true;
-        void api.ui
-          .openAgentWindow({ sessionId })
-          .then((result) => {
-            if (result.ok) {
-              setAgentWindowOpen(true);
-              return;
-            }
-            agentWindowOpenRef.current = false;
-            setNotice(
-              t(getLanguage(), "browser.layout.openFailed", {
-                error: result.error ?? t(getLanguage(), "common.unknownError"),
-              }),
-            );
-          })
-          .catch(() => {
-            agentWindowOpenRef.current = false;
-            setNotice(
-              t(getLanguage(), "browser.layout.openFailed", { error: t(getLanguage(), "common.unknownError") }),
-            );
-          });
-        return;
-      }
-      if (mode !== "docked") return;
-      if (agentWindowOpenRef.current) {
-        agentWindowOpenRef.current = false;
-        void api.ui.closeAgentWindow().catch(() => {});
-        setAgentWindowOpen(false);
-      }
-      const prefs = preferencesRef.current;
-      // 偏好还没水合（null）/ 已经是常驻右侧：都不写盘，避免用半份偏好覆盖用户设置。
-      if (!prefs || prefs.sidebarMode === "docked") return;
-      void api.settings
-        .setPreferences({ ...prefs, sidebarMode: "docked" })
-        .then((result) => setPreferences(result.preferences))
-        .catch(() => {});
-    });
-  }, [api, miniWindow]);
-
-  /** 生效的侧栏宽度（收起态只用图标条宽度，让网页区自然变宽）。 */
-  // 独立窗口模式下主窗口侧栏完全隐藏 → 网页区铺满（宽度 0）
-  const vibeBounds = computeVibeSidebarBounds(typeof window === "undefined" ? 1440 : window.innerWidth);
-  /** Vibecoding 生效宽度：始终夹在 [vibe.min, vibe.max]；未初始化时回落到最小宽度。 */
-  const activeVibeWidth = Math.min(
-    Math.max(vibeBounds.min, vibeSidebarWidth > 0 ? vibeSidebarWidth : vibeBounds.min),
-    vibeBounds.max,
-  );
-  const effectiveSidebarWidth = agentWindowOpen
-    ? 0
-    : sidebarMode === "collapsed"
-      ? LAYOUT.SIDEBAR_COLLAPSED_WIDTH
-      : vibeModeActive
-        ? activeVibeWidth
-        : sidebarWidth;
-  React.useEffect(() => {
-    if (!api || miniWindow || !preferences) return;
-    const target = effectiveSidebarWidth;
-    const previous = nativeSidebarWidthRef.current;
-    // 启动水合（默认宽度→偏好宽度/收起态）必须瞬时落位；拖拽时逐帧跟手且不播动画。
-    const animate = nativeSidebarReadyRef.current && !sidebarDraggingRef.current;
-    nativeSidebarReadyRef.current = true;
-    // 宽度没变（只是其它偏好更新导致 effect 重跑）：不能重播动画/重抓截图，否则会留下静态快照遮住网页。
-    if (previous === target) {
-      return;
-    }
-    nativeSidebarWidthRef.current = target;
-    if (!animate) {
-      void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
-      return;
-    }
-    // 左右同拍：DOM 侧栏 CSS 过渡 320ms；原生网页视图由渲染层 rAF 逐帧驱动
-    // （主进程 setInterval 在 Windows 上实际只有 ~40fps，rAF 跟随合成器，通常 60/120Hz）。
-    const from = typeof previous === "number" ? previous : target;
-    const startedAt = performance.now();
-    if (sidebarRafRef.current !== null) cancelAnimationFrame(sidebarRafRef.current);
-    const step = (now: number): void => {
-      const t = Math.min(1, (now - startedAt) / SIDEBAR_ANIMATION_MS_UI);
-      const eased = easeSidebar(t);
-      const width = Math.round(from + (target - from) * eased);
-      void api.browser.setSidebarWidth({ width, animate: false }).catch(() => {});
-      if (t < 1) {
-        sidebarRafRef.current = requestAnimationFrame(step);
-      } else {
-        sidebarRafRef.current = null;
-        void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
-      }
-    };
-    sidebarRafRef.current = requestAnimationFrame(step);
-    return () => {
-      if (sidebarRafRef.current !== null) {
-        cancelAnimationFrame(sidebarRafRef.current);
-        sidebarRafRef.current = null;
-      }
-    };
-  }, [api, effectiveSidebarWidth, miniWindow, preferences]);
 
   // 全宽终端占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
   React.useEffect(() => {
@@ -2331,75 +1971,6 @@ export default function App(): React.JSX.Element {
   };
   // 运行中输入非空时仍可发送：此时作为「转向提示」注入（steer）
   const canSend = Boolean(api) && input.trim() !== "";
-
-  // 图标态：整窗透明 + 单层圆角图标（无窗框）。按下拖动=移动窗口，
-  // 单击（位移 < 4px）=还原会话视图——与 Slime「图标浮窗可拖、点一下回来」一致。
-  const iconDragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
-
-  const beginIconDrag = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0) return;
-    iconDragRef.current = { x: event.screenX, y: event.screenY, moved: false };
-    const move = (ev: PointerEvent): void => {
-      const state = iconDragRef.current;
-      if (!state) return;
-      const dx = ev.screenX - state.x;
-      const dy = ev.screenY - state.y;
-      if (!state.moved && Math.abs(dx) + Math.abs(dy) > 4) state.moved = true;
-      if (!state.moved || (dx === 0 && dy === 0)) return;
-      state.x = ev.screenX;
-      state.y = ev.screenY;
-      void api?.ui.moveAgentWindow({ dx, dy }).catch(() => undefined);
-    };
-    const finish = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
-      iconDragRef.current = null;
-    };
-    const up = (): void => {
-      const state = iconDragRef.current;
-      finish();
-      if (!state?.moved) void api?.ui.restoreAgentWindow().catch(() => undefined);
-    };
-    const cancel = (): void => {
-      finish();
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
-  };
-
-  // Slime float 同款：minimize 时窗口不动、面板从整窗收到图标矩形；restore 反向展开。
-  // 面板尺寸过渡期间，内容被钉在原窗口像素尺寸 + overflow:hidden 裁切 → 零重排。
-  const floatRect = agentFloat ? (agentFloatStarted ? agentFloat.to : agentFloat.from) : null;
-  /** 稳定图标态：面板停留在图标矩形（该大窗口在图标态被主进程隐藏，由独立 56px 图标窗口顶替）。 */
-  const stableIconRect = !agentFloat && agentIconMode ? agentIconRect : null;
-  const floatMs = agentFloat?.durationMs ?? 400;
-  const floatEase = "cubic-bezier(0,0,0.2,1)";
-  // 图标态 / 过渡相位决定内容与图标层的显隐：
-  //   minimize：内容淡出、图标淡入（Slime 的 180ms ease + 120ms delay）；
-  //   restore ：内容淡入、图标立即淡出（不再被 agentIconMode 的旧值挡住）；
-  //   静止图标态：只显示图标。
-  const contentHidden =
-    agentFloat?.phase === "minimize" ? true : agentFloat?.phase === "restore" ? false : agentIconMode;
-  const iconShown =
-    agentFloat?.phase === "minimize" ? true : agentFloat?.phase === "restore" ? false : agentIconMode;
-  // 内容透明度：过渡期间由 rAF 按宽度进度直接写 style（Slime 同款）；静止态用这个基准值。
-  const contentBaseOpacity = contentHidden || agentFloat?.phase === "restore" ? 0 : 1;
-  const iconTransition =
-    agentFloat?.phase === "minimize"
-      ? "opacity 180ms ease 120ms"
-      : agentFloat?.phase === "restore"
-        ? "opacity 160ms ease"
-        : "none";
-  // 起点几何挂载的那一帧必须关掉 transition（否则浏览器会从上一状态插值，出现「先摊满再缩」的假动画）。
-  const panelTransition =
-    agentFloat && agentFloatStarted
-      ? `left ${floatMs}ms ${floatEase}, top ${floatMs}ms ${floatEase}, width ${floatMs}ms ${floatEase}, height ${floatMs}ms ${floatEase}`
-      : "none";
-  const freezeW = agentFloatFreeze?.width;
-  const freezeH = agentFloatFreeze?.height;
 
   const body = (
     <>
