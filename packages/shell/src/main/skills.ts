@@ -156,10 +156,12 @@ export class SkillHost {
     return this.registry.list().find((item) => item.id === id) ?? null;
   }
 
-  /** 删除候选：只允许未启用项；防止误删已启用技能或越界路径。 */
+  /** 删除候选：只允许 skill_candidate 生成且未启用的草稿；防止误删普通技能或越界路径。 */
   remove(id: string): boolean {
     const existing = this.registry.get(id);
     if (!existing || existing.enabled) return false;
+    const tags = existing.frontmatter.tags ?? [];
+    if (!tags.includes("candidate") && !tags.includes("auto-candidate")) return false;
     const root = path.resolve(this.dir);
     const target = path.resolve(root, id);
     if (!isInside(root, target)) return false;

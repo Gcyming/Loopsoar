@@ -89,6 +89,13 @@ describe("技能候选（P1-7）", () => {
       expect(host.replaceCandidate(enabled.id, { name: "已启用", description: "y", body: "y" })).toBeNull();
       expect(host.remove(enabled.id)).toBe(false);
       expect(host.list().find((item) => item.id === enabled.id)?.enabled).toBe(true);
+
+      const ordinary = path.join(host.dirPath(), "ordinary");
+      fs.mkdirSync(ordinary, { recursive: true });
+      fs.writeFileSync(path.join(ordinary, "SKILL.md"), "---\nname: 普通技能\ndescription: 不是候选\n---\n正文\n");
+      host.scan();
+      expect(host.remove("ordinary")).toBe(false);
+      expect(host.replaceCandidate("ordinary", { name: "普通技能", description: "y", body: "y" })).toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

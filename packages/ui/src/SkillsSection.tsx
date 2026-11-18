@@ -112,7 +112,9 @@ export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir
               </span>
               <span style={S.icons}>
                 <Toggle value={skill.enabled} onChange={(next) => void onToggle(skill.id, next)} />
-                {!skill.enabled ? (
+                {!skill.enabled &&
+                ((skill.frontmatter.tags ?? []).includes("candidate") ||
+                  (skill.frontmatter.tags ?? []).includes("auto-candidate")) ? (
                   <button type="button" style={S.remove} onClick={() => void onRemove(skill.id)}>
                     {tr("settings.skills.remove")}
                   </button>
