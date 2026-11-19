@@ -71,6 +71,13 @@ export interface UsageEvent {
   kind: UsageKind;
 }
 
+/** 召回命中（含理由）：UI 用以解释「为什么召回这条」。 */
+export interface RecallHit {
+  fact: MemoryFact;
+  score: number;
+  reasons: string[];
+}
+
 /** 召回排序信号：P1 接图后由 MemoryService 提供激活值 / 图邻居 / 层级；缺省 = 旧行为。 */
 export interface RecallRankingSignal {
   mode?: MemoryRankingMode;
@@ -554,6 +561,15 @@ export class MemoryStore {
     limit = 6,
     opts: { workspaceId?: string; ranking?: RecallRankingSignal } = {},
   ): { fact: MemoryFact; score: number }[] {
+    return this.recallDetailed(query, limit, opts).map(({ fact, score }) => ({ fact, score }));
+  }
+
+  /** 召回（含命中理由）：UI 诊断/「为什么召回这条」用；recall/recallPrompt 共用同一套排序。 */
+  recallDetailed(
+    query: string,
+    limit = 6,
+    opts: { workspaceId?: string; ranking?: RecallRankingSignal } = {},
+  ): RecallHit[] {
     const nowMs = this.now();
     // D2：失效条目默认不参与召回（可被显式查回，但不再自动注入）。
     const pool = (opts.workspaceId
@@ -583,6 +599,7 @@ export class MemoryStore {
     return rankMemory(candidates, { mode: opts.ranking?.mode, limit }).map((hit) => ({
       fact: byId.get(hit.id) as MemoryFact,
       score: hit.score,
+      reasons: hit.reasons,
     }));
   }
 
@@ -592,8 +609,17 @@ export class MemoryStore {
     limit = 6,
     opts: { workspaceId?: string; ranking?: RecallRankingSignal } = {},
   ): string {
-    const hits = this.recall(query, limit, opts);
-    if (hits.length === 0) return "";
+    return this.recallPromptWithHits(query, limit, opts).text;
+  }
+
+  /** 同 recallPrompt，但同时返回命中条目与理由（壳层缓存给 UI 诊断用）。 */
+  recallPromptWithHits(
+    query: string,
+    limit = 6,
+    opts: { workspaceId?: string; ranking?: RecallRankingSignal } = {},
+  ): { text: string; hits: RecallHit[] } {
+    const hits = this.recallDetailed(query, limit, opts);
+    if (hits.length === 0) return { text: "", hits };
     // 读取侧格式（D1 轻量版）：每条带分类 / 时间 / 来源，模型与用户都能判断「这条从哪来」。
     const lines = hits.map(({ fact }) => {
       const day = new Date(fact.timestamp).toISOString().slice(0, 10);
@@ -601,7 +627,10 @@ export class MemoryStore {
       return `- [${fact.category}] ${day} · ${source} · ${fact.content}`;
     });
     const scope = opts.workspaceId ? "本工作区" : "过往会话";
-    return `以下是${scope}的长期记忆（共 ${hits.length} 条，可能过时，按需使用）：\n${lines.join("\n")}`;
+    return {
+      text: `以下是${scope}的长期记忆（共 ${hits.length} 条，可能过时，按需使用）：\n${lines.join("\n")}`,
+      hits,
+    };
   }
 
   stats(workspaceId?: string): MemoryStats {

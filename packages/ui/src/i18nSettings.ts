@@ -481,6 +481,14 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
 
   /* ── 记忆 ── */
   "settings.memory.head": { zh: "记忆", en: "Memory" },
+  "settings.memory.lastRecallHint": { zh: "上次自动召回：{time}（条目上的徽标是命中理由）", en: "Last recall: {time} (badges show why each fact matched)" },
+  "settings.memory.reason.lexical": { zh: "词法", en: "Lexical" },
+  "settings.memory.reason.exact": { zh: "精确", en: "Exact" },
+  "settings.memory.reason.activation": { zh: "激活", en: "Activation" },
+  "settings.memory.reason.graph": { zh: "图邻居", en: "Graph" },
+  "settings.memory.reason.coldStart": { zh: "冷启动", en: "Cold start" },
+  "settings.memory.reason.bandL2": { zh: "L2 游离", en: "L2" },
+  "settings.memory.reason.tag": { zh: "标签", en: "Tag" },
   "settings.memory.headHint": {
     zh: "会话自动汇总：抽取 → 去重/合并/建链 → 容量软归档；相关对话自动召回。",
     en: "Automatic session summaries: extract → dedupe/merge/link → soft-archive when full; related conversations are recalled automatically.",

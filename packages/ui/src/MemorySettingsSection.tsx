@@ -7,7 +7,7 @@
  * 仅通过 props 使用 api、偏好和全局通知。
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { BADGE } from "./theme.js";
+import { BADGE, BRAND } from "./theme.js";
 import {
   Area,
   Btn,
@@ -207,10 +207,29 @@ export default function MemorySettingsSection({
     const workspaceOptions = [...new Set([...workspaceIds, "default"])].filter(Boolean);
     const importanceOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
     const categoryLabel = (key: string): string => tr(`settings.memory.category.${key}`);
+    // 召回理由码 → 人读文案（方案 P2：UI 解释「为什么召回这条」）
+    const REASON_KEYS: Record<string, string> = {
+      lexical: "settings.memory.reason.lexical",
+      exact: "settings.memory.reason.exact",
+      activation: "settings.memory.reason.activation",
+      graph: "settings.memory.reason.graph",
+      "cold-start": "settings.memory.reason.coldStart",
+      "band:L2": "settings.memory.reason.bandL2",
+      tag: "settings.memory.reason.tag",
+    };
+    const reasonLabel = (reason: string): string => {
+      const key = REASON_KEYS[reason];
+      return key ? tr(key) : reason;
+    };
 
     return (
       <div>
         <Head t={tr("settings.memory.head")} h={tr("settings.memory.headHint")} />
+        {mem.lastRecall && mem.lastRecall.at > 0 ? (
+          <div style={{ fontSize: 11, color: BRAND.linenFaint, marginBottom: 6 }}>
+            {tr("settings.memory.lastRecallHint", { time: new Date(mem.lastRecall.at).toLocaleTimeString() })}
+          </div>
+        ) : null}
         <MemoryGraphView data={memGraph} height={360} onSelect={setGraphSel} />
         {replayDomain ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 2px" }}>
@@ -436,7 +455,10 @@ export default function MemorySettingsSection({
         {shownFacts.length === 0 ? <div style={S.dashed}>{tr("settings.memory.empty")}</div> : pageFacts.map((f) => (
           <div key={f.id} className="panel-card" style={S.card}>
             <div style={S.rowBetween}>
-              <span style={S.meta}><span style={BADGE.neutral}>{categoryLabel(f.category)}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}</span>
+              <span style={S.meta}><span style={BADGE.neutral}>{categoryLabel(f.category)}</span>{f.workspaceId ? <span style={S.tag}>{f.workspaceId}</span> : null}<span style={S.tag}>{tr("settings.memory.importance", { value: f.importance })}</span>{f.tags.map((t) => <span key={t} style={S.tag}>#{t}</span>)}
+                {(mem.lastRecall?.reasons[f.id] ?? []).map((reason) => (
+                  <span key={reason} style={{ ...S.tag, color: BRAND.ochreHover, borderColor: "rgba(var(--ls-accent-rgb, 200, 118, 60),0.45)" }}>{reasonLabel(reason)}</span>
+                ))}</span>
               <span style={S.icons}>
                 {mEdit?.id === f.id ? <>
                   <Btn label={tr("settings.save")} small onClick={() => void saveMemEdit()} /><Btn label={tr("settings.cancel")} small onClick={() => setMEdit(null)} />

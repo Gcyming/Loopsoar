@@ -228,6 +228,8 @@ export interface MemoryListResult {
   filePath: string;
   /** 后台是否仍在按内容哈希核对磁盘（启动后的最终一致窗口）。 */
   reconciling: boolean;
+  /** 最近一次自动召回的理由（fact id → reason codes）；null = 还没有召回发生过。 */
+  lastRecall?: { at: number; reasons: Record<string, string[]> } | null;
 }
 
 export interface LocationsInfo {

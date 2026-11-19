@@ -146,6 +146,16 @@ describe("MemoryStore.recall 接入 ranker", () => {
     expect(port?.score).toBeCloseTo(expected, 10);
   });
 
+  it("recallDetailed 返回命中理由；recall 仍只返回 fact+score（兼容旧调用）", () => {
+    const s = store();
+    const detailed = s.recallDetailed("端口 8991 是什么", 6, { workspaceId: "default" });
+    expect(detailed.length).toBeGreaterThan(0);
+    expect(Array.isArray(detailed[0].reasons)).toBe(true);
+    expect(detailed[0].reasons.length).toBeGreaterThan(0);
+    const plain = s.recall("端口 8991 是什么", 6, { workspaceId: "default" });
+    expect(Object.keys(plain[0]).sort()).toEqual(["fact", "score"]);
+  });
+
   it("hybrid 模式：同样候选下由信号（激活值）改变排序", () => {
     const s = store();
     // 两条都命中关键词：让「旧但精确」的 port 与「新但次要」的 build 竞争。

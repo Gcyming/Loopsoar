@@ -108,6 +108,21 @@ describe("MemoryService · 召回门控（默认开启）", () => {
     expect(service.recallSignals("继续")).toEqual([]);
   });
 
+  it("自动召回后 lastRecallReasons 记录条目与理由；门控拦截时清空", async () => {
+    const { service } = await makeService();
+    const added = await service.add({ content: "用户偏好深色主题界面", category: "preference" });
+    const prompt = service.recallPrompt("上次说的深色主题方案");
+    expect(prompt).toContain("深色主题");
+    const snapshot = service.lastRecallReasons();
+    expect(snapshot).not.toBeNull();
+    expect(Object.keys(snapshot?.reasons ?? {})).toContain(added.id);
+    expect(snapshot?.reasons[added.id]).toEqual(expect.arrayContaining(["activation"]));
+
+    // 门控挡住（无信号）→ 本次没有召回，理由清空，避免面板展示上一次的旧理由
+    expect(service.recallPrompt("你好")).toBe("");
+    expect(service.lastRecallReasons()?.reasons).toEqual({});
+  });
+
   it("召回结果跨重启（load）仍可用：门控命中后能读到已持久化记忆", async () => {
     const first = await makeService();
     await first.service.add({ content: "部署前必须先跑契约检查", category: "lesson", importance: 9 });

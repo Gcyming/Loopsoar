@@ -38,6 +38,8 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
       trust: fact.provenance?.trust ?? "user",
       sessionId: fact.provenance?.sessionId,
     })),
+    /** 最近一次自动召回的理由（UI 解释「为什么召回这条」）；null = 还没发生过召回。 */
+    lastRecall: deps.memory.lastRecallReasons?.() ?? null,
     archivedCount: deps.memory.stats().archived,
     stats: deps.memory.stats(),
     filePath: deps.memory.vaultPath,

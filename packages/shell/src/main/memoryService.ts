@@ -1006,11 +1006,17 @@ export class MemoryService {
    * 避免自动注入的行为随向量权重变化而漂移（行为可回归、可对照）。
    */
   recallPrompt(text: string, workspaceId?: string): string {
-    if (this.recallGateEnabled() && !shouldRecall(text).hit) return "";
+    if (this.recallGateEnabled() && !shouldRecall(text).hit) {
+      // 门控未命中 = 本次没有召回：清空上次理由，避免面板把「上次为什么召回」当成这次。
+      this.lastRecall = { at: Date.now(), reasons: {} };
+      return "";
+    }
     const mode = this.opts.rankingMode?.() ?? "hybrid";
     // similarity = 旧行为（零回归，也用于做 A/B 对照）；不需要图信号。
     if (mode === "similarity") {
-      return this.store.recallPrompt(text, 6, workspaceId ? { workspaceId } : {});
+      const result = this.store.recallPromptWithHits(text, 6, workspaceId ? { workspaceId } : {});
+      this.rememberRecall(result.hits);
+      return result.text;
     }
     // 每次召回重置邻居缓存：记忆可能在两次同 query 召回之间新增/改链，不能复用上一次的邻居表。
     this.neighborCache = null;
@@ -1021,10 +1027,25 @@ export class MemoryService {
       live: new Set(this.opts.liveSessionIds?.() ?? this.liveSessionIds?.() ?? []),
       neighbors: this.neighborIds(text),
     };
-    return this.store.recallPrompt(text, 6, {
+    const result = this.store.recallPromptWithHits(text, 6, {
       ...(workspaceId ? { workspaceId } : {}),
       ranking: { mode, signal: (fact) => this.rankingSignalOf(fact, context) },
     });
+    this.rememberRecall(result.hits);
+    return result.text;
+  }
+
+  /** 缓存「最近一次自动召回」的命中理由（Fact id → reasons），供设置·记忆面板解释。 */
+  private lastRecall: { at: number; reasons: Record<string, string[]> } | null = null;
+  private rememberRecall(hits: readonly { fact: MemoryFact; reasons: string[] }[]): void {
+    const reasons: Record<string, string[]> = {};
+    for (const hit of hits) reasons[hit.fact.id] = [...hit.reasons];
+    this.lastRecall = { at: Date.now(), reasons };
+  }
+
+  /** 最近一次自动召回的理由快照（空对象 = 上次召回过但无命中/被门控挡住）。 */
+  lastRecallReasons(): { at: number; reasons: Record<string, string[]> } | null {
+    return this.lastRecall;
   }
 
   /**

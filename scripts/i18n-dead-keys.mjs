@@ -29,6 +29,8 @@ const DYNAMIC_PREFIXES = [
   'settings.permission.level.', // L0-L5 权限档
   'settings.provider.', // 供应商卡片按字段拼
   'settings.extensions.', // 扩展状态文案按 state 拼
+  'settings.memory.category.', // 记忆分类按 category 拼
+  'settings.memory.reason.', // 召回理由徽标
   'timeline.', // 时间线工具分类
   'status.', // 状态栏
 ];
