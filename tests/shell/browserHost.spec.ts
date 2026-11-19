@@ -6,6 +6,7 @@ import {
   BrowserHost,
   SIDEBAR_ANIMATION_MS,
   SIDEBAR_ANIMATION_TICK_MS,
+  USER_TABS_SESSION,
   type BrowserHostDeps,
   type HostView,
 } from "../../packages/shell/src/main/browserHost.ts";
@@ -146,6 +147,20 @@ describe("BrowserHost（多标签）", () => {
     expect(host.selectTab(first)).toBe(true);
     expect(host.listTabs().find((t) => t.active)?.id).toBe(first);
     expect(created.filter((v) => v.visible).length).toBe(1);
+  });
+
+  it("网页 target=_blank 建页落在当前可见会话（搜索页里不会落进后台会话组）", async () => {
+    const { host } = makeHost();
+    await host.navigate("https://a.example");
+    host.showUserTabs();
+    const result = await host.newTabInVisibleSession("https://b.example");
+    expect(result.ok).toBe(true);
+    const visible = host.listTabs(USER_TABS_SESSION);
+    expect(visible.length).toBe(1);
+    expect(visible[0].url).toBe("https://b.example/");
+    expect(visible[0].active).toBe(true);
+    // 后台聊天会话组不应被塞入这个用户点击产生的新页。
+    expect(host.listTabs("default").length).toBe(1);
   });
 
   it("空白新标签不显示原生视图（避免透明视图吞掉新建页鼠标事件）", async () => {

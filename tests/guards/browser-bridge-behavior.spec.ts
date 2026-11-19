@@ -97,6 +97,13 @@ describe("① window.open / target=_blank 逃逸（行为级）", () => {
     expect(opened).toEqual(["https://example.com/", "http://example.com/"]);
   });
 
+  it("网页新窗口回调进入当前可见会话，而不是后台 chat 的 activeSession", () => {
+    const source = fs.readFileSync(path.join(SHELL_SRC, "main/index.ts"), "utf8");
+    expect(source).toMatch(/newTabInVisibleSession\(url\)/);
+    // 旧写法会让 target=_blank 落进不可见会话组：标签条不更新，看起来像按钮没反应。
+    expect(source).not.toMatch(/browserHost\?\.newTab\(url\)/);
+  });
+
   it("仅 http(s) 放行；伪协议/本地文件/应用内协议全部忽略", () => {
     expect(isNewTabUrlAllowed("https://example.com/a?b=1#c")).toBe(true);
     expect(isNewTabUrlAllowed("http://127.0.0.1:8080/")).toBe(true);

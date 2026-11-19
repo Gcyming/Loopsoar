@@ -146,6 +146,37 @@ describe("placePopover · 四角矩阵", () => {
   }
 });
 
+describe("placePopover · 原生网页避让", () => {
+  it("菜单与网页只相交几像素时，优先平移到网页右侧而不是冻结整页", () => {
+    const position = placePopover({
+      anchor: { x: 100, y: 100, width: 60, height: 24 },
+      size: { width: 200, height: 120 },
+      viewport: VIEWPORT,
+      avoid: { x: 0, y: 0, width: 150, height: 500 },
+    });
+    expect(position.left).toBe(150 + POPOVER_GAP);
+    expectInsideViewport(position, { width: 200, height: 120 }, VIEWPORT);
+  });
+
+  it("右侧空间不足时平移到网页左侧；两侧都不行则保持原位置", () => {
+    const rightBlocked = placePopover({
+      anchor: { x: 100, y: 100, width: 60, height: 24 },
+      size: { width: 500, height: 120 },
+      viewport: { width: 800, height: 600 },
+      avoid: { x: 0, y: 0, width: 500, height: 500 },
+    });
+    expect(rightBlocked.left).toBe(100); // 右侧/左侧都塞不下，交给冻结兜底
+
+    const leftFits = placePopover({
+      anchor: { x: 700, y: 100, width: 60, height: 24 },
+      size: { width: 200, height: 120 },
+      viewport: VIEWPORT,
+      avoid: { x: 600, y: 0, width: 200, height: 500 },
+    });
+    expect(leftFits.left).toBe(600 - POPOVER_GAP - 200);
+  });
+});
+
 describe("placePopover · 视口外锚点 / 极小视口 / 参数", () => {
   it("锚点滚到视口上方：仍贴在视口内（top=margin）", () => {
     const size = { width: 200, height: 100 };

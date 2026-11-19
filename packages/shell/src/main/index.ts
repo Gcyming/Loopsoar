@@ -999,7 +999,9 @@ app.whenReady().then(async () => {
     (url) => {
       // 只把真实网页转为新标签：about:blank/空地址等（弹窗占位）直接忽略，避免凭空多出「新标签页」
       if (!/^https?:\/\//i.test(url)) return;
-      void browserHost?.newTab(url);
+      // 网页按钮可能默认 target=_blank；必须开在“当前可见会话”，否则在搜索页/用户标签里
+      // 新页会落进后台 chat 会话组，用户看到的就是点击没反应。
+      void browserHost?.newTabInVisibleSession(url);
     },
     {
       initialSessionId,

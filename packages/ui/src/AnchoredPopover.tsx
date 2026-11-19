@@ -78,12 +78,16 @@ export default function Popover({
     // 自然尺寸：scroll* 反映完整内容（即使已被上一轮 maxHeight 限制成滚动区）
     const measuredWidth = width ?? Math.max(box.offsetWidth, box.scrollWidth, 0);
     const measuredHeight = Math.max(box.offsetHeight, box.scrollHeight, 0);
+    // 原生网页可见时，菜单不遮挡网页：能平移到网页侧边就平移，避免触发整页冻结。
+    const pageEl = document.querySelector<HTMLElement>('[data-native-page="live"]');
+    const pageRect = pageEl?.getBoundingClientRect() ?? null;
     const next = placePopover({
       anchor: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
       size: { width: measuredWidth, height: measuredHeight },
       viewport: readViewport(),
       ...(placement ? { placement } : {}),
       ...(gap !== undefined ? { gap } : {}),
+      avoid: pageRect ? { x: pageRect.x, y: pageRect.y, width: pageRect.width, height: pageRect.height } : null,
     });
     setPosition((previous) => (samePosition(previous, next) ? previous : next));
   }, [anchorRef, width, placement, gap]);
@@ -106,10 +110,17 @@ export default function Popover({
       if (boxRef.current) observer.observe(boxRef.current);
       if (anchorRef.current) observer.observe(anchorRef.current);
     }
+    // 页面从搜索主页切到真实网页时，原生视图区域才出现；菜单需要立刻避让。
+    const pageObserver =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => update())
+        : null;
+    pageObserver?.observe(document.body, { attributes: true, attributeFilter: ["data-native-page"], subtree: true });
     return () => {
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("scroll", onViewportChange, true);
       observer?.disconnect();
+      pageObserver?.disconnect();
     };
   }, [open, update, anchorRef]);
 

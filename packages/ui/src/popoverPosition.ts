@@ -38,6 +38,11 @@ export interface PlacePopoverInput {
   gap?: number;
   /** 视口内边距（默认 8）。 */
   margin?: number;
+  /**
+   * 不应遮挡的矩形（原生网页区域）。浮层若与它相交且旁边有空间，
+   * 会整体平移到该矩形的左侧或右侧，避免为了 12px 交集把整页冻结成静态底图。
+   */
+  avoid?: PopoverAnchorRect | null;
 }
 
 export interface PopoverPosition {
@@ -124,11 +129,26 @@ export function placePopover(input: PlacePopoverInput): PopoverPosition {
     const otherLeft = otherAlignment === "start" ? startLeft : endLeft;
     if (fitsLeft(otherLeft)) alignment = otherAlignment;
   }
-  const left = clampNumber(
+  let left = clampNumber(
     alignment === "start" ? startLeft : endLeft,
     margin,
     Math.max(margin, viewportWidth - margin - width),
   );
+
+  // 原生网页区域避让：菜单与网页只相交几像素时，宁可把菜单平移到网页旁边，
+  // 也不要把整页隐藏成静态底图（那会让网页点击/跳转全部失效）。
+  const avoid = input.avoid;
+  if (avoid) {
+    const verticalOverlap = top < avoid.y + avoid.height && top + effectiveHeight > avoid.y;
+    const intersects = left < avoid.x + avoid.width && left + width > avoid.x;
+    if (verticalOverlap && intersects) {
+      const fits = (candidate: number): boolean => candidate >= margin && candidate + width <= viewportWidth - margin;
+      const rightCandidate = avoid.x + avoid.width + gap;
+      const leftCandidate = avoid.x - gap - width;
+      if (fits(rightCandidate)) left = rightCandidate;
+      else if (fits(leftCandidate)) left = leftCandidate;
+    }
+  }
 
   return {
     top,

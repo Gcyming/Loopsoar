@@ -901,6 +901,17 @@ export class BrowserHost {
     return { tabId: id, ok: true, url: outcome.url };
   }
 
+  /**
+   * 网页里的 window.open / target=_blank 进入新标签。
+   *
+   * 必须落在 **当前可见会话**，而不是 activeSession：用户可能在全局用户标签/搜索页里，
+   * activeSession 仍是某个聊天会话；若按 activeSession 建页，新标签会落进不可见分组，
+   * 页面看起来就是“点了没反应”。Agent 的工具调用仍用 newTab(activeSession)，不受影响。
+   */
+  async newTabInVisibleSession(rawUrl?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
+    return this.newTab(rawUrl, this.visibleSession);
+  }
+
   selectTab(tabId: string, sessionId?: string): boolean {
     const group = this.group(sessionId);
     if (!group.tabs.has(tabId)) return false;

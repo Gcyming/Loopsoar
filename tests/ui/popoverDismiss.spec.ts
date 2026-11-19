@@ -20,6 +20,7 @@ import {
   getOpenPopoverId,
   subscribePopovers,
 } from "../../packages/ui/src/popover.ts";
+import { isNativePageVisible } from "../../packages/ui/src/useBrowserPopoverOverlay.ts";
 
 const ROOT = process.cwd();
 const UI_SRC = path.join(ROOT, "packages", "ui", "src");
@@ -96,10 +97,37 @@ describe("dismissAllPopovers（全局收起入口）", () => {
     expect(hook).toContain("screenshot({})");
     expect(hook).toContain("setPopoverOverPage(true)");
     expect(hook).toContain("getBoundingClientRect()");
+    // 搜索主页/加载中/错误页时原生视图本来就是隐藏的，不能拿旧网页截图当底图。
+    expect(hook).toContain("nativePageVisible");
+    expect(app).toContain("nativePageVisible");
     expect(app).toMatch(/popoverOverPage[\s\S]{0,200}setOverlay\(\{ open: overlay \}\)/);
     expect(app).not.toMatch(/anyPopoverOpen;\s*\n\s*void api\.browser\.setOverlay/);
     const popover = read("packages/ui/src/popover.ts");
     expect(popover).toContain("export function useAnyPopoverOpen");
+  });
+
+  it("切回空白标签必须清空 currentUrl（否则旧网页会冒充搜索主页）", () => {
+    const app = read("packages/ui/src/App.tsx");
+    const selectTab = app.slice(app.indexOf("const selectTab"), app.indexOf("const closeTab"));
+    expect(selectTab).toContain("const url = active?.url ?? \"\"");
+    expect(selectTab).toContain("setCurrentUrl(url)");
+    expect(selectTab).not.toMatch(/if \(tab\?\.url\)/);
+  });
+
+  it("搜索主页没有原生网页时绝不抓底图（否则旧网页截图会冻结到主页上）", () => {
+    const base = {
+      miniWindow: false,
+      currentUrl: "",
+      loading: false,
+      loadFailure: null,
+      vibeModeActive: false,
+    };
+    expect(isNativePageVisible(base)).toBe(false);
+    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com" })).toBe(true);
+    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", loading: true })).toBe(false);
+    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", loadFailure: "ERR" })).toBe(false);
+    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", vibeModeActive: true })).toBe(false);
+    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", miniWindow: true })).toBe(false);
   });
 
   it("浮层层级高于所有应用页面层级（新增页面不会再盖住列表）", () => {

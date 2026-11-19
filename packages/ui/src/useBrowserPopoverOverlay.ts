@@ -22,12 +22,38 @@ export interface BrowserPopoverOverlayOptions {
   anyPopoverOpen: boolean;
   /** 设置/权限等整页 DOM 已经遮住网页时为 true：此时不需要再抓底图。 */
   baseOverlay: boolean;
+  /** 原生网页当前是否真的可见；搜索主页/加载中/错误页时原生视图是隐藏的。 */
+  nativePageVisible: boolean;
+}
+
+export interface NativePageVisibilityInput {
+  miniWindow: boolean;
+  currentUrl: string;
+  loading: boolean;
+  loadFailure: unknown;
+  vibeModeActive: boolean;
+}
+
+/**
+ * 与 BrowserHost.applyLayout 的原生视图 visible 条件保持同源：
+ * 空 URL（搜索主页）、加载中、加载失败、Vibe 会话都不显示原生网页。
+ * 浮层底图只能在这些条件之外抓，否则会把上一个网页的旧画面冻结到主页上。
+ */
+export function isNativePageVisible(input: NativePageVisibilityInput): boolean {
+  return Boolean(
+    !input.miniWindow &&
+      input.currentUrl &&
+      !input.loading &&
+      !input.loadFailure &&
+      !input.vibeModeActive,
+  );
 }
 
 export function useBrowserPopoverOverlay({
   api,
   anyPopoverOpen,
   baseOverlay,
+  nativePageVisible,
 }: BrowserPopoverOverlayOptions): BrowserPopoverOverlayState {
   const [popoverOverPage, setPopoverOverPage] = useState(false);
   const [browserPreview, setBrowserPreview] = useState<string | null>(null);
@@ -38,7 +64,7 @@ export function useBrowserPopoverOverlay({
     let cancelled = false;
     const sync = async (): Promise<void> => {
       let overPage = false;
-      if (anyPopoverOpen && !baseOverlay) {
+      if (anyPopoverOpen && !baseOverlay && nativePageVisible) {
         const menu = document.querySelector<HTMLElement>("[data-popover]");
         const page = pageColumnRef.current;
         if (menu && page) {
@@ -68,7 +94,7 @@ export function useBrowserPopoverOverlay({
     return () => {
       cancelled = true;
     };
-  }, [api, anyPopoverOpen, baseOverlay]);
+  }, [api, anyPopoverOpen, baseOverlay, nativePageVisible]);
 
   return { pageColumnRef, popoverOverPage, browserPreview };
 }
