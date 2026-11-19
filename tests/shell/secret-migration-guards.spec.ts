@@ -20,25 +20,27 @@ const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf
 
 describe("密钥迁移接线（ProviderStore dedupe alias → SecretStore）", () => {
   it("SecretStore 先于 ProviderStore 创建，并注入 onAliases 迁移回调", () => {
-    const index = read("packages/shell/src/main/index.ts");
-    const secretsPos = index.indexOf("const secrets = new SecretStore(");
-    const providersPos = index.indexOf("new ProviderStore(");
+    const core = read("packages/shell/src/main/coreServices.ts");
+    const secretsPos = core.indexOf("const secrets = new SecretStore(");
+    const providersPos = core.indexOf("new ProviderStore(");
     expect(secretsPos).toBeGreaterThan(0);
     expect(providersPos).toBeGreaterThan(0);
     expect(secretsPos).toBeLessThan(providersPos);
-    expect(index).toContain("onAliases: migrateAliasedSecrets");
-    expect(index).toContain("secrets.meta(from)");
-    expect(index).toContain("secrets.set(to, key)");
+    expect(core).toContain("onAliases: migrateAliasedSecrets");
+    expect(core).toContain("secrets.meta(from)");
+    expect(core).toContain("secrets.set(to, key)");
   });
 
   it("历史孤儿副本（opencode-go-2 之类）在启动时按后缀归并", () => {
-    const index = read("packages/shell/src/main/index.ts");
-    expect(index).toContain("reconcileOrphanSecrets");
-    expect(index).toContain("secret reconciled");
-    const callPos = index.indexOf("reconcileOrphanSecrets();");
-    const llmPos = index.indexOf("= buildLlmFromActive()");
+    const core = read("packages/shell/src/main/coreServices.ts");
+    expect(core).toContain("reconcileOrphanSecrets");
+    expect(core).toContain("secret reconciled");
+    const callPos = core.indexOf("reconcileOrphanSecrets();");
+    const llmPos = core.indexOf("const buildLlmFromActive");
     expect(callPos).toBeGreaterThan(0);
     expect(llmPos).toBeGreaterThan(callPos);
+    // 活跃 LLM 在 core 返回后由 index 初始化；保证首次构建发生在归并之后。
+    expect(read("packages/shell/src/main/index.ts")).toContain("= buildLlmFromActive();");
   });
 
   it("ProviderStore.load 会把 alias 交给回调；upsert 复用同端点现存 id", () => {
