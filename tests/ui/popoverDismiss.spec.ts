@@ -145,15 +145,16 @@ describe("dismissAllPopovers（全局收起入口）", () => {
 
   it("App 在切界面/切会话/新会话/切标签/失焦时调用 dismissAllPopovers", () => {
     const app = read("packages/ui/src/App.tsx");
+    const actions = read("packages/ui/src/useSessionActions.ts");
     const tabsHook = read("packages/ui/src/useBrowserTabs.ts");
     expect(app).toContain('window.addEventListener("blur"');
-    expect((app.match(/dismissAllPopovers\(\)/g) ?? []).length).toBeGreaterThanOrEqual(6);
+    expect(((app + actions).match(/dismissAllPopovers\(\)/g) ?? []).length).toBeGreaterThanOrEqual(6);
     expect(app).toMatch(/const openSettings[\s\S]{0,200}dismissAllPopovers\(\)/);
     expect(tabsHook).toMatch(/const selectTab[\s\S]{0,200}dismissAllPopovers\(\)/);
     expect(app).toContain("useBrowserTabs(");
     // 新建会话/新标签统一走 createFreshSessionAndTab（内部先 dismissAllPopovers）
     expect(app).toMatch(/const createFreshSessionAndTab[\s\S]{0,400}dismissAllPopovers\(\)/);
-    expect(app).toMatch(/const newSession[\s\S]{0,200}createFreshSessionAndTab/);
-    expect(app).toMatch(/const switchSession[\s\S]{0,200}dismissAllPopovers\(\)/);
+    expect(actions).toMatch(/const newSession[\s\S]{0,200}createFreshSessionAndTab/);
+    expect(actions).toMatch(/const switchSession[\s\S]{0,200}dismissAllPopovers\(\)/);
   });
 });

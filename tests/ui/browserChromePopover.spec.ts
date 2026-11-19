@@ -35,9 +35,9 @@ describe("工具栏浮层：悬停延迟 + 点击收起不闪烁", () => {
     expect(main).toContain("deps.onClosed?.()");
     const index = read("packages/shell/src/main/index.ts");
     expect(index).toContain('onClosed: () => pushToRenderer("chrome:popoverClosed"');
-    const contracts = read("packages/contracts/src/schemas.ts");
-    expect(contracts).toContain('"chrome:popoverClosed"');
-    expect(contracts).toContain('"chrome:dismissPopovers"');
+    const events = read("packages/contracts/src/events.ts");
+    expect(events).toContain('"chrome:popoverClosed"');
+    expect(events).toContain('"chrome:dismissPopovers"');
   });
 });
 
@@ -50,7 +50,7 @@ describe("点击列表外区域收起（含原生网页区域）", () => {
     expect(index).toContain("onViewFocused: () => {");
     expect(index).toContain("chromePopover.close()");
     expect(index).toContain('pushToRenderer("chrome:dismissPopovers"');
-    const app = read("packages/ui/src/App.tsx");
+    const app = read("packages/ui/src/useSessionActions.ts");
     expect(app).toContain('api.on("chrome:dismissPopovers", () => dismissAllPopovers())');
   });
 

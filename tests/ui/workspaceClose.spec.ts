@@ -20,7 +20,7 @@ describe("Agent 工作区 · 关闭入口", () => {
   });
 
   it("主窗口处理 closeTab 动作（复用标签关闭链路）", () => {
-    const source = read(path.join("packages", "ui", "src", "App.tsx"));
+    const source = read(path.join("packages", "ui", "src", "useSessionActions.ts"));
     expect(source).toContain('p?.action === "closeTab"');
     expect(source).toContain("closeTab(p.payload.tabId)");
   });

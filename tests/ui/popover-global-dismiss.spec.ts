@@ -52,7 +52,7 @@ describe("工具栏浮层：再次点击按钮 = 收起（原子 toggle，不连
     const chrome = read("packages/ui/src/BrowserChrome.tsx");
     expect(chrome).toContain(".togglePopover({");
     expect(chrome).toContain("data-chrome-popover-trigger");
-    const app = read("packages/ui/src/App.tsx");
+    const app = read("packages/ui/src/useSessionActions.ts");
     expect(app).toContain("ui.closePopover");
     expect(app).toContain("data-chrome-popover-trigger");
   });

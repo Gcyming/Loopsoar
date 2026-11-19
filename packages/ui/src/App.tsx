@@ -46,6 +46,8 @@ import {
   useE2eRestoredScroll,
   useE2eSettingsDeepLink,
 } from "./useE2eDeepLinks.js";
+import { useChatActions } from "./useChatActions.js";
+import { useSessionActions } from "./useSessionActions.js";
 import { nextId } from "./ids.js";
 import {
   applySteerToLatest,
@@ -73,6 +75,8 @@ import {
  * 架构（P5 拆分后）：本文件只保留「状态与业务编排」——会话/浏览器/设置的门面状态、
  * 发送/回滚/重生成/停止等动作、以及顶层布局装配。具体实现按职责外置：
  *   · useChatStreamEvents.ts —— 启动数据同步 + chat:stream:* 事件订阅与 per-session 路由；
+ *   · useChatActions.ts      —— 发送 / 建会话 / steer / 回滚 / 重生成 / 停止；
+ *   · useSessionActions.ts   —— 会话切换 / 分叉 / 删除 / 浏览器控制 / 保存页面 / 快照；
  *   · useBrowserPopoverOverlay.ts —— 浮层与原生网页视图的几何让位/静态底图；
  *   · useBottomDock.ts —— 终端/DevTools 开合、高度持久化与主进程同步；
  *   · AppTitleBar.tsx / AppDialogs.tsx / AppBottomPanels.tsx —— 顶层布局分区；
@@ -784,757 +788,105 @@ export default function App(): React.JSX.Element {
       .catch((err: unknown) => setNotice(`回答失败：${err instanceof Error ? err.message : String(err)}`));
   }, [api, activeAsk]);
 
-  /** 发送一条文本：立即渲染用户消息 + 助手占位（不等首字），再发起流式请求。 */
-  const sendText = useCallback(
-    (raw: string, targetSessionId?: string): void => {
-      const text = raw.trim();
-      if (!text || !api) return;
-      const sid = targetSessionId ?? sessionIdRef.current;
-      if (!sid) return;
-      const meta = metaFor(sid);
-      const assistantId = nextId("assistant");
-      meta.activeId = assistantId;
-      meta.startedAt = Date.now();
-      meta.firstTokenAt = 0;
-      meta.busy = true;
-      meta.stopping = false;
-      updateSessionMessages(sid, (prev) => [
-        ...prev,
-        { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() },
-        {
-          id: assistantId,
-          role: "assistant",
-          text: "",
-          status: "streaming",
-          createdAt: Date.now(),
-          provider: provider?.provider ?? undefined,
-          model: provider?.model ?? undefined,
-        },
-      ]);
-      setBusy(true);
-      setNotice("");
-      void api.chat
-        .stream({ message: text, sessionId: sid, mode, reasoningEffort: reasoningEffort || undefined })
-        .catch((err: unknown) => {
-          meta.busy = false;
-          if (sid === sessionIdRef.current) {
-            setBusy(false);
-            setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
-          }
-        });
-    },
-    [api, metaFor, mode, provider, reasoningEffort, updateSessionMessages],
-  );
-
-  /** 首次发送：没有会话时创建（工作区=当前选择；没有选择则未归属），并切换到该会话。 */
-  const ensureSessionForSend = useCallback(async (): Promise<string | null> => {
-    if (!api) return null;
-    if (sessionIdRef.current) return sessionIdRef.current;
-    const created = await api.chat.newSession({ workspaceId: activeWorkspaceId ?? null });
-    const sid = created.session?.sessionId ?? created.currentId ?? null;
-    if (!sid) throw new Error("创建会话失败");
-    sessionIdRef.current = sid;
-    const boundTabId = tabs.find((tab) => tab.active)?.id;
-    if (boundTabId) tabSessionRef.current.set(boundTabId, sid);
-    writeSessionMessages(sid, []);
-    setSessions(created.sessions);
-    setCurrentSession(sid);
-    // 草稿态点过「浏览器控制」：先落库再发首条消息——否则第一条消息的工具面会按「关闭」算，
-    // 用户看到的是「开了开关但 Agent 说没有浏览器能力」。
-    if (draftBrowserControlRef.current) {
-      try {
-        const saved = await api.chat.setBrowserControl({ sessionId: sid, enabled: true });
-        if (saved.ok) {
-          setSessions((prev) => prev.map((item) => (item.id === sid ? { ...item, browserControl: true } : item)));
-        }
-      } catch {
-        // 落库失败不阻断发送：工具面按关闭处理（fail-closed）
-      }
-    }
-    setMessages([]);
-    setPendingSteers([]);
-    setBusy(false);
-    setInput("");
-    return sid;
-  }, [activeWorkspaceId, api, tabs, writeSessionMessages]);
-
-  /** 新标签页 Vibecoding 首次发送：默认总是新建会话；只有刚在会话列表里主动选过会话才续接。 */
-  const startVibe = useCallback(
-    (raw: string): void => {
-      const text = raw.trim();
-      if (!text || !api) return;
-      const reusePicked = pickedSessionRef.current && Boolean(sessionIdRef.current);
-      pickedSessionRef.current = false;
-      const begin = async (): Promise<void> => {
-        const sid = reusePicked && sessionIdRef.current ? sessionIdRef.current : await ensureSessionForSend();
-        if (!sid) throw new Error("创建会话失败");
-        sendText(text, sid);
-      };
-      void begin().catch((err: unknown) => setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`));
-    },
-    [api, ensureSessionForSend, sendText],
-  );
-  /** 投递一条待发指令：运行中不打断，主进程在轮次边界注入后回执 chat:steer:applied。 */
-  const deliverSteer = useCallback(
-    (sid: string, item: PendingSteer): void => {
-      if (!api) return;
-      void api.chat
-        .steer({ message: item.text, sessionId: sid, steerId: item.id })
-        .then((result) => {
-          if (result.accepted) {
-            writePending(sid, setPendingStatus(readPending(sid), item.id, "delivered"));
-            return;
-          }
-          const reason =
-            result.reason === "full"
-              ? "队列已满（最多 8 条）"
-              : result.reason === "no-running"
-                ? "当前没有运行中的回复"
-                : "内容为空或重复";
-          // 没送达就留在队列里（queued）：本轮结束后由 onStreamSettled 自动续发
-          writePending(sid, setPendingStatus(readPending(sid), item.id, "queued", reason));
-          setNotice(`待发指令暂存队列：${reason}`);
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          writePending(sid, setPendingStatus(readPending(sid), item.id, "failed", message));
-          setNotice(`待发指令投递失败：${message}`);
-        });
-    },
-    [api, readPending, writePending],
-  );
-
-  /**
-   * 运行中发送：**只入队，不投递**（对齐 slime 三选项语义）。
-   *
-   * 用户发出后先显示待发卡，由用户三选一：
-   *   · 什么都不做 → 本轮 Agent 输出结束后，自动把这条作为下一轮用户需求发出；
-   *   · 点卡片上的「引导」→ 作为 steer 投递，在当前这轮的下一个轮次边界并入思考历程（绝不打断）；
-   *   · 点「修改」/「撤销删除」→ 取回重写或丢弃。
-   * 此前是"入队即投递"，用户明确否掉了这一形态。
-   */
-  const queueSteer = useCallback(
-    (raw: string): void => {
-      const text = raw.trim();
-      const sid = sessionIdRef.current;
-      if (!text || !sid || !api) return;
-      const current = readPending(sid);
-      if (current.length >= PENDING_STEER_MAX) {
-        setNotice(`待发队列已满（最多 ${PENDING_STEER_MAX} 条），请等本轮结束后再发`);
-        return;
-      }
-      const item: PendingSteer = { id: nextId("steer"), text, createdAt: Date.now(), status: "queued" };
-      writePending(sid, enqueuePending(current, item));
-      setNotice(`已排队（${current.length + 1}/${PENDING_STEER_MAX}）：本轮结束后自动发出；点「引导」可提前并入当前思考`);
-    },
-    [api, readPending, writePending],
-  );
-
-  const send = useCallback((): void => {
-    const text = input.trim();
-    if (!text || !api) return;
-    setInput("");
-    if (busy) {
-      // 运行中：Enter = 待发指令（入队 + 投递，不打断当前输出；slime 语义）
-      queueSteer(text);
-      return;
-    }
-    void ensureSessionForSend()
-      .then((sid) => {
-        if (sid) sendText(text, sid);
-      })
-      .catch((err: unknown) => setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`));
-  }, [api, busy, ensureSessionForSend, input, queueSteer, sendText]);
-
-  /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
-  const rollbackTo = useCallback(
-    (targetId: string): void => {
-      const idx = messages.findIndex((m) => m.id === targetId);
-      if (idx < 0) return;
-      const target = messages[idx];
-      if (target.role !== "user") return;
-      const keepCount = messages
-        .slice(0, idx)
-        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
-      const sid = sessionIdRef.current;
-      if (sid) updateSessionMessages(sid, (prev) => prev.slice(0, idx));
-      setInput(target.text);
-      setNotice("已回滚到该消息，内容已放回输入框");
-      void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
-    },
-    [api, messages, updateSessionMessages],
-  );
-
-  /** 重新生成：回滚到上一条用户消息并重发（复用现有 rollback + sendText 通道）。 */
-  const regenerate = useCallback(
-    (assistantId: string): void => {
-      const idx = messages.findIndex((m) => m.id === assistantId);
-      if (idx < 0) return;
-      let userIdx = -1;
-      for (let i = idx - 1; i >= 0; i -= 1) {
-        if (messages[i].role === "user") {
-          userIdx = i;
-          break;
-        }
-      }
-      if (userIdx < 0) return;
-      const text = messages[userIdx].text;
-      const keepCount = messages
-        .slice(0, userIdx)
-        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
-      const sid = sessionIdRef.current;
-      if (sid) updateSessionMessages(sid, (prev) => prev.slice(0, userIdx));
-      void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
-      window.setTimeout(() => sendText(text), 80);
-    },
-    [api, messages, sendText, updateSessionMessages],
-  );
-
-  const stop = useCallback((): void => {
-    if (!api) return;
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    // 标记「用户主动停止」：abort 的 error 事件被 UI 收束为已停止，而不是红色报错
-    const meta = metaFor(sid);
-    meta.stopping = true;
-    setNotice("正在停止…");
-    void api.chat
-      .stop({ sessionId: sid })
-      .then((r) => {
-        if (r.stopped) return;
-        meta.stopping = false;
-        meta.busy = false;
-        setBusy(false);
-        setNotice("当前没有正在运行的回复");
-      })
-      .catch(() => {
-        meta.stopping = false;
-      });
-  }, [api, metaFor]);
-
-  /* ------------------------- 待发指令卡片的三个操作 ------------------------- */
-
-  /** 修改：撤销主进程缓冲 → 移出队列 → 文本放回输入框。 */
-  const editPendingSteer = useCallback(
-    (id: string): void => {
-      const sid = sessionIdRef.current;
-      if (!sid) return;
-      const item = readPending(sid).find((entry) => entry.id === id);
-      if (!item) return;
-      void api?.chat.steerCancel({ steerId: id, sessionId: sid }).catch(() => {});
-      writePending(sid, removePending(readPending(sid), id));
-      setInput((prev) => (prev ? `${prev}\n${item.text}` : item.text));
-      setNotice("已取回待发内容，可修改后重新发送");
-    },
-    [api, readPending, writePending],
-  );
-
-  /** 引导插入：仅此按钮会把排队内容作为 steer 投递给主进程（并入当前这轮思考，不打断）。 */
-  const insertPendingSteer = useCallback(
-    (id: string): void => {
-      const sid = sessionIdRef.current;
-      if (!sid) return;
-      const item = readPending(sid).find((entry) => entry.id === id);
-      if (!item) return;
-      if (item.status === "delivered") {
-        setNotice("已作为引导投递，等待本轮注入");
-        return;
-      }
-      writePending(sid, setPendingStatus(readPending(sid), id, "queued"));
-      deliverSteer(sid, item);
-      setNotice("已作为引导插入当前这一轮（不打断输出）…");
-    },
-    [deliverSteer, readPending, writePending],
-  );
-
-  /** 撤销删除：撤销主进程缓冲并移出队列。 */
-  const removePendingSteer = useCallback(
-    (id: string): void => {
-      const sid = sessionIdRef.current;
-      if (!sid) return;
-      void api?.chat.steerCancel({ steerId: id, sessionId: sid }).catch(() => {});
-      writePending(sid, removePending(readPending(sid), id));
-      setNotice("已撤销待发指令");
-    },
-    [api, readPending, writePending],
-  );
-
-  /** 注入回执：撤卡 + 把文案折进当轮 assistant 的「引导」时间线卡（不乐观提前塞）。 */
-  const handleSteerApplied = useCallback(
-    (sessionId: string, items: Array<{ id: string; text: string }>): void => {
-      const { next, deliveredTexts } = mergeDelivered(readPending(sessionId), items);
-      writePending(sessionId, next);
-      if (deliveredTexts.length === 0) return;
-      updateSessionMessages(sessionId, (prev) => deliveredTexts.reduce((acc, text) => applySteerToLatest(acc, text), prev));
-      setNotice(deliveredTexts.length === 1 ? "引导已并入本轮思考历程" : `已并入 ${deliveredTexts.length} 条引导`);
-    },
-    [readPending, updateSessionMessages, writePending],
-  );
-
-  /** 一轮收尾：未注入的改回 queued；当前会话自动续发第一条（slime 的排队续发语义）。 */
-  const handleStreamSettled = useCallback(
-    (sessionId: string): void => {
-      // 本轮可能刚把会话升级成「浏览器任务」：刷新列表，任务/分支徽标不必等下次切会话。
-      void api?.chat
-        .sessions()
-        .then((r) => setSessions(r.sessions))
-        .catch(() => undefined);
-      const current = readPending(sessionId);
-      if (current.length === 0) return;
-      const requeued = requeueUndelivered(current);
-      writePending(sessionId, requeued);
-      if (sessionId !== sessionIdRef.current) return;
-      const next = nextResendable(requeued);
-      if (!next) return;
-      writePending(sessionId, removePending(requeued, next.id));
-      window.setTimeout(() => {
-        sendText(next.text);
-        setNotice("本轮已结束，待发指令已自动续发");
-      }, 120);
-    },
-    [readPending, sendText, writePending],
-  );
-
-  // 事件订阅在 useChatStreamEvents 内只绑一次：用 effect 把最新回调写进 ref 桥
-  useEffect(() => {
-    steerAppliedRef.current = handleSteerApplied;
-  }, [handleSteerApplied]);
-  useEffect(() => {
-    streamSettledRef.current = handleStreamSettled;
-  }, [handleStreamSettled]);
-
-  const changeSearchEngine = useCallback(
-    (engine: Preferences["searchEngine"]): void => {
-      if (!preferences) return;
-      const next = { ...preferences, searchEngine: engine };
-      setPreferences(next); // 即时生效：地址栏图标 + 下一次搜索立刻使用新引擎
-      void api?.settings
-        .setPreferences(next)
-        .then((r) => setPreferences(r.preferences))
-        .catch(() => {
-          // 落盘失败不阻塞当前会话；下次打开设置会重新读取
-        });
-    },
-    [api, preferences],
-  );
-
-  // 浮层动作（独立子窗口经主进程转发）：打开整页管理 / 主窗口导航 / 保存页面
-  const savePageRef = React.useRef<null | (() => void)>(null);
-  // 工具栏浮层（独立子窗口）的「点击列表外收起」：主窗口内任何非触发按钮的按下都关闭它。
-  // 触发按钮自己负责原子 toggle（ui:togglePopover），这里跳过，避免 pointerdown 先关、click 又开导致连闪。
-  React.useEffect(() => {
-    if (!api?.ui?.closePopover) return;
-    const onDown = (event: PointerEvent): void => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("[data-chrome-popover-trigger]")) return;
-      void api.ui.closePopover().catch(() => undefined);
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    return () => document.removeEventListener("pointerdown", onDown, true);
-  }, [api]);
-  React.useEffect(() => {
-    if (!api) return;
-    // 用户点原生网页面板（WebContentsView，DOM 收不到 pointerdown）也算「点列表外」→ 收起所有浮层。
-    return api.on("chrome:dismissPopovers", () => dismissAllPopovers());
-  }, [api]);
-  React.useEffect(() => {
-    if (!api) return;
-    return api.on("chrome:popoverAction", (payload) => {
-      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string; tabId?: string } };
-      if (p?.action === "openPage" && p.payload?.kind) {
-        dismissAllPopovers();
-        setChromePage(p.payload.kind);
-        return;
-      }
-      if (p?.action === "navigate" && p.payload?.url) {
-        navigate(p.payload.url);
-        return;
-      }
-      if (p?.action === "savePage") savePageRef.current?.();
-      if (p?.action === "selectTab" && p.payload?.tabId) {
-        selectTab(p.payload.tabId);
-        return;
-      }
-      // Agent 工作区浮层里的「关闭此网页」：与标签条上的关闭同一条链路（关页不等于关会话）。
-      if (p?.action === "closeTab" && p.payload?.tabId) {
-        closeTab(p.payload.tabId);
-        return;
-      }
-      if (p?.action === "selectWorkspace") {
-        const id = (p.payload as { id?: unknown } | undefined)?.id;
-        if (typeof id === "string") bindWorkspaceToCurrentSession(id);
-        return;
-      }
-      if (p?.action === "addWorkspace") {
-        addWorkspaceForChat();
-        return;
-      }
-    });
-  }, [api, navigate, bindWorkspaceToCurrentSession, addWorkspaceForChat]);
-
-  const refreshSessions = useCallback((): void => {
-    if (!api) return;
-    void api.chat.sessions().then((r) => {
-      setSessions(r.sessions);
-      setCurrentSession(r.currentId);
-    }).catch(() => {});
-  }, [api]);
-
-  /** 会话 chip：刷新列表 + 切换下拉开合（原内联组合动作）。 */
-  const toggleSessionMenu = useCallback((): void => {
-    refreshSessions();
-    setSessionOpen((value) => !value);
-  }, [refreshSessions]);
-
-  /**
-   * 会话级「浏览器控制」开关（功能1）：开启 = Agent 看得见、也能执行 browser_* 工具。
-   * · 会话已存在 → 立即落库（shell 装配的 allowlist 在下一轮 stream 生效）；
-   * · 草稿态（还没会话 id）→ 只记标志，由 ensureSessionForSend 建会话后先写再发首条消息。
-   */
-  const toggleBrowserControl = useCallback((): void => {
-    const next = !browserControl;
-    setBrowserControl(next);
-    draftBrowserControlRef.current = next;
-    const sid = sessionIdRef.current || currentSession;
-    const notice = (key: string): void => setNotice(t(getLanguage(), key));
-    if (!sid) {
-      notice(next ? "composer.browserControlOn" : "composer.browserControlOff");
-      return;
-    }
-    if (!api) {
-      setBrowserControl(!next);
-      draftBrowserControlRef.current = !next;
-      notice("composer.browserControlUnavailable");
-      return;
-    }
-    void api.chat
-      .setBrowserControl({ sessionId: sid, enabled: next })
-      .then((r) => {
-        if (!r.ok) {
-          // 会话已不存在（被删/切走）：回滚 UI 真值，不要留下「界面开着但实际关着」的错觉
-          setBrowserControl(!next);
-          draftBrowserControlRef.current = !next;
-          setNotice(t(getLanguage(), "composer.browserControlFailed", { error: "会话不存在" }));
-          return;
-        }
-        setSessions((prev) => prev.map((item) => (item.id === sid ? { ...item, browserControl: next } : item)));
-        notice(next ? "composer.browserControlOn" : "composer.browserControlOff");
-      })
-      .catch((err: unknown) => {
-        setBrowserControl(!next);
-        draftBrowserControlRef.current = !next;
-        setNotice(
-          t(getLanguage(), "composer.browserControlFailed", {
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      });
-  }, [api, browserControl, currentSession]);
-
-  /** 收起态竖条：悬停/点条目后展开侧栏并打开会话列表（等宽度过渡结束再弹浮层，锚点才正确）。 */
-  const expandSidebarWithSessions = useCallback((): void => {
-    dismissAllPopovers();
-    // 只展开侧栏；会话/工作区列表由用户自己点开（用户 m10071：悬停自动展开时不要连带展开列表）
-    changeSidebarMode("docked");
-  }, [changeSidebarMode]);
-  /** 新建会话 = 新标签页（会话与标签页一一绑定）。 */
-  const newSession = useCallback((): void => {
-    if (!api) return;
-    void createFreshSessionAndTab({ reset: "keep" }).catch((err: unknown) =>
-      setNotice("新建会话失败：" + (err instanceof Error ? err.message : String(err))),
-    );
-  }, [api, createFreshSessionAndTab]);
-
-  /**
-   * 斜杠命令执行（Composer 只负责解析/面板，动作由 App 统一接线）。
-   * /compact 目前没有独立 IPC：上下文在超预算时会自动压缩，这里只给可读提示。
-   */
-  const handleSlashCommand = useCallback(
-    (command: string): void => {
-      const cmd = command.trim().toLowerCase();
-      switch (cmd) {
-        case "/new":
-          newSession();
-          break;
-        case "/clear":
-          setInput("");
-          break;
-        case "/stop":
-          stop();
-          break;
-        case "/settings":
-          openSettings();
-          break;
-        case "/compact": {
-          // 真实压缩：先预览统计 → 用户确认 → 写回持久化并重载当前会话消息
-          if (!api) break;
-          void (async () => {
-            try {
-              const preview = await api.chat.compact({ apply: false });
-              if (!preview.ok) {
-                setNotice(preview.error ?? "压缩失败");
-                return;
-              }
-              if (preview.compressed === false) {
-                setNotice("当前会话未超预算，无需压缩。");
-                return;
-              }
-              const pct = Math.round(preview.savedRatio * 100);
-              const confirmed = window.confirm(
-                `将把 ${preview.before.messages} 条（约 ${preview.before.chars} 字符）压缩为 ${preview.after.messages} 条（约 ${preview.after.chars} 字符），节省 ${pct}%。\n早期内容会汇总为摘要，是否继续？`,
-              );
-              if (!confirmed) return;
-              const applied = await api.chat.compact({ apply: true });
-              if (!applied.ok) {
-                setNotice(applied.error ?? "压缩失败");
-                return;
-              }
-              setNotice(`已压缩：${applied.before.messages} → ${applied.after.messages} 条，节省 ${Math.round(applied.savedRatio * 100)}%`);
-              const history = await api.chat.history().catch(() => null);
-              if (history?.session?.messages?.length) {
-                writeSessionMessages(history.session.sessionId, restoreMessages(history.session.messages, nextId));
-              }
-            } catch (err) {
-              setNotice(`压缩失败：${err instanceof Error ? err.message : String(err)}`);
-            }
-          })();
-          break;
-        }
-        case "/help":
-          setNotice("可用命令：/new 新建会话 · /clear 清空输入 · /stop 停止生成 · /settings 打开设置 · /compact 压缩说明 · /help 帮助");
-          break;
-        default:
-          setNotice(`未知命令：${command}（输入 /help 查看可用命令）`);
-      }
-    },
-    [api, newSession, openSettings, setInput, stop, writeSessionMessages],
-  );
-
-  const switchSession = useCallback((sessionId: string): void => {
-    if (!api) return;
-    // 切会话属于切换界面：先收起所有展开列表/浮层（用户 m02115 全局规则）。
-    dismissAllPopovers();
-    const previousSessionId = sessionIdRef.current;
-    void api.chat.switchSession({ sessionId }).then((r) => {
-      if (!r.ok) return;
-      pickedSessionRef.current = true;
-      sessionIdRef.current = sessionId;
-      setCurrentSession(sessionId);
-      // 优先恢复该会话的实时缓存（后台可能仍在跑）；否则用持久化历史
-      const cached = sessionCacheRef.current.get(sessionId);
-      const msgs = cached ?? restoreMessages(r.session?.messages ?? [], nextId);
-      writeSessionMessages(sessionId, msgs);
-      const meta = metaFor(sessionId);
-      setBusy(meta.busy);
-      // 切会话：把该会话自己的待发队列镜像回 UI（每个会话独立排队）
-      setPendingSteers(readPending(sessionId));
-      // 会话隔离：输入草稿跟着会话走（先存旧会话，再恢复新会话）
-      draftRef.current.set(previousSessionId, inputRef.current);
-      setInput(draftRef.current.get(sessionId) ?? "");
-      setNotice("");
-      void api.browser
-        .listTabs()
-        .then((r) => {
-          setTabs(r.tabs);
-          const active = r.tabs.find((tab) => tab.active);
-          // 绑定方向：把「该会话自己的活动标签」记到它名下（而不是把上一個会话的标签改判给新会话）。
-          if (active) tabSessionRef.current.set(active.id, sessionId);
-          const url = active?.url ?? "";
-          lastSyncedUrlRef.current = url;
-          setAddress(url);
-          setCurrentUrl(url);
-        })
-        .catch(() => undefined);
-    });
-  }, [api, metaFor, readPending, writeSessionMessages]);
-
-  /**
-   * 从某条消息分支：把「到这条为止」的历史复制成新会话并切过去。
-   * 为什么需要：Agent 浏览器操作会把会话绑在任务上，用户之后可能只想纯讨论——
-   * 分支给出一条干净的对话线，原会话完全不动（浏览器任务也不被复制）。
-   */
-  /** 点跨会话任务 chip / 任务会话：进入该任务的折叠工作区（同时切到对应会话）。 */
-  const openAgentTask = useCallback(
-    (taskSessionId: string): void => {
-      if (!api) return;
-      switchSession(taskSessionId);
-      void api.browser
-        .showTask({ sessionId: taskSessionId })
-        .then((r) => {
-          setTabs(r.tabs);
-          const active = r.tabs.find((tab) => tab.active);
-          setAddress(active?.url ?? "");
-          setCurrentUrl(active?.url ?? "");
-        })
-        .catch(() => undefined);
-    },
-    [api, switchSession],
-  );
-
-  // 首次动作结束：任务身份过户给新分支，界面跟着进入该任务的折叠工作区。
-  React.useEffect(() => {
-    if (!api) return;
-    return api.on("chat:taskForked", (payload) => {
-      const p = payload as { from?: string; to?: string } | null;
-      const to = p?.to;
-      if (!to) return;
-      refreshSessions();
-      // 用户回合中途切去看别的会话：只刷新列表，不把他强行拽到任务分支。
-      if (p?.from && sessionIdRef.current && sessionIdRef.current !== p.from) {
-        return;
-      }
-      switchSession(to);
-      void api.browser
-        .showTask({ sessionId: to })
-        .then((r) => {
-          setTabs(r.tabs);
-          const active = r.tabs.find((tab) => tab.active);
-          setAddress(active?.url ?? "");
-          setCurrentUrl(active?.url ?? "");
-        })
-        .catch(() => undefined);
-    });
-  }, [api, switchSession]);
-
-  const renameSession = useCallback(
-    (targetId: string, title: string): void => {
-      if (!api) return;
-      void api.chat
-        .renameSession({ sessionId: targetId, title })
-        .then((r) => {
-          if (r.ok) setSessions(r.sessions);
-        })
-        .catch((err: unknown) => setNotice(`重命名失败：${err instanceof Error ? err.message : String(err)}`));
-    },
-    [api],
-  );
-
-  const forkSessionById = useCallback(
-    (targetId: string, keepCount: number): void => {
-      if (!api) return;
-      void api.chat
-        .forkSession({ sessionId: targetId, keepCount })
-        .then((r) => {
-          if (!r.ok || !r.session) {
-            setNotice("分叉失败：源会话不存在");
-            return;
-          }
-          setSessions(r.sessions);
-          switchSession(r.session.sessionId);
-          setNotice("已分叉会话");
-        })
-        .catch((err: unknown) => setNotice(`分叉失败：${err instanceof Error ? err.message : String(err)}`));
-    },
-    [api, switchSession],
-  );
-
-  const forkFrom = useCallback(
-    (targetId: string): void => {
-      if (!api) return;
-      const idx = messages.findIndex((m) => m.id === targetId);
-      if (idx < 0) return;
-      const keepCount = messages
-        .slice(0, idx + 1)
-        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status !== "error")).length;
-      const sid = sessionIdRef.current;
-      if (!sid) return;
-      void api.chat
-        .forkSession({ sessionId: sid, keepCount })
-        .then((r) => {
-          if (!r.ok || !r.session) {
-            setNotice("分支失败：源会话不存在");
-            return;
-          }
-          setSessions(r.sessions);
-          switchSession(r.session.sessionId);
-          setNotice("已从此消息分支；原会话保持不变");
-        })
-        .catch((err: unknown) => setNotice(`分支失败：${err instanceof Error ? err.message : String(err)}`));
-    },
-    [api, messages, switchSession],
-  );
-
-  /**
-   * 打开「Agent 工作区」浮层：独立子窗口，压在网页之上。
-   * 为什么不在主窗口里画：主窗口 DOM 在原生网页视图之下，面板要么被盖住、要么得把网页隐藏/下移。
-   */
-  const toggleWorkspacePopover = useCallback((): void => {
-    if (!api) return;
-    const chip = document.querySelector('[data-workspace-chip="1"]') as HTMLElement | null;
-    if (!chip) return;
-    const rect = chip.getBoundingClientRect();
-    void api.ui
-      .togglePopover({
-        kind: "workspace",
-        anchor: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        lang: preferences?.language === "en-US" ? "en-US" : "zh-CN",
-      })
-      .catch(() => undefined);
-  }, [api, preferences?.language]);
-
-  /** 删除会话：当前会话被删时连同左侧标签切到下一个会话（原内联逻辑外置）。 */
-  const deleteSession = useCallback(
-    (sessionId: string): void => {
-      if (!api) return;
-      void (async () => {
-        // 工作区 > 会话 > 网页：删会话时先关掉它名下的全部网页（关网页则不会删会话）。
-        await api.browser.closeSessionTabs({ sessionId }).catch(() => undefined);
-        return api.chat.deleteSession({ sessionId });
-      })()
-        .then((r) => {
-          setSessions(r.sessions);
-          setCurrentSession(r.currentId);
-          // 会话都没了：待发队列一并清掉
-          pendingRef.current.delete(sessionId);
-          // 删除当前会话：右侧不能只清空，必须连同左侧标签一起切到下一个会话
-          if (sessionId === currentSession) {
-            setMessages([]);
-            setPendingSteers([]);
-            if (r.currentId) switchSession(r.currentId);
-          }
-        })
-        .catch(() => {});
-    },
-    [api, currentSession, switchSession],
-  );
-
-  /** 保存当前页面 HTML 全页（主进程写到下载目录 saved-pages/），成功 toast 显示路径。 */
-  const savePage = useCallback((): void => {
-    if (!api) return;
-    setNotice("正在保存页面…");
-    void api.browser
-      .savePage({})
-      .then((result) => {
-        if (!result.ok) {
-          setNotice(`保存失败：${result.error ?? "未知错误"}`);
-          return;
-        }
-        const size = typeof result.bytes === "number" ? `（${Math.max(1, Math.round(result.bytes / 1024))} KB）` : "";
-        setNotice(`页面已保存${size}：${result.path ?? "（路径未返回）"}`);
-      })
-      .catch((err: unknown) => setNotice(`保存失败：${err instanceof Error ? err.message : String(err)}`));
-  }, [api]);
-  // 供「浮层动作」稳定引用最新的 savePage（避免把整个回调塞进事件 effect 依赖）
-  React.useEffect(() => {
-    savePageRef.current = savePage;
-  }, [savePage]);
-
-  const snapshot = useCallback((): void => {
-    if (!api) return;
-    // 打开快照面板 = 进入整页浮层：先收起所有展开列表（用户 m02115 全局规则）。
-    dismissAllPopovers();
-    void api.browser
-      .snapshot()
-      .then((result) => {
-        if (result.ok) {
-          setSnapshotData(result); // 面板化：正文/元素可滚动与复制，不再只 toast 一行
-          setNotice("");
-          return;
-        }
-        setNotice(`快照失败：${result.error ?? "未知错误"}`);
-      })
-      .catch((err: unknown) => setNotice(`快照失败：${err instanceof Error ? err.message : String(err)}`));
-  }, [api]);
+  const {
+    sendText,
+    startVibe,
+    send,
+    rollbackTo,
+    regenerate,
+    stop,
+    editPendingSteer,
+    insertPendingSteer,
+    removePendingSteer,
+  } = useChatActions({
+    api,
+    sessionIdRef,
+    metaFor,
+    updateSessionMessages,
+    provider,
+    setBusy,
+    setNotice,
+    mode,
+    reasoningEffort,
+    activeWorkspaceId,
+    tabs,
+    tabSessionRef,
+    writeSessionMessages,
+    setSessions,
+    setCurrentSession,
+    draftBrowserControlRef,
+    setMessages,
+    setPendingSteers,
+    setInput,
+    pickedSessionRef,
+    readPending,
+    writePending,
+    input,
+    busy,
+    messages,
+    steerAppliedRef,
+    streamSettledRef,
+  });
+  const {
+    changeSearchEngine,
+    refreshSessions,
+    toggleSessionMenu,
+    toggleBrowserControl,
+    expandSidebarWithSessions,
+    newSession,
+    handleSlashCommand,
+    switchSession,
+    openAgentTask,
+    renameSession,
+    forkSessionById,
+    forkFrom,
+    toggleWorkspacePopover,
+    deleteSession,
+    savePage,
+    snapshot,
+  } = useSessionActions({
+    api,
+    preferences,
+    setPreferences,
+    setSessions,
+    setCurrentSession,
+    setNotice,
+    setSessionOpen,
+    setChromePage,
+    setSnapshotData,
+    setTabs,
+    setAddress,
+    setCurrentUrl,
+    setMessages,
+    setPendingSteers,
+    setInput,
+    navigate,
+    selectTab,
+    closeTab,
+    bindWorkspaceToCurrentSession,
+    addWorkspaceForChat,
+    changeSidebarMode,
+    createFreshSessionAndTab,
+    openSettings,
+    sessionIdRef,
+    draftBrowserControlRef,
+    browserControl,
+    setBrowserControl,
+    currentSession,
+    pendingRef,
+    sessionCacheRef,
+    inputRef,
+    draftRef,
+    lastSyncedUrlRef,
+    tabSessionRef,
+    writeSessionMessages,
+    metaFor,
+    readPending,
+    messages,
+    pickedSessionRef,
+    setBusy,
+    stop,
+  });
 
   // E2E 深链（?e2e=chat / model-menu / ... / settings）：脚本化验证用，生产路径不触发
   useE2eChatAutoSend(api, sendText);
