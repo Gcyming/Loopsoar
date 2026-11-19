@@ -3,6 +3,8 @@
  */
 import { describe, expect, it } from "vitest";
 import * as React from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderRich } from "../../packages/ui/src/Markdown.tsx";
 
@@ -53,5 +55,11 @@ describe("Markdown 渲染", () => {
     expect(compact).toContain("<hr");
     expect(compact).toContain("第一行 第二行");
     expect(normal).toContain("第一行 第二行");
+  });
+
+  it("链接跳转走 onOpenLink 回调，不直连 window.loopsoarAPI", () => {
+    const source = readFileSync(path.resolve(__dirname, "../../packages/ui/src/Markdown.tsx"), "utf8");
+    expect(source).not.toContain("window.loopsoarAPI");
+    expect(source).toContain("onOpenLink?.(link[2])");
   });
 });

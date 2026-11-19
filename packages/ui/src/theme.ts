@@ -9,7 +9,10 @@
  *
  * 用法：`applyTheme("classic")` 切主题（加 200ms 颜色过渡 class）；设置面板/Settings 由 App 接线。
  */
+import { LAYOUT } from "loopsoar-contracts/layout";
+
 const cssVar = (token: string, fallback: string): string => `var(--${token}, ${fallback})`;
+const sidebarMs = `${LAYOUT.SIDEBAR_MOTION_MS}ms`;
 
 export type ThemeName = "soft" | "classic";
 export const DEFAULT_THEME: ThemeName = "soft";
@@ -54,7 +57,7 @@ export const MOTION = {
   fast: "120ms",
   active: "80ms",
   themeSwitch: "200ms",
-  sidebarDuration: "320ms",
+  sidebarDuration: sidebarMs,
   terminalDuration: "240ms",
   popoverDuration: "140ms",
   ease: "cubic-bezier(0.2, 0, 0.2, 1)",
@@ -63,7 +66,7 @@ export const MOTION = {
   hover: "background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out",
   /** 侧栏 collapsed/float：宽度与透明度同步过渡。 */
   sidebar:
-    "width 320ms cubic-bezier(0.2, 0, 0.2, 1), opacity 320ms cubic-bezier(0.2, 0, 0.2, 1), margin 320ms cubic-bezier(0.2, 0, 0.2, 1), border-radius 320ms cubic-bezier(0.2, 0, 0.2, 1)",
+    `width ${sidebarMs} cubic-bezier(0.2, 0, 0.2, 1), opacity ${sidebarMs} cubic-bezier(0.2, 0, 0.2, 1), margin ${sidebarMs} cubic-bezier(0.2, 0, 0.2, 1), border-radius ${sidebarMs} cubic-bezier(0.2, 0, 0.2, 1)`,
   /** 终端面板拉起/收起：高度过渡。 */
   terminal: `height 240ms cubic-bezier(0.2, 0, 0.2, 1), border-radius 240ms cubic-bezier(0.2, 0, 0.2, 1)`,
 } as const;

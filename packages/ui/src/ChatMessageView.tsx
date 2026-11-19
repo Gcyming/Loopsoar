@@ -138,7 +138,7 @@ export default function ChatMessageView({
             open={thinkingOpen}
             durationText={replyDurationText}
             onToggleOpen={onToggleThinking}
-            Markdown={({ text, compact }) => renderRich(text, { compact })}
+            Markdown={({ text, compact }) => renderRich(text, { compact, onOpenLink: onOpenUrl })}
             onOpenUrl={onOpenUrl}
           />
         ) : null}
@@ -180,7 +180,7 @@ export default function ChatMessageView({
               </span>
             </span>
           ) : (
-            renderRich(displayText)
+            renderRich(displayText, { onOpenLink: onOpenUrl })
           )}
           {streaming ? <span className="stream-cursor" aria-hidden /> : null}
         </div>

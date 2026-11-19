@@ -1041,7 +1041,7 @@ function scheduleE2EPlanDemo(win: BrowserWindow): void {
       });
     }, 1200);
     setTimeout(() => {
-      // TODO_UPDATE：计划推进（触发「已完成 / 开始」播报）
+      // 演示：计划推进（触发「已完成 / 开始」播报）
       push("chat:stream:tool", {
         content: JSON.stringify({
           toolName: "todo_write",

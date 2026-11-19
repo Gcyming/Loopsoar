@@ -1,8 +1,8 @@
 # Loopsoar 框架审计报告（第二阶段开工前 · 夯实框架）
 
-> 审计范围：只读分析 + 基线验证。未修改任何源码/生成物；仓库 `git status` 审计前后均为空。
-> 审计时间：2026-11-13。仓库根：`D:\tool\AI\real-project\Loopsoar\Parent file`。
-> 结论见最后一节：**需先完成 P0 清单（2 项，均为小改动），其余可并行**。
+> 审计范围：只读分析 + 基线验证；审计时间 2026-11-13。
+> **状态（2026-11-19）**：P0-1/P0-2、P1-1、P1-4～P1-7、P2-1/P2-2/P2-3/P2-4/P2-6 已完成；P1-3/P2-5 部分收敛；P1-2 待产品决策；P1-8 已归档。详见 §5。
+> 仓库根：`D:\tool\AI\real-project\Loopsoar\Parent file`。
 
 ---
 
@@ -258,43 +258,43 @@
 
 | 编号 | 问题 | 证据 | 建议 |
 |---|---|---|---|
-| **P0-1** | 工具面对模型全量广播，无"按会话启停/收窄"能力；allowlist 只拦执行 | `services/src/chat.ts:486-492`（`toolSchemas()` 无参）、`core/src/tools/registry.ts:106`（钩子存在但无调用方）、`chat.ts:240-243`（只拦执行）、`chat.ts:84`（`getToolAllowlist` 无 sessionId）、`shell/src/main/index.ts:1798`（全局单例注册） | ① `chat.ts:486` → `registry.toolSchemas(resolvedAllowlist)`；② `ChatStreamSchema`（`schemas.ts:20`）加 `browserTools?: boolean` 或写进 `PersistedSession`（`sessionStore.ts:42`）；③ `getToolAllowlist(mode, sessionId)` |
-| **P0-2** | 元素引用契约断裂：快照发编号、点击不认；编号每次快照重排且旧标记不清 | `browserTools.ts:105` vs `:141-152`；`webContentsView.ts:60-65`（不清理）、`:210/:214-215`（每次重排）、`:83-87`（`selectorFor` 未被工具使用）；`tests/shell/browserTools.spec.ts:63`（用例避开了编号） | 见 §4.5 五步：快照令牌+稳定 ref → 清理旧标记 → 工具改走宿主方法 → 动作分层 → 等待可复用 |
+| **P0-1** | 工具面对模型全量广播，无"按会话启停/收窄"能力；allowlist 只拦执行 | `services/src/chat.ts:486-492`（`toolSchemas()` 无参）、`core/src/tools/registry.ts:106`（钩子存在但无调用方）、`chat.ts:240-243`（只拦执行）、`chat.ts:84`（`getToolAllowlist` 无 sessionId）、`shell/src/main/index.ts:1798`（全局单例注册） | **已完成**：`toolSchemas(resolvedAllowlist)` 让模型可见面与执行面同源；`getToolAllowlist(mode, sessionId)` 读取会话 `browserTools`；`tests/services/chatToolSurface.spec.ts` 覆盖。 |
+| **P0-2** | 元素引用契约断裂：快照发编号、点击不认；编号每次快照重排且旧标记不清 | `browserTools.ts:105` vs `:141-152`；`webContentsView.ts:60-65`（不清理）、`:210/:214-215`（每次重排）、`:83-87`（`selectorFor` 未被工具使用）；`tests/shell/browserTools.spec.ts:63`（用例避开了编号） | **已完成**：快照返回 `elements[]` + `snapshotGen` + `tabToken`；ref 注册表按会话/标签绑定，旧 ref 返回 `STALE_REF`；生产动作走 `BrowserHost.agentClick/agentType/agentKey/agentWheel`；`browserRefs.spec.ts`/`browserTools.spec.ts` 覆盖。 |
 
 ### P1（建议修，可与第二阶段并行，但 (b) 开工前要定案 3 件）
 
 | 编号 | 问题 | 证据 | 建议 |
 |---|---|---|---|
-| **P1-1** | Preferences 三份定义、无漂移守卫；新增字段会被 IPC 校验静默 strip | `schemas.ts:345,712` / `preferences.ts:11,43,76` / `types.d.ts:48`；`trustedIpc.ts:84-92` | 见 §4.1：契约出类型，core/UI 复用；补 `DEFAULT_PREFERENCES` ⊆ schema 守卫 |
-| **P1-2** | `sidebarMode:"float"` 是死值（UI 强制降级），且与"独立小窗"语义冲突 | `App.tsx:149-150`、`:600-616`、`schemas.ts:369` | 先定 float 语义（窗口 or 卡片），再决定策略枚举（`ask/docked/window`） |
-| **P1-3** | 浏览器动作两套实现，适配器 4 个方法不可达且未测 | `webContentsView.ts:230-260`、`browserAdapter/types.ts:29-37`、`browserTools.ts:130-212`、`webContentsAdapter.spec.ts` 只测 `close` | 收敛为一套（宿主方法），删死表面 |
+| **P1-1** | Preferences 三份定义、无漂移守卫；新增字段会被 IPC 校验静默 strip | `schemas.ts:345,712` / `preferences.ts:11,43,76` / `types.d.ts:48`；`trustedIpc.ts:84-92` | **已完成**：`PreferencesSchema` 为唯一产地；core 的 `Preferences` 与默认值、UI 的 `PreferencesData` 均从契约推导；`tests/core/preferences.spec.ts` 守住默认值可被 schema 解析。 |
+| **P1-2** | `sidebarMode:"float"` 是死值（UI 强制降级），且与"独立小窗"语义冲突 | `App.tsx:125-126`、`schemas.ts:392` | **待决策**：`float` 目前只作为“打开独立窗口”的动作信号，不落盘；App 会把持久化的 `float` 降级为 `docked`。需产品先定窗口/卡片语义，再改枚举。 |
+| **P1-3** | 浏览器动作两套实现，适配器 4 个方法不可达且未测 | `webContentsView.ts:230-260`、`browserAdapter/types.ts:29-37`、`browserTools.ts:130-212`、`webContentsAdapter.spec.ts` 只测 `close` | **部分完成**：生产动作已统一走 `BrowserHost.agentClick/agentType/agentKey/agentWheel`；适配器 `click/type` 仅保留为测试端口，`scroll/wait` 为兼容可选；不再有生产双路径。 |
 | **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout`。**已完成**：主进程不再创建 setInterval，`setSidebarWidth` 兼容旧参数但立即落位；UI 的 rAF 逐帧驱动保留。 |
-| **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | 快照格式升级前先补类型（与 P0-2 同批做） |
+| **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | **已完成**：`BrowserSnapshot.elements: BrowserElementSnapshot[]` 已是正式契约；`elementTotal`/`snapshotGen`/`tabToken` 同步入类型，工具层直接消费。 |
 | **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | **已完成**：`check.ts` 生成到临时目录，`gen.ts` 不再在 import 时写盘；守卫测试比对 gen 文件哈希，确保校验不改写工作树。 |
 | **P1-7** | 2 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:1470`（`useChatActions` 432 / `useSessionActions` 597）、`index.ts:1486`（`coreServices` 313 / `mainPaths` 49）、`schemas.ts:1490`（`events.ts` 55）、`browserHost.ts:1445`（`browserHostTypes.ts` 92） | **已完成**：全部源码 <=1500 行（当前最大 `refs.ts:1494`），并由 `tests/guards/source-size.spec.ts` 锁住红线 |
-| **P1-8** | `docs/FRAMEWORK-REVIEW.md` 全篇过时（MCP/skill/多标签/多会话/路径） | 见 §3.6 | 重写或标注归档 |
+| **P1-8** | `docs/FRAMEWORK-REVIEW.md` 全篇过时（MCP/skill/多标签/多会话/路径） | 见 §3.6 | **已归档**：文件头标注历史快照并指向本报告；不再作为当前架构依据。 |
 
 ### P2（可缓）
 
 | 编号 | 问题 | 证据 | 建议 |
 |---|---|---|---|
-| P2-1 | `.tmp/` 仅被 `.git/info/exclude:7` 忽略，不入库 | `.gitignore:14,17` 覆盖了 `.loopsoar-data*/`、`.tmp-mcp-test/` | 把 `.tmp/` 并入 `.gitignore` |
-| P2-2 | 裸 `ipcMain.handle` 无守卫（现存的 1 处是有意例外） | `index.ts:1927`、`trustedIpc.ts:8` | 加守卫测试：只允许白名单文件出现裸 handle |
-| P2-3 | UI 绕过 `useLoopsoarApi` 直接用 `window.loopsoarAPI` | `Markdown.tsx:64` | 走 `api.browser.newTab` |
-| P2-4 | 唯一 TODO：计划推进播报未接线 | `index.ts:1091` | 接上或删注释 |
-| P2-5 | `contracts/schemas.ts` 1295 行装 129 通道 + 31 事件 | `schemas.ts` | 按域拆文件（保持 gen 输出不变） |
-| P2-6 | 侧栏宽度/动画常量跨 UI/壳/theme 三处 | `App.tsx:108`、`browserHost.ts:28-30`、`theme.ts:53-57` | 收敛到 `contracts/layout`，theme 引用 |
+| P2-1 | `.tmp/` 仅被 `.git/info/exclude:7` 忽略，不入库 | `.gitignore:14,17` 覆盖了 `.loopsoar-data*/`、`.tmp-mcp-test/` | **已完成**：`.gitignore:14` 已收录 `.tmp/`。 |
+| P2-2 | 裸 `ipcMain.handle` 无守卫（现存的 1 处是有意例外） | `index.ts:1243`、`trustedIpc.ts:8` | **已完成**：`tests/guards/bare-ipc.spec.ts` 只允许 `index.ts` 的浏览器 preload 安装通道；新增裸 handle 会失败。 |
+| P2-3 | UI 绕过 `useLoopsoarApi` 直接用 `window.loopsoarAPI` | `Markdown.tsx:64` | **已完成**：`renderRich` 接收 `onOpenLink`，`ChatMessageView` 注入 `onOpenUrl`（最终走 `api.browser.newTab`）；UI 源码已无直连。 |
+| P2-4 | 唯一 TODO：计划推进播报未接线 | `e2eHooks.ts:1044` | **已完成**：TODO 标记已清除；该路径是 E2E 演示流，保留为产品演示数据。 |
+| P2-5 | `contracts/schemas.ts` 1295 行装 129 通道 + 31 事件 | `schemas.ts`（现 1490 行） | **部分完成**：31 个事件已抽到 `events.ts`（55 行）并由 schemas re-export；129 条通道仍在 `schemas.ts`，按域拆分待做。 |
+| P2-6 | 侧栏宽度/动画常量跨 UI/壳/theme 三处 | `layout.ts:31`、`theme.ts:57`、`browserHost.ts:112` | **已完成**：`LAYOUT.SIDEBAR_WIDTH` 与 `LAYOUT.SIDEBAR_MOTION_MS` 为单源；UI 的 `MOTION` 由契约生成时长，壳层宽度读同一个 LAYOUT。 |
 
 ---
 
 ## 6. 结论
 
-**需先完成 P0 清单（P0-1、P0-2 两项，均为小时级改动），之后第二阶段可以开工。**
+**P0 已完成，第二阶段可以开工；剩余项是收尾债，不是结构性问题。**
 
 依据：
-1. 框架本身没有结构性问题——分层 0 破口、electron 0 泄漏、preload 白名单由契约生成、129 条通道全部经 `handleTrusted`（1 处有意的浏览器 preload 例外）、生成物逐字节一致、typecheck 5/5。
-2. 但第二阶段的三项新能力，**(a) 依赖 P0-1**（否则"关掉浏览器工具"只是"模型看得见但点了报错"）、**(c) 依赖 P0-2**（否则在"编号不可信"的地基上做快照格式与引用稳定性 = 返工）。
-3. (b) 的两个前置是**决策**而非返工：float 的语义（P1-2）、默认策略设置放 `Settings.tsx:577` 的 general 分支（新增 6 步见 §4.2）。这两项可在 P0 修复的同一周内定案。
+1. 框架分层 0 破口、electron 0 泄漏、preload 白名单由契约生成、129 条通道全部经 `handleTrusted`（1 处有意的浏览器 preload 例外）、生成物逐字节一致、typecheck 5/5；全源码 <=1500 行。
+2. P0-1（模型可见面收窄）与 P0-2（稳定 ref/STALE_REF/真实输入动作）已闭环，第二阶段不再返工。
+3. 剩余：**P1-2** 需要先定 float 语义（窗口 or 卡片）；**P1-3** 生产双路径已收敛，但适配器 `click/type` 仍是测试端口；**P2-3** Markdown 仍直连 `window.loopsoarAPI`；**P2-5** schemas 仍有 129 通道未按域拆；**P2-6** 动画时长 token 仍只在 theme。
 
 **给第二阶段的三个"别踩"**：
 - 新增任何偏好 → 先改契约，否则静默丢字段（§4.1 故障链）；
@@ -315,5 +315,5 @@ done
 pnpm check
 
 # 3) 测试（本沙箱无法运行，请在普通终端执行）
-npx vitest run     # 期望 176 文件 / 1476 条
+npx vitest run     # 当前 245 文件 / 1905 条（2026-11-19）
 ```

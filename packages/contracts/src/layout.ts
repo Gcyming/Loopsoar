@@ -27,6 +27,8 @@ export const LAYOUT = {
   BROWSER_VIEW_RADIUS: 14,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
   SIDEBAR_WIDTH: 360,
+  /** 侧栏宽度/透明度过渡时长（ms）：UI 动效 token 与壳层布局共用。 */
+  SIDEBAR_MOTION_MS: 320,
   /**
    * 侧栏最小宽度占窗口宽度的比例（ADR-0037，用户裁决：把当前左右栏比例固定为侧栏的最小窄度）。
    * 当前布局实测：侧栏 720px / 窗口 2048px ≈ 35.2% ⇒ 取 0.35。

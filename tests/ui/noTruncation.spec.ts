@@ -38,7 +38,7 @@ describe("消息正文权威来源（ChatMessage.text）", () => {
 
   it("正文来自 text 的权威字段，timeline body 只走时间线展示", () => {
     expect(chat).toContain("const displayText = stripDiffMarkers(m.text)");
-    expect(chat).toContain("renderRich(displayText)");
+    expect(chat).toContain("renderRich(displayText, { onOpenLink: onOpenUrl })");
     // 不允许把 timeline 的 body 分片当正文来源
     expect(chat).not.toMatch(/step\.kind\s*===\s*"body"/);
     // 唯一允许的 .slice 是右侧卷轴导航的短标签（data-rail-label），正文/复制不得截断
@@ -49,7 +49,7 @@ describe("消息正文权威来源（ChatMessage.text）", () => {
 
   it("有错误横幅时仍完整渲染已有正文（不能因状态吞掉内容）", () => {
     expect(chat).not.toMatch(/m\.errorText\s*\?\s*null\s*:\s*streaming/);
-    expect(chat).toContain("renderRich(displayText)");
+    expect(chat).toContain("renderRich(displayText, { onOpenLink: onOpenUrl })");
   });
 
   it("复制按钮复制完整文本：助手用 displayText（text 去内部标记），用户用原始 m.text", () => {

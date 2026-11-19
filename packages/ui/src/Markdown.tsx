@@ -39,7 +39,7 @@ function CodeBlock({ code, lang, compact = false }: { code: string; lang: string
 }
 
 /** 行内：行内代码 / 粗体 / 斜体 / 链接。 */
-function inlineRich(text: string): React.ReactNode {
+function inlineRich(text: string, onOpenLink?: (url: string) => void): React.ReactNode {
   const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g);
   return parts.map((part, pi) => {
     if (part.startsWith("`") && part.endsWith("`")) {
@@ -61,7 +61,7 @@ function inlineRich(text: string): React.ReactNode {
           style={styles.richLink}
           onClick={(event) => {
             event.preventDefault();
-            void window.loopsoarAPI?.browser.newTab({ url: link[2] }).catch(() => {});
+            onOpenLink?.(link[2]);
           }}
         >
           {link[1]}
@@ -73,7 +73,7 @@ function inlineRich(text: string): React.ReactNode {
 }
 
 /** 行级渲染（GFM 表格 / 列表 / 标题 / 引用 / 分隔线 / 段落）。 */
-function renderPlainLines(block: string, bi: number, compact = false): React.ReactNode[] {
+function renderPlainLines(block: string, bi: number, compact = false, onOpenLink?: (url: string) => void): React.ReactNode[] {
   const lines = block.split(/\n/);
   const nodes: React.ReactNode[] = [];
   let list: string[] = [];
@@ -91,7 +91,7 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
     if (!text) return;
     nodes.push(
       <div key={`p-${bi}-${nodes.length}`} style={{ ...styles.richPara, ...(compact ? styles.compactPara : null) }}>
-        {inlineRich(text)}
+        {inlineRich(text, onOpenLink)}
       </div>,
     );
   };
@@ -106,13 +106,13 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
       ordered ? (
         <ol key={`ol-${bi}-${listKey++}`} style={listStyle}>
           {items.map((item, ii) => (
-            <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
+            <li key={ii} style={styles.richListItem}>{inlineRich(item, onOpenLink)}</li>
           ))}
         </ol>
       ) : (
         <ul key={`ul-${bi}-${listKey++}`} style={listStyle}>
           {items.map((item, ii) => (
-            <li key={ii} style={styles.richListItem}>{inlineRich(item)}</li>
+            <li key={ii} style={styles.richListItem}>{inlineRich(item, onOpenLink)}</li>
           ))}
         </ul>
       ),
@@ -138,11 +138,11 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
         <div key={`tbl-${bi}-${nodes.length}`} style={styles.tableWrap}>
           <table style={{ ...styles.table, ...(compact ? styles.compactTable : null) }}>
             <thead>
-              <tr>{header.map((cell, ci) => <th key={ci} style={styles.th}>{inlineRich(cell)}</th>)}</tr>
+              <tr>{header.map((cell, ci) => <th key={ci} style={styles.th}>{inlineRich(cell, onOpenLink)}</th>)}</tr>
             </thead>
             <tbody>
               {rows.map((row, ri) => (
-                <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={styles.td}>{inlineRich(cell)}</td>)}</tr>
+                <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={styles.td}>{inlineRich(cell, onOpenLink)}</td>)}</tr>
               ))}
             </tbody>
           </table>
@@ -202,7 +202,7 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
             marginTop: compact ? 7 : 10,
           }}
         >
-          {inlineRich(heading[2])}
+          {inlineRich(heading[2], onOpenLink)}
         </div>,
       );
       i += 1;
@@ -212,7 +212,7 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
     const quote = /^\s*>\s?(.*)$/.exec(line);
     if (quote) {
       flushParagraph();
-      nodes.push(<div key={`q-${bi}-${nodes.length}`} style={{ ...styles.richQuote, ...(compact ? styles.compactQuote : null) }}>{inlineRich(quote[1])}</div>);
+      nodes.push(<div key={`q-${bi}-${nodes.length}`} style={{ ...styles.richQuote, ...(compact ? styles.compactQuote : null) }}>{inlineRich(quote[1], onOpenLink)}</div>);
       i += 1;
       continue;
     }
@@ -227,7 +227,7 @@ function renderPlainLines(block: string, bi: number, compact = false): React.Rea
 }
 
 /** 富文本入口：代码块与行级内容分段渲染。 */
-export function renderRich(text: string, options: { compact?: boolean } = {}): React.ReactNode {
+export function renderRich(text: string, options: { compact?: boolean; onOpenLink?: (url: string) => void } = {}): React.ReactNode {
   if (!text) return null;
   const blocks = text.split(/(```[\s\S]*?```)/g);
   return blocks.map((block, bi) => {
@@ -236,7 +236,7 @@ export function renderRich(text: string, options: { compact?: boolean } = {}): R
       const body = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
       return <CodeBlock key={`code-${bi}`} code={body} lang={head} compact={options.compact} />;
     }
-    return <React.Fragment key={`text-${bi}`}>{renderPlainLines(block, bi, options.compact)}</React.Fragment>;
+    return <React.Fragment key={`text-${bi}`}>{renderPlainLines(block, bi, options.compact, options.onOpenLink)}</React.Fragment>;
   });
 }
 
