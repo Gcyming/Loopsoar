@@ -10,7 +10,7 @@
  *   ⑦ 按当前安全等级策略（DEFAULT_LEVEL_POLICY）：auto→allow / deny→deny / confirm→confirm
  *   ⑧ 兜底 → deny（fail-closed；未知工具名也是 deny，不抛错——「判不了≠不存在」在注册表层区分）
  */
-import path from "node:path";
+import type { PathPort } from "./platform/types.js";
 import { hardRuleCheck } from "./tools/hard_rules.js";
 
 export type SandboxLevel = 0 | 1 | 2 | 3 | 4 | 5;
@@ -67,8 +67,19 @@ export interface SandboxScope {
   workspaceRoot?: string;
 }
 
+export interface SandboxOptions {
+  /**
+   * 显式工作根：core 不再回落到 process.cwd()（DoD：找不到根就 fail-fast，不在核心猜）。
+   * 装配层（shell）必须传入；按会话判定时仍可用 checkPermission 的 opts.workspaceRoot 覆盖。
+   */
+  workspaceRoot?: string;
+  /** 路径能力注入（Node 装配用 nodePathPort）；缺失时任何越界判定直接抛错。 */
+  paths?: PathPort;
+}
+
 export class SandboxManager {
-  private workspaceRoot: string = process.cwd();
+  private workspaceRoot: string;
+  private paths?: PathPort;
   private allowedDirs: string[] = [];
   /** key = `${sessionId}\0${agentId}`；无会话时用 `\0${agentId}` 兼容旧行为。 */
   private sessionApprovals = new Map<string, Set<string>>();
@@ -79,6 +90,11 @@ export class SandboxManager {
   private terminalCount = new Map<string, number>(); // `${sessionId}\0${agentId}` -> 终端调用计数
   private knownTools = new Set<string>(); // 已装配工具名（由 ToolRegistry 同步）
   private assemblyDone = false; // 「判不了 ≠ 不存在」：未装配完成时不因空清单而全拒
+
+  constructor(opts: SandboxOptions = {}) {
+    this.workspaceRoot = opts.workspaceRoot?.trim() ?? "";
+    this.paths = opts.paths;
+  }
 
   /** 设置实例级默认工作根（兼容旧装配）。按会话判定时应改用 checkPermission 的 opts.workspaceRoot。 */
   setWorkspaceRoot(root: string): void {
@@ -140,9 +156,15 @@ export class SandboxManager {
 
   private isInsideWorkspace(p: string | undefined, workspaceRoot: string): boolean {
     if (!p) return true;
-    const root = path.resolve(workspaceRoot);
+    const configuredRoot = workspaceRoot.trim();
+    if (!configuredRoot) {
+      throw new Error("SandboxManager：未配置 workspaceRoot（core 不再回落到 process.cwd()）");
+    }
+    const paths = this.paths;
+    if (!paths) throw new Error("SandboxManager：未注入 PathPort，无法判定路径越界");
+    const root = paths.resolve(configuredRoot);
     // 相对路径按工作区根解析（工具参数通常给相对路径；不解析会永远判"越界"）
-    const target = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
+    const target = paths.isAbsolute(p) ? paths.resolve(p) : paths.resolve(root, p);
     const normRoot = this.norm(root);
     const normTarget = this.norm(target);
     return normTarget === normRoot || normTarget.startsWith(normRoot + "/");

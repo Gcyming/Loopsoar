@@ -161,6 +161,8 @@ export interface ChatServiceOptions {
    * 关闭仅用于调试/内部对比，生产应保持开启。
    */
   filterOutput?: boolean;
+  /** Agent-Loop 调试回调（由壳层按 LOOPSOAR_LOOP_DEBUG 注入；services/core 不直接读环境）。 */
+  loopDebug?: (event: string, detail?: unknown) => void;
 }
 
 export interface ChatInput {
@@ -767,22 +769,21 @@ export class ChatService {
         steers,
         signal: controller.signal,
         verifyRound,
+        debug: this.opts.loopDebug,
       } satisfies ToolLoopOpts;
       // Agent-Loop 注入（ADR-0010）：有 runner 走 LoopRegistry（可插拔 + 安全回退），否则内置循环
       const loopOutcome = this.opts.runLoop
         ? await this.opts.runLoop({ ...loopInput, sessionId })
         : await runToolLoop(loopInput);
-      if (process.env.LOOPSOAR_LOOP_DEBUG) {
-        console.log("[LOOP] outcome", {
-          status: loopOutcome.status,
-          reason: loopOutcome.reason,
-          finalTextLen: loopOutcome.finalText.length,
-          rounds: loopOutcome.usage?.rounds,
-          toolCalls: loopOutcome.usage?.toolCalls,
-          totalTokens: loopOutcome.usage?.totalTokens,
-          wallClockMs: loopOutcome.usage?.wallClockMs,
-        });
-      }
+      this.opts.loopDebug?.("outcome", {
+        status: loopOutcome.status,
+        reason: loopOutcome.reason,
+        finalTextLen: loopOutcome.finalText.length,
+        rounds: loopOutcome.usage?.rounds,
+        toolCalls: loopOutcome.usage?.toolCalls,
+        totalTokens: loopOutcome.usage?.totalTokens,
+        wallClockMs: loopOutcome.usage?.wallClockMs,
+      });
 
       outcome = loopOutcome.status;
       // aborted 的底层原因文案（"外部中止信号触发…"）对用户无意义：主动停止是用户动作，

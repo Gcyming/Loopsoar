@@ -5,14 +5,14 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { SandboxManager } from "../../packages/core/src/sandbox.ts";
+import { nodePathPort } from "../../packages/core/src/platform/node.ts";
 
 const GLOBAL_ROOT = path.resolve("loopsoar-test-global");
 const ROOT_A = path.resolve("loopsoar-test-ws-a");
 const ROOT_B = path.resolve("loopsoar-test-ws-b");
 
 function makeSandbox(): SandboxManager {
-  const sandbox = new SandboxManager();
-  sandbox.setWorkspaceRoot(GLOBAL_ROOT);
+  const sandbox = new SandboxManager({ workspaceRoot: GLOBAL_ROOT, paths: nodePathPort });
   return sandbox;
 }
 
@@ -124,8 +124,7 @@ describe("SandboxManager · 按次判定作用域根（不修改全局根）", (
   });
 
   it("setWorkspaceRoot 兼容性保留：无 opts 时仍按最后设置的全局根判定", () => {
-    const sandbox = new SandboxManager();
-    sandbox.setWorkspaceRoot(ROOT_B);
+    const sandbox = new SandboxManager({ workspaceRoot: ROOT_B, paths: nodePathPort });
     const inside = sandbox.checkPermission({
       agentId: "a",
       toolName: "file_read",

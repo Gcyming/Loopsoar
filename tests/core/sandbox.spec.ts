@@ -3,14 +3,20 @@
  */
 import { describe, expect, it } from "vitest";
 import { SandboxManager } from "../../packages/core/src/sandbox.ts";
+import { nodePathPort } from "../../packages/core/src/platform/node.ts";
 
 function freshSandbox(): SandboxManager {
-  const sm = new SandboxManager();
-  sm.setWorkspaceRoot("C:/loopsoar-work");
-  return sm;
+  return new SandboxManager({ workspaceRoot: "C:/loopsoar-work", paths: nodePathPort });
 }
 
 describe("沙箱：八步决策链（fail-closed）", () => {
+  it("未配置 workspaceRoot / 路径端口 → fail-fast（不回落到 process.cwd）", () => {
+    const bare = new SandboxManager();
+    expect(() => bare.checkPermission({ agentId: "a", toolName: "file_read", kind: "read", target: "x.txt" })).toThrow(/workspaceRoot/);
+    const rootOnly = new SandboxManager({ workspaceRoot: "C:/loopsoar-work" });
+    expect(() => rootOnly.checkPermission({ agentId: "a", toolName: "file_read", kind: "read", target: "x.txt" })).toThrow(/PathPort/);
+  });
+
   it("① 白名单目录命中 → allow", () => {
     const sm = freshSandbox();
     sm.addAllowedDir("C:/loopsoar-extra");

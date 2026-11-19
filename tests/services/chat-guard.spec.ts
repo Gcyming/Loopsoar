@@ -3,6 +3,7 @@ import { z } from "zod";
 import { InternalToolExecutor, PermRequestBus } from "../../packages/services/src/chat.ts";
 import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
 import { SandboxManager } from "../../packages/core/src/sandbox.ts";
+import { nodePathPort } from "../../packages/core/src/platform/node.ts";
 import { DEFAULT_PERMISSIONS } from "../../packages/core/src/permissions.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,8 +11,7 @@ import path from "node:path";
 
 function makeExecutor(guard?: (input: { target?: string; toolName: string; args: Record<string, unknown>; sessionId: string; kind?: string; workspaceRoot?: string }) => { action: "allow" | "deny"; reason?: string } | null) {
   const root = mkdtempSync(path.join(tmpdir(), "loopsoar-guard-"));
-  const sandbox = new SandboxManager();
-  sandbox.setWorkspaceRoot(root);
+  const sandbox = new SandboxManager({ workspaceRoot: root, paths: nodePathPort });
   const registry = new ToolRegistry();
   let executed = 0;
   registry.register({

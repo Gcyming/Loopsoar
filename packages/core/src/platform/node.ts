@@ -10,7 +10,7 @@
  *   4) 3xx 手动逐跳跟随，每一跳重新校验+重新解析+重新钉扎。
  */
 import * as fs from "node:fs/promises";
-import { resolve as resolvePath, dirname } from "node:path";
+import { resolve as resolvePath, dirname, isAbsolute as isAbsolutePath, join as joinPath } from "node:path";
 import { execFile } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import * as http from "node:http";
@@ -30,7 +30,16 @@ import type {
   NetResponse,
   EmbedAdapter,
   LoopsoarPlatform,
+  PathPort,
 } from "./types.js";
+
+/** Node 的路径端口实现（core 内唯一的 node:path 使用者）。 */
+export const nodePathPort: PathPort = {
+  resolve: (...parts) => resolvePath(...parts),
+  isAbsolute: (p) => isAbsolutePath(p),
+  dirname: (p) => dirname(p),
+  join: (...parts) => joinPath(...parts),
+};
 
 class NodeFsAdapter implements FsAdapter {
   async readFileUtf8(p: string): Promise<string> {

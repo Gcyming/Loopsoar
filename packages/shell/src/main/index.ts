@@ -434,13 +434,13 @@ app.whenReady().then(async () => {
   };
 
   const toolEvidence = new ToolEvidence(memory);
-  // 自动技能候选：每会话 10 分钟最多一次，避免连续任务刷出一堆低质量草稿。
-  const autoSkillLastAt = new Map<string, number>();
+  const autoSkillLastAt = new Map<string, number>(); // 自动技能候选：每会话 10 分钟最多一次，避免刷出低质量草稿。
   const AUTO_SKILL_COOLDOWN_MS = 10 * 60 * 1000;
   const chatService = new ChatService({
     platform,
     registry,
     sandbox,
+    loopDebug: process.env.LOOPSOAR_LOOP_DEBUG ? (event, detail) => console.log("[LOOP]", event, detail ?? "") : undefined, // 环境读取留在壳层
     // Agent-Loop 可插拔：统一经 LoopRegistry 运行（内置 loop 失败自动回退安全模式）
     runLoop: (input) => loopRuntime.run(input),
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,

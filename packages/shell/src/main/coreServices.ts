@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createNodePlatform } from "loopsoar-core/platform";
+import { createNodePlatform, nodePathPort } from "loopsoar-core/platform";
 import { ToolRegistry } from "loopsoar-core/tools/registry";
 import { registerBuiltinMinimal } from "loopsoar-core/tools/builtin";
 import { SandboxManager } from "loopsoar-core/sandbox";
@@ -50,8 +50,7 @@ export async function createCoreServices(input: CoreServiceInput) {
   const platform = createNodePlatform();
   const registry = new ToolRegistry();
   registerBuiltinMinimal(registry, platform);
-  const sandbox = new SandboxManager();
-  sandbox.setWorkspaceRoot(process.cwd());
+  const sandbox = new SandboxManager({ workspaceRoot: process.cwd(), paths: nodePathPort });
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
   // 偏好（工作区根 / 记忆库位置 / 自动记忆开关）→ 决定后续装配

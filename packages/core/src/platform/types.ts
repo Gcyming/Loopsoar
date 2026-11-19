@@ -13,6 +13,17 @@ export interface FsAdapter {
   isInside(root: string, p: string): boolean;
 }
 
+/**
+ * 最小路径能力（core 不直接 import node:path）：工作根解析与越界判定都走注入。
+ * 为什么单独成端口：Sandbox 是纯逻辑，路径语义（Windows 盘符 / POSIX）由平台适配层决定。
+ */
+export interface PathPort {
+  resolve(...parts: string[]): string;
+  isAbsolute(p: string): boolean;
+  dirname(p: string): string;
+  join(...parts: string[]): string;
+}
+
 export interface ProcessResult {
   code: number | null;
   stdout: string;

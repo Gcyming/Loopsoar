@@ -4,10 +4,10 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { SandboxManager } from "../../packages/core/src/sandbox.ts";
+import { nodePathPort } from "../../packages/core/src/platform/node.ts";
 
 function makeSandbox(root: string) {
-  const sandbox = new SandboxManager();
-  sandbox.setWorkspaceRoot(root);
+  const sandbox = new SandboxManager({ workspaceRoot: root, paths: nodePathPort });
   sandbox.syncKnownTools(["file_write"]);
   return sandbox;
 }

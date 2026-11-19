@@ -80,6 +80,11 @@ export interface ToolLoopOpts {
   longRunningTimeoutMs?: number;
   /** 普通工具静默超时覆盖（默认 LOOP_HEALTH.silentTimeoutMs；自定义 loop 可收紧，测试可缩短）。 */
   silentTimeoutMs?: number;
+  /**
+   * 调试日志回调（替代直接读 process.env.LOOPSOAR_LOOP_DEBUG）：
+   * 由装配层（Node/壳层）决定是否开启；core 不再感知环境变量。
+   */
+  debug?: (event: string, detail?: unknown) => void;
 }
 
 // 工具循环产出：包含最终状态、归因文案、累积文本、最终预算使用量。
@@ -312,7 +317,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             }
 
             case "tool_call": {
-              if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] tool_call", (chunk as { toolCall?: { name?: string } }).toolCall?.name);
+              opts.debug?.("tool_call", (chunk as { toolCall?: { name?: string } }).toolCall?.name);
               const tc = chunk as { kind: "tool_call"; toolCall: { id: string; name: string; args: unknown } };
               const toolCall: ToolCall = {
                 id: tc.toolCall.id,
@@ -540,7 +545,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       }
 
       // 本轮产生过工具调用：把 assistant(tool_calls) 与工具结果回灌，进入下一轮
-      if (process.env.LOOPSOAR_LOOP_DEBUG) console.log("[LOOP] round done", { round, sawDone, tools: roundToolCalls.length, text: roundText.length, finishReason: roundFinishReason });
+      opts.debug?.("round done", { round, sawDone, tools: roundToolCalls.length, text: roundText.length, finishReason: roundFinishReason });
       if (roundToolCalls.length > 0) {
         // 工具调用参数被长度上限截断：参数 JSON 往往不完整（工具已执行失败），不能把这些残缺调用
         // 回灌给模型，否则它会基于错误结果继续；改为丢弃本轮残缺工具轮 + 明确要求重发。
@@ -549,9 +554,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           emit("progress", {
             note: `工具调用参数被上游长度上限截断，已丢弃并请求重发（第 ${lengthContinuations}/${maxLengthContinuations} 次）…`,
           });
-          if (process.env.LOOPSOAR_LOOP_DEBUG) {
-            console.log("[LOOP] truncated tool round", { round, count: lengthContinuations, tools: roundToolCalls.length });
-          }
+          opts.debug?.("truncated tool round", { round, count: lengthContinuations, tools: roundToolCalls.length });
           conversation = [
             ...conversation,
             { role: "assistant", content: roundText, ...reasoningFields() },
@@ -630,14 +633,12 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
         // 同一助手消息由 UI 继续拼接，用户无感。
         if ((roundFinishReason === "length" || roundFinishReason === "max_tokens") && lengthContinuations < maxLengthContinuations) {
           lengthContinuations += 1;
-          if (process.env.LOOPSOAR_LOOP_DEBUG) {
-            console.log("[LOOP] length continuation", {
-              round,
-              count: lengthContinuations,
-              roundTextLen: roundText.length,
-              finishReason: roundFinishReason,
-            });
-          }
+          opts.debug?.("length continuation", {
+            round,
+            count: lengthContinuations,
+            roundTextLen: roundText.length,
+            finishReason: roundFinishReason,
+          });
           emit("progress", {
             note: `输出达到上游长度上限，自动续写（第 ${lengthContinuations}/${maxLengthContinuations} 次）…`,
           });
