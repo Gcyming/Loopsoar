@@ -69,6 +69,18 @@ const server = createServer(async (req, res) => {
     body = {};
   }
   const messages = Array.isArray(body.messages) ? body.messages : [];
+  // E2E 探针：只要任一请求消息里出现 MOCK_PROBE 文本，就记一行命中日志（用于断言「记忆已被注入模型请求」）。
+  // 只读日志、不影响响应；生产不使用该脚本。
+  if (process.env.MOCK_PROBE) {
+    const probe = process.env.MOCK_PROBE;
+    const hit = messages.some((message) => {
+      const content = message?.content;
+      if (typeof content === "string") return content.includes(probe);
+      if (Array.isArray(content)) return content.some((part) => typeof part?.text === "string" && part.text.includes(probe));
+      return false;
+    });
+    console.log(`MOCK_PROBE_HIT=${hit ? 1 : 0} probe=${JSON.stringify(probe)}`);
+  }
   const toolName = process.env.MOCK_TOOL_NAME;
   console.log(`MOCK_REQ roles=${messages.map((m) => m.role).join(",")} tool=${toolName ?? "-"}`);
   if (process.env.MOCK_LOG_HEADERS === "1") {
@@ -85,7 +97,11 @@ const server = createServer(async (req, res) => {
   res.write(": loopsoar mock stream\n\n");
 
   // 工具轮模拟：按 MOCK_TOOL_NAME 的顺序逐个调用；MOCK_PLAN=1 追加 todo_write；MOCK_REASONING=1 先吐思考
-  if (toolName) {
+  // MOCK_TOOL_FIRST_USER_ONLY=1：只有第一轮用户消息造工具调用，之后的用户轮直接走文本回复
+  // （六步 E2E 要用「同一会话的下一轮」验证记忆注入，不能被 mock 再造一次工具调用打断）。
+  const skipToolsForLaterTurns =
+    process.env.MOCK_TOOL_FIRST_USER_ONLY === "1" && messages.filter((msg) => msg.role === "user").length > 1;
+  if (toolName && !skipToolsForLaterTurns) {
     const calls = toolName.split(",").map((x) => x.trim()).filter(Boolean);
     if (process.env.MOCK_PLAN === "1") calls.push("todo_write");
     const toolResultCount = messages.filter((msg) => msg.role === "tool").length;
