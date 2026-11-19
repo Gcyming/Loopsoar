@@ -493,7 +493,7 @@ export function createElectronBrowserHost(
     openDevToolsPanel: options.devToolsPanel ? (webContents) => options.devToolsPanel!.open(webContents as Electron.WebContents) : undefined,
     closeDevToolsPanel: options.devToolsPanel ? () => options.devToolsPanel!.close() : undefined,
     isDevToolsPanelOpen: options.devToolsPanel ? () => options.devToolsPanel!.isOpen() : undefined,
-    createView: () => {
+    createView: (sessionId?: string) => {
       const browserPreload = browserPreloadPath();
       const view = new WebContentsView({
         webPreferences: {
@@ -514,7 +514,21 @@ export function createElectronBrowserHost(
       // 圆角切掉的四个角是「视图背景」而不是窗口背景：默认黑色会在呼吸灯外侧留下黑色方角。
       // 颜色跟随主题（UI 通过 browser:setCornerColor 下发），避免 soft 主题色差。
       view.setBackgroundColor(cornerColor);
-      view.webContents.setWindowOpenHandler(createWindowOpenHandler(openInNewTab));
+      view.webContents.setWindowOpenHandler(
+        createWindowOpenHandler((url) => {
+          // 归属必须跟着「发起窗口所在的标签组」，不能一律落到用户全局标签：
+          // 后台 Agent 会话里点开的新页若进了用户组，会被当成用户页面且在错误的会话里可见。
+          if (sessionId && hostRef) {
+            // 新页的任务归属跟「发起页」一致：Agent 克隆页开的页仍折叠进 Agent 工作区；
+            // 用户标签/普通页面开的页保持用户语义，不因为落在某个会话组就被标成任务页。
+            const fromAgent =
+              typeof view.webContents.id === "number" && hostRef.isAgentWebContents(view.webContents.id);
+            void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user");
+            return;
+          }
+          openInNewTab(url);
+        }),
+      );
       // 点网页区域 = 点到「列表外」：通知主窗口收起按钮展开的浮层（DOM 收不到原生视图的点击）
       if (options.onViewFocused) {
         view.webContents.on("focus", () => options.onViewFocused?.());

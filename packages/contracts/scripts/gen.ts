@@ -60,18 +60,6 @@ export function generateIpcTs(outDir = resolve("gen")) {
     )
     .join("\n");
 
-  // 构造 buildPreloadWhitelist 函数（domain → method[]，直接由 CHANNEL_BINDINGS 推导）
-  const domainToMethods = new Map<string, Set<string>>();
-  for (const [channel, binding] of Object.entries(CHANNEL_BINDINGS)) {
-    if (!domainToMethods.has(binding.domain)) domainToMethods.set(binding.domain, new Set());
-    domainToMethods.get(binding.domain)!.add(binding.method);
-  }
-  const preloadEntries = Array.from(domainToMethods.entries())
-    .map(
-      ([domain, methods]) => `    "${domain}": [${Array.from(methods).map((m) => `"${m}"`).join(", ")}]`
-    )
-    .join(",\n");
-
   const content = `/**
  * 生成文件：由 scripts/gen-cli.ts 生成，不可手动修改。
  * 唯一产地：packages/contracts/src/schemas.ts 与 src/security-policy.ts。
@@ -88,14 +76,6 @@ ${ipcChannelsEntries}
 } as const;
 
 /**
- * IpcRequest 包装类型：通道名 + 载荷。
- */
-export type IpcRequest<T> = {
-  readonly channel: string;
-  readonly payload: T;
-};
-
-/**
  * IPC_VALIDATORS：通道名 → zod 校验器（无参通道为 null）。
  * 与 CHANNEL_BINDINGS 同源（直接由 request 字段推导），
  * 供受信 IPC 入口做四要素校验之「参数合法性」。
@@ -103,18 +83,6 @@ export type IpcRequest<T> = {
 export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEntries(
   Object.entries(CHANNEL_BINDINGS).map(([channel, b]) => [channel, b.request]),
 ) as Record<string, z.ZodTypeAny | null>;
-
-/**
- * buildPreloadWhitelist：根据 CHANNEL_BINDINGS 构建 preload 白名单。
- * 用于 Electron preload 层暴露接口时的域名→方法映射。
- */
-export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
-  return {
-    domains: {
-${preloadEntries}
-    },
-  };
-}
 
 /**
  * EVENT_NAMES：所有事件名列表。

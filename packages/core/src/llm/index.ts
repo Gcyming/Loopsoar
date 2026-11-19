@@ -21,6 +21,13 @@ export interface LlmMessage {
   tool_calls?: { id: string; name: string; args: unknown }[];
   /** role="tool" 时对应的工具调用 id */
   tool_call_id?: string;
+  /**
+   * Anthropic extended thinking 原文：工具轮必须原样回灌，否则下一轮 400。
+   * 仅当上游返回签名时使用；其它厂商忽略。
+   */
+  reasoning?: string;
+  /** Anthropic thinking 块签名（与 reasoning 成对；缺失时不回灌，避免伪造）。 */
+  reasoningSignature?: string;
 }
 
 // LLM 请求：包含对话上下文、可用工具清单、最大 Token 限制、中止信号。
@@ -36,7 +43,7 @@ export interface LlmRequest {
 // LLM 流式输出块：每种 kind 对应不同的语义处理路径（文本、推理、工具调用、使用量、完成、错误）。
 export type LlmChunk =
   | { kind: "text"; text: string; tokens?: number }
-  | { kind: "reasoning"; text: string; tokens?: number }
+  | { kind: "reasoning"; text: string; tokens?: number; signature?: string }
   | {
       kind: "tool_call";
       toolCall: { id: string; name: string; args: unknown };

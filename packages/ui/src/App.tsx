@@ -782,9 +782,9 @@ export default function App(): React.JSX.Element {
       .respond(payload)
       .then((result) => {
         // received=false：问题已过期 / 会话已终止（shell 侧按取消结算了）
-        if (!result?.received) setNotice("回答未送达：问题已过期或会话已结束");
+        if (!result?.received) setNotice(t(getLanguage(), "app.answerUndelivered"));
       })
-      .catch((err: unknown) => setNotice(`回答失败：${err instanceof Error ? err.message : String(err)}`));
+      .catch((err: unknown) => setNotice(`${t(getLanguage(), "app.answerFailed")}${err instanceof Error ? err.message : String(err)}`));
   }, [api, activeAsk]);
 
   const {
@@ -993,9 +993,9 @@ export default function App(): React.JSX.Element {
   const permissionLabel = (state: PermissionsState): string => {
     const p = state.permissions;
     const risky = [p.write, p.terminal, p.network, p.browser];
-    if (risky.every((x) => x === "deny")) return "只读会话";
-    if (risky.some((x) => x === "confirm")) return "权限：询问";
-    return "权限：放行";
+    if (risky.every((x) => x === "deny")) return t(getLanguage(), "app.readonlySession");
+    if (risky.some((x) => x === "confirm")) return t(getLanguage(), "app.permsAsk");
+    return t(getLanguage(), "app.permsAllow");
   };
   // 运行中输入非空时仍可发送：此时作为「转向提示」注入（steer）
   const canSend = Boolean(api) && input.trim() !== "";
@@ -1280,7 +1280,7 @@ export default function App(): React.JSX.Element {
         open={workspacePanelOpen}
         onClose={() => setWorkspacePanelOpen(false)}
         currentSessionId={currentSession}
-        currentSessionTitle={sessions.find((item) => item.id === currentSession)?.title ?? "当前会话"}
+        currentSessionTitle={sessions.find((item) => item.id === currentSession)?.title ?? t(getLanguage(), "app.currentSession")}
         sessionWorkspaceId={sessions.find((item) => item.id === currentSession)?.workspaceId ?? activeWorkspaceId}
         onChanged={(text) => {
           if (text) setNotice(text);

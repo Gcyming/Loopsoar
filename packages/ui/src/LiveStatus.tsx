@@ -9,6 +9,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 
 export interface LiveStatusProps {
   startedAt: number;
@@ -19,6 +20,7 @@ export interface LiveStatusProps {
 }
 
 export default function LiveStatus({ startedAt, contextPct, runningTool, hasText }: LiveStatusProps): React.ReactElement {
+  const tr = useT();
   const [now, setNow] = React.useState<number>(() => Date.now());
 
   React.useEffect(() => {
@@ -28,14 +30,14 @@ export default function LiveStatus({ startedAt, contextPct, runningTool, hasText
 
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   const text = runningTool
-    ? "思考与工具调用进行中"
+    ? tr("live.toolRunning")
     : hasText
-      ? "正在输出"
+      ? tr("live.streaming")
       : seconds >= 5
-        ? "已发出请求，等待上游返回"
-        : "正在思考";
+        ? tr("live.waiting")
+        : tr("live.thinking");
   // 不用 emoji：陪伴语前挂本地图标（bulb），颜色随文字主题走
-  const cheer = seconds >= 5 ? "别急，好东西值得多等几秒" : null;
+  const cheer = seconds >= 5 ? tr("live.cheer") : null;
 
   return (
     <div style={styles.wrap}>
@@ -47,7 +49,7 @@ export default function LiveStatus({ startedAt, contextPct, runningTool, hasText
         <span style={styles.detail}>
           · {seconds}s
           {contextPct !== null
-            ? ` · 上下文 ${contextPct === 0 && seconds >= 0 ? "<1" : contextPct}%`
+            ? ` · ${tr("live.context")} ${contextPct === 0 && seconds >= 0 ? "<1" : contextPct}%`
             : ""}
         </span>
       </div>

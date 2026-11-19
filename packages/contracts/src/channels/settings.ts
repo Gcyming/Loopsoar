@@ -76,12 +76,6 @@ export const settingsChannels: Record<string, ChannelBinding> = {
     request: PermissionsSchema,
     sensitive: true,
   },
-  "settings:clearProvider": {
-    domain: "settings",
-    method: "clearProvider",
-    request: null,
-    sensitive: true,
-  },
   "settings:testProvider": {
     domain: "settings",
     method: "testProvider",

@@ -4,7 +4,7 @@
 // 偏好类型直接消费契约推断类型（唯一产地 packages/contracts/src/schemas.ts）：
 // 不再手写第二份 interface —— 契约新增字段而 UI 类型不更新时，设置页读不到该字段，
 // 而壳层 zod safeParse 会 strip 未知键、静默落回默认值，这类漂移必须由编译期消灭。
-import type { PreferencesData } from "loopsoar-contracts/schemas";
+import type { EventName, Permissions as PermissionsData, PreferencesData } from "loopsoar-contracts/schemas";
 
 export interface LoopsoarDomain {
   [method: string]: (...args: unknown[]) => Promise<unknown>;
@@ -64,18 +64,17 @@ export interface PermissionCategory {
 }
 
 export interface PermissionsState {
-  permissions: {
-    read: "allow" | "confirm" | "deny";
-    write: "allow" | "confirm" | "deny";
-    terminal: "allow" | "confirm" | "deny";
-    network: "allow" | "confirm" | "deny";
-    /** 浏览器操作（Agent 操控内嵌浏览器）；登录/支付/不可撤销动作仍逐次确认，不受此项影响。 */
-    browser: "allow" | "confirm" | "deny";
-    workspaceRoots: string[];
-    confirmDangerousAlways: boolean;
-  };
+  permissions: PermissionsData;
   categories: PermissionCategory[];
   workspaceRoot: string;
+  /** L0–L5 形式化分级（core PERMISSION_LEVELS 的只读投影；设置页展示与审计共用）。 */
+  levels?: Array<{
+    level: number;
+    name: string;
+    zh: string;
+    en: string;
+    description: string;
+  }>;
 }
 
 export interface RuleEntry {
@@ -741,46 +740,8 @@ export interface SavePageResult {
   error?: string;
 }
 
-export type LoopsoarEvent =
-  | "chat:stream:chunk"
-  | "chat:stream:reasoning"
-  | "chat:stream:tool"
-  | "chat:stream:tool_start"
-  | "chat:stream:progress"
-  | "chat:stream:done"
-  | "chat:stream:error"
-  | "chat:stream:heartbeat"
-  | "chat:steer:applied"
-  | "perm:request"
-  | "boot:ready"
-  | "browser:tabs"
-  | "chat:taskForked"
-  | "browser:downloads"
-  | "extensions:updated"
-  | "skills:updated"
-  | "mcp:updated"
-  | "skills:updated"
-  | "mcp:updated"
-  | "memory:updated"
-  | "rules:updated"
-  | "terminal:data"
-  | "terminal:exit"
-  | "terminal:state"
-  | "ask:user"
-  | "loop:changed"
-  | "loop:fallback"
-  | "chrome:popoverAction"
-  | "chrome:popoverClosed"
-  | "chrome:dismissPopovers"
-  | "chrome:agentWindowClosed"
-  | "chrome:devToolsPanel"
-  | "chrome:agentWindowIconMode"
-  | "chrome:agentWindowTransition"
-  /** Agent 首次打开网页前的会话窗口布局安排（{ mode: "docked" | "agentWindow"; sessionId?; reason? }）。 */
-  | "chrome:applyLayout"
-  /** Agent 浏览器活动（{ sessionId?, tool, phase }）：当前会话显示呼吸灯，并切到操作中的标签。 */
-  | "chrome:agentActivity"
-  | "chat:compacted";
+/** 事件名唯一产地：contracts/src/events.ts 的 EVENTS（禁止在 UI 再维护一份）。 */
+export type LoopsoarEvent = EventName;
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
 export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace";
@@ -928,7 +889,6 @@ export interface LoopsoarAPI {
   agents: LoopsoarDomain & { list(): Promise<{ agents: AgentSummary[] }> };
   runtime: LoopsoarDomain & {
     status(): Promise<BootStatus>;
-    version(): Promise<{ app: string; id: string; version: string }>;
   };
   /** 应用级提示：主进程透明子窗口（永远压在原生网页之上）。 */
   ui: LoopsoarDomain & {
@@ -1080,7 +1040,6 @@ export interface LoopsoarAPI {
       apiKey?: string;
       headers?: Record<string, string>;
     }): Promise<TestProviderResult>;
-    clearProvider(): Promise<{ cleared: boolean }>;
     getPreferences(): Promise<{ preferences: Preferences; defaults: Preferences; searchUrlExample: string; locations: LocationsInfo }>;
     setPreferences(payload: Preferences): Promise<{ saved: boolean; preferences: Preferences }>;
     getPermissions(): Promise<PermissionsState>;

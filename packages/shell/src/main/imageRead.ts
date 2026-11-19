@@ -28,13 +28,45 @@ export function readImageDataUrl(filePath: string): ImageReadResult {
   const ext = path.extname(filePath).toLowerCase();
   const mime = IMAGE_MIME[ext];
   if (!mime) return { ok: false, error: "仅支持 png/jpg/jpeg/webp/gif 图片" };
+  let fd: number | undefined;
   try {
-    const stat = fs.statSync(filePath);
+    fd = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(fd);
     if (!stat.isFile()) return { ok: false, error: "不是文件" };
     if (stat.size > MAX_IMAGE_BYTES) return { ok: false, error: `图片过大（${Math.round(stat.size / 1024 / 1024)}MB，上限 6MB）` };
-    const buffer = fs.readFileSync(filePath);
+    // 先读文件头校验魔数：扩展名可随意改名，读 6MB 再判断太晚，也会把非图片内容塞进 data URL。
+    const header = Buffer.alloc(Math.min(64, stat.size));
+    const headRead = fs.readSync(fd, header, 0, header.length, 0);
+    if (!magicMatches(mime, header.subarray(0, headRead))) {
+      return { ok: false, error: `文件内容不是有效的 ${mime} 图片` };
+    }
+    const buffer = Buffer.alloc(stat.size);
+    const read = fs.readSync(fd, buffer, 0, stat.size, 0);
+    if (read !== stat.size) return { ok: false, error: "图片读取不完整（文件在读取过程中被修改）" };
     return { ok: true, dataUrl: `data:${mime};base64,${buffer.toString("base64")}`, mime };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // 关闭失败不影响已读结果
+      }
+    }
   }
+}
+
+/** 扩展名 → 文件头魔数校验（防止把任意 6MB 文件改名成 .png 后回传渲染层）。 */
+function magicMatches(mime: string, b: Buffer): boolean {
+  if (b.length < 12) return false;
+  if (mime === "image/png") {
+    return b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (mime === "image/jpeg") return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (mime === "image/gif") return b.subarray(0, 6).toString("latin1") === "GIF87a" || b.subarray(0, 6).toString("latin1") === "GIF89a";
+  if (mime === "image/webp") {
+    return b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP";
+  }
+  return false;
 }

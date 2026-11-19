@@ -436,7 +436,7 @@ export function buildDismissOverlayScript(): string {
     document.dispatchEvent(ev);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
   } catch (err) {}
-  return { ok: true, action: 'escape' };
+  return { ok: false, code: 'NOTHING_FOUND', action: 'escape' };
 })()`;
 }
 

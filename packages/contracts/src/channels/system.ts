@@ -4,12 +4,6 @@ import type { ChannelBinding } from "../validators.js";
 
 /** 通道 system 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
 export const systemChannels: Record<string, ChannelBinding> = {
-  "app:version": {
-    domain: "runtime",
-    method: "version",
-    request: null,
-    sensitive: true,
-  },
   "boot:status": {
     domain: "runtime",
     method: "status",

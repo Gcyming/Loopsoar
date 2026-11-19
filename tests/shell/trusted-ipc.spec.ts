@@ -67,9 +67,9 @@ describe("受信 IPC 四要素（fail-closed）", () => {
 
   it("④ 合法帧 + 合法参数 → 正常返回", async () => {
     const deps = fakeDeps();
-    handleTrusted(deps, "app:version", () => ({ version: "test" }));
-    const handler = getHandlerRegistry().get("app:version")!.handler as unknown as Handler;
-    const result = await handler({ senderFrame: { url: "loopsoar://app/index.html" } }, undefined);
+    handleTrusted(deps, "chat:stop", () => ({ version: "test" }));
+    const handler = getHandlerRegistry().get("chat:stop")!.handler as unknown as Handler;
+    const result = await handler({ senderFrame: { url: "loopsoar://app/index.html" } }, { sessionId: "sess-1" });
     expect(result).toEqual({ version: "test" });
   });
 });

@@ -41,43 +41,107 @@ export const MODEL_FAMILY_RE: readonly RegExp[] = [
   /底层\s*模型/gi,
 ] as const;
 
-// 对完整文本执行统一替换：将所有匹配的模型家族标记替换为「Loopsoar 平台」。
-// 为什么：统一输出掩码是身份边界的最后一道防线，防止用户通过模型自称识别底层供应商。
-export function applyOutputFilter(text: string): string {
-  let result = text;
-  for (const re of MODEL_FAMILY_RE) {
-    result = result.replace(re, "Loopsoar 平台");
+interface ProtectedRange {
+  start: number;
+  end: number;
+}
+
+/** 收集受保护区间；重叠区间合并，保证每个字符最多被保护一次。 */
+function protectedRanges(text: string): ProtectedRange[] {
+  const ranges: ProtectedRange[] = [];
+  const add = (start: number, end: number): void => {
+    if (end > start) ranges.push({ start, end });
+  };
+
+  // 围栏代码块：未闭合时保护到文本末尾（宁可少掩码，也不改坏代码）。
+  const fence = /```[\s\S]*?(?:```|$)/g;
+  for (const match of text.matchAll(fence)) {
+    const start = match.index ?? 0;
+    add(start, start + match[0].length);
   }
+
+  // 行内代码：只保护单行；跳过已落在围栏里的区间。
+  const inline = /`[^`\n]*`/g;
+  for (const match of text.matchAll(inline)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (ranges.some((r) => start < r.end && end > r.start)) continue;
+    add(start, end);
+  }
+
+  // URL：保留协议到路径/查询；中文正文紧贴 URL 时在 CJK 字符处截断。
+  const url = /https?:\/\/[^\s<>"'`\u4e00-\u9fff]+/gi;
+  for (const match of text.matchAll(url)) {
+    const raw = match[0].replace(/[),.;:!?，。；：！？、]+$/, "");
+    if (!raw) continue;
+    const start = match.index ?? 0;
+    const end = start + raw.length;
+    if (ranges.some((r) => start < r.end && end > r.start)) continue;
+    add(start, end);
+  }
+
+  ranges.sort((a, b) => a.start - b.start);
+  const merged: ProtectedRange[] = [];
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+function mask(text: string): string {
+  let result = text;
+  for (const re of MODEL_FAMILY_RE) result = result.replace(re, "Loopsoar 平台");
   return result;
 }
 
-// 增量流过滤器：处理 LLM 流式输出（chunk）的跨边界正则匹配问题。
-// 由于正则替换可能跨越多个 chunk，未完成的匹配尾部（如「底层模型」被切分）必须缓冲到下一个 chunk 再处理。
-// 为什么：如果直接逐 chunk 替换，跨 chunk 的匹配会被漏掉（前半匹配不到完整模式，后半已丢失上下文），导致掩码失效。
+// 对完整文本执行替换：受保护区间原样保留，普通文本掩码。
+export function applyOutputFilter(text: string): string {
+  if (!text) return text;
+  const ranges = protectedRanges(text);
+  if (ranges.length === 0) return mask(text);
+  let out = "";
+  let cursor = 0;
+  for (const range of ranges) {
+    out += mask(text.slice(cursor, range.start));
+    out += text.slice(range.start, range.end);
+    cursor = range.end;
+  }
+  out += mask(text.slice(cursor));
+  return out;
+}
+
+// 增量流过滤器：按完整行处理，维护围栏开/关状态。
+// 为什么按行而不是固定 20 字符尾巴：固定尾巴仍可能把 URL/行内代码切断；按行处理能保证
+// 围栏代码块内的内容不被误掩码。没有换行的尾块留到 flush。
 export function createStreamFilter() {
   let buffer = "";
+  let inFence = false;
 
   return {
-    /**
-     * 接收一个文本 chunk，返回已过滤的安全文本。
-     * 未完成的匹配尾部保留在内部 buffer，等待下次 push 完成匹配。
-     */
     push(chunk: string): string {
       buffer += chunk;
-      // 保守策略：最长可能跨边界的模式（如「底层模型」约 4 字符加上下文）取 20 字符缓冲。
-      // 这样可以确保任何可能被切分的匹配都有足够上下文在下次处理时完成。
-      const safeLen = Math.max(0, buffer.length - 20);
-      const toProcess = buffer.slice(0, safeLen);
-      buffer = buffer.slice(safeLen);
-      return applyOutputFilter(toProcess);
+      let out = "";
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline + 1);
+        buffer = buffer.slice(newline + 1);
+        if (/^\s*```/.test(line)) {
+          inFence = !inFence;
+          out += line;
+        } else {
+          out += inFence ? line : applyOutputFilter(line);
+        }
+      }
+      return out;
     },
 
-    /**
-     * 流结束时刷新剩余 buffer，确保无遗漏。
-     */
     flush(): string {
       const rest = applyOutputFilter(buffer);
       buffer = "";
+      inFence = false;
       return rest;
     },
   };

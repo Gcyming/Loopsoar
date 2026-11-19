@@ -91,8 +91,8 @@ export class AgentRegistry {
   }
 }
 
-/** 工具白名单判定（fail-closed 语义见文件头）。 */
-export function canUseTool(agent: AgentDefinition, toolName: string): boolean {
+/** 工具白名单判定（fail-closed 语义见文件头）。接受最小结构，避免生产端为了调用它伪造完整 AgentDefinition。 */
+export function canUseTool(agent: Pick<AgentDefinition, "toolAllowlist">, toolName: string): boolean {
   if (agent.toolAllowlist === undefined) return true;
   return agent.toolAllowlist.includes(toolName);
 }

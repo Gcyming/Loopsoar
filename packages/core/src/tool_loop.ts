@@ -48,6 +48,8 @@ export interface ToolLoopOpts {
   messages?: LlmMessage[];
   /** 推理等级（透传厂商；不支持则忽略）。 */
   reasoningEffort?: string;
+  /** 模型能力推导的最大输出（tokens）；undefined = 不传，交给上游默认。 */
+  maxTokens?: number;
   /**
    * 每轮声称核验（可选）：某轮无工具调用且模型准备收束（sawDone）时调用。
    * 为什么：只在最终收束时核验，「已保存」的假完成已经先呈现给用户了；每轮核验能在收束前
@@ -230,8 +232,15 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       let roundHadTextProgress = false;
       let roundHadToolProgress = false;
       let roundText = "";
+      let roundReasoning = "";
+      let roundReasoningSignature = "";
       let sawDone = false;
       let roundFinishReason: string | undefined;
+      /** 有签名的 thinking 才能回灌给 Anthropic；其它厂商/无签名数据不带，避免 400。 */
+      const reasoningFields = (): Pick<LlmMessage, "reasoning" | "reasoningSignature"> =>
+        roundReasoning && roundReasoningSignature
+          ? { reasoning: roundReasoning, reasoningSignature: roundReasoningSignature }
+          : {};
       const roundToolCalls: {
         id: string;
         name: string;
@@ -257,10 +266,9 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       const request: LlmRequest = {
         messages: conversation,
         tools: tools(),
-        // 不向上游传显式 max_tokens：各供应商对「最大输出」的上限差异巨大（从 4k 到数十万），
-        // 传大了会被上游 400 拒绝，传小了反而制造截断。长度上限交给 finish_reason=length
-        // 的同轮续写兜底（ADR-0045/0047），这是对未知上游最安全的行为。
-        maxTokens: undefined,
+        // max_tokens 由模型能力推导（ChatService 注入 getMaxOutputTokens）；未配置时不传，
+        // 交给上游默认。长度上限仍由 finish_reason=length 的同轮续写兜底（ADR-0045/0047）。
+        maxTokens: opts.maxTokens,
         reasoningEffort: opts.reasoningEffort,
         signal: abortController.signal,
       };
@@ -297,7 +305,9 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
             case "reasoning": {
               const reasoningText = chunk.text ?? "";
-              emit("reasoning", { text: reasoningText });
+              if (reasoningText) roundReasoning += reasoningText;
+              if (chunk.signature) roundReasoningSignature = chunk.signature;
+              if (reasoningText) emit("reasoning", { text: reasoningText });
               break;
             }
 
@@ -544,7 +554,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           }
           conversation = [
             ...conversation,
-            { role: "assistant", content: roundText },
+            { role: "assistant", content: roundText, ...reasoningFields() },
             {
               role: "user",
               content:
@@ -562,6 +572,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           {
             role: "assistant",
             content: roundText,
+            ...reasoningFields(),
             tool_calls: roundToolCalls.map((call) => ({ id: call.id, name: call.name, args: call.args })),
           },
           ...roundToolCalls.map((call) => {
@@ -603,7 +614,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           });
           conversation = [
             ...conversation,
-            { role: "assistant", content: roundText },
+            { role: "assistant", content: roundText, ...reasoningFields() },
             {
               role: "user",
               content: `\n【运行中插入的指令】\n用户在你运行期间插入了下面的请求（把它们当作本轮新增的指令一并考虑）：\n${lateSteers
@@ -632,7 +643,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           });
           conversation = [
             ...conversation,
-            { role: "assistant", content: roundText },
+            { role: "assistant", content: roundText, ...reasoningFields() },
             {
               role: "user",
               content: "请紧接上文继续输出未完成的内容：不要重复已写内容，不要重新开头，不要总结。",
@@ -703,7 +714,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             // 把模型的收束正文与本轮核验结论一起回灌，模型才知道「哪句话没被采信」
             conversation = [
               ...conversation,
-              { role: "assistant", content: roundText },
+              { role: "assistant", content: roundText, ...reasoningFields() },
               {
                 role: "user",
                 content: `声称核验未通过：${verifyNote}，请先用工具实际核实再收束`,

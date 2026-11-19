@@ -44,8 +44,6 @@ export function registerMemoryDomain(deps: MemoryDeps): void {
     reconciling: deps.memory.reconciling,
   }));
 
-  handleTrusted(deps, "memory:stats", () => deps.memory.stats());
-
   /**
    * 记忆图谱（E-M0）：事实 + 会话 → 节点/边 → 确定性环带布局（1000×1000 画布坐标系）。
    * 布局放在壳层算：渲染层不需要依赖 core，且同一份数据在任何窗口得到同一张图。

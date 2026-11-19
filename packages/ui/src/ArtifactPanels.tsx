@@ -8,6 +8,7 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { useT } from "./i18n.js";
 import DiffBlock from "./DiffBlock.js";
 import type { ProductFile, ReferenceGroups } from "./artifacts.js";
 
@@ -38,10 +39,11 @@ function Collapse({ open, children }: { open: boolean; children: React.ReactNode
 }
 
 export function UrlPanel({ urls, onOpenUrl }: { urls: ReferenceGroups["urls"]; onOpenUrl?: (url: string) => void }): React.ReactElement | null {
+  const tr = useT();
   if (urls.length === 0) return null;
   return (
     <div className="ref-panel">
-      <div className="ref-panel-head"><Icon name="globe" size={12} /> 访问来源 <span className="ref-panel-count">{urls.length}</span></div>
+      <div className="ref-panel-head"><Icon name="globe" size={12} /> {tr("artifacts.sources")} <span className="ref-panel-count">{urls.length}</span></div>
       <div className="ref-panel-list">
         {urls.map((item) => (
           <a
@@ -63,6 +65,7 @@ export function UrlPanel({ urls, onOpenUrl }: { urls: ReferenceGroups["urls"]; o
 }
 
 export function RefPanel({ files }: { files: ReferenceGroups["files"] }): React.ReactElement | null {
+  const tr = useT();
   if (files.length === 0) return null;
   const [open, setOpen] = React.useState(false);
   return (
@@ -70,7 +73,7 @@ export function RefPanel({ files }: { files: ReferenceGroups["files"] }): React.
       <button type="button" className="ref-panel-head is-button" onClick={() => setOpen((value) => !value)} title={open ? "收起参考文件" : "展开参考文件"}>
         <Chevron open={open} />
         <Icon name="file" size={12} />
-        <span>参考内容</span>
+        <span>{tr("artifacts.references")}</span>
         <span className="ref-panel-count">{files.length}</span>
       </button>
       <Collapse open={open}>
@@ -85,11 +88,12 @@ export function RefPanel({ files }: { files: ReferenceGroups["files"] }): React.
 }
 
 export function ProductPanel({ products, defaultOpen = false }: { products: ProductFile[]; defaultOpen?: boolean }): React.ReactElement | null {
+  const tr = useT();
   const [openPath, setOpenPath] = React.useState<string | null>(defaultOpen && products[0] ? products[0].path : null);
   if (products.length === 0) return null;
   return (
     <div className="product-panel">
-      <div className="product-panel-head">产物 <span className="ref-panel-count">{products.length}</span></div>
+      <div className="product-panel-head">{tr("artifacts.products")} <span className="ref-panel-count">{products.length}</span></div>
       <div className="product-grid">
         {products.map((product) => {
           const open = openPath === product.path;

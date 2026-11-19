@@ -97,6 +97,9 @@ export function compressConversation(
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const older = conversation.slice(0, conversation.length - keepRecent);
     const recent = conversation.slice(-keepRecent);
+    // 上游要求 tool 消息必须紧跟对应的 assistant(tool_calls)。压缩边界若正好切在
+    // tool 轮中间，保留窗口会以 role="tool" 开头 → 请求 400。丢弃这些孤儿工具结果。
+    while (recent.length > 1 && recent[0]?.role === "tool") recent.shift();
     const summaryLines = older.map((message) => summarizeMessage(message, summaryItemChars));
     const summary = [
       "## 早期对话摘要（系统自动压缩，原文仍保存在本地会话记录中）",

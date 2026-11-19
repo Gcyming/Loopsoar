@@ -78,6 +78,10 @@ class NodeProcessAdapter implements ProcessAdapter {
     return new Promise((resolve) => {
       let stdoutAcc = "";
       let stderrAcc = "";
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      const stdoutDecoder = new TextDecoder("utf-8");
+      const stderrDecoder = new TextDecoder("utf-8");
       let settled = false;
       const maxBytes = opts.maxBytes ?? 8_388_608;
       const child = execFile(cmd, args, {
@@ -104,16 +108,27 @@ class NodeProcessAdapter implements ProcessAdapter {
         resolve(result);
       };
 
-      child.stdout?.on("data", (chunk: Buffer) => {
-        const s = chunk.toString("utf-8", 0, Math.min(chunk.length, Math.max(0, maxBytes - stdoutAcc.length)));
-        stdoutAcc += s;
+      child.stdout?.on("data", (chunk: Buffer | string) => {
+        const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+        const room = maxBytes - stdoutBytes;
+        if (room <= 0) return;
+        const slice = bytes.length <= room ? bytes : bytes.subarray(0, room);
+        stdoutBytes += slice.length;
+        // TextDecoder(stream) 保留跨 chunk 的多字节尾部；直接 chunk.toString 会把中文切坏。
+        stdoutAcc += stdoutDecoder.decode(slice, { stream: true });
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        const s = chunk.toString("utf-8", 0, Math.min(chunk.length, Math.max(0, maxBytes - stderrAcc.length)));
-        stderrAcc += s;
+      child.stderr?.on("data", (chunk: Buffer | string) => {
+        const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+        const room = maxBytes - stderrBytes;
+        if (room <= 0) return;
+        const slice = bytes.length <= room ? bytes : bytes.subarray(0, room);
+        stderrBytes += slice.length;
+        stderrAcc += stderrDecoder.decode(slice, { stream: true });
       });
 
       child.on("close", (code, signal) => {
+        stdoutAcc += stdoutDecoder.decode();
+        stderrAcc += stderrDecoder.decode();
         finish({
           code: typeof code === "number" ? code : null,
           stdout: stdoutAcc,
@@ -363,15 +378,17 @@ class NodeNetAdapter implements NetAdapter {
       const req = transport.request(options, (res) => {
         const chunks: string[] = [];
         let collected = 0;
+        const decoder = new TextDecoder("utf-8");
         const status = res.statusCode ?? 0;
         const headersOut = normalizeHeaders(res.headers);
         const finishBody = (): void => {
+          chunks.push(decoder.decode());
           finish({ status, headers: headersOut, text: chunks.join("") });
         };
 
         res.on("data", (chunk: Buffer) => {
           if (settled) return;
-          const piece = chunk.toString("utf8");
+          const piece = decoder.decode(chunk, { stream: true });
           const room = maxChars - collected;
           if (room <= 0) {
             // 语义是「取前 maxChars 个字符」：够了就收尾，避免把整页下载进内存

@@ -36,10 +36,55 @@ function isInside(root: string, target: string): boolean {
 export class SkillHost {
   private registry = new SkillRegistry();
   private stateFile: string;
+  private watcher: fs.FSWatcher | null = null;
+  private watchTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private dir: string) {
     this.stateFile = path.join(path.dirname(dir), "skills.json");
     this.scan();
+  }
+
+  /**
+   * 监听技能目录，外部编辑 SKILL.md 后自动重扫。
+   * 不监听的话，Agent 在会话中生成的候选/用户手改的规则要重启应用才生效，
+   * 与 loop 热更新不一致（loop 走 registry 重新加载）。
+   */
+  watch(onChange?: (installed: number) => void): void {
+    if (this.watcher) return;
+    const rescan = (): void => {
+      if (this.watchTimer) clearTimeout(this.watchTimer);
+      this.watchTimer = setTimeout(() => {
+        this.watchTimer = null;
+        try {
+          const result = this.scan();
+          onChange?.(result.installed);
+        } catch {
+          // 扫描失败保留上一次可用快照
+        }
+      }, 300);
+      this.watchTimer.unref?.();
+    };
+    try {
+      this.watcher = fs.watch(this.dir, { recursive: true }, rescan);
+    } catch {
+      try {
+        this.watcher = fs.watch(this.dir, rescan);
+      } catch {
+        this.watcher = null;
+        return;
+      }
+    }
+    this.watcher.on("error", () => {
+      this.watcher?.close();
+      this.watcher = null;
+    });
+  }
+
+  dispose(): void {
+    if (this.watchTimer) clearTimeout(this.watchTimer);
+    this.watchTimer = null;
+    this.watcher?.close();
+    this.watcher = null;
   }
 
   private readState(): SkillsState {

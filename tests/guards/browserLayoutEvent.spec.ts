@@ -27,7 +27,10 @@ describe("守卫：chrome:applyLayout 事件链路", () => {
   });
 
   it("UI 类型声明与订阅一致（订阅名必须与契约逐字相同）", () => {
-    expect(read("packages/ui/src/types.d.ts")).toContain('"chrome:applyLayout"');
+    // 事件名不再手写在 types.d.ts（会与契约漂移）：类型别名直接引用 contracts 的 EventName，
+    // 字面量只保留在契约 events.ts 里。
+    expect(read("packages/ui/src/types.d.ts")).toContain("export type LoopsoarEvent = EventName;");
+    expect(read("packages/contracts/src/events.ts")).toContain('"chrome:applyLayout"');
     expect(read("packages/ui/src/useAgentWindowLayout.ts")).toContain('api.on("chrome:applyLayout"');
   });
 

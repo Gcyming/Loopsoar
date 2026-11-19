@@ -552,7 +552,7 @@ export class CdpBrowserBackend implements BrowserBackend {
     return this.sessions.has(sessionId || "default");
   }
 
-  async ensureAgentTab(sessionId?: string): Promise<string | null> {
+  async ensureAgentTab(sessionId?: string, _opts?: { blank?: boolean }): Promise<string | null> {
     const group = this.group(sessionId);
     if (group.active && this.tabs.has(group.active)) return group.active;
     const tab = await this.tabOrCreate(undefined, sessionId);

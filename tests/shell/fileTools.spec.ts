@@ -53,6 +53,24 @@ describe("file_write 工具", () => {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 20000);
+
+  it("拒绝敏感文件与受保护目录（.env / .git/config）", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-file-"));
+    const tool = makeTool(root);
+    try {
+      const env = await tool.execute({ agentId: "a", params: { path: ".env", content: "SECRET=x" }, platform: {} });
+      expect(env.ok).toBe(false);
+      expect(env.content).toContain("敏感文件");
+      expect(fs.existsSync(path.join(root, ".env"))).toBe(false);
+
+      const git = await tool.execute({ agentId: "a", params: { path: ".git/config", content: "x" }, platform: {} });
+      expect(git.ok).toBe(false);
+      expect(git.content).toContain("受保护");
+      expect(fs.existsSync(path.join(root, ".git/config"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 20000);
 });
 
 

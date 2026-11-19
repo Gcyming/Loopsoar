@@ -254,6 +254,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.permissions.save": { zh: "保存权限策略", en: "Save permission policy" },
   "settings.permissions.saved": { zh: "权限策略已保存（下次工具调用生效）", en: "Permission policy saved (applies to the next tool call)" },
   "settings.permissions.securityTitle": { zh: "安全", en: "Security" },
+  "settings.permissions.levelsTitle": { zh: "权限分级（L0–L5）", en: "Permission levels (L0–L5)" },
+  "settings.permissions.levelsHint": {
+    zh: "工具按声明能力归入固定等级；分级用于展示与审计，实际放行仍由上面的类别策略和二次确认决定",
+    en: "Tools map to fixed levels by declared capability; levels are for display and audit, while category policy and confirmations decide actual execution",
+  },
   "settings.permissions.sensitive": { zh: "敏感步骤始终确认", en: "Always confirm sensitive steps" },
   "settings.permissions.sensitiveHint": {
     zh: "登录、支付、不可撤销的提交等敏感步骤强制二次确认（默认开启；关闭后仍遵守上面的类别策略与危险操作确认）",

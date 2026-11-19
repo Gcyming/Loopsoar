@@ -41,6 +41,19 @@ describe("图片读取", () => {
     }
   });
 
+  it("非图片内容改名成 .png → 魔数校验拒绝", () => {
+    const dir = makeDir();
+    try {
+      const file = path.join(dir, "fake.png");
+      fs.writeFileSync(file, "not an image at all");
+      const result = readImageDataUrl(file);
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("不是有效的 image/png");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("超过 6MB 的图片 → 拒绝并说明大小", () => {
     const dir = makeDir();
     try {

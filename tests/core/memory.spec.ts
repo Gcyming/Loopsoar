@@ -48,14 +48,25 @@ describe("记忆五闸", () => {
     expect(gateDedupe(existing, incoming).duplicate).toBe(false);
   });
 
-  it("③ 合并：无 tags 且相似度 >0.68 → 合并；带 tags 不参与合并", () => {
+  it("③ 合并：tags 不阻断；跨 agent 不合并", () => {
     const base = createFact({ id: "f1", content: "记忆系统写入前必须先去重检查", category: "insight" });
     const incoming = createFact({ id: "f2", content: "记忆系统写入前必须先去重", category: "insight" });
     const r = gateMerge([base], incoming);
     expect(r.mergeInto?.id).toBe("f1");
 
+    // extract 产出的候选恒有 tags；带 tags 仍应参与合并（真实写入路径不再被一票否决）。
     const tagged = createFact({ id: "f3", content: "记忆系统写入前必须先去重", category: "insight", tags: ["memory"] });
-    expect(gateMerge([base], tagged).mergeInto).toBeUndefined();
+    expect(gateMerge([base], tagged).mergeInto?.id).toBe("f1");
+
+    // 跨 agent 即使落在 0.68–0.75 区间也不能合并（保留归属）。
+    const otherAgent = createFact({
+      id: "f4",
+      content: "记忆系统写入前必须先去重",
+      category: "insight",
+      tags: ["memory"],
+      agentId: "agent-b",
+    });
+    expect(gateMerge([base], otherAgent).mergeInto).toBeUndefined();
   });
 
   it("④ 建链：tags 交集即可建双向链接", () => {

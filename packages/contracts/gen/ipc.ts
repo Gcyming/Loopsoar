@@ -20,12 +20,8 @@ export const IPC_CHANNELS = {
   "fs:saveImage": { domain: "fs", method: "saveImage", sensitive: true, hasRequest: true },
   "chat:saveTimeline": { domain: "chat", method: "saveTimeline", sensitive: true, hasRequest: true },
   "chat:stop": { domain: "chat", method: "stop", sensitive: true, hasRequest: true },
-  "chat:send": { domain: "chat", method: "send", sensitive: true, hasRequest: true },
   "perm:respond": { domain: "perm", method: "respond", sensitive: true, hasRequest: true },
-  "file:read": { domain: "workspace", method: "read", sensitive: true, hasRequest: true },
-  "file:write": { domain: "workspace", method: "write", sensitive: true, hasRequest: true },
   "agents:list": { domain: "agents", method: "list", sensitive: true, hasRequest: false },
-  "app:version": { domain: "runtime", method: "version", sensitive: true, hasRequest: false },
   "boot:status": { domain: "runtime", method: "status", sensitive: true, hasRequest: false },
   "browser:navigate": { domain: "browser", method: "navigate", sensitive: true, hasRequest: true },
   "browser:screenshot": { domain: "browser", method: "screenshot", sensitive: true, hasRequest: true },
@@ -52,7 +48,6 @@ export const IPC_CHANNELS = {
   "memory:update": { domain: "memory", method: "update", sensitive: true, hasRequest: true },
   "memory:delete": { domain: "memory", method: "delete", sensitive: true, hasRequest: true },
   "memory:graph": { domain: "memory", method: "graph", sensitive: true, hasRequest: true },
-  "memory:stats": { domain: "memory", method: "stats", sensitive: true, hasRequest: false },
   "memory:clear": { domain: "memory", method: "clear", sensitive: true, hasRequest: false },
   "memory:consolidate": { domain: "memory", method: "consolidate", sensitive: true, hasRequest: false },
   "memory:review": { domain: "memory", method: "review", sensitive: true, hasRequest: true },
@@ -69,7 +64,6 @@ export const IPC_CHANNELS = {
   "settings:setPreferences": { domain: "settings", method: "setPreferences", sensitive: true, hasRequest: true },
   "settings:getPermissions": { domain: "settings", method: "getPermissions", sensitive: true, hasRequest: false },
   "settings:setPermissions": { domain: "settings", method: "setPermissions", sensitive: true, hasRequest: true },
-  "settings:clearProvider": { domain: "settings", method: "clearProvider", sensitive: true, hasRequest: false },
   "settings:testProvider": { domain: "settings", method: "testProvider", sensitive: true, hasRequest: true },
   "settings:getRules": { domain: "settings", method: "getRules", sensitive: true, hasRequest: false },
   "settings:setRules": { domain: "settings", method: "setRules", sensitive: true, hasRequest: true },
@@ -165,14 +159,6 @@ export const IPC_CHANNELS = {
 } as const;
 
 /**
- * IpcRequest 包装类型：通道名 + 载荷。
- */
-export type IpcRequest<T> = {
-  readonly channel: string;
-  readonly payload: T;
-};
-
-/**
  * IPC_VALIDATORS：通道名 → zod 校验器（无参通道为 null）。
  * 与 CHANNEL_BINDINGS 同源（直接由 request 字段推导），
  * 供受信 IPC 入口做四要素校验之「参数合法性」。
@@ -180,38 +166,6 @@ export type IpcRequest<T> = {
 export const IPC_VALIDATORS: Record<string, z.ZodTypeAny | null> = Object.fromEntries(
   Object.entries(CHANNEL_BINDINGS).map(([channel, b]) => [channel, b.request]),
 ) as Record<string, z.ZodTypeAny | null>;
-
-/**
- * buildPreloadWhitelist：根据 CHANNEL_BINDINGS 构建 preload 白名单。
- * 用于 Electron preload 层暴露接口时的域名→方法映射。
- */
-export function buildPreloadWhitelist(): { domains: Record<string, string[]> } {
-  return {
-    domains: {
-    "chat": ["stream", "steer", "steerCancel", "rollback", "renameSession", "forkSession", "saveTimeline", "stop", "send", "history", "sessions", "newSession", "switchSession", "deleteSession", "setBrowserControl", "compact"],
-    "fs": ["readImage", "saveImage"],
-    "perm": ["respond"],
-    "workspace": ["read", "write", "list", "create", "bindSession", "select", "rename", "openFolder", "remove", "status"],
-    "agents": ["list"],
-    "runtime": ["version", "status"],
-    "browser": ["navigate", "screenshot", "snapshot", "newTab", "closeTab", "endTask", "closeSessionTabs", "selectTab", "resolveFavicon", "setCornerColor", "listTasks", "showTask", "showUserTabs", "listTabs", "setOverlay", "setSidebarWidth", "setBottomInset", "back", "forward", "reload", "setDevToolsPanel", "toggleDevTools", "listExtensions", "installExtension", "removeExtension", "history", "historyRemove", "downloads", "downloadAction", "savePage"],
-    "ui": ["toast", "openPopover", "togglePopover", "closePopover", "popoverAction", "openAgentWindow", "closeAgentWindow", "minimizeAgentWindow", "dragAgentWindow", "restoreAgentWindow", "moveAgentWindow"],
-    "settings": ["listModels", "getProvider", "setProvider", "getPreferences", "setPreferences", "getPermissions", "setPermissions", "clearProvider", "testProvider", "getRules", "setRules", "getWorkspaceRule", "diagnostics", "about", "setApiKey", "clearApiKey", "listProviders", "upsertProvider", "removeProvider", "setActiveProvider"],
-    "dialog": ["pickPath"],
-    "memory": ["list", "add", "update", "delete", "graph", "stats", "clear", "consolidate", "review", "merge", "export"],
-    "window": ["minimize", "maximize", "close", "state"],
-    "rules": ["candidates", "reviewSession", "history", "rollback", "learnFromSession", "acceptCandidate", "dismissCandidate"],
-    "worktree": ["create", "remove", "diff", "merge"],
-    "extensions": ["list", "setEnabled", "remove", "start", "stop", "openDir"],
-    "skills": ["list", "reload", "setEnabled", "remove", "openDir"],
-    "mcp": ["list", "add", "remove", "connect", "disconnect"],
-    "terminal": ["profiles", "list", "open", "input", "run", "interrupt", "close", "history", "diagnose"],
-    "ask": ["respond"],
-    "loop": ["list", "setActive", "reload"],
-    "bookmarks": ["list", "add", "remove"]
-    },
-  };
-}
 
 /**
  * EVENT_NAMES：所有事件名列表。
@@ -227,7 +181,6 @@ export const EVENT_NAMES = [
   "chat:stream:heartbeat",
   "chat:steer:applied",
   "perm:request",
-  "boot:ready",
   "browser:tabs",
   "chat:taskForked",
   "browser:downloads",

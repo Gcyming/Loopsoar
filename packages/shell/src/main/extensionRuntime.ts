@@ -131,8 +131,17 @@ export class ExtensionRuntime {
       callTimeoutMs?: number;
       /** 测试注入（默认 node:child_process.spawn）。 */
       spawn?: ExtensionSpawn;
+      /**
+       * 崩溃/超时后自动重启（默认 true；测试可关）。最多连续 3 次，退避 1s/5s/15s；
+       * 超过上限保持 error，交给用户手动重试，避免坏扩展无限拉起。
+       */
+      autoRestart?: boolean;
     },
   ) {}
+
+  private restartTimers = new Map<string, NodeJS.Timeout>();
+  /** 连续失败计数：5 分钟内累计，成功 ready 不清零（防「一启动就崩」无限重启）。 */
+  private failures = new Map<string, { count: number; lastAt: number }>();
 
   status(id: string): ExtensionRuntimeStatus {
     const run = this.runs.get(id);
@@ -265,6 +274,12 @@ export class ExtensionRuntime {
 
   /** 停止扩展并注销其工具（幂等）。 */
   stop(id: string): ExtensionRuntimeStatus {
+    const pendingRestart = this.restartTimers.get(id);
+    if (pendingRestart) {
+      clearTimeout(pendingRestart);
+      this.restartTimers.delete(id);
+    }
+    this.failures.delete(id);
     const run = this.runs.get(id);
     if (run) this.teardown(id, run);
     if (this.statusMap.get(id)?.state !== "error") {
@@ -274,7 +289,7 @@ export class ExtensionRuntime {
   }
 
   stopAll(): void {
-    for (const id of [...this.runs.keys()]) this.stop(id);
+    for (const id of new Set([...this.runs.keys(), ...this.restartTimers.keys()])) this.stop(id);
   }
 
   /** 启动所有「已启用且声明 main」的扩展（启动失败互相隔离）。 */
@@ -333,7 +348,11 @@ export class ExtensionRuntime {
       const callTimeoutMs = this.opts.callTimeoutMs ?? CALL_TIMEOUT_MS;
       const timer = setTimeout(() => {
         run.pending.delete(callId);
-        resolve({ ok: false, content: `[扩展执行超时] ${tool} 超过 ${callTimeoutMs}ms` });
+        const message = `[扩展执行超时] ${tool} 超过 ${callTimeoutMs}ms`;
+        // 超时不能只回一条错误：worker 可能已卡死，工具仍注册/状态仍 ready 会让后续调用
+        // 继续排在同一死进程后面。首次超时即 failRun（注销工具 + kill），再走退避重启。
+        this.failRun(id, run, message);
+        resolve({ ok: false, content: message });
       }, callTimeoutMs);
       run.pending.set(callId, { resolve, timer });
       try {
@@ -362,6 +381,27 @@ export class ExtensionRuntime {
     } catch {
       // 已退出
     }
+    this.scheduleRestart(id);
+  }
+
+  /** 崩溃/超时后的有界退避重启；显式 stop 会清掉定时器。 */
+  private scheduleRestart(id: string): void {
+    if (this.opts.autoRestart === false) return;
+    if (this.restartTimers.has(id)) return;
+    const now = Date.now();
+    const previous = this.failures.get(id);
+    const count = previous && now - previous.lastAt < 5 * 60_000 ? previous.count + 1 : 1;
+    this.failures.set(id, { count, lastAt: now });
+    if (count > 3) return;
+    const delay = [1_000, 5_000, 15_000][count - 1] ?? 15_000;
+    const timer = setTimeout(() => {
+      this.restartTimers.delete(id);
+      const item = this.opts.extensions.list().find((candidate) => candidate.manifest.id === id);
+      if (!item?.enabled) return;
+      void this.start(id).catch(() => undefined);
+    }, delay);
+    timer.unref?.();
+    this.restartTimers.set(id, timer);
   }
 
   private teardown(id: string, run: ExtensionRun): void {

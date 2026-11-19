@@ -54,5 +54,5 @@ export interface BrowserBackend {
   executeScript(script: string, sessionId?: string, tabId?: string): Promise<unknown>;
   getPageZoom(sessionId?: string, tabId?: string): number;
   isSessionVisible(sessionId?: string): boolean;
-  ensureAgentTab(sessionId?: string): Promise<string | null>;
+  ensureAgentTab(sessionId?: string, opts?: { blank?: boolean }): Promise<string | null>;
 }

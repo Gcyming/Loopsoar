@@ -7,12 +7,12 @@
     "skipLibCheck": true,
     "declaration": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "sourceMap": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "lib": ["ES2023"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules", "gen", "scripts"]
+  "include": ["src/**/*.ts", "gen/ipc.ts"],
+  "exclude": ["dist", "node_modules", "scripts"]
 }

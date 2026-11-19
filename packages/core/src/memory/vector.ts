@@ -85,11 +85,6 @@ export function hashEmbedding(text: string, dim: number = DEFAULT_EMBED_DIM): Fl
   return l2Normalize(vector);
 }
 
-/** 批量 hash embedding（同一维度；供 load/写入后重建索引使用）。 */
-export function hashEmbeddings(texts: readonly string[], dim: number = DEFAULT_EMBED_DIM): Float32Array[] {
-  return texts.map((text) => hashEmbedding(text, dim));
-}
-
 /** 余弦相似度（通用实现，不要求输入已归一化；维度不一致直接抛错，fail-closed 不猜）。 */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (a.length !== b.length) {
@@ -319,9 +314,4 @@ export class FlatVectorIndex {
     this.slots = nextSlots;
     this.capacity = nextCapacity;
   }
-}
-
-/** 纯估算：count 条 dim 维 float32 向量的原始字节数（不含索引/字符串开销）。 */
-export function estimateVectorBytes(count: number, dim: number = DEFAULT_EMBED_DIM): number {
-  return count * dim * 4;
 }

@@ -179,6 +179,25 @@ describe("Agent-Loop 注册表（安全模式后备）", () => {
     expect(reg.fallbackLog()[0].reason).toContain("静默超时");
   });
 
+  it("心跳重置静默看门狗：健康的长任务不会被固定总时长误杀", async () => {
+    const reg = makeRegistry({ silentTimeoutMs: 30 });
+    reg.register({
+      id: "heartbeat-loop",
+      name: "有进展的慢 loop",
+      runner: async (ctx) => {
+        for (let i = 0; i < 4; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 15));
+          ctx.heartbeat?.();
+        }
+        return outcome("done", "beat");
+      },
+    });
+    const result = await reg.run("heartbeat-loop", { sessionId: "s-heart" });
+    expect(result.status).toBe("done");
+    expect(result.finalText).toBe("beat");
+    expect(reg.fallbackLog()).toHaveLength(0);
+  });
+
   it("未知 loop id → 回退 builtin 而非崩溃", async () => {
     const reg = makeRegistry();
     const result = await reg.run("ghost-loop", { sessionId: "s4" });

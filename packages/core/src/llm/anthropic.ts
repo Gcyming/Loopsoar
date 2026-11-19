@@ -93,17 +93,24 @@ function toAnthropicMessages(messages: LlmMessage[]): { system: string; messages
       });
       continue;
     }
+    // extended thinking 必须作为 assistant 的第一个内容块原样回放（含签名）；
+    // 只回放有签名的块：没有签名的 reasoning 是别的厂商或降级数据，Anthropic 会拒绝。
+    const thinkingBlocks =
+      msg.role === "assistant" && msg.reasoning && msg.reasoningSignature
+        ? [{ type: "thinking", thinking: msg.reasoning, signature: msg.reasoningSignature }]
+        : [];
     if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
       out.push({
         role: "assistant",
         content: [
+          ...thinkingBlocks,
           ...(textOf(msg.content) ? [{ type: "text", text: textOf(msg.content) }] : []),
           ...msg.tool_calls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: call.args ?? {} })),
         ],
       });
       continue;
     }
-    out.push({ role: msg.role, content: anthropicContent(msg.content) });
+    out.push({ role: msg.role, content: [...thinkingBlocks, ...anthropicContent(msg.content)] });
   }
   return { system: systemParts.join("\n\n"), messages: out };
 }
@@ -148,9 +155,15 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
     }
     try {
       const { system, messages } = toAnthropicMessages(req.messages);
+      // max_tokens 由 ChatService 从模型能力注入；thinking budget 必须小于 max_tokens，
+      // 否则 Anthropic 会 400。模型输出上限太小时自动收敛/关闭 thinking，而不是发非法请求。
+      const maxTokens = req.maxTokens && req.maxTokens > 0 ? Math.floor(req.maxTokens) : 4096;
+      const requestedBudget = req.reasoningEffort ? effortToBudget(req.reasoningEffort) : 0;
+      const thinkingBudget =
+        requestedBudget > 0 ? Math.min(requestedBudget, Math.max(0, maxTokens - 1024)) : 0;
       const body: Record<string, unknown> = {
         model: opts.model,
-        max_tokens: req.maxTokens ?? 4096,
+        max_tokens: maxTokens,
         messages,
         stream: true,
         ...(system ? { system } : {}),
@@ -163,8 +176,8 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
               })),
             }
           : {}),
-        ...(req.reasoningEffort
-          ? { thinking: { type: "enabled", budget_tokens: effortToBudget(req.reasoningEffort) } }
+        ...(thinkingBudget >= 1024
+          ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } }
           : {}),
       };
       const res = await fetch(endpoint, {
@@ -251,7 +264,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           type?: string;
           index?: number;
           content_block?: { type?: string; id?: string; name?: string };
-          delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
+          delta?: { type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string; stop_reason?: string };
           usage?: { input_tokens?: number; output_tokens?: number };
           message?: { usage?: { input_tokens?: number; output_tokens?: number } };
           error?: { message?: string };
@@ -275,7 +288,11 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           case "content_block_delta":
             if (evt.delta?.type === "text_delta" && evt.delta.text) yield { kind: "text", text: evt.delta.text };
             else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) yield { kind: "reasoning", text: evt.delta.thinking };
-            else if (evt.delta?.type === "input_json_delta" && typeof evt.index === "number") {
+            else if (evt.delta?.type === "signature_delta" && evt.delta.signature) {
+              // 签名在 thinking 块末尾单独下发；空 text 的 reasoning 块只用于携带签名，
+              // tool_loop 会把它和前面的 thinking 文本配对后原样回灌。
+              yield { kind: "reasoning", text: "", signature: evt.delta.signature };
+            } else if (evt.delta?.type === "input_json_delta" && typeof evt.index === "number") {
               const block = toolBlocks.get(evt.index);
               if (block) block.json += evt.delta.partial_json ?? "";
             }

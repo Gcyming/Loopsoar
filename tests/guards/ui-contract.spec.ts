@@ -49,7 +49,6 @@ describe("守卫：UI ↔ 契约一致", () => {
     expect(calls.length).toBeGreaterThan(0);
     const methodMap: Record<string, string> = {
       "runtime.status": "boot:status",
-      "runtime.version": "app:version",
       "agents.list": "agents:list",
       "settings.getProvider": "settings:getProvider",
       "chat.stream": "chat:stream",

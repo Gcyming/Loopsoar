@@ -32,15 +32,6 @@ export const ChatSteerSchema = z.object({
   /** 客户端生成的引导 id：UI 用它与主进程注入回执对账（同 id 重复提交按覆盖处理）。 */
   steerId: z.string().min(1).max(64).optional(),
 });
-/**
- * 引导投递结果：accepted=false 时 reason 说明原因（UI 据此保留待发卡，本轮收尾后继续投递）。
- * · no-running 当前没有运行中的回复 · full 队列已满（8 条）· empty 文本为空 · duplicate 同一 id 已在队列
- */
-export const ChatSteerResultSchema = z.object({
-  accepted: z.boolean(),
-  steerId: z.string().optional(),
-  reason: z.enum(["no-running", "full", "empty", "duplicate"]).optional(),
-});
 /** 撤销一条尚未注入的引导（待发卡的「修改 / 撤销删除」动作）。 */
 export const ChatSteerCancelSchema = z.object({
   steerId: z.string().min(1).max(64),
@@ -95,7 +86,6 @@ export const ChatForkSchema = z.object({
   title: z.string().min(1).max(80).optional(),
 });
 export const ChatStopSchema = z.object({ sessionId: SessionIdSchema });
-export const ChatSendSchema = z.object({ message: z.string(), sessionId: SessionIdSchema.optional() });
 /**
  * 会话级「浏览器控制」开关（第二阶段 · 功能1）：
  * 关闭（默认）= browser_* 工具对模型不可见（不进 toolSchemas）且不可执行；
@@ -107,18 +97,6 @@ export const BrowserControlSchema = z.object({
   enabled: z.boolean(),
 });
 export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enum(["allow-once", "allow-session", "deny"]) });
-export const FileReadSchema = z.object({
-  path: z.string().min(1).max(2000),
-  offset: z.number().int().nonnegative().optional(),
-  limit: z.number().int().positive().optional(),
-  /** 目标会话：按会话工作根（工作区/worktree）约束路径；缺省=活动工作区。 */
-  sessionId: SessionIdSchema.optional(),
-});
-export const FileWriteSchema = z.object({
-  path: z.string().min(1).max(2000),
-  content: z.string(),
-  sessionId: SessionIdSchema.optional(),
-});
 export const BrowserNavigateSchema = z.object({ url: z.string() });
 export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
@@ -214,6 +192,16 @@ export const McpServerSchema = z.object({
   url: z.string().url().max(2000).optional(),
   headers: z.record(z.string().max(2000)).optional(),
   enabled: z.boolean().optional(),
+}).superRefine((value, ctx) => {
+  // 传输方式缺省按「有 url 即 http，否则 stdio」，与 core/mcp 的旧行为一致；
+  // 校验必须放在契约层，否则 IPC 边界会放行 http 无 url / stdio 无 command 的配置。
+  const transport = value.transport ?? (value.url ? "http" : "stdio");
+  if (transport === "http" && !value.url) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "HTTP 传输需要 url" });
+  }
+  if (transport === "stdio" && !value.command) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "stdio 传输需要 command" });
+  }
 });
 /* ───────────────────────── 终端（持久会话，P0 安全门 #2 配套） ───────────────────────── */
 
@@ -435,6 +423,9 @@ export const PermissionsSchema = z.object({
   /** 危险命令/敏感路径始终二次确认（不随 allow 放行）。 */
   confirmDangerousAlways: z.boolean(),
 });
+
+/** 权限策略的推断类型：UI/壳层/服务统一消费，禁止再手写一份。 */
+export type Permissions = z.infer<typeof PermissionsSchema>;
 
 /** 规则文件（设置 · 规则）：AGENTS.md 约定（项目根逐级向上 + 全局规则）。 */
 /** 规则条目（逐条增删，替代原先的「两个大文本框」）。 */

@@ -36,6 +36,13 @@ describe("isSensitivePath", () => {
   it("非敏感文件 → false", () => {
     expect(isSensitivePath("/etc/passwd")).toBe(false);
   });
+
+  it("带目录前缀的规则匹配完整路径（config/auth_token*, config/providers.enc.json）", () => {
+    expect(isSensitivePath("/repo/config/auth_token_2024.json")).toBe(true);
+    expect(isSensitivePath("config/auth_token.txt")).toBe(true);
+    expect(isSensitivePath("/repo/config/providers.enc.json")).toBe(true);
+    expect(isSensitivePath("/repo/docs/config/providers.enc.json.bak")).toBe(false);
+  });
 });
 
 describe("isProtectedSourceDir", () => {
@@ -61,6 +68,13 @@ describe("isProtectedSourceDir", () => {
   it("路径标准化：反斜杠转正斜杠后仍匹配（目录本身）", () => {
     expect(isProtectedSourceDir("\\repo\\node_modules")).toBe(true);
     expect(isProtectedSourceDir("\\repo\\.git")).toBe(true);
+  });
+
+  it("受保护目录的子文件也受保护（.git/config、node_modules/pkg/index.js）", () => {
+    expect(isProtectedSourceDir("/repo/.git/config")).toBe(true);
+    expect(isProtectedSourceDir("/repo/node_modules/pkg/index.js")).toBe(true);
+    expect(isProtectedSourceDir("/repo/packages/contracts/gen/ipc.ts")).toBe(true);
+    expect(isProtectedSourceDir("/repo/src/git/config.ts")).toBe(false);
   });
 });
 

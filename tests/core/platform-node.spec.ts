@@ -72,17 +72,24 @@ describe("process.run 正常 / 超时 / maxBytes 截断", () => {
     expect(result.timedOut).toBe(true);
   });
 
-  it("maxBytes 截断：设置小 maxBytes 时 stdout 被限制（实际行为贴合源码手动截断）", async () => {
+  it("maxBytes 按 UTF-8 字节截断：hello\\n 取前 5 字节 = hello", async () => {
     const platform = createNodePlatform();
     const result = await platform.process.run(
       "node",
       ["-e", `console.log("hello")`],
       { maxBytes: 5 },
     );
-    // 手动截断实现：每次 chunk 只取 min(chunk.length, maxBytes - stdoutAcc.length)
-    // 对于小输出，stdoutAcc 仍可能包含完整内容（因为 chunk 小于 maxBytes），
-    // 这里仅断言过程不抛异常，且 stdout 非空（贴合实现实际行为）。
-    expect(result.stdout.length).toBeGreaterThan(0);
+    expect(result.stdout).toBe("hello");
+  });
+
+  it("跨 chunk 的多字节字符不被 chunk.toString 切坏（TextDecoder 流式解码）", async () => {
+    const platform = createNodePlatform();
+    const script = [
+      "process.stdout.write(Buffer.from([0xe4]));",
+      "setTimeout(() => process.stdout.write(Buffer.from([0xb8, 0xad])), 20);",
+    ].join("");
+    const result = await platform.process.run("node", ["-e", script], { maxBytes: 3 });
+    expect(result.stdout).toBe("中");
   });
 });
 

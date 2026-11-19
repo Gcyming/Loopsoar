@@ -68,6 +68,8 @@ export interface UsageEvent {
 export const USAGE_EVENT_CAP = 50;
 export const GHOST_IDLE_DAYS = 90;
 export const GHOST_MAX_CHARS = 120;
+/** 归档区上限（只裁最旧；活跃记忆仍由 capacity 治理）。 */
+export const MAX_ARCHIVED = 2_000;
 
 export interface MemoryStoreState {
   facts: MemoryFact[];
@@ -128,6 +130,12 @@ export class MemoryStore {
 
   size(): number {
     return this.facts.length;
+  }
+
+  /** 归档区上限：防止长期运行后无界增长（只裁剪最旧归档，不影响活跃记忆）。 */
+  private trimArchived(): void {
+    const overflow = this.archived.length - MAX_ARCHIVED;
+    if (overflow > 0) this.archived.splice(0, overflow);
   }
 
   /**
@@ -227,6 +235,8 @@ export class MemoryStore {
       if (merge.mergeInto) {
         const target = merge.mergeInto;
         target.content = `${target.content}；${incoming.content}`;
+        // tags 是分类并集，不是合并的否决票；去重后保留双方分类。
+        target.tags = [...new Set([...target.tags, ...incoming.tags])];
         target.lastAccessed = nowMs;
         target.repeated += 1;
         target.mergeTrail.push({ mergedAt: nowMs, reason: `相似度合并（${incoming.source}）` });
@@ -263,6 +273,7 @@ export class MemoryStore {
         archivedIds.push(fact.id);
       }
     }
+    this.trimArchived();
 
     return {
       added,
@@ -347,6 +358,7 @@ export class MemoryStore {
       archived.push(fact.id);
     }
     this.facts = survivors;
+    this.trimArchived();
     return { merged, archived, scanned };
   }
 
@@ -403,7 +415,18 @@ export class MemoryStore {
   /** 手动新增（UI「新增记忆」入口）。 */
   add(input: MemoryCandidate): MemoryFact {
     const result = this.write([{ ...input, source: input.source ?? "manual" }]);
-    return result.added[0] ?? this.facts[this.facts.length - 1];
+    // 去重/合并命中时 added 为空；旧实现回退到「最后一条」会返回完全无关的记忆，
+    // UI 随后拿错 id 做更新/删除。这里按本次动作的真实目标解析。
+    if (result.added[0]) return result.added[0];
+    if (result.merged[0]) {
+      const kept = this.get(result.merged[0].into);
+      if (kept) return kept;
+    }
+    if (result.deduped[0]) {
+      const hit = this.get(result.deduped[0].id);
+      if (hit) return hit;
+    }
+    throw new Error("记忆写入未产生任何条目（内容为空或被治理规则丢弃）");
   }
 
   update(id: string, patch: Partial<Pick<MemoryFact, "content" | "category" | "tags" | "importance">>): MemoryFact | null {

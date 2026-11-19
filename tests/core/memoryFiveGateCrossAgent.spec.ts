@@ -66,6 +66,21 @@ describe("MemoryStore.write 接入第 5 闸", () => {
     expect(store.stats().crossAgentLinks).toBe(2);
   });
 
+  it("带 tags 的真实写入仍走合并，并取 tags 并集", () => {
+    const store = new MemoryStore();
+    const first = store.write([
+      { content: "记忆系统写入前必须先去重检查", category: "insight", tags: ["memory"] },
+    ]);
+    expect(first.added).toHaveLength(1);
+    const second = store.write([
+      { content: "记忆系统写入前必须先检查重复", category: "insight", tags: ["gate"] },
+    ]);
+    expect(second.added).toHaveLength(0);
+    expect(second.merged).toHaveLength(1);
+    expect(store.size()).toBe(1);
+    expect(store.list()[0].tags.sort()).toEqual(["gate", "memory"]);
+  });
+
   it("同 agent 重复内容 → 仍按旧行为去重（不新增、repeated+1）", () => {
     const store = new MemoryStore();
     store.write([{ content: "用户偏好深色主题界面", category: "preference" }]);

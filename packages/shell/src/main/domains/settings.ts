@@ -21,6 +21,7 @@ import { compileRuleGuards } from "loopsoar-core/rules/guard";
 import { compileCommandGuards } from "loopsoar-core/rules/commandGuard";
 import { analyzeRuleConflicts } from "loopsoar-core/rules/health";
 import { buildRuleChecklist, type Checklist } from "loopsoar-core/rules/checklist";
+import { APP_ID, APP_NAME, PROTOCOL } from "../../shared/brand.js";
 import type { RuleHit } from "../ruleStats.js";
 import type { RuleHistoryStore } from "../ruleHistory.js";
 import { withProviderDefaults } from "../providerDefaults.js";
@@ -45,10 +46,10 @@ import {
 import {
   DEFAULT_PREFERENCES,
   mergePreferences,
-  searchUrlFor,
   type Preferences,
 } from "loopsoar-core/preferences";
-import { PERMISSION_CATEGORIES, mergePermissions, type Permissions } from "loopsoar-core/permissions";
+import { buildSearchUrl } from "loopsoar-contracts/omnibox";
+import { PERMISSION_CATEGORIES, PERMISSION_LEVELS, mergePermissions, type Permissions } from "loopsoar-core/permissions";
 import {
   RULES_FILE_NAME,
   CLAUDE_COMPAT_FILE_NAME,
@@ -601,21 +602,6 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     return { saved: true, config: cfg, usable: usability.usable, reason: usability.reason ?? null };
   });
 
-  handleTrusted(deps, "settings:clearProvider", () => {
-    try {
-      if (fs.existsSync(paths.provider)) fs.unlinkSync(paths.provider);
-      const active = activeProvider();
-      if (active && deps.providers) {
-        deps.providers.remove(active.id);
-        deps.onProvidersChanged?.();
-      }
-    } catch {
-      throw new Error("删除供应商配置失败");
-    }
-    deps.onProviderCleared?.();
-    return { cleared: true };
-  });
-
   handleTrusted(deps, "settings:testProvider", async (payload) => {
     const raw = payload as {
       headers?: Record<string, string>;
@@ -631,7 +617,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:getPreferences", () => ({
     preferences: loadPreferences(deps.configDir),
     defaults: DEFAULT_PREFERENCES,
-    searchUrlExample: searchUrlFor("bing", "loopsoar"),
+    searchUrlExample: buildSearchUrl("loopsoar", "bing"),
     locations: {
       dataDir: deps.dataDir,
       configDir: deps.configDir,
@@ -653,6 +639,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:getPermissions", () => ({
     permissions: loadPermissions(deps.configDir),
     categories: PERMISSION_CATEGORIES,
+    levels: PERMISSION_LEVELS,
     workspaceRoot: deps.workspaceRoot,
   }));
 
@@ -966,10 +953,10 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   });
 
   handleTrusted(deps, "settings:about", () => ({
-    name: "Loopsoar",
+    name: APP_NAME,
     version: deps.appVersion,
-    appId: "com.loopsoar.app",
-    protocol: "loopsoar://",
+    appId: APP_ID,
+    protocol: `${PROTOCOL}://`,
     electron: process.versions.electron ?? "—",
     node: process.versions.node,
     brandAssetSource: "前期准备/brand/quilt-inf（官方 ∞ 破环·化片）",

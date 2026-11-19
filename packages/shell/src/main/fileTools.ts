@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { sensitivePathReason } from "loopsoar-core/tools/classifier";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 
 const MAX_OLD_BYTES = 200_000;
@@ -54,6 +55,14 @@ export function registerFileTools(registry: ToolRegistry, workspaceRoot: (sessio
       const root = workspaceRoot(ctx.sessionId) || process.cwd();
       const resolved = resolveInside(root, params.path);
       if (!resolved.ok) return { ok: false, content: `[错误] ${resolved.reason}` };
+      const guard = sensitivePathReason(resolved.rel);
+      if (guard) {
+        const kind = guard === "sensitive" ? "敏感文件" : "受保护源代码目录";
+        return {
+          ok: false,
+          content: `[错误] ${kind}不允许 Agent 直接写入：${resolved.rel}（需人工在编辑器中操作）`,
+        };
+      }
       const next = params.content ?? "";
       try {
         let old = "";

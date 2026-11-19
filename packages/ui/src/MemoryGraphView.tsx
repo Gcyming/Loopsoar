@@ -8,6 +8,7 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import { useT } from "./i18n.js";
 import type { MemoryGraphNodeView, MemoryGraphPointView, MemoryGraphResult } from "./types.js";
 
 export interface MemoryGraphViewProps {
@@ -40,6 +41,7 @@ function readMode(): "2d" | "3d" {
 }
 
 export default function MemoryGraphView({ data, height = 380, onSelect }: MemoryGraphViewProps): React.JSX.Element {
+  const tr = useT();
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [hovered, setHovered] = React.useState<string | null>(null);
@@ -426,7 +428,7 @@ export default function MemoryGraphView({ data, height = 380, onSelect }: Memory
           3D
         </button>
       </div>
-      {mode === "3d" ? <div style={hintStyle}>拖拽旋转 · 滚轮/± 缩放</div> : null}
+      {mode === "3d" ? <div style={hintStyle}>{tr("memory.graphHint3d")}</div> : null}
       {hovered && nodeById.get(hovered) ? (
         <div style={captionStyle}>{nodeById.get(hovered)?.label}</div>
       ) : null}

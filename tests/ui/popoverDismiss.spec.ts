@@ -136,7 +136,8 @@ describe("dismissAllPopovers（全局收起入口）", () => {
 
   it("浮层层级高于所有应用页面层级（新增页面不会再盖住列表）", () => {
     const popover = read("packages/ui/src/AnchoredPopover.tsx");
-    const match = popover.match(/POPOVER_Z_INDEX\s*=\s*([\d_]+)/);
+    const layers = read("packages/ui/src/layers.ts");
+    const match = layers.match(/POPOVER_Z_INDEX\s*=\s*([\d_]+)/);
     expect(match?.[1]).toBeTruthy();
     const zIndex = Number((match?.[1] ?? "").replace(/_/g, ""));
     expect(zIndex).toBeGreaterThan(100_000);

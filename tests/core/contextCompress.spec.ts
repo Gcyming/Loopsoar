@@ -54,6 +54,22 @@ describe("上下文自动压缩", () => {
     expect(result.messages[result.messages.length - 1].content).toBe(messages[messages.length - 1].content);
   });
 
+  it("压缩边界切在工具轮中间：保留窗口不以孤儿 tool 消息开头", () => {
+    const big = "内容".repeat(1000);
+    const messages: CompactableMessage[] = [
+      { role: "system", content: "系统稳定段" },
+      { role: "user", content: `早期诉求 ${big}` },
+      { role: "assistant", content: "调用工具", tool_calls: [{ id: "t1", name: "file_read", args: {} }] },
+      { role: "tool", content: `工具结果 ${big}`, tool_call_id: "t1" },
+      { role: "assistant", content: `最终回答 ${big}` },
+    ];
+    const result = compressConversation(messages, { budgetChars: 4000, keepRecent: 2 });
+    expect(result.compressed).toBe(true);
+    const afterSummary = result.messages.slice(2);
+    expect(afterSummary[0]?.role).not.toBe("tool");
+    expect(afterSummary[afterSummary.length - 1]?.content).toBe(messages[messages.length - 1].content);
+  });
+
   it("预算换算：按上下文窗口比例给历史，且有上下限", () => {
     expect(historyBudgetChars(undefined)).toBe(60_000);
     expect(historyBudgetChars(8000)).toBe(9_600);

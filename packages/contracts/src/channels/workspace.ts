@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BindSessionWorkspaceSchema, FileReadSchema, FileWriteSchema, ReadImageSchema, SaveImageSchema, WorkspaceCreateSchema, WorkspaceIdSchema, WorkspaceStatusSchema, WorktreeMergeSchema, WorktreeRemoveSchema, WorktreeSessionSchema } from "../validators.js";
+import { BindSessionWorkspaceSchema, ReadImageSchema, SaveImageSchema, WorkspaceCreateSchema, WorkspaceIdSchema, WorkspaceStatusSchema, WorktreeMergeSchema, WorktreeRemoveSchema, WorktreeSessionSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 workspace 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -14,18 +14,6 @@ export const workspaceChannels: Record<string, ChannelBinding> = {
     domain: "fs",
     method: "saveImage",
     request: SaveImageSchema,
-    sensitive: true,
-  },
-  "file:read": {
-    domain: "workspace",
-    method: "read",
-    request: FileReadSchema,
-    sensitive: true,
-  },
-  "file:write": {
-    domain: "workspace",
-    method: "write",
-    request: FileWriteSchema,
     sensitive: true,
   },
   "agents:list": {

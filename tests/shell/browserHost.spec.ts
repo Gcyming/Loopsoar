@@ -130,6 +130,16 @@ describe("BrowserHost（多标签）", () => {
     expect(host.listTabs("default").length).toBe(1);
   });
 
+  it("后台会话首次动作不抢前台视图（只建 Agent 标签，不切 visibleSession）", async () => {
+    const { host } = makeHost();
+    await host.navigate("https://foreground.example");
+    const before = host.visibleSessionId();
+    const tab = await host.ensureAgentTab("background-session");
+    expect(tab).toBeTruthy();
+    expect(host.visibleSessionId()).toBe(before);
+    expect(host.listTabs("background-session").some((t) => t.active)).toBe(true);
+  });
+
   it("空白新标签不显示原生视图（避免透明视图吞掉新建页鼠标事件）", async () => {
     const { host, created } = makeHost();
     const r = await host.newTab();

@@ -13,7 +13,6 @@ export const EVENTS = [
   "chat:stream:heartbeat",
   "chat:steer:applied",
   "perm:request",
-  "boot:ready",
   "browser:tabs",
   "chat:taskForked",
   "browser:downloads",

@@ -35,7 +35,8 @@ export interface PopoverProps {
  * 应用内浮层统一层级：高于所有页面/模态/工具栏，避免新增页面时又把菜单盖住。
  * 原生 WebContentsView 不参与 DOM 层级，必须由 App 同时调用 browser.setOverlay 让位。
  */
-export const POPOVER_Z_INDEX = 2_147_483_000;
+export { POPOVER_Z_INDEX, MODAL_Z_INDEX } from "./layers.js";
+import { POPOVER_Z_INDEX } from "./layers.js";
 
 function readViewport(): { width: number; height: number } {
   if (typeof window === "undefined") return { width: 0, height: 0 };

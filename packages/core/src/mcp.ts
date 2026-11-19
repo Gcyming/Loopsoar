@@ -11,39 +11,19 @@
  * 真正的子进程/HTTP 传输在壳层（shell/mcpHost.ts），不进 core。
  */
 import { z } from "zod";
+import { McpServerSchema } from "loopsoar-contracts/schemas";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 
 export const McpTransportSchema = z.enum(["stdio", "http"]);
 export type McpTransport = z.infer<typeof McpTransportSchema>;
 
-export const McpServerConfigSchema = z
-  .object({
-    id: z.string().min(1).max(120).optional(),
-    name: z.string().min(1).max(120),
-    /** 传输方式；缺省按 stdio（向后兼容旧 mcp.json）。 */
-    transport: McpTransportSchema.optional(),
-    /** 启动命令（stdio 传输），如 "npx" / "node"。 */
-    command: z.string().max(500).optional(),
-    args: z.array(z.string().max(500)).max(50).optional(),
-    env: z.record(z.string().max(2000)).optional(),
-    /** Streamable HTTP：端点 URL（如 https://example.com/mcp）。 */
-    url: z.string().url().max(2000).optional(),
-    /** Streamable HTTP：附加请求头（认证等；不落日志）。 */
-    headers: z.record(z.string().max(2000)).optional(),
-    enabled: z.boolean().optional(),
-  })
-  .superRefine((value, ctx) => {
-    const transport = value.transport ?? (value.url ? "http" : "stdio");
-    if (transport === "http" && !value.url) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "HTTP 传输需要 url" });
-    }
-    if (transport === "stdio" && !value.command) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "stdio 传输需要 command" });
-    }
-  });
-
-export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+/**
+ * MCP 服务配置：schema 唯一产地在 contracts（含 superRefine 传输校验）；
+ * 这里只做别名/类型导出，保持既有 `loopsoar-core/mcp` 消费方不破。
+ */
+export const McpServerConfigSchema = McpServerSchema;
+export type McpServerConfig = z.infer<typeof McpServerSchema>;
 
 export type McpServerState = "idle" | "connecting" | "ready" | "error";
 

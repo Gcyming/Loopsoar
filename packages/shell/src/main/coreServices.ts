@@ -269,6 +269,7 @@ export async function createCoreServices(input: CoreServiceInput) {
   });
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
   const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
+  skills.watch((installed) => pushToRenderer("skills:updated", { action: "watch", installed }));
   const subagentTasks = new SubagentTaskStore(path.join(dirs.dataDir, "subagents"));
   const mcp = new McpHost(
     path.join(dirs.dataDir, "mcp.json"),

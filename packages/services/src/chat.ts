@@ -5,7 +5,8 @@
 // 设计：services 不 import electron；全部能力经注入（llm/platform/registry/sandbox）。
 import type { LlmClient } from "loopsoar-core/llm";
 import type { LoopsoarPlatform } from "loopsoar-core/platform";
-import { buildSystemSegments } from "loopsoar-core/session";
+import { buildSystemSegments, assertStableUnchanged } from "loopsoar-core/session";
+import { canUseTool } from "loopsoar-core/agent";
 import { currentWallClockLine, withWallClockPrefix } from "loopsoar-core/messageTime";
 import {
   runToolLoop,
@@ -120,6 +121,10 @@ export interface ChatServiceOptions {
   getToolAllowlist?: (mode?: "build" | "plan", sessionId?: string) => string[] | undefined;
   /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 6 万字符）。 */
   getContextWindow?: () => number | undefined;
+  /** 当前模型最大输出（tokens）；作为请求 max_tokens 的上限，未配置则回退 4096。 */
+  getMaxOutputTokens?: () => number | undefined;
+  /** stable 段校验结果（供壳层日志；changed=false 表示与前一轮同输入下字节一致）。 */
+  onStableSegment?: (info: { sessionId: string; changed: boolean; length: number }) => void;
   /** Agent 循环上限（设置 · 通用可调；缺省使用 core 默认）。 */
   getAgentLimits?: () => {
     maxRounds?: number;
@@ -313,7 +318,7 @@ export class InternalToolExecutor {
   async invoke(toolCall: ToolCall): Promise<{ ok: boolean; content: string; error?: string }> {
     const { registry, sandbox, permBus, toolAllowlist } = this.opts;
     // Agent 权限先于沙箱判定：不同 Agent 的能力边界在这里收敛（不允许「白名单外的工具先跑到沙箱再被兜底」）
-    if (toolAllowlist !== undefined && !toolAllowlist.includes(toolCall.name)) {
+    if (!canUseTool({ toolAllowlist }, toolCall.name)) {
       return {
         ok: false,
         content: `[错误] Agent 权限未包含工具 ${toolCall.name}（白名单拦截）`,
@@ -455,6 +460,8 @@ export class ChatService {
   /** sessionId → 当前运行中的转向总线（steer 注入用） */
   private steerBuses = new Map<string, SteerBus>();
   private aborts = new Map<string, AbortController>();
+  /** sessionId → 上一轮 stable 段 + 输入指纹；同输入下必须字节级不变。 */
+  private stableSegments = new Map<string, { key: string; stable: string }>();
 
   constructor(private opts: ChatServiceOptions = {}) {
     this.permBus = new PermRequestBus(opts.permTimeoutMs ?? 300_000);
@@ -581,6 +588,18 @@ export class ChatService {
     const stableContent = rulesText.trim()
       ? `${segments.stable}\n\n${rulesText}`
       : segments.stable;
+    // stable 段校验：同一会话、同一身份/规则输入下，stable 必须字节级不变。
+    // 规则文件/Agent 身份变化时 key 改变，是合法的新基线，不误报；变化本身写入回调日志。
+    const stableKey = `${agent?.name ?? "Loopsoar"}\u0000${agent?.role ?? "本地 AI Agent"}\u0000${rulesText}`;
+    const previousStable = this.stableSegments.get(sessionId);
+    let stableChanged = false;
+    if (previousStable && previousStable.key === stableKey) {
+      assertStableUnchanged(previousStable.stable, stableContent);
+    } else {
+      stableChanged = Boolean(previousStable);
+    }
+    this.stableSegments.set(sessionId, { key: stableKey, stable: stableContent });
+    this.opts.onStableSegment?.({ sessionId, changed: stableChanged, length: stableContent.length });
     // 记忆召回 + 技能注入：都放 volatile 段（不进稳定前缀，避免破坏 KV 缓存）
     const memoryText = this.opts.getMemoryFor?.(input.message, sessionId) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
@@ -744,6 +763,7 @@ export class ChatService {
         },
         messages,
         reasoningEffort: input.reasoningEffort,
+        maxTokens: this.opts.getMaxOutputTokens?.(),
         steers,
         signal: controller.signal,
         verifyRound,

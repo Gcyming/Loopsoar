@@ -7,6 +7,7 @@ import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import { MODAL_Z_INDEX } from "./layers.js";
 import { useT } from "./i18n.js";
 
 export type PermissionChoice = "allow-once" | "allow-session" | "deny";
@@ -59,7 +60,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 60,
+    // 权限确认必须压住一切浮层（下拉/快捷菜单的 z-index 极高）：否则弹窗出现时
+    // 仍在页面上的浮层会盖住「允许/拒绝」，用户点不到。
+    zIndex: MODAL_Z_INDEX,
   },
   permCard: {
     width: 420,

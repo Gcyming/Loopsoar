@@ -30,4 +30,31 @@ describe("输出过滤", () => {
     const out3 = f.flush();
     expect((out1 + out2 + out3)).not.toContain("底层模型");
   });
+
+  it("URL 与代码块/行内代码不被身份掩码破坏", () => {
+    const text = [
+      "链接 https://api.openai.com/v1/models 保留。",
+      "说明 OpenAI 的身份。",
+      "`OpenAI` 行内代码保留。",
+      "```ts",
+      "const provider = \"OpenAI\";",
+      "```",
+    ].join("\n");
+    const out = applyOutputFilter(text);
+    expect(out).toContain("https://api.openai.com/v1/models");
+    expect(out).toContain("`OpenAI`");
+    expect(out).toContain('const provider = "OpenAI";');
+    expect(out).toContain("Loopsoar 平台 的身份");
+  });
+
+  it("流式过滤保持围栏代码块原样、只掩码块外正文", () => {
+    const f = createStreamFilter();
+    const out =
+      f.push("```ts\nconst provider = \"OpenAI\";\n```\n") +
+      f.push("我是 OpenAI 模型\n") +
+      f.flush();
+    expect(out).toContain('const provider = "OpenAI";');
+    expect(out).toContain("Loopsoar 平台");
+    expect(out).not.toContain("我是 OpenAI");
+  });
 });

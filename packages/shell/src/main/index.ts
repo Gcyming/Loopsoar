@@ -170,7 +170,13 @@ function buildBindings(): { channel: string; domain: string; method: string }[] 
 }
 
 function pushToRenderer(event: string, payload: unknown): void {
+  const chatty = /^(chat:|terminal:|ask:|perm:|loop:)/.test(event);
   for (const w of BrowserWindow.getAllWindows()) {
+    // 只发给加载了 React 渲染层的窗口（pointer/toast 是 data: 页、icon 是静态页）。
+    const url = w.webContents.getURL();
+    if (!url.includes("/index.html")) continue;
+    // 工具栏浮层只要 chrome:* 状态，跳过高频流。
+    if (chatty && url.includes("popover=")) continue;
     void w.webContents.send(`loopsoar:${event}`, payload);
   }
 }
@@ -551,6 +557,16 @@ app.whenReady().then(async () => {
       const active = providers.active();
       const spec = active?.models?.find((m) => m.id === active.model);
       return spec?.contextWindow;
+    },
+    // 当前模型最大输出：请求 max_tokens 的唯一来源（Anthropic thinking 预算会据此收敛）
+    getMaxOutputTokens: () => {
+      const active = providers.active();
+      const spec = active?.models?.find((m) => m.id === active.model);
+      return spec?.maxOutput;
+    },
+    // stable 段日志：同输入下必须 changed=false；true 仅表示规则/身份合法变更
+    onStableSegment: ({ sessionId, changed, length }) => {
+      console.info(`[stable] session=${sessionId} changed=${changed} length=${length}`);
     },
     // Agent 请求上限（设置 · 通用）
     getAgentLimits: () => {
@@ -995,13 +1011,10 @@ app.whenReady().then(async () => {
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({
     ...deps,
-    platform,
     openPath: (target: string) => shell.openPath(target),
     workspaces,
     sessions,
     worktreesRoot,
-    // file:read/write 的会话工作根解析（worktree > 会话工作区 > 活动工作区）
-    resolveSessionRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
     pickFolder: async () => {
       const result = await dialog.showOpenDialog(mainWindow ?? undefined!, {
         title: "选择工作区文件夹",
@@ -1415,7 +1428,7 @@ app.whenReady().then(async () => {
     },
     saveBrowserStates: saveAllBrowserStates,
     shutdownMcp: () => mcp.shutdown(),
-    stopExtensions: () => extensionRuntime.stopAll(),
+    stopExtensions: () => { extensionRuntime.stopAll(); skills.dispose(); },
     closeTerminals: () => {
       terminals.closeAll();
       askBus.clearAll("应用退出，按取消处理");

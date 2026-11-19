@@ -194,6 +194,20 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     })();
   }, [api, bad]);
 
+  // MCP 状态变化（连接/断开/外部修改）：设置页已打开时同步列表，避免必须重开设置。
+  useEffect(() => {
+    if (!api) return;
+    return api.on("mcp:updated", () => {
+      void api.mcp
+        .list()
+        .then((result) => {
+          setMcpServers(result.servers);
+          setMcpConfigPath(result.configPath);
+        })
+        .catch(() => {});
+    });
+  }, [api]);
+
   // 通用设置实时生效：变更后 400ms 防抖自动保存（不需要保存按钮）
   useEffect(() => {
     if (!api || !prefs || loading) return;
@@ -523,6 +537,17 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Area v={perms.permissions.workspaceRoots.join("\n")} rows={3} on={(x) => setPerms({ ...perms, permissions: { ...perms.permissions, workspaceRoots: x.split("\n").map((s) => s.trim()).filter(Boolean) } })} />
           </Field>
           <div style={S.note}>{tr("settings.permissions.currentRoot")}<code style={S.code}>{perms.workspaceRoot}</code></div>
+          {perms.levels && perms.levels.length > 0 ? (
+            <div style={S.box}>
+              <div style={S.boxTitle}>{tr("settings.permissions.levelsTitle")}</div>
+              <div style={S.note}>{tr("settings.permissions.levelsHint")}</div>
+              {perms.levels.map((level) => (
+                <div key={level.level} style={S.note}>
+                  <code style={S.code}>{level.name}</code> {level.zh} / {level.en} — {level.description}
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div style={S.box}>
             <div style={S.boxTitle}>{tr("settings.permissions.securityTitle")}</div>
             {prefs ? (

@@ -22,6 +22,7 @@ import type { BrowserElementSnapshot } from "../browserAdapter/types.js";
 import {
   MAX_VISIBLE_ELEMENTS,
   NAMED_KEYS,
+  dropTabRegistry,
   getTabRegistry,
   isSupportedKey,
   buildDismissOverlayScript,
@@ -60,6 +61,22 @@ const STATUS_SETTLE_MAX_MS = 1500;
 const snapshotTokens = new Map<string, string>();
 /** 会话 → 最近一次快照的标签 id（诊断文案「引用来自标签 A」用）。 */
 const lastSnapshotTab = new Map<string, string>();
+/** 绑定表上限：UI 关页/删会话不会回调这里，必须自带上限防长期浏览后无界增长。 */
+const MAX_SNAPSHOT_BINDINGS = 512;
+
+function trimSnapshotBindings(): void {
+  while (snapshotTokens.size > MAX_SNAPSHOT_BINDINGS) {
+    const oldest = snapshotTokens.entries().next().value as [string, string] | undefined;
+    if (!oldest) break;
+    snapshotTokens.delete(oldest[0]);
+    dropTabRegistry(oldest[1]);
+  }
+  while (lastSnapshotTab.size > MAX_SNAPSHOT_BINDINGS) {
+    const oldest = lastSnapshotTab.keys().next().value as string | undefined;
+    if (!oldest) break;
+    lastSnapshotTab.delete(oldest);
+  }
+}
 
 function tokenKey(sessionId: string | undefined, tabId: string | null | undefined): string {
   return `${sessionId ?? ""}::${tabId ?? ""}`;
@@ -392,6 +409,7 @@ export function registerBrowserTools(
         if (snapshot.tabToken) {
           snapshotTokens.set(tokenKey(ctx.sessionId, tabId), snapshot.tabToken);
           if (tabId) lastSnapshotTab.set(ctx.sessionId ?? "", tabId);
+          trimSnapshotBindings();
         }
         const body = clip(snapshot.text ?? "", params.maxChars ?? MAX_TEXT);
         const elements = snapshot.elements ?? [];
@@ -593,11 +611,26 @@ export function registerBrowserTools(
     execute: async (ctx): Promise<ToolResult> => {
       try {
         const host = needHost();
+        const tabs = host.listTabs(ctx.sessionId);
+        if (tabs.length === 0) return { ok: false, content: "[NO_TAB] 当前会话没有打开的网页标签" };
         const tabId = activeTabOf(host, ctx.sessionId);
-        const result = (await host
-          .executeScript(buildDismissOverlayScript(), ctx.sessionId, tabId ?? undefined)
-          .catch(() => null)) as { ok?: boolean; action?: string } | null;
-        if (!result?.ok) return { ok: false, content: "[错误] 当前没有可操作的网页标签" };
+        let result: { ok?: boolean; action?: string; code?: string } | null = null;
+        try {
+          result = (await host.executeScript(
+            buildDismissOverlayScript(),
+            ctx.sessionId,
+            tabId ?? undefined,
+          )) as { ok?: boolean; action?: string; code?: string } | null;
+        } catch (err) {
+          return { ok: false, content: `[SCRIPT_ERROR] 页面脚本执行失败：${err instanceof Error ? err.message : String(err)}` };
+        }
+        if (!result?.ok) {
+          // 没找到关闭控件：已按 Esc 尝试，但必须如实告诉模型「无可操作控件」而不是假成功。
+          return {
+            ok: false,
+            content: `[NOTHING_FOUND] 没有找到明确的关闭控件；已发送 Esc 尝试关闭。可先 browser_snapshot 查看页面再决定（${result?.action ?? "escape"}）`,
+          };
+        }
         await new Promise((resolve) => setTimeout(resolve, 220));
         return { ok: true, content: `已关闭遮挡弹窗（${result.action ?? "dismiss"}）；如需继续操作请重新 browser_snapshot 获取最新状态` };
       } catch (err) {
@@ -1305,15 +1338,21 @@ export function registerBrowserTools(
         execute: async (ctx) => {
           const host = browserHost();
           if (host && typeof host.ensureAgentTab === "function") {
-            const fromTab = activeTabOf(host, ctx.sessionId);
+            // 快照可能落在「用户全局标签」（会话还没有自己的页）；此时 activeTabId(session) 为 null，
+            // 但 lastSnapshotTab 记着令牌真正来自哪个标签，迁移必须以它为来源键。
+            const fromTab =
+              activeTabOf(host, ctx.sessionId) ?? lastSnapshotTab.get(ctx.sessionId ?? "") ?? null;
             const fromKey = tokenKey(ctx.sessionId, fromTab);
             const token = fromTab ? snapshotTokens.get(fromKey) : undefined;
-            const adopted = await host.ensureAgentTab(ctx.sessionId).catch(() => null);
+            const adopted = await host
+              .ensureAgentTab(ctx.sessionId, { blank: name === "browser_navigate" })
+              .catch(() => null);
             // 首次动作会把用户页克隆成任务页；把快照令牌迁到克隆页，避免第一次点击必 STALE_REF。
             if (adopted && fromTab && adopted !== fromTab) {
               if (token) {
                 snapshotTokens.set(tokenKey(ctx.sessionId, adopted), token);
                 snapshotTokens.delete(fromKey);
+                trimSnapshotBindings();
               }
               if (lastSnapshotTab.get(ctx.sessionId ?? "") === fromTab) {
                 lastSnapshotTab.set(ctx.sessionId ?? "", adopted);

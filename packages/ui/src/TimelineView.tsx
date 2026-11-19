@@ -18,6 +18,7 @@ import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import StreamFadeText from "./StreamFade.js";
 import DiffBlock from "./DiffBlock.js";
+import { useT } from "./i18n.js";
 import { RefPanel, UrlPanel } from "./ArtifactPanels.js";
 import { collectReferences, diffStat, diffLines, parseDiffResult } from "./artifacts.js";
 import {
@@ -88,16 +89,17 @@ function toolLabel(name: string): string {
 }
 
 export default function Timeline({ steps, liveStream = false, expandAll = false, durationText, open, onToggleOpen, Markdown, onOpenUrl }: TimelineProps): React.ReactElement | null {
+  const tr = useT();
   const groups = React.useMemo(() => groupTimeline(steps), [steps]);
   const references = React.useMemo(() => collectReferences(steps), [steps]);
   if (steps.length === 0) return null;
   const toolCount = steps.filter((step) => step.kind === "tool").length;
   return (
     <div className="think-card">
-      <button type="button" className="think-card-title" onClick={onToggleOpen} title={open ? "收起思考过程" : "展开思考过程"}>
+      <button type="button" className="think-card-title" onClick={onToggleOpen} title={open ? tr("chat.thinkingCollapse") : tr("chat.thinkingExpand")}>
         <span className="think-card-brain" aria-hidden><Icon name="sparkle" size={12} /></span>
-        <span className="think-card-label">思考过程</span>
-        {toolCount > 0 ? <span className="think-card-count">{toolCount} 个动作</span> : null}
+        <span className="think-card-label">{tr("timeline.thinking")}</span>
+        {toolCount > 0 ? <span className="think-card-count">{tr("timeline.actions", { count: toolCount })}</span> : null}
         {durationText ? (
           <span className="think-card-duration" style={DURATION_STYLE}>
             {durationText}
@@ -209,6 +211,7 @@ function TimelineNode({
   Markdown: MarkdownFn;
   onOpenUrl?: (url: string) => void;
 }): React.ReactElement | null {
+  const tr = useT();
   const [expanded, setExpanded] = React.useState(Boolean(autoExpand || forceExpand));
 
   if (step.kind === "think") {
@@ -229,9 +232,9 @@ function TimelineNode({
         <button type="button" className="think-step-toggle" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起这段思考" : "展开这段思考（Markdown）"}>
           <Chevron open={expanded} size={10} />
           <span className="think-step-icon" aria-hidden><Icon name="bulb" size={11} /></span>
-          <span className="think-step-kind">思考</span>
+          <span className="think-step-kind">{tr("timeline.stepThinking")}</span>
           <span className="think-step-preview">
-            {displayPreview || (duplicateOfHeadline ? (expanded ? "收起思考" : "展开思考") : "思考…")}
+            {displayPreview || (duplicateOfHeadline ? (expanded ? tr("timeline.thinkingCollapse") : tr("timeline.thinkingExpandShort")) : tr("timeline.thinkingHint"))}
             {!duplicateOfHeadline && clean.length > 120 ? "…" : ""}
           </span>
         </button>
@@ -270,9 +273,9 @@ function TimelineNode({
         <span className={`think-step-mark todo-step-mark${done ? " is-done" : ""}`} />
         <div className={`todo-announce${done ? " is-done" : ""}`} data-state={done ? "done" : "start"}>
           <span className="todo-announce-mark" aria-hidden>{done ? <Icon name="check" size={9} /> : <Icon name="play" size={9} />}</span>
-          <span className="todo-announce-kind">推进播报</span>
+          <span className="todo-announce-kind">{tr("timeline.progress")}</span>
           <span className="todo-announce-text" title={step.text}>{step.text}</span>
-          <span className="todo-announce-tag">{done ? "已完成" : "开始"}</span>
+          <span className="todo-announce-tag">{done ? tr("timeline.done") : tr("timeline.start")}</span>
         </div>
       </div>
     );
@@ -288,7 +291,7 @@ function TimelineNode({
           <button type="button" className="steer-card-head" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起这条引导" : "展开这条引导"}>
             <Chevron open={expanded} size={10} />
             <span className="steer-card-icon" aria-hidden><Icon name="guide-arrow" size={11} /></span>
-            <span className="steer-card-title">引导</span>
+            <span className="steer-card-title">{tr("timeline.steer")}</span>
             {!expanded ? <span className="steer-card-preview">{text.replace(/\s+/g, " ").slice(0, 80)}</span> : null}
           </button>
           <Collapse open={expanded}>
@@ -303,6 +306,7 @@ function TimelineNode({
 }
 
 function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
+  const tr = useT();
   const [expanded, setExpanded] = React.useState(false);
   const done = items.filter((item) => item.status === "completed").length;
   const active = items.find((item) => item.status === "in_progress");
@@ -313,7 +317,7 @@ function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
         <button type="button" className="plan-card-head" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起任务规划" : "展开任务规划"}>
           <Chevron open={expanded} size={10} />
           <span className="plan-card-icon" aria-hidden><Icon name="list-details" size={12} /></span>
-          <span className="plan-card-title">任务规划</span>
+          <span className="plan-card-title">{tr("timeline.plan")}</span>
           <span className="plan-card-progress" data-all-done={done === items.length && items.length > 0 ? "1" : "0"}>{done}/{items.length}</span>
           {!expanded && active ? <span className="plan-card-active">· {active.content}</span> : null}
         </button>
@@ -343,6 +347,7 @@ function ToolNode({
   onToggle: () => void;
   onOpenUrl?: (url: string) => void;
 }): React.ReactElement {
+  const tr = useT();
   const failed = isToolFailure(step.name, step.result, step.ok);
   const running = step.state === "running";
   const { color } = toolCategoryOf(step.name);
@@ -440,7 +445,7 @@ function ToolNode({
             ) : null}
             {resultText ? (
               isCommand ? (
-                <pre className="think-terminal">{resultText.slice(0, 6000)}{resultText.length > 6000 ? `\n…（已截断：共 ${resultText.length} 字符，仅显示前 6000）` : ""}</pre>
+                <pre className="think-terminal">{resultText.slice(0, 6000)}{resultText.length > 6000 ? `\n…${tr("timeline.truncated", { count: resultText.length })}` : ""}</pre>
               ) : (
                 <div className="think-tool-result" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.linenMuted }}>
                   <span className="think-tool-result-mark" aria-hidden>{failed ? <Icon name="close" size={10} /> : <Icon name="check" size={10} />}</span>

@@ -180,7 +180,8 @@ describe("时间线工具结果展示不静默截断", () => {
   });
 
   it("终端结果若限制长度必须明示「已截断 + 总字符数」", () => {
-    expect(timeline).toContain("已截断：共");
+    expect(timeline).toContain('tr("timeline.truncated"');
+    expect(read("packages/ui/src/i18nBrowser.ts")).toContain("已截断：共 {count} 字符");
     expect(timeline).toContain("resultText.length");
   });
 

@@ -12,7 +12,7 @@
  */
 import { jaccardCJK } from "./fiveGate.js";
 import { shouldRecall } from "./recallGate.js";
-import { DEFAULT_EMBED_DIM, hashEmbedding, tokenize } from "./vector.js";
+import { DEFAULT_EMBED_DIM, cosineSimilarity, hashEmbedding, tokenize } from "./vector.js";
 
 /** 单次检索默认召回候选数（BM25 阶段截断）。 */
 export const DEFAULT_CANDIDATE_LIMIT = 60;
@@ -197,23 +197,10 @@ export function vectorRerank(
     const vector = vectors(candidate.doc.id);
     let vectorScore = 0;
     if (vector && vector.length === queryVector.length) {
-      vectorScore = cosineSafe(queryVector, vector);
+      vectorScore = cosineSimilarity(queryVector, vector);
     }
     return { ...candidate, vectorScore };
   });
-}
-
-function cosineSafe(a: Float32Array, b: Float32Array): number {
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 /** ④ 融合 + 阈值 + limit。 */

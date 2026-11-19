@@ -34,12 +34,6 @@ export const memoryChannels: Record<string, ChannelBinding> = {
     request: MemoryGraphSchema,
     sensitive: true,
   },
-  "memory:stats": {
-    domain: "memory",
-    method: "stats",
-    request: null,
-    sensitive: true,
-  },
   "memory:clear": {
     domain: "memory",
     method: "clear",

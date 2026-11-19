@@ -7,6 +7,7 @@
  * 因此这里只保留「默认值 + 合并行为 + 搜索引擎 URL」，字段定义一律从契约导入。
  */
 import { PreferencesSchema, type PreferencesData } from "loopsoar-contracts/schemas";
+import { buildSearchUrl, type SearchEngine } from "loopsoar-contracts/omnibox";
 
 /** 动效强度枚举（由契约 schema 推导，保留旧导出名以免调用点断裂）。 */
 export const AnimationsSchema = PreferencesSchema.shape.animations;
@@ -78,16 +79,10 @@ export function mergePreferences(raw: unknown): Preferences {
   };
 }
 
-/** 搜索引擎 → omnibox 搜索 URL 模板（非 URL 输入时使用）。 */
-export function searchUrlFor(engine: Preferences["searchEngine"], query: string): string {
-  const q = encodeURIComponent(query);
-  switch (engine) {
-    case "google":
-      return `https://www.google.com/search?q=${q}`;
-    case "baidu":
-      return `https://www.baidu.com/s?wd=${q}`;
-    case "bing":
-    default:
-      return `https://www.bing.com/search?q=${q}`;
-  }
+/**
+ * 搜索引擎 → omnibox 搜索 URL 模板已收口到 loopsoar-contracts/omnibox 的 buildSearchUrl；
+ * 这里保留 re-export 只为兼容旧 import，不再提供第二份 switch。
+ */
+export function searchUrlFor(engine: SearchEngine, term: string): string {
+  return buildSearchUrl(term, engine);
 }

@@ -231,10 +231,6 @@ export function registerChatDomain(deps: ChatDeps): void {
     startStream(deps, payload as { message: string; sessionId?: string; mode?: "build" | "plan" }),
   );
 
-  handleTrusted(deps, "chat:send", (payload) =>
-    startStream(deps, payload as { message: string; sessionId?: string; mode?: "build" | "plan" }),
-  );
-
   handleTrusted(deps, "chat:steer", (payload) => {
     const p = payload as { message: string; sessionId?: string; steerId?: string };
     return deps.chatService.steer(p.sessionId ?? undefined, p.message, p.steerId);

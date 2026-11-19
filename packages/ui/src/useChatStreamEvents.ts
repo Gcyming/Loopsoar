@@ -280,6 +280,21 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         const at = meta.activeId;
         if (at) updateSessionMessages(sid, (prev) => applyReasoning(prev, at, reasoningDelta));
       }),
+      api.on("chat:compacted", (payload) => {
+        const p = payload as { sessionId?: string };
+        const sid = p.sessionId ?? sessionIdRef.current;
+        if (!sid || sid !== sessionIdRef.current) return;
+        // 上下文压缩会替换会话消息（旧消息折叠为摘要）：重新拉取当前会话，
+        // 否则界面仍显示已不存在的原文，继续对话时上下文与 UI 不一致。
+        void api.chat
+          .history()
+          .then((history) => {
+            if (!history?.session) return;
+            const restored = restoreMessages(history.session.messages, nextId);
+            updateSessionMessages(sid, () => restored);
+          })
+          .catch(() => {});
+      }),
       api.on("chat:stream:tool_start", (payload) => {
         const p = payload as { content?: string; sessionId?: string };
         const sid = p.sessionId ?? sessionIdRef.current;

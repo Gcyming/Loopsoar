@@ -170,7 +170,7 @@ export class BrowserHost {
   }
 
   private createTab(sessionId: string): TabEntry {
-    const view = this.deps.createView();
+    const view = this.deps.createView(sessionId);
     const attached = this.tryAttach(view);
     const id = this.nextId();
     /** 事件回调可能早于 entry 创建（loadURL 前的同步事件），用闭包引用兜底。 */
@@ -1241,7 +1241,7 @@ export class BrowserHost {
    *
    * 只应在「动作类」工具执行前调用：只读（快照/截图）不算工作，不该克隆页面。
    */
-  async ensureAgentTab(sessionId?: string): Promise<string | null> {
+  async ensureAgentTab(sessionId?: string, opts?: { blank?: boolean }): Promise<string | null> {
     const sid = (sessionId ?? this.activeSession).trim();
     if (!sid) return null;
     // Agent 要动手：把网页展开，用户能看见它在操作克隆页。
@@ -1264,14 +1264,17 @@ export class BrowserHost {
     entry.agentBound = true;
     // 先标记任务身份，再 emit 落盘：否则第一次保存会因为「还不知道是任务」而丢掉标记。
     this.deps.onTaskCreated?.(sid);
-    if (sourceUrl) {
+    if (sourceUrl && opts?.blank !== true) {
       const outcome = await this.navigate(sourceUrl, id, sid, "agent");
       if (!outcome.ok) entry.url = sourceUrl;
     }
-    // Agent 工作区成为可见组：折叠页与任务标签条同时出现。
-    this.showTask(sid);
-    // 页面此刻才真正可见：把「常驻光标」从现在开始算，而不是等用户看到第一次点击。
-    this.deps.onAgentActing?.(sid);
+    // 只有前台会话才切视图/点亮光标：后台会话的工具调用不能把用户正在看的页面换掉。
+    const foreground = sid === this.activeSession;
+    if (foreground) {
+      this.showTask(sid);
+      // 页面此刻才真正可见：把「常驻光标」从现在开始算，而不是等用户看到第一次点击。
+      this.deps.onAgentActing?.(sid);
+    }
     return id;
   }
 

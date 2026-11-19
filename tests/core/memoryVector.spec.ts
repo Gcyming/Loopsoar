@@ -8,9 +8,7 @@ import {
   DEFAULT_EMBED_DIM,
   FlatVectorIndex,
   cosineSimilarity,
-  estimateVectorBytes,
   hashEmbedding,
-  hashEmbeddings,
   l2Normalize,
   tokenize,
 } from "../../packages/core/src/memory/vector.ts";
@@ -49,11 +47,9 @@ describe("tokenize / hash embedding", () => {
     expect(cosineSimilarity(base, similar)).toBeGreaterThan(0.3);
   });
 
-  it("批量 embedding 与单条一致；自定义维度生效", () => {
-    const batch = hashEmbeddings(["记忆五闸", "工具循环"], 128);
-    expect(batch).toHaveLength(2);
-    expect(batch[0].length).toBe(128);
-    expect(Array.from(batch[0])).toEqual(Array.from(hashEmbedding("记忆五闸", 128)));
+  it("自定义维度生效；非法维度抛错", () => {
+    const custom = hashEmbedding("记忆五闸", 128);
+    expect(custom.length).toBe(128);
     expect(() => hashEmbedding("x", 0)).toThrow(/维度/);
   });
 
@@ -72,11 +68,6 @@ describe("tokenize / hash embedding", () => {
     expect(cosineSimilarity(new Float32Array([1, 0]), new Float32Array([-1, 0]))).toBeCloseTo(-1, 6);
     expect(cosineSimilarity(new Float32Array([1, 0]), new Float32Array([0, 1]))).toBeCloseTo(0, 6);
     expect(() => cosineSimilarity(new Float32Array([1, 0]), new Float32Array([1, 0, 0]))).toThrow(/维度不一致/);
-  });
-
-  it("estimateVectorBytes：count × dim × 4", () => {
-    expect(estimateVectorBytes(100_000, 256)).toBe(100_000 * 256 * 4);
-    expect(estimateVectorBytes(0, 256)).toBe(0);
   });
 });
 

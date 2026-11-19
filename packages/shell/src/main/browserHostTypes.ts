@@ -18,7 +18,8 @@ export interface HostView extends WebContentsViewLike {
 }
 
 export interface BrowserHostDeps {
-  createView: () => HostView;
+  /** sessionId 用于给页面的 window.open/target=_blank 找到正确归属（后台会话不能落到用户标签）。 */
+  createView: (sessionId?: string) => HostView;
   /**
    * 把原生视图挂到主窗口（contentView.addChildView）。
    * 返回 false 表示窗口还没就绪（典型场景：启动恢复时窗口尚未创建）→ 宿主在下一次 applyLayout

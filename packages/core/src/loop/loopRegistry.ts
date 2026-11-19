@@ -14,6 +14,8 @@ export interface LoopRunContext {
   sessionId: string;
   /** 回退标记：safeMode=true 表示这是安全模式下的兜底运行。 */
   safeMode?: boolean;
+  /** 心跳：runner 有进展时调用，重置静默看门狗（自定义 loop 必须定期调用）。 */
+  heartbeat?: () => void;
   [key: string]: unknown;
 }
 
@@ -143,16 +145,33 @@ export class LoopRegistry {
     const controller = new AbortController();
     const unlink = this.linkAbort(parentSignal, controller);
     let toolCalls = 0;
+    // 静默看门狗按「进展」计时：工具调用会心跳，runner 也可主动调 ctx.heartbeat()。
+    // 固定总时长会把健康但耗时长的自定义 loop 误杀；无心跳才是真正的死循环/卡死。
+    const timeoutMs = this.opts.silentTimeoutMs ?? LOOP_HEALTH.silentTimeoutMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let heartbeat = (): void => undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      heartbeat = () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          reject(new Error(`静默超时 ${timeoutMs}ms（心跳缺失/判死 → 安全模式条件）`));
+          controller.abort();
+        }, timeoutMs);
+      };
+      heartbeat();
+    });
     const baseExecutor = ctx.executeTool as ToolExecutor | undefined;
     const runCtx: LoopRunContext = {
       ...ctx,
       safeMode: false,
       signal: controller.signal,
+      heartbeat,
       ...(baseExecutor
         ? {
             executeTool: {
               invoke: async (toolCall) => {
                 toolCalls += 1;
+                heartbeat();
                 return baseExecutor.invoke(toolCall);
               },
             } satisfies ToolExecutor,
@@ -161,7 +180,7 @@ export class LoopRegistry {
     };
     const runner = Promise.resolve().then(() => def.runner(runCtx));
     try {
-      return await this.withTimeout(runner, controller);
+      return await Promise.race([runner, timeout]);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       controller.abort();
@@ -172,6 +191,7 @@ export class LoopRegistry {
       if (toolCalls > 0 && !def.builtin) return this.sideEffectStop(reason, toolCalls);
       return this.fallbackFrom(def, ctx, reason);
     } finally {
+      if (timer) clearTimeout(timer);
       unlink();
     }
   }
@@ -186,23 +206,6 @@ export class LoopRegistry {
     const onAbort = (): void => controller.abort();
     parent.addEventListener("abort", onAbort, { once: true });
     return () => parent.removeEventListener("abort", onAbort);
-  }
-
-  /** 静默超时：先 abort 让守规矩的 runner 停下，再以 reject 进入回退/停止判定。 */
-  private async withTimeout(runner: Promise<ToolLoopOutcome>, controller: AbortController): Promise<ToolLoopOutcome> {
-    const timeoutMs = this.opts.silentTimeoutMs ?? LOOP_HEALTH.silentTimeoutMs;
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        reject(new Error(`静默超时 ${timeoutMs}ms（心跳缺失/判死 → 安全模式条件）`));
-        controller.abort();
-      }, timeoutMs);
-    });
-    try {
-      return await Promise.race([runner, timeout]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
   }
 
   /** 失败后最多再等 250ms，给收到 abort 的 runner 一点收尾时间；不阻塞主流程。 */

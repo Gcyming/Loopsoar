@@ -87,17 +87,20 @@ export function gateDedupe(
 }
 
 /**
- * gateMerge — 无 tags 且相似度 > 0.68 → 合并；带 tags 不参与合并。
- * 为什么带 tags 不合并：tags 是分类标签，合并会丢失分类边界，导致语义混合。
+ * gateMerge — 相似度 > 0.68 且同 agent/同工作区 → 合并；tags 不阻断合并。
+ * 为什么 tags 不再阻断：extract 产出的候选几乎总有分类 tags，若一票否决，0.68 合并闸在真实
+ * 写入路径上永不生效；合并时由调用方做 tags 并集，分类信息不会丢。
+ * 跨 agent 的近似内容由 gateCrossAgent 先处理（保留双方归属，只建指针）；
+ * 这里再按 agent 过滤一次，防止 0.68–0.75 区间绕过第 5 闸被合并。
  */
 export function gateMerge(
   existing: MemoryFact[],
   incoming: MemoryFact,
   threshold = THRESHOLD_MERGE
 ): { mergeInto?: MemoryFact } {
-  if (incoming.tags.length > 0) return {};
+  const incomingAgent = agentOf(incoming);
   for (const f of existing) {
-    if (f.tags.length > 0) continue; // 只有无 tags 的参与合并
+    if (agentOf(f) !== incomingAgent) continue;
     const sim = jaccardCJK(incoming.content, f.content);
     if (sim > threshold) {
       return { mergeInto: f };

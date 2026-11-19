@@ -59,6 +59,41 @@ describe("规则进入 Agent 循环", () => {
     expect(seen).toEqual(["sess-a"]);
   });
 
+  it("同一会话同输入的 stable 段字节不变，回调报告 changed=false", async () => {
+    const events: { sessionId: string; changed: boolean; length: number }[] = [];
+    const llm = new RecordingLlm();
+    const service = new ChatService({
+      llm,
+      platform: createNodePlatform(),
+      registry: new ToolRegistry(),
+      sandbox: new SandboxManager(),
+      agent: { name: "T", role: "测试" },
+      getSystemRules: () => "# 固定规则\n- 不改",
+      onStableSegment: (info) => events.push(info),
+    });
+    await service.stream({ message: "第一次", sessionId: "sess-stable" });
+    const first = llm.requests.at(-1)?.messages.find((m) => m.role === "system")?.content;
+    await service.stream({ message: "第二次", sessionId: "sess-stable" });
+    const second = llm.requests.at(-1)?.messages.find((m) => m.role === "system")?.content;
+    expect(second).toBe(first);
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.changed === false)).toBe(true);
+  });
+
+  it("maxTokens 由模型能力注入并透传到 LLM 请求", async () => {
+    const llm = new RecordingLlm();
+    const service = new ChatService({
+      llm,
+      platform: createNodePlatform(),
+      registry: new ToolRegistry(),
+      sandbox: new SandboxManager(),
+      agent: { name: "T", role: "测试" },
+      getMaxOutputTokens: () => 8192,
+    });
+    await service.stream({ message: "开始", sessionId: "sess-max" });
+    expect(llm.requests[0].maxTokens).toBe(8192);
+  });
+
   it("停用/无规则时不注入（返回空串）", async () => {
     const { service, llm } = makeService(() => "");
     await service.stream({ message: "开始", sessionId: "sess-a" });

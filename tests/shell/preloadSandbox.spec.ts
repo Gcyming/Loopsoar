@@ -103,7 +103,7 @@ describe("preload 沙箱（行为级）", () => {
     // 预加载脚本里 ipcRenderer 只以闭包形式存在于方法内部，不应出现在 API 对象上
     expect(Object.keys(api)).not.toContain("ipcRenderer");
     expect(api.chat).toBeTruthy();
-    expect(typeof api.chat.send).toBe("function");
+    expect(typeof api.chat.stream).toBe("function");
   });
 
   it("域方法只来自契约白名单：调用走 loopsoar:<channel> 前缀并透传 payload", async () => {
@@ -114,9 +114,9 @@ describe("preload 沙箱（行为级）", () => {
         "function",
       );
     }
-    await harness.api.chat.send({ message: "hi", sessionId: "sess-1" });
+    await harness.api.chat.stream({ message: "hi", sessionId: "sess-1" });
     expect(harness.invokes[0]).toEqual({
-      channel: "loopsoar:chat:send",
+      channel: "loopsoar:chat:stream",
       payload: { message: "hi", sessionId: "sess-1" },
     });
     // 新增的 /compact 通道必须在 preload 白名单里（否则 UI 调不到）

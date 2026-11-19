@@ -231,5 +231,50 @@ git status --short                   # 仅本轮预期改动
 
 **验证**：全量 **191 文件 / 1619 用例全绿**；typecheck 5/5、build 5/5。
 
+---
+
+## 9. 第三阶段开工前问题闭环（2026-11-19）
+
+> 本节记录 §5 与 §8.2 台账的最终处置；上文的「待办」保留为历史审计证据，不再代表当前状态。
+
+### 9.1 §5 正确性 / 安全 / 接线
+
+- 扩展权限改为**交集**：工具声明的权限必须是清单权限子集，越界 fail-closed 并记入冲突（§5 #1）。
+- Loop 回退：已执行工具的失败**不再回退重放**，直接安全停止并如实报错；未执行工具才回退 builtin（§5 #2）。
+- 看门狗改为**进展/心跳**驱动；超时先 abort 并等待 runner 收尾，不再与 builtin 并发（§5 #3/#4）。
+- 扩展调用超时即 `failRun`（注销 + kill）；崩溃按 1s/5s/15s 退避、最多 3 次、5 分钟窗口重启（§5 #5）。
+- Anthropic thinking：`reasoning` + `reasoningSignature` 全链路回灌；`max_tokens` 由模型能力推导；thinking budget 夹到 `maxTokens − 1024`（§5 #6/#7）。
+- 输出过滤：URL / 行内代码 / 围栏代码为保护区间，流式为行级状态机（§5 #8）。
+- 记忆合并：tags 只分类不否决，合并时并集；跨 agent 绝不合并；`add()` 返回真实落点条目，归档有上限（§5 #9/#10，P2）。
+- Node 平台：`TextDecoder({stream:true})` + `Buffer.byteLength` 字节记账，截断落在完整字符边界（§5 #11/#12）。
+- 敏感路径 / 受保护源码目录接入 `file_write` 前置判定；`canUseTool` 进入 chat 执行链（§5 #13/#14）。
+- `assertStableUnchanged` 每会话在组装 stable 段时校验（§5 #15）。
+- 死通道/死事件/死校验清理完成；`browser:screenshot` 保留（工具栏浮层真实使用）（§5 #16–#19）。
+- 品牌、`searchUrlFor`、UI 类型、MCP schema、向量余弦全部单源；L0–L5 分级进入设置页（§5 #20–#25）。
+- 上下文压缩后的保留窗口丢弃开头孤儿 `tool` 消息（P2）。
+- E2E 钩子已抽到 `main/e2eHooks.ts`；ADR 编号 0007/0008/0009 重排为 **0144/0145/0146**；向量死函数删除（P2）。
+
+### 9.2 §8.2 浏览器子系统
+
+- 后台会话 `ensureAgentTab` 不再调用 `showTask` / `onAgentActing`，不抢前台视图。
+- 网页 `window.open` / `target=_blank` 按**发起标签所在会话**新建，不再一律落到用户全局标签；导航类工具首次任务化用空白克隆，避免两次整页加载。
+- 快照落在用户全局标签时，动作前的令牌迁移改用 `lastSnapshotTab` 作为来源键，首次「快照 → 动作」不再必 STALE_REF。
+- 快照令牌绑定表加上限（512）并在淘汰时释放注册表；关闭标签仍即时清理。
+- `browser_dismiss_popup` 区分 `NO_TAB` / `SCRIPT_ERROR` / `NOTHING_FOUND`，找不到关闭控件不再假成功。
+
+### 9.3 当前验证基线
+
+```
+pnpm -r typecheck                         # 5/5 exit 0
+npx vitest run                            # 247 文件 / 1917 用例全绿
+pnpm gen && pnpm check                    # 逐字节一致
+pnpm build                                # 5/5 Done
+node scripts/e2e-confirm-run.mjs          # ok:true（敏感确认真机链路）
+node scripts/e2e-p2-run.mjs               # ok:true（导航/快照/点击真机链路）
+node -e "import('loopsoar-core/loop')"    # 在 packages/core 下可加载
+```
+
+**仍未处理（非代码）**：仓库外层容器目录与旧 docs 快照属于工作区外文件，需用户确认后再删；i18n 疑似未用键需人工逐条确认（存在动态拼接，机器扫描会误报）。
+
 
 
