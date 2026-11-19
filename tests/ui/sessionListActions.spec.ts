@@ -58,10 +58,13 @@ describe("会话列表悬浮操作", () => {
     const domain = read("packages/shell/src/main/domains/workspace.ts");
     expect(domain).toContain('"workspace:rename"');
     expect(domain).toContain('"workspace:openFolder"');
+    // 工作区动作已从 App 抽到状态 hook；守卫改为断言真正实现处，同时保留 App 的跨域接线。
+    const workspaces = read("packages/ui/src/useWorkspaces.ts");
+    expect(workspaces).toContain("const renameWorkspace");
+    expect(workspaces).toContain("const removeWorkspace");
+    expect(workspaces).toContain("const openWorkspaceFolder");
     const app = read("packages/ui/src/App.tsx");
-    expect(app).toContain("const renameWorkspace");
-    expect(app).toContain("const removeWorkspace");
-    expect(app).toContain("const openWorkspaceFolder");
+    expect(app).toContain("useWorkspaces(");
     expect(app).toContain("onNewSessionInWorkspace={newSessionInWorkspace}");
   });
 });

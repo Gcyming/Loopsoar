@@ -11,18 +11,18 @@ import type {
   ProviderStatus,
   SessionMeta,
   TabState,
-  WorkspaceRecord,
 } from "./types.js";
 import { MOTION, NO_DRAG_REGION, applyTheme } from "./theme.js";
 import { styles } from "./appStyles.js";
 import { useAgentWindowLayout } from "./useAgentWindowLayout.js";
 import { useSidebarLayout } from "./useSidebarLayout.js";
-import { useBrowserPopoverOverlay } from "./useBrowserPopoverOverlay.js";
+import { useModelPicker } from "./useModelPicker.js";
+import { useBrowserPopoverOverlay, isNativePageVisible } from "./useBrowserPopoverOverlay.js";
+import { useWorkspaces } from "./useWorkspaces.js";
 import { useBottomDock } from "./useBottomDock.js";
 const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
-import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { dismissAllPopovers, useAnyPopoverOpen } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
 import AppTitleBar from "./AppTitleBar.js";
@@ -92,9 +92,6 @@ export default function App(): React.JSX.Element {
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [maximized, setMaximized] = useState(false);
-  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
-  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [address, setAddress] = useState("");
@@ -153,7 +150,6 @@ export default function App(): React.JSX.Element {
   const [askQueue, setAskQueue] = useState<AskUserRequest[]>([]);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   /** 任意 usePopover 列表打开时都要让原生 WebContentsView 让位，否则菜单会被网页整块盖住。 */
   const anyPopoverOpen = useAnyPopoverOpen();
   // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
@@ -216,13 +212,26 @@ export default function App(): React.JSX.Element {
    */
   const [browserControl, setBrowserControl] = useState(false);
   const draftBrowserControlRef = useRef(false);
-  const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
   // 全局浮层仲裁：同一时刻只允许一个菜单展开；点击外部/Esc/切界面统一收起。
   // 会话历史下拉在 AgentSidebar 内用 usePopover("app-session") 登记；这里只负责全局收起。
 
   // 启动时先为空：真实会话 ID 必须来自 shell（恢复历史或 chat:sessions 的 currentId），
   // 否则未恢复历史的冷启动会拿一个假 ID 发送，消息落到索引外的"幽灵会话"。
   const sessionIdRef = useRef<string>("");
+  const {
+    workspaces,
+    activeWorkspaceId,
+    workspacePanelOpen,
+    setWorkspacePanelOpen,
+    setWorkspaces,
+    setActiveWorkspaceId,
+    applyWorkspaces,
+    bindWorkspaceToCurrentSession,
+    createWorkspace,
+    renameWorkspace,
+    removeWorkspace,
+    openWorkspaceFolder,
+  } = useWorkspaces({ api, sessionIdRef, setSessions, setNotice });
   /** 标签页 ↔ 会话绑定：会话只在首次对话时创建并绑定当前标签页；切回旧标签页恢复其会话。 */
   const tabSessionRef = useRef<Map<string, string>>(new Map());
   const omniboxRef = useRef<HTMLInputElement | null>(null);
@@ -374,6 +383,16 @@ export default function App(): React.JSX.Element {
     setSettingsSection(section ?? "general");
     setSettingsOpen(true);
   }, []);
+
+  const {
+    modelMenuOpen,
+    setModelMenuOpen,
+    modelGroups,
+    openModelMenu,
+    chooseModel,
+    effortOptions,
+    effortLabel,
+  } = useModelPicker({ api, provider, setProvider, setNotice, openSettings });
 
   // 挤压检测：内容自然宽度 vs 可用宽度；<92% 触发图标化（阈值可调）
   useEffect(() => {
@@ -538,72 +557,16 @@ export default function App(): React.JSX.Element {
     setBusy(metaFor(mapped).busy);
   }, [activeTabId]);
 
-  const openModelMenu = useCallback((): void => {
-    if (!api || !provider?.configured) {
-      openSettings("providers");
-      return;
-    }
-    if (modelMenuOpen) {
-      setModelMenuOpen(false);
-      return;
-    }
-    setModelMenuOpen(true);
-    // 跨供应商：直接读本地供应商清单（含模型参数），不做远端探测，秒开且离线可用
-    setModelGroups(null);
-    void api.settings
-      .listProviders()
-      .then((result) => setModelGroups(buildModelGroups(result.items, result.activeId)))
-      .catch(() => setModelGroups([]));
-  }, [api, modelMenuOpen, openSettings, provider]);
-
   // 工作区清单预载：「+ 工作区」菜单与侧栏会话树启动即可用（WorkspacePanel 之外不再等到打开面板才加载）。
   React.useEffect(() => {
     if (!api) return;
     void api.workspace
       .list()
       .then((r) => {
-        setWorkspaces(r.workspaces);
-        setActiveWorkspaceId(r.activeId);
+        applyWorkspaces(r);
       })
       .catch(() => undefined);
-  }, [api]);
-  // 新标签页 Vibecoding 的模型胶囊要立刻能展开：启动后预载一次跨供应商模型清单（离线、只读本地）。
-  React.useEffect(() => {
-    if (!api || modelGroups !== null) return;
-    void api.settings
-      .listProviders()
-      .then((result) => setModelGroups(buildModelGroups(result.items, result.activeId)))
-      .catch(() => setModelGroups([]));
-  }, [api, modelGroups]);
-  // 当前模型声明的推理等级；为空则不显示「推理」chip
-  const effortOptions = useMemo(() => {
-    const spec = provider?.models?.find((m) => m.id === provider.model);
-    // 模型未声明 reasoning levels 时给默认三档（关=不发参数，安全），保证「推理强度」始终可用
-    return spec?.thinkingEfforts && spec.thinkingEfforts.length > 0 ? spec.thinkingEfforts : ["low", "medium", "high"];
-  }, [provider]);
-
-  // 推理等级统一英文（用户 2026-11-14：菜单里中英混杂很难看）：
-  // 档位名直接用模型声明的值（low / medium / high / max …），关闭态显示 off。
-  const effortLabel = useCallback((value: string): string => (value ? value : "off"), []);
-
-  const chooseModel = useCallback(
-    (modelId: string, providerId: string): void => {
-      setModelMenuOpen(false);
-      if (!api) return;
-      const group = modelGroups?.find((item) => item.providerId === providerId);
-      if (!group) return;
-      void (async () => {
-        if (!group.active) await api.settings.setActiveProvider({ id: providerId });
-        await api.settings.setProvider({ provider: group.provider, baseUrl: group.baseUrl, model: modelId });
-        const nextProvider = await api.settings.getProvider();
-        setProvider(nextProvider);
-        const list = await api.settings.listProviders().catch(() => null);
-        if (list) setModelGroups(buildModelGroups(list.items, list.activeId));
-        setNotice(`已切换到 ${group.provider} · ${modelId}`);
-      })().catch((err: unknown) => setNotice(`切换模型失败：${err instanceof Error ? err.message : String(err)}`));
-    },
-    [api, modelGroups],
-  );
+  }, [api, applyWorkspaces]);
 
   /**
    * 新会话 = 新标签页（用户 m07920 规则）：会话绑定标签页、标签页绑定工作区。
@@ -628,8 +591,7 @@ export default function App(): React.JSX.Element {
           setNotice(selected.error ?? "切换工作区失败");
           return;
         }
-        setWorkspaces(selected.workspaces);
-        setActiveWorkspaceId(selected.activeId);
+        applyWorkspaces(selected);
       }
       // 草稿态：没有会话、没有消息；右侧只是「尚未归属工作区的会话栏」。
       sessionIdRef.current = "";
@@ -660,67 +622,21 @@ export default function App(): React.JSX.Element {
       else setSessionResetToken((value) => value + 1);
       setNotice(options?.notice ?? (options?.reset === "keep" ? "新会话草稿：发送后才会创建" : "已新建标签页"));
     },
-    [api, activeWorkspaceId],
+    [api, activeWorkspaceId, applyWorkspaces],
   );
 
   /** 新建标签页 = 新会话（每次都进入一个新的搜索页，不再和当前会话共用标签组）。 */
-  /** 输入框下方工作区选择器：草稿态只设后续活动工作区；已有会话才绑定。 */
-  const bindWorkspaceToCurrentSession = useCallback(
-    (workspaceId: string): void => {
-      if (!api) return;
-      if (!sessionIdRef.current) {
-        void api.workspace
-          .select({ id: workspaceId })
-          .then((r) => {
-            if (!r.ok) {
-              setNotice(r.error ?? "切换工作区失败");
-              return;
-            }
-            setWorkspaces(r.workspaces);
-            setActiveWorkspaceId(r.activeId);
-            setNotice("后续新建页/会话将在此工作区进行");
-          })
-          .catch((err: unknown) => setNotice("切换工作区失败：" + (err instanceof Error ? err.message : String(err))));
-        return;
-      }
-      void api.workspace
-        .bindSession({ workspaceId })
-        .then((r) => {
-          if (!r.ok) {
-            setNotice(r.error ?? "切换工作区失败");
-            return;
-          }
-          if (r.sessions) setSessions(r.sessions);
-          if (r.workspaces) setWorkspaces(r.workspaces);
-          if (r.activeId) setActiveWorkspaceId(r.activeId);
-          setNotice("已切换工作区");
-        })
-        .catch((err: unknown) => setNotice("切换工作区失败：" + (err instanceof Error ? err.message : String(err))));
-    },
-    [api],
-  );
-
   /** 新标签页/整页会话的「+ 新加工作区」：原生文件夹选择器 → 挂载并设为当前工作区。 */
   const addWorkspaceForChat = useCallback((): void => {
-    if (!api) return;
-    void api.workspace
-      .create({})
-      .then(async (r) => {
-        if (!r.ok) {
-          // 用户取消文件夹选择不算错误
-          if (r.error && !r.error.includes("取消") && !r.error.toLowerCase().includes("cancel")) setNotice(r.error);
-          return;
-        }
-        setWorkspaces(r.workspaces);
-        setActiveWorkspaceId(r.activeId);
-        // 新建工作区后直接进入该工作区的「新会话 + 新标签页」搜索页（用户 m07920）。
-        await createFreshSessionAndTab({
-          workspaceId: r.activeId ?? undefined,
-          notice: `已添加工作区：${r.workspace?.name ?? ""}`,
-        });
-      })
-      .catch((err: unknown) => setNotice(`添加工作区失败：${err instanceof Error ? err.message : String(err)}`));
-  }, [api, createFreshSessionAndTab]);
+    void createWorkspace().then(async (workspace) => {
+      if (!workspace) return;
+      // 新建工作区后直接进入该工作区的「新会话 + 新标签页」搜索页（用户 m07920）。
+      await createFreshSessionAndTab({
+        workspaceId: workspace.id,
+        notice: `已添加工作区：${workspace.name}`,
+      });
+    });
+  }, [createFreshSessionAndTab, createWorkspace]);
 
   /** 通用附件选择：返回路径（用户取消返回 null），供右侧输入区与 Vibecoding 输入区共用。 */
   const pickAttachmentPath = useCallback(async (): Promise<string | null> => {
@@ -742,42 +658,6 @@ export default function App(): React.JSX.Element {
     [api, createFreshSessionAndTab],
   );
 
-  /** 重命名工作区（只改显示名）。 */
-  const renameWorkspace = useCallback((workspaceId: string, name: string): void => {
-    if (!api) return;
-    void api.workspace
-      .rename({ id: workspaceId, name })
-      .then((r) => {
-        setWorkspaces(r.workspaces);
-        setActiveWorkspaceId(r.activeId);
-        setNotice(r.ok ? "工作区已重命名为「" + (r.workspace?.name ?? name) + "」" : (r.error ?? "重命名失败"));
-      })
-      .catch((err: unknown) => setNotice("重命名失败：" + (err instanceof Error ? err.message : String(err))));
-  }, [api]);
-
-  /** 删除工作区（后端会拒绝仍有会话绑定的工作区）。 */
-  const removeWorkspace = useCallback((workspaceId: string): void => {
-    if (!api) return;
-    void api.workspace
-      .remove({ id: workspaceId })
-      .then((r) => {
-        setWorkspaces(r.workspaces);
-        setActiveWorkspaceId(r.activeId);
-        setNotice(r.ok ? "工作区已删除" : (r.error ?? "删除工作区失败"));
-      })
-      .catch((err: unknown) => setNotice("删除工作区失败：" + (err instanceof Error ? err.message : String(err))));
-  }, [api]);
-
-  /** 在系统文件管理器中打开工作区根目录。 */
-  const openWorkspaceFolder = useCallback((workspaceId: string): void => {
-    if (!api) return;
-    void api.workspace
-      .openFolder({ id: workspaceId })
-      .then((r) => {
-        if (!r.ok) setNotice(r.error ?? "无法打开文件夹");
-      })
-      .catch((err: unknown) => setNotice("无法打开文件夹：" + (err instanceof Error ? err.message : String(err))));
-  }, [api]);
   /** 推理强度：Composer 与新版会话页共用同一持久化逻辑。 */
   const changeReasoningEffort = useCallback(
     (value: string): void => {
@@ -819,10 +699,20 @@ export default function App(): React.JSX.Element {
     chromePage !== null ||
     activeAsk !== null ||
     permReq !== null;
+  const activeTabState = tabs.find((tab) => tab.active) ?? null;
+  /** 与 BrowserHost.applyLayout 的 visible 条件同源：搜索主页/加载/错误/vibe 时原生视图不可见。 */
+  const nativePageVisible = isNativePageVisible({
+    miniWindow,
+    currentUrl,
+    loading: Boolean(activeTabState?.loading),
+    loadFailure: activeTabState?.loadFailure ?? null,
+    vibeModeActive,
+  });
   const { pageColumnRef, popoverOverPage, browserPreview } = useBrowserPopoverOverlay({
     api,
     anyPopoverOpen,
     baseOverlay,
+    nativePageVisible,
   });
 
   /** 到期的询问自动出队：shell 已按取消结算，弹窗再留着只会让用户点出一个「已过期」。 */
@@ -1292,16 +1182,23 @@ export default function App(): React.JSX.Element {
       if (!api) return;
       // 切标签属于切换界面：所有已展开列表/浮层先收起（用户 m02115 全局规则）。
       dismissAllPopovers();
-      void api.browser.selectTab({ tabId }).then(() => {
-        void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
-        const tab = tabs.find((t) => t.id === tabId);
-        if (tab?.url) {
-          setAddress(tab.url);
-          setCurrentUrl(tab.url);
-        }
-      });
+      void api.browser
+        .selectTab({ tabId })
+        .then(async () => {
+          // 以切换后的真实活动标签为准，而不是切换前的闭包快照：
+          // 切到空白「搜索主页」时必须把 currentUrl 清空，否则原生网页可见性判断会
+          // 继续把上一个网页当成当前页，浮层底图也会冻结旧网页。
+          const r = await api.browser.listTabs();
+          setTabs(r.tabs);
+          const active = r.tabs.find((tab) => tab.active);
+          const url = active?.url ?? "";
+          lastSyncedUrlRef.current = url;
+          setAddress(url);
+          setCurrentUrl(url);
+        })
+        .catch(() => undefined);
     },
-    [api, tabs],
+    [api],
   );
 
   const closeTab = useCallback(
@@ -1919,9 +1816,13 @@ export default function App(): React.JSX.Element {
           （x=inset、y=titlebar+topbar+inset、宽度让出侧栏与 splitter）。 */}
       <div style={styles.workRow}>
         {miniWindow ? null : (
-          <div ref={pageColumnRef} style={{ ...styles.pageColumn, position: "relative" }}>
+          <div
+            ref={pageColumnRef}
+            data-native-page={nativePageVisible ? "live" : undefined}
+            style={{ ...styles.pageColumn, position: "relative" }}
+          >
             {popoverOverPage && browserPreview ? (
-              <div style={styles.browserFreeze} aria-hidden="true">
+              <div data-testid="browser-popover-preview" style={styles.browserFreeze} aria-hidden="true">
                 <img src={browserPreview} alt="" style={styles.browserFreezeImage} />
               </div>
             ) : null}
@@ -2175,8 +2076,7 @@ export default function App(): React.JSX.Element {
             setCurrentSession(r.currentId);
           }).catch(() => {});
           void api?.workspace.list().then((r) => {
-            setWorkspaces(r.workspaces);
-            setActiveWorkspaceId(r.activeId);
+            applyWorkspaces(r);
           }).catch(() => {});
         }}
         onNotice={setNotice}
