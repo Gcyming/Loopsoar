@@ -8,6 +8,8 @@
 
 侧栏动效只回答三个问题：**哪条边在动、谁和谁同拍、稳态在哪恢复**。Loopsoar 当前实现（m001—in-flight 修复后）已经把「wrapper 承载宽度过渡 + 内容右锚裁剪」做对，但仍有 6 个缝合点会重新制造「位置反逻辑」：**DOM 与原生视图曲线不同源、窗口化与侧栏收起不同拍、Agent 窗口 24px 微移冒充滑入、关闭事件早于滑出动画、splitter 恒扣 6px、启动/恢复阶段误播动画**。slime 的历史 bug 全部可归入 13 条不变式，本规范把它们变成可断言条款。
 
+> 实现更新（2026-11-19）：主进程 `BrowserHost.setSidebarWidth` 已删除自带的 320ms 逐帧动画，只做瞬时 `setBounds`；动画由 UI `useSidebarLayout` 的 rAF 逐帧调用 `browser:setSidebarWidth({ animate:false })` 驱动，避免两套计时器互相追帧。下文涉及 `animate:true` 的历史方案仅作设计背景，不再代表当前实现。
+
 ## 1. 不变式清单（I1–I14，违反任一条即视为回归）
 
 | # | 规则 | 为什么（slime 历史 bug / 机制） | 出处（slime） |

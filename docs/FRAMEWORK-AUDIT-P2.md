@@ -103,9 +103,9 @@
 
 | # | 重复 | 证据 | 影响 |
 |---|---|---|---|
-| D1 | **侧栏 320ms 动画两套** | UI 用 rAF 逐帧（`App.tsx:674-693`）并**始终** `animate:false`（`:671/:684/:689`）；壳层 `BrowserHost.setSidebarWidth` 自带 320ms 插值循环（`browserHost.ts:305-336`），生产路径无人传 `animate:true`（只有 `tests/shell/browserHost.spec.ts:349-409` 在测） | 壳层那 ~30 行是死代码；`App.tsx:2058` 的注释"由 browser:setSidebarWidth({animate:true}) 同步让位"已过期 |
+| D1 | **侧栏 320ms 动画两套** | UI 用 rAF 逐帧（`App.tsx:674-693`）并**始终** `animate:false`（`:671/:684/:689`）；壳层 `BrowserHost.setSidebarWidth` 自带 320ms 插值循环（`browserHost.ts:305-336`），生产路径无人传 `animate:true`（只有 `tests/shell/browserHost.spec.ts:349-409` 在测） | **已修（2026-11-19）**：壳层自带动画分支已删除，`setSidebarWidth` 立即落位；UI 的 rAF 逐帧驱动保留，成为唯一动画来源。 |
 | D2 | **浏览器点击/输入两套脚本** | 适配器 `webContentsView.ts:230-260`（`click`/`type`/`scroll`，`selectorFor()` 支持数字编号）；`browserTools.ts:130-212` 又用内联 JS 字符串重写了一遍，且**不支持编号** | 两套行为会分叉（见 P0-2）；适配器那套在生产里根本不可达 |
-| D3 | **320ms 常量三处** | `App.tsx:108` `SIDEBAR_ANIMATION_MS_UI = 320`、`browserHost.ts:28` `SIDEBAR_ANIMATION_MS = 320`、`ui/src/theme.ts:53-57` `MOTION.sidebarDuration = "320ms"`、`browserHost.ts:30` tick 8ms | 改一处忘两处 |
+| D3 | **320ms 常量两处** | `App.tsx:108` `SIDEBAR_ANIMATION_MS_UI = 320`、`ui/src/theme.ts:53-57` `MOTION.sidebarDuration = "320ms"`；壳层 `SIDEBAR_ANIMATION_MS`/tick 已随动画分支删除 | 改一处忘另一处；后续收敛到 `contracts/layout` |
 
 另外：`BrowserAdapter` 的 `click/type/scroll/wait`（`browserAdapter/types.ts:29-37`）在生产代码里无调用方（`browserTools` 绕过它们、`browserHost` 只暴露 `executeScript/snapshot/screenshot`），`tests/shell/webContentsAdapter.spec.ts` 只测了 `close()` → 四个方法 = 未测且不可达的死表面（P1）。
 
@@ -271,7 +271,7 @@
 | **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout`。**已完成**：主进程不再创建 setInterval，`setSidebarWidth` 兼容旧参数但立即落位；UI 的 rAF 逐帧驱动保留。 |
 | **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | 快照格式升级前先补类型（与 P0-2 同批做） |
 | **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | 改为"生成到临时目录再比对"，或在 `finally` 里恢复 |
-| **P1-7** | 4 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:2494`、`index.ts:2130`、`Settings.tsx:2057`、`StartPage.tsx:1578` | 至少先把 `Settings.tsx` 按分区拆文件、`index.ts` 抽 bootstrap |
+| **P1-7** | 4 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:2118`（`useBrowserTabs` 已抽出）、`index.ts:2130`、`Settings.tsx:2057`、`StartPage.tsx:1578` | 至少先把 `Settings.tsx` 按分区拆文件、`index.ts` 抽 bootstrap |
 | **P1-8** | `docs/FRAMEWORK-REVIEW.md` 全篇过时（MCP/skill/多标签/多会话/路径） | 见 §3.6 | 重写或标注归档 |
 
 ### P2（可缓）
