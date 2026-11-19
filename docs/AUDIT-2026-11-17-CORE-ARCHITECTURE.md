@@ -41,8 +41,8 @@
 
 | 文件 | 行数 | 风险 |
 |---|---:|---|
-| `packages/ui/src/App.tsx` | 2,491 | 仍承载聊天/会话/浏览器编排；Agent 小窗与侧栏布局已抽成状态自持 hook |
-| `packages/ui/src/Settings.tsx` | 2,646 | 设置页巨型化；已抽出纯模型与技能/扩展分区，仍需继续按领域拆 |
+| `packages/ui/src/App.tsx` | 2,353 | 仍承载聊天/会话/浏览器编排；Agent 小窗、侧栏布局、浮层让位、底部抽屉、标题栏/对话框/底部面板已抽出 |
+| `packages/ui/src/Settings.tsx` | 2,150 | 设置页巨型化；已抽出纯模型与技能/扩展分区、通用控件，仍需继续按领域拆 |
 | `packages/ui/src/useAgentWindowLayout.ts` | 367 | Agent 小窗开合/图标化/过渡几何/拖拽还原 |
 | `packages/ui/src/useSidebarLayout.ts` | 209 | 侧栏宽度/拖拽/原生视图同步 |
 | `packages/shell/src/main/index.ts` | 1,754 | 入口只做装配；E2E 钩子拆至 `e2eHooks.ts`（1,167 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行） |
@@ -231,7 +231,7 @@
 
 | # | 问题 | 证据 | 建议 |
 |---|---|---|---|
-| P2-1 | UI 巨型组件 | `App.tsx` 2,984 行、`Settings.tsx` 2,835 行 | 按领域拆 container/hook；设置页纯模型/分区已拆；`App.tsx` 的 Agent 小窗与侧栏布局已拆成状态自持 hook（2,920 → 2,491 行） |
+| P2-1 | UI 巨型组件 | `App.tsx` 2,984 行、`Settings.tsx` 2,835 行 | 按领域拆 container/hook；设置页纯模型/分区已拆；`App.tsx` 的 Agent 小窗、侧栏布局、浮层让位、底部抽屉与标题栏/对话框已拆（2,920 → 2,353 行） |
 | P2-2 | 主包过大、无代码分割 | 原 `index-CDRREsyZ.js` 649.52 kB；已加 `manualChunks` → `index-wxKnb0O7.js` 424.17 kB + `react-vendor` 223.22 kB，>500 kB 警告消失 | 继续按路由/设置/终端/浏览器面板 dynamic import |
 | P2-3 | shell 入口过重 | `main/index.ts` 2,939 行，E2E 钩子、入口装配、窗口生命周期混在一起 | 已拆：E2E 钩子 → `e2eHooks.ts`（1,167 行），窗口生命周期 → `mainWindowFactory.ts`（126 行），入口降至 1,754 行；IPC 注册在 `domains/*` + `trustedIpc`（仅保留一条受信浏览器安装例外） |
 | P2-4 | E2E 收尾不可靠 | 功能 `ok:true`，但 300s 后强杀 Electron、退出码 2；无 `GUI_SHOT_SAVED`，截图仍是 11/15 旧图 | 给 `capturePage()` 加超时；跑前删旧图；只在 mtime 更新后打印路径 |
@@ -343,6 +343,7 @@
 - 2026-11-18：浏览器后端收口：`CdpBrowserBackend` 按 `sessionId` 隔离标签组/激活项，新增 `LOOPSOAR_BROWSER_CDP_ENDPOINT` 显式选择器（默认不启用，Electron 主窗口不变）；扩展 manifest schema 移到 `contracts/extension.ts`，UI 直接消费 `ExtensionManifest`，删除手写镜像；设置页通用控件/样式抽到 `settingsUi.tsx`（Settings 2,150 行）。全量 **239 文件 / 1,887 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P1-5 关闭动态再委派/子会话恢复：新增 `delegate_child`（仅子代理可调用，`AsyncLocalStorage` 传 depth/session/taskId/history；根子代理 depth=1，最多 2 层，每子代理最多 2 个动态子任务；父中止信号向下传播）；`SubagentTaskStore` 增加 `child` 类型与 `history`（用户目标+最终答复，≤20 条/24k 字符）；`subagent_resume` 注入历史恢复上下文。全量 **238 文件 / 1,880 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P2-1 `App.tsx` 的 Agent 小窗布局抽成 `useAgentWindowLayout.ts`（367 行，状态自持：开合/图标化/过渡几何/拖拽还原/`chrome:applyLayout`），侧栏布局抽成 `useSidebarLayout.ts`（209 行，宽度/拖拽/原生视图逐帧同步）；`App.tsx` 2,920 → 2,491 行，`chrome:applyLayout` 守卫改查新 hook。全量 **237 文件 / 1,876 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
+- 2026-11-19：P2-1 继续拆 `App.tsx`：浮层让位抽成 `useBrowserPopoverOverlay.ts`（仅菜单压网页时隐藏原生视图，隐藏前抓静态底图），底部终端/DevTools 抽成 `useBottomDock.ts` + `AppBottomPanels.tsx`，标题栏/标签条抽成 `AppTitleBar.tsx`，权限/询问/Toast 抽成 `AppDialogs.tsx`；`App.tsx` 2,491 → 2,353 行。全量 **239 文件 / 1,889 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 - 2026-11-18：P2-3 完成入口拆分：E2E 钩子 → `e2eHooks.ts`（1,167 行）、窗口生命周期 → `mainWindowFactory.ts`（126 行），`main/index.ts` 2,939 → 1,754 行，只做装配；IPC 保持 `domains/*` + `trustedIpc`。全量 **237 文件 / 1,876 用例**通过，typecheck 5/5，build 通过；E2E 退出码 0、sessionMatch:true。
 
 ## 11. 修补进度
@@ -376,7 +377,7 @@
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
 | P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
-| P2-1 UI 巨型组件 | 🟡 部分 | 设置页纯模型抽成 `settingsModel.ts`，技能/扩展分区抽成 `SkillsSection.tsx`/`ExtensionsSection.tsx`，通用控件/样式抽成 `settingsUi.tsx`（`Settings.tsx` 2,894 → 2,150 行）；`App.tsx` 顶层样式抽成 `appStyles.ts`，Agent 小窗/侧栏布局抽成状态自持的 `useAgentWindowLayout.ts`（367 行）与 `useSidebarLayout.ts`（209 行），`App.tsx` 2,920 → 2,491 行；`chrome:applyLayout` 订阅守卫改查新 hook。App 仍是中心编排组件，未继续拆状态所有权。 |
+| P2-1 UI 巨型组件 | 🟡 部分 | 设置页纯模型抽成 `settingsModel.ts`，技能/扩展分区抽成 `SkillsSection.tsx`/`ExtensionsSection.tsx`，通用控件/样式抽成 `settingsUi.tsx`（`Settings.tsx` 2,894 → 2,150 行）；`App.tsx` 顶层样式抽成 `appStyles.ts`，Agent 小窗/侧栏布局抽成 `useAgentWindowLayout.ts`（367 行）/`useSidebarLayout.ts`（209 行），浮层让位抽成 `useBrowserPopoverOverlay.ts`，底部抽屉抽成 `useBottomDock.ts`，标题栏/对话框/底部面板抽成 `AppTitleBar.tsx`/`AppDialogs.tsx`/`AppBottomPanels.tsx`，`App.tsx` 2,920 → 2,353 行；App 仍是中心编排组件，未继续拆状态所有权。 |
 | P2-3 shell 入口 | ✅ | E2E 钩子拆至 `e2eHooks.ts`（1,167 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行）；入口 `main/index.ts` 2,939 → 1,754 行，只做装配；IPC 在 `domains/*` + `trustedIpc`。 |
 
 **本轮验证**：`npx vitest run` **237 文件 / 1,876 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

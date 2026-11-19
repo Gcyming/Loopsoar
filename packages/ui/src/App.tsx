@@ -73,6 +73,9 @@ import {
  * 架构（P5 拆分后）：本文件只保留「状态与业务编排」——会话/浏览器/设置的门面状态、
  * 发送/回滚/重生成/停止等动作、以及顶层布局装配。具体实现按职责外置：
  *   · useChatStreamEvents.ts —— 启动数据同步 + chat:stream:* 事件订阅与 per-session 路由；
+ *   · useBrowserPopoverOverlay.ts —— 浮层与原生网页视图的几何让位/静态底图；
+ *   · useBottomDock.ts —— 终端/DevTools 开合、高度持久化与主进程同步；
+ *   · AppTitleBar.tsx / AppDialogs.tsx / AppBottomPanels.tsx —— 顶层布局分区；
  *   · useE2eDeepLinks.ts     —— ?e2e=* 深链自动化（生产路径零副作用）；
  *   · AgentSidebar.tsx       —— 侧栏外壳（复制会话/工作区条/会话切换与历史菜单）；
  *   · BrowserMenus.tsx       —— 历史 / 下载下拉面板；
