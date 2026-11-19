@@ -2,13 +2,15 @@
  * 生成脚本（唯一产地）。
  * 读取 contracts 包的唯一产地文件（schemas、security-policy），
  * 生成三个生成物到 gen/ 目录（入库）。
- * 用法：pnpm --filter loopsoar-contracts gen（或直接 tsx scripts/gen.ts）
+ * 用法：pnpm --filter loopsoar-contracts gen（或直接 tsx scripts/gen-cli.ts）
  */
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { CHANNEL_BINDINGS, EVENTS } from "../src/schemas.js";
 import * as policy from "../src/security-policy.js";
+
+export const GENERATED_FILES = ["ipc-manifest.json", "ipc.ts", "security-policy.json"] as const;
 
 /**
  * 确保目标目录存在。
@@ -22,8 +24,9 @@ function ensureDir(p: string) {
 
 /**
  * 生成 ipc-manifest.json（通道清单 + 事件名列表）。
+ * outDir 可指向临时目录：check 只读比对，不触碰入库的 gen/。
  */
-export function generateIpcManifest() {
+export function generateIpcManifest(outDir = resolve("gen")) {
   const channels = Object.entries(CHANNEL_BINDINGS).map(
     ([channel, binding]) => ({
       channel,
@@ -37,7 +40,7 @@ export function generateIpcManifest() {
     channels,
     events: [...EVENTS],
   };
-  const outPath = resolve("gen", "ipc-manifest.json");
+  const outPath = resolve(outDir, "ipc-manifest.json");
   ensureDir(outPath);
   writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
   console.log("生成: " + outPath);
@@ -46,8 +49,8 @@ export function generateIpcManifest() {
 /**
  * 生成 ipc.ts（IPC 常量、类型、白名单构造器、事件名）。
  */
-export function generateIpcTs() {
-  const outPath = resolve("gen", "ipc.ts");
+export function generateIpcTs(outDir = resolve("gen")) {
+  const outPath = resolve(outDir, "ipc.ts");
   ensureDir(outPath);
 
   // 构造 IPC_CHANNELS（常量对象）
@@ -70,7 +73,7 @@ export function generateIpcTs() {
     .join(",\n");
 
   const content = `/**
- * 生成文件：由 scripts/gen.ts 生成，不可手动修改。
+ * 生成文件：由 scripts/gen-cli.ts 生成，不可手动修改。
  * 唯一产地：packages/contracts/src/schemas.ts 与 src/security-policy.ts。
  */
 
@@ -128,8 +131,8 @@ ${EVENTS.map((e) => `  "${e}",`).join("\n")}
 /**
  * 生成 security-policy.json（全量 JSON 序列化）。
  */
-export function generateSecurityPolicyJson() {
-  const outPath = resolve("gen", "security-policy.json");
+export function generateSecurityPolicyJson(outDir = resolve("gen")) {
+  const outPath = resolve(outDir, "security-policy.json");
   ensureDir(outPath);
   // 手动构造纯数据 JSON，确保与 security-policy.ts 完全一致
   const data = {
@@ -176,8 +179,4 @@ export function generateSecurityPolicyJson() {
   console.log("生成: " + outPath);
 }
 
-// 主执行：直接脚本运行时生成全部产物；被 check.ts 导入时重复生成无害（check 自带备份比对）。
-generateIpcManifest();
-generateIpcTs();
-generateSecurityPolicyJson();
-console.log("生成完成。生成物已入库（gen/ 目录）。");
+// 生成入口在 scripts/gen-cli.ts；本模块只导出生成函数，import 时没有写盘副作用。

@@ -15,7 +15,7 @@
     "./headerTemplate": "./src/headerTemplate.ts"
   },
   "scripts": {
-    "gen": "tsx scripts/gen.ts",
+    "gen": "tsx scripts/gen-cli.ts",
     "check": "tsx scripts/check.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"

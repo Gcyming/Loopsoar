@@ -270,7 +270,7 @@
 | **P1-3** | 浏览器动作两套实现，适配器 4 个方法不可达且未测 | `webContentsView.ts:230-260`、`browserAdapter/types.ts:29-37`、`browserTools.ts:130-212`、`webContentsAdapter.spec.ts` 只测 `close` | 收敛为一套（宿主方法），删死表面 |
 | **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout`。**已完成**：主进程不再创建 setInterval，`setSidebarWidth` 兼容旧参数但立即落位；UI 的 rAF 逐帧驱动保留。 |
 | **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | 快照格式升级前先补类型（与 P0-2 同批做） |
-| **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | 改为"生成到临时目录再比对"，或在 `finally` 里恢复 |
+| **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | **已完成**：`check.ts` 生成到临时目录，`gen.ts` 不再在 import 时写盘；守卫测试比对 gen 文件哈希，确保校验不改写工作树。 |
 | **P1-7** | 2 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:2118`（`useBrowserTabs` 已抽出）、`index.ts:1763`（E2E/窗口已拆）；`Settings.tsx:1337` 与 `StartPage.tsx:178` 已完成分区拆分，回到 1500 行内 | 继续拆 `App.tsx` 会话编排与 `index.ts` 启动装配；对齐 1500 行红线 |
 | **P1-8** | `docs/FRAMEWORK-REVIEW.md` 全篇过时（MCP/skill/多标签/多会话/路径） | 见 §3.6 | 重写或标注归档 |
 

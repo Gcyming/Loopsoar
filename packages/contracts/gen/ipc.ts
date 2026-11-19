@@ -1,5 +1,5 @@
 /**
- * 生成文件：由 scripts/gen.ts 生成，不可手动修改。
+ * 生成文件：由 scripts/gen-cli.ts 生成，不可手动修改。
  * 唯一产地：packages/contracts/src/schemas.ts 与 src/security-policy.ts。
  */
 
