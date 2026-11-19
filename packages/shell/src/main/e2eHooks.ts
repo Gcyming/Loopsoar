@@ -386,17 +386,39 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
             });
             if (pointerWin) {
               try {
-                // 透明指针窗口的 BrowserWindow.capturePage 在 Windows 上也可能永久挂起：加超时，失败不阻断主截图/退出。
-                const img = await Promise.race([
-                  pointerWin.webContents.capturePage(),
-                  new Promise<never>((_, reject) => {
-                    setTimeout(() => reject(new Error("pointer capturePage 超时 5000ms")), 5_000);
-                  }),
-                ]);
-                if (!img.isEmpty()) {
-                  fs.writeFileSync(process.env.LOOPSOAR_E2E_POINTER_SHOT, img.toPNG());
-                  console.log("POINTER_SHOT_SAVED", process.env.LOOPSOAR_E2E_POINTER_SHOT);
+                // 透明覆盖窗口在 Windows 上若隐藏/被遮挡，就没有合成帧，capturePage 会永久挂起。
+                // 先 showInactive + moveTop 触发合成；若仍失败，再用真正 show() 抢到前台重试一次。
+                pointerWin.showInactive();
+                pointerWin.moveTop?.();
+                await new Promise((r) => setTimeout(r, 150));
+                const captureOnce = async (): Promise<Buffer> => {
+                  const img = await Promise.race([
+                    pointerWin.webContents.capturePage(undefined, { stayAwake: true }),
+                    new Promise<never>((_, reject) => {
+                      setTimeout(() => reject(new Error("pointer capturePage 超时 1500ms")), 1_500);
+                    }),
+                  ]);
+                  if (img.isEmpty()) throw new Error("pointer capturePage 返回空图");
+                  return img.toPNG();
+                };
+                let png: Buffer | undefined;
+                for (let attempt = 1; attempt <= 2 && !png; attempt += 1) {
+                  try {
+                    png = await captureOnce();
+                  } catch (err) {
+                    if (attempt === 2) throw err;
+                    console.warn(
+                      "POINTER_CAPTURE_RETRY",
+                      err instanceof Error ? err.message : String(err),
+                    );
+                    pointerWin.show();
+                    pointerWin.moveTop?.();
+                    await new Promise((r) => setTimeout(r, 150));
+                  }
                 }
+                if (!png) throw new Error("pointer capturePage 重试后仍为空");
+                fs.writeFileSync(process.env.LOOPSOAR_E2E_POINTER_SHOT, png);
+                console.log("POINTER_SHOT_SAVED", process.env.LOOPSOAR_E2E_POINTER_SHOT);
               } catch (err) {
                 console.warn("POINTER_SHOT_SKIPPED", err instanceof Error ? err.message : String(err));
               }

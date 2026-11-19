@@ -45,7 +45,7 @@
 | `packages/ui/src/Settings.tsx` | 2,150 | 设置页巨型化；已抽出纯模型与技能/扩展分区、通用控件，仍需继续按领域拆 |
 | `packages/ui/src/useAgentWindowLayout.ts` | 367 | Agent 小窗开合/图标化/过渡几何/拖拽还原 |
 | `packages/ui/src/useSidebarLayout.ts` | 209 | 侧栏宽度/拖拽/原生视图同步 |
-| `packages/shell/src/main/index.ts` | 1,754 | 入口只做装配；E2E 钩子拆至 `e2eHooks.ts`（1,167 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行） |
+| `packages/shell/src/main/index.ts` | 1,754 | 入口只做装配；E2E 钩子拆至 `e2eHooks.ts`（1,189 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行） |
 | `packages/ui/src/StartPage.tsx` | 1,639 | 启动页承担了过多产品逻辑 |
 | `packages/shell/src/main/browserHost.ts` | 1,579 | 浏览器宿主与标签/视图/导航耦合 |
 | `packages/contracts/src/schemas.ts` | 1,537 | 契约集中可接受，但已接近该拆分的临界点 |
@@ -325,7 +325,7 @@
 - `capturePage()` 无超时；
 - verify 按消息数挑文件，不是按 eval id。
 
-**P2-4/P2-5 修复后复跑**：根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起。改为 `webContents.capturePage()` + 5s 超时后，实跑得到 `POINTER_SHOT_SKIPPED`（降级）→ `GUI_SHOT_SAVED` → `E2E_SESSION_VERIFY sessionMatch:true` → `Electron 退出码=0`。因此当前可以记作“功能 + 收尾都通过”；仍保留一条限制：指针浮层截图在超时后不产出，不影响主截图与退出。
+**P2-4/P2-5 修复后复跑（2026-11-19 彻底修复）**：根因不是超时阈值，而是透明指针窗口在隐藏/未置顶时没有合成帧，`webContents.capturePage()` 会永久挂起。抓图前先 `showInactive()` + `moveTop()` 并传 `stayAwake: true`，实跑得到 `POINTER_SHOT_SAVED` → `GUI_SHOT_SAVED` → `E2E_SESSION_VERIFY sessionMatch:true` → `Electron 退出码=0`；失败时再用 `show()` 抢前台重试一次。`e2e-p2-run.mjs` 已把指针截图改成硬断言，缺失/空图会让 E2E 失败，不再静默降级。
 
 ---
 
@@ -375,9 +375,9 @@
 |---|---|---|
 | P2-2 UI 分包 | ✅ | `vite.config.ts` 增加 `manualChunks`：`react-vendor` 223.22 kB，主包 424.17 kB；>500 kB 警告消失。 |
 | P2-7 限流 key | ✅ | `writeHistory`/`terminalCount` 改为 `sessionId\0agentId`；新增“A 会话写满不误伤 B 会话”用例；会话删除时 `clearSessionApprovals` 一并清空限流历史，同 id 重建不继承计数。 |
-| P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口的 `BrowserWindow.capturePage()` 先挂起；改为 `webContents.capturePage()` + 5s 超时，主截图也用 `webContents.capturePage()`。实跑：`POINTER_SHOT_SKIPPED`（超时降级）→ `GUI_SHOT_SAVED` → `Electron 退出码=0`，新截图已落盘。 |
+| P2-4 E2E 收尾 | ✅ | 根因是透明指针窗口在隐藏/未置顶时没有合成帧；抓图前 `showInactive()` + `moveTop()` + `stayAwake:true`，失败时 `show()` 抢前台重试。实跑：`POINTER_SHOT_SAVED` → `GUI_SHOT_SAVED` → `Electron 退出码=0`；`e2e-p2-run.mjs` 对指针截图做硬断言。 |
 | P2-5 E2E 会话校验 | ✅ | runner 解析 `E2E_EVAL.sessionId`，verify 优先选 `forkedFrom.sessionId` 匹配的分支；最近实跑 `E2E_SESSION_VERIFY`：`sessionMatch:true`、`browserControl:true`、`messages:2`、`navigated/snapshotWithRefs/clickedMarker` 全真，且 `forkedFrom` 与 eval session 同源。 |
 | P2-1 UI 巨型组件 | 🟡 部分 | 设置页纯模型抽成 `settingsModel.ts`，技能/扩展分区抽成 `SkillsSection.tsx`/`ExtensionsSection.tsx`，通用控件/样式抽成 `settingsUi.tsx`（`Settings.tsx` 2,894 → 2,150 行）；`App.tsx` 顶层样式抽成 `appStyles.ts`，Agent 小窗/侧栏布局抽成 `useAgentWindowLayout.ts`（367 行）/`useSidebarLayout.ts`（209 行），浮层让位抽成 `useBrowserPopoverOverlay.ts`，底部抽屉抽成 `useBottomDock.ts`，标题栏/对话框/底部面板抽成 `AppTitleBar.tsx`/`AppDialogs.tsx`/`AppBottomPanels.tsx`，`App.tsx` 2,920 → 2,353 行；App 仍是中心编排组件，未继续拆状态所有权。 |
-| P2-3 shell 入口 | ✅ | E2E 钩子拆至 `e2eHooks.ts`（1,167 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行）；入口 `main/index.ts` 2,939 → 1,754 行，只做装配；IPC 在 `domains/*` + `trustedIpc`。 |
+| P2-3 shell 入口 | ✅ | E2E 钩子拆至 `e2eHooks.ts`（1,189 行），窗口生命周期拆至 `mainWindowFactory.ts`（126 行）；入口 `main/index.ts` 2,939 → 1,754 行，只做装配；IPC 在 `domains/*` + `trustedIpc`。 |
 
 **本轮验证**：`npx vitest run` **237 文件 / 1,876 用例全部通过**；`pnpm -r typecheck` **5/5**；`pnpm build` 通过（UI 无 >500 kB 警告，`main.bundle.mjs` 含 pdfjs）；E2E **干净退出**：`E2E_EVAL ok:true`、`GUI_SHOT_SAVED`、`E2E_SESSION_VERIFY sessionMatch:true`、Electron 退出码 0。

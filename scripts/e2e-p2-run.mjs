@@ -21,6 +21,7 @@ const OUT_DIR = path.join(ROOT, "e2e-evidence");
 const STARTED = Date.now();
 const LOG = path.join(OUT_DIR, "p2-agent-browser.log");
 const SHOT = path.join(OUT_DIR, "p2-agent-browser-window.png");
+const POINTER_SHOT = path.join(OUT_DIR, "p2-agent-pointer.png");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -177,5 +178,13 @@ try {
 
 log(`Electron 退出码=${exitCode}`);
 log(`日志：${LOG}`);
-if (existsSync(SHOT) && statSync(SHOT).mtimeMs >= STARTED) log(`截图：${SHOT}`);
+const freshShot = (file) => existsSync(file) && statSync(file).mtimeMs >= STARTED && statSync(file).size > 1000;
+if (freshShot(SHOT)) log(`截图：${SHOT}`);
 else log("截图：未产出（本次运行没有新截图，可能是 capturePage 超时）");
+// 指针浮层截图现在是硬断言：capturePage 超时/空图必须让 E2E 失败，
+// 避免「功能通过但证据悄悄缺失」再次变成非阻塞项。
+if (freshShot(POINTER_SHOT)) log(`指针截图：${POINTER_SHOT}`);
+else {
+  log("指针截图：未产出（透明覆盖窗口抓取失败）");
+  process.exitCode = exitCode || 1;
+}
