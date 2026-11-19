@@ -25,9 +25,7 @@ import MessageList from "./MessageList.js";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.js";
 import { dismissAllPopovers, useAnyPopoverOpen } from "./popover.js";
 import BrowserChrome from "./BrowserChrome.js";
-import BrowserTabs from "./BrowserTabs.js";
-import TitleBar from "./TitleBar.js";
-import WorkspaceSwitcher from "./WorkspaceSwitcher.js";
+import AppTitleBar from "./AppTitleBar.js";
 import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
@@ -1894,37 +1892,22 @@ export default function App(): React.JSX.Element {
     <>
       {/* Agent 独立窗口（?mini=1）也走自绘标题栏：无系统边框，只有最小化/关闭；
           主窗口标题栏同时承载标签页（与窗口按钮同一行，Chrome 式）。 */}
-      <TitleBar
+      <AppTitleBar
         maximized={maximized}
-        variant={miniWindow ? "agent" : "main"}
-        {...(miniWindow
-          ? {}
-          : {
-              tabsLeading: (
-                <WorkspaceSwitcher
-                  workspaces={workspaces}
-                  activeWorkspaceId={activeWorkspaceId}
-                />
-              ),
-              tabs: (
-                <BrowserTabs
-                  tabs={userTabs}
-                  boundTabs={boundTabs}
-                  onToggleWorkspace={() => {
-                    // 独立浮层：网页保持原样（不隐藏、不被挤），浮层天然压在网页之上。
-                    dismissAllPopovers();
-                    toggleWorkspacePopover();
-                  }}
-                  onCloseWorkspace={closeAgentWorkspace}
-                  agentTasks={agentTasks}
-                  currentSessionId={browserVisibleSession ?? currentSession}
-                  onOpenTask={openAgentTask}
-                  onSelectTab={selectTab}
-                  onCloseTab={closeTab}
-                  onNewTab={newTab}
-                />
-              ),
-            })}
+        miniWindow={miniWindow}
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        userTabs={userTabs}
+        boundTabs={boundTabs}
+        agentTasks={agentTasks}
+        browserVisibleSession={browserVisibleSession}
+        currentSession={currentSession}
+        onToggleWorkspace={toggleWorkspacePopover}
+        onCloseWorkspace={closeAgentWorkspace}
+        onOpenTask={openAgentTask}
+        onSelectTab={selectTab}
+        onCloseTab={closeTab}
+        onNewTab={newTab}
       />
 
       {/* 工作区：左侧「网页列」（导航工具条 + 圆角页框），右侧会话栏。
