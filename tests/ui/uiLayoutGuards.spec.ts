@@ -40,7 +40,7 @@ describe("消息/输入区布局守卫（用户 m02010）", () => {
     expect(statusBar).toContain("composer.buildFoot");
     expect(statusBar).toContain("composer.planFoot");
     // App 只把 mode 传进状态栏（notice 仍走 Toast，不再塞回输入框下方）
-    expect(read("packages/ui/src/App.tsx")).toMatch(/<StatusBar[\s\S]*?mode=\{mode\}/);
+    expect(read("packages/ui/src/AppBottomPanels.tsx")).toMatch(/<StatusBar[\s\S]*?mode=\{mode\}/);
   });
 });
 

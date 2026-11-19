@@ -31,17 +31,14 @@ import WorkspaceSwitcher from "./WorkspaceSwitcher.js";
 import WorkspacePanel from "./WorkspacePanel.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import Composer from "./Composer.js";
-const TerminalPanel = React.lazy(() => import("./TerminalPanel.js"));
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
 import { setLanguage, getLanguage, t } from "./i18n.js";
 import { splitAgentTabs } from "./agentWorkspace.js";
 import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
-import AskUserDialog from "./AskUserDialog.js";
+import AppDialogs from "./AppDialogs.js";
 const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
 import AgentSidebar from "./AgentSidebar.js";
-import StatusBar from "./StatusBar.js";
-import PermissionDialog from "./PermissionDialog.js";
-import Toast from "./Toast.js";
+import AppBottomPanels from "./AppBottomPanels.js";
 import StartPage from "./StartPage.js";
 import { useBootstrapData, useChatStreamEvents } from "./useChatStreamEvents.js";
 import {
@@ -2155,58 +2152,28 @@ export default function App(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 应用内终端：全宽底部面板（VS Code 风格，从整个程序底部拉起） */}
-      <div
-        style={{
-          height: terminalOpen ? terminalHeight : 0,
-          flexShrink: 0,
-          overflow: "hidden",
-          transition: "height 240ms cubic-bezier(0.2, 0, 0.2, 1)",
-        }}
-      >
-        <React.Suspense fallback={null}>
-        <TerminalPanel
-          sessionId={currentSession ?? undefined}
-          open={terminalOpen}
-          onClose={() => setTerminalOpen(false)}
-          height={terminalHeight}
-          onHeightChange={changeTerminalHeight}
-          fullWidth
-          onResizeStart={() => {
-            void api?.browser.setOverlay({ open: true }).catch(() => {});
-          }}
-          onResizeEnd={() => {
-            void api?.browser.setOverlay({ open: false }).catch(() => {});
-          }}
-        />
-        </React.Suspense>
-      </div>
-
-      {miniWindow ? null : (
-      <StatusBar
+      <AppBottomPanels
+        miniWindow={miniWindow}
+        terminalOpen={terminalOpen}
+        terminalHeight={terminalHeight}
+        devtoolsOpen={devtoolsOpen}
+        devtoolsHeight={devtoolsHeight}
+        currentSession={currentSession}
         shellStatus={boot?.status}
         agentLabel={agentLabel}
         providerLabel={providerLabel}
         currentUrl={currentUrl}
         mode={mode}
-        terminalOpen={terminalOpen}
-        onToggleTerminal={toggleTerminal}
-        devtoolsOpen={devtoolsOpen}
-        onToggleDevtools={toggleDevtools}
-      />
-      )}
-
-      {/* 底部开发者工具面板：占位放在状态栏之后 → 面板增高时状态栏被平滑推上去，
-          成为展开面板的顶栏；真实 DevTools WebContentsView 由主进程覆盖在该区域上。 */}
-      <div
-        data-testid="devtools-panel-slot"
-        aria-hidden={!devtoolsOpen}
-        style={{
-          height: devtoolsOpen ? devtoolsHeight : 0,
-          flexShrink: 0,
-          overflow: "hidden",
-          transition: "height 240ms cubic-bezier(0.2, 0, 0.2, 1)",
+        onCloseTerminal={() => setTerminalOpen(false)}
+        onTerminalHeightChange={changeTerminalHeight}
+        onTerminalResizeStart={() => {
+          void api?.browser.setOverlay({ open: true }).catch(() => {});
         }}
+        onTerminalResizeEnd={() => {
+          void api?.browser.setOverlay({ open: false }).catch(() => {});
+        }}
+        onToggleTerminal={toggleTerminal}
+        onToggleDevtools={toggleDevtools}
       />
 
       <WorkspacePanel
@@ -2310,25 +2277,17 @@ export default function App(): React.JSX.Element {
         />
       ) : null}
 
-      {permReq ? <PermissionDialog request={permReq} onRespond={respondPermission} /> : null}
-
-      {/* 询问弹窗：只处理当前会话（后台会话的提问/敏感确认不抢界面） */}
-      {activeAsk ? <AskUserDialog key={activeAsk.requestId} request={activeAsk} onRespond={respondAsk} /> : null}
-
-      {/* 其它会话有挂起的确认：给一个可点击入口，点它切到该会话再确认 */}
-      {!activeAsk && otherSessionAsk?.sessionId ? (
-        <button
-          type="button"
-          className="ask-pending-other"
-          onClick={() => switchSession(otherSessionAsk.sessionId as string)}
-          title={t(getLanguage(), "ask.pendingOther")}
-        >
-          {t(getLanguage(), "ask.pendingOther")}
-        </button>
-      ) : null}
-
-      {/* 主窗口的提示走独立子窗口（原生网页会盖住 DOM）；只有独立的小窗模式仍用内联 Toast。 */}
-      {notice && miniWindow ? <Toast text={notice} onDismiss={() => setNotice("")} /> : null}
+      <AppDialogs
+        permReq={permReq}
+        onRespondPermission={respondPermission}
+        activeAsk={activeAsk}
+        onRespondAsk={respondAsk}
+        otherSessionAsk={otherSessionAsk}
+        onSwitchSession={switchSession}
+        notice={notice}
+        miniWindow={miniWindow}
+        onDismissNotice={() => setNotice("")}
+      />
     </>
   );
 
