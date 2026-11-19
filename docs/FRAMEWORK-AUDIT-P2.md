@@ -1,7 +1,7 @@
 # Loopsoar 框架审计报告（第二阶段开工前 · 夯实框架）
 
 > 审计范围：只读分析 + 基线验证；审计时间 2026-11-13。
-> **状态（2026-11-19）**：P0-1/P0-2、P1-1、P1-4～P1-7、P2-1/P2-2/P2-3/P2-4/P2-6 已完成；P1-3/P2-5 部分收敛；P1-2 待产品决策；P1-8 已归档。详见 §5。
+> **状态（2026-11-19）**：P0-1/P0-2、P1-1～P1-8、P2-1～P2-6 全部完成；P1-8 已归档。详见 §5。
 > 仓库根：`D:\tool\AI\real-project\Loopsoar\Parent file`。
 
 ---
@@ -94,7 +94,7 @@
 | `packages/shell/src/main/index.ts` | 2130 | **该拆**。装配层 + E2E 钩子 + 浏览器事件 + 终端 + MCP 全在一起；建议先抽 `bootstrap/*`（窗口/浏览器/agent 装配） |
 | `packages/ui/src/Settings.tsx` | 2057 | **该拆**。17 个分区塞进一个 `switch`；`case "general"`（`:577-681`）单分支 ~105 行 |
 | `packages/ui/src/StartPage.tsx` | 1578 | 可拆（搜索/多引擎/建议列表） |
-| `packages/contracts/src/schemas.ts` | 1295 | 可拆（129 通道 + 31 事件 + 全部 zod）；拆文件不影响 gen 输出，但需同步 `scripts/gen.ts` 的 import |
+| `packages/contracts/src/schemas.ts` | 45 | 已拆为 barrel：`validators.ts` 503 行、7 个域通道文件、`events.ts` 55 行；gen 输出逐字节不变 |
 | `packages/shell/src/main/agentWindow.ts` | 1159 | 可拆（窗口管理 / 几何计算 / 图标态动画三块职责） |
 | `packages/ui/src/types.d.ts` | 1040 | 可拆且**应换源**（见 §4.1） |
 | `TerminalPanel 889` / `Composer 884` / `browserHost 859` / `ChromePage 850` / `domains/settings 830` / `AgentSidebar 816` / `terminalProfiles 805` | 805-889 | 暂可接受；`domains/settings.ts` 830 行里规则/记忆/关于/诊断混在一个域，可拆 |
@@ -111,7 +111,7 @@
 
 ### 3.4 生成物漂移
 
-`pnpm check` 等价验证通过（§1.1）：`gen/ipc-manifest.json`（129 通道 / 31 事件）、`gen/ipc.ts`、`gen/security-policy.json` 与生成器输出逐字节一致，无漂移。
+`pnpm check` 等价验证通过（§1.1）：`gen/ipc-manifest.json`（152 通道 / 31 事件）、`gen/ipc.ts`、`gen/security-policy.json` 与生成器输出逐字节一致，无漂移。
 
 ### 3.5 夹具目录与 .gitignore
 
@@ -266,12 +266,12 @@
 | 编号 | 问题 | 证据 | 建议 |
 |---|---|---|---|
 | **P1-1** | Preferences 三份定义、无漂移守卫；新增字段会被 IPC 校验静默 strip | `schemas.ts:345,712` / `preferences.ts:11,43,76` / `types.d.ts:48`；`trustedIpc.ts:84-92` | **已完成**：`PreferencesSchema` 为唯一产地；core 的 `Preferences` 与默认值、UI 的 `PreferencesData` 均从契约推导；`tests/core/preferences.spec.ts` 守住默认值可被 schema 解析。 |
-| **P1-2** | `sidebarMode:"float"` 是死值（UI 强制降级），且与"独立小窗"语义冲突 | `App.tsx:125-126`、`schemas.ts:392` | **待决策**：`float` 目前只作为“打开独立窗口”的动作信号，不落盘；App 会把持久化的 `float` 降级为 `docked`。需产品先定窗口/卡片语义，再改枚举。 |
-| **P1-3** | 浏览器动作两套实现，适配器 4 个方法不可达且未测 | `webContentsView.ts:230-260`、`browserAdapter/types.ts:29-37`、`browserTools.ts:130-212`、`webContentsAdapter.spec.ts` 只测 `close` | **部分完成**：生产动作已统一走 `BrowserHost.agentClick/agentType/agentKey/agentWheel`；适配器 `click/type` 仅保留为测试端口，`scroll/wait` 为兼容可选；不再有生产双路径。 |
+| **P1-2** | `sidebarMode:"float"` 是死值（UI 强制降级），且与"独立小窗"语义冲突 | `App.tsx:125`、`validators.ts:392`、`AgentSidebar.tsx:45` | **已完成**：持久化枚举只保留 `docked/collapsed`；`SidebarModeAction` 用 `float` 表示“打开独立 Agent 窗口”命令，不落盘；旧值在 `mergePreferences` 迁移为 `docked`；`tests/core/preferences.spec.ts` 覆盖。 |
+| **P1-3** | 浏览器动作两套实现，适配器 4 个方法不可达且未测 | `browserAdapter/types.ts`、`webContentsView.ts`、`browserTools.ts` | **已完成**：删除 `BrowserAdapter` 的 `click/type/scroll/wait` 死表面；生产动作只走 `BrowserHost.agentClick/agentType/agentKey/agentWheel`；注册表/脚本测试改走 `performClick`，无第二套实现。 |
 | **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout`。**已完成**：主进程不再创建 setInterval，`setSidebarWidth` 兼容旧参数但立即落位；UI 的 rAF 逐帧驱动保留。 |
 | **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | **已完成**：`BrowserSnapshot.elements: BrowserElementSnapshot[]` 已是正式契约；`elementTotal`/`snapshotGen`/`tabToken` 同步入类型，工具层直接消费。 |
 | **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | **已完成**：`check.ts` 生成到临时目录，`gen.ts` 不再在 import 时写盘；守卫测试比对 gen 文件哈希，确保校验不改写工作树。 |
-| **P1-7** | 2 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:1470`（`useChatActions` 432 / `useSessionActions` 597）、`index.ts:1486`（`coreServices` 313 / `mainPaths` 49）、`schemas.ts:1490`（`events.ts` 55）、`browserHost.ts:1445`（`browserHostTypes.ts` 92） | **已完成**：全部源码 <=1500 行（当前最大 `refs.ts:1494`），并由 `tests/guards/source-size.spec.ts` 锁住红线 |
+| **P1-7** | 2 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:1469`（`useChatActions` 432 / `useSessionActions` 597）、`index.ts:1486`（`coreServices` 313 / `mainPaths` 49）、`schemas.ts:1490`（`events.ts` 55）、`browserHost.ts:1445`（`browserHostTypes.ts` 92） | **已完成**：全部源码 <=1500 行（当前最大 `refs.ts:1494`），并由 `tests/guards/source-size.spec.ts` 锁住红线 |
 | **P1-8** | `docs/FRAMEWORK-REVIEW.md` 全篇过时（MCP/skill/多标签/多会话/路径） | 见 §3.6 | **已归档**：文件头标注历史快照并指向本报告；不再作为当前架构依据。 |
 
 ### P2（可缓）
@@ -282,19 +282,19 @@
 | P2-2 | 裸 `ipcMain.handle` 无守卫（现存的 1 处是有意例外） | `index.ts:1243`、`trustedIpc.ts:8` | **已完成**：`tests/guards/bare-ipc.spec.ts` 只允许 `index.ts` 的浏览器 preload 安装通道；新增裸 handle 会失败。 |
 | P2-3 | UI 绕过 `useLoopsoarApi` 直接用 `window.loopsoarAPI` | `Markdown.tsx:64` | **已完成**：`renderRich` 接收 `onOpenLink`，`ChatMessageView` 注入 `onOpenUrl`（最终走 `api.browser.newTab`）；UI 源码已无直连。 |
 | P2-4 | 唯一 TODO：计划推进播报未接线 | `e2eHooks.ts:1044` | **已完成**：TODO 标记已清除；该路径是 E2E 演示流，保留为产品演示数据。 |
-| P2-5 | `contracts/schemas.ts` 1295 行装 129 通道 + 31 事件 | `schemas.ts`（现 1490 行） | **部分完成**：31 个事件已抽到 `events.ts`（55 行）并由 schemas re-export；129 条通道仍在 `schemas.ts`，按域拆分待做。 |
+| P2-5 | `contracts/schemas.ts` 1295 行装 152 通道 + 31 事件 | `schemas.ts`（现 45 行）、`validators.ts`（503）、`channels/*`（7 文件，最大 205） | **已完成**：事件在 `events.ts`；通道按 chat/workspace/browser/settings/memory/extensions/system 七域拆分；`channels/index.ts` 用 `CHANNEL_ORDER` 恢复原始键序，`pnpm check` 逐字节通过。 |
 | P2-6 | 侧栏宽度/动画常量跨 UI/壳/theme 三处 | `layout.ts:31`、`theme.ts:57`、`browserHost.ts:112` | **已完成**：`LAYOUT.SIDEBAR_WIDTH` 与 `LAYOUT.SIDEBAR_MOTION_MS` 为单源；UI 的 `MOTION` 由契约生成时长，壳层宽度读同一个 LAYOUT。 |
 
 ---
 
 ## 6. 结论
 
-**P0 已完成，第二阶段可以开工；剩余项是收尾债，不是结构性问题。**
+**P0/P1/P2 全部闭环，第二阶段可以开工；当前没有待实现项。**
 
 依据：
-1. 框架分层 0 破口、electron 0 泄漏、preload 白名单由契约生成、129 条通道全部经 `handleTrusted`（1 处有意的浏览器 preload 例外）、生成物逐字节一致、typecheck 5/5；全源码 <=1500 行。
+1. 框架分层 0 破口、electron 0 泄漏、preload 白名单由契约生成、152 条通道全部经 `handleTrusted`（1 处有意的浏览器 preload 例外）、生成物逐字节一致、typecheck 5/5；全源码 <=1500 行。
 2. P0-1（模型可见面收窄）与 P0-2（稳定 ref/STALE_REF/真实输入动作）已闭环，第二阶段不再返工。
-3. 剩余：**P1-2** 需要先定 float 语义（窗口 or 卡片）；**P1-3** 生产双路径已收敛，但适配器 `click/type` 仍是测试端口；**P2-3** Markdown 仍直连 `window.loopsoarAPI`；**P2-5** schemas 仍有 129 通道未按域拆；**P2-6** 动画时长 token 仍只在 theme。
+3. 所有 P0/P1/P2 已闭环；没有待实现项。P1-8 文档已归档，P2-5 的通道顺序由测试/生成校验锁住。
 
 **给第二阶段的三个"别踩"**：
 - 新增任何偏好 → 先改契约，否则静默丢字段（§4.1 故障链）；
@@ -315,5 +315,5 @@ done
 pnpm check
 
 # 3) 测试（本沙箱无法运行，请在普通终端执行）
-npx vitest run     # 当前 245 文件 / 1905 条（2026-11-19）
+npx vitest run     # 当前 245 文件 / 1907 条（2026-11-19）
 ```

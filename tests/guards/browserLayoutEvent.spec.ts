@@ -41,7 +41,7 @@ describe("守卫：chrome:applyLayout 事件链路", () => {
   });
 
   it("设置侧只有 docked / agentWindow / keep：不再有「每次询问」策略", () => {
-    const schemas = read("packages/contracts/src/schemas.ts");
+    const schemas = read("packages/contracts/src/validators.ts");
     expect(schemas).toContain('browserOpenLayout: z.enum(["docked", "agentWindow", "keep"]).optional()');
     expect(schemas).not.toContain('browserOpenLayout: z.enum(["ask"');
   });

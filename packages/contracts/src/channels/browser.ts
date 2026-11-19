@@ -1,0 +1,205 @@
+import { z } from "zod";
+import { BookmarkAddSchema, BookmarkRemoveSchema, BrowserBottomInsetSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
+import type { ChannelBinding } from "../validators.js";
+
+/** 通道 browser 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
+export const browserChannels: Record<string, ChannelBinding> = {
+  "browser:navigate": {
+    domain: "browser",
+    method: "navigate",
+    request: BrowserNavigateSchema,
+    sensitive: true,
+  },
+  "browser:screenshot": {
+    domain: "browser",
+    method: "screenshot",
+    request: BrowserScreenshotSchema,
+    sensitive: true,
+  },
+  "browser:snapshot": {
+    domain: "browser",
+    method: "snapshot",
+    request: null,
+    sensitive: true,
+  },
+  "browser:newTab": {
+    domain: "browser",
+    method: "newTab",
+    request: BrowserNewTabSchema,
+    sensitive: true,
+  },
+  "browser:closeTab": {
+    domain: "browser",
+    method: "closeTab",
+    request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:endTask": {
+    domain: "browser",
+    method: "endTask",
+    request: BrowserSessionIdSchema,
+    sensitive: true,
+  },
+  "browser:closeSessionTabs": {
+    domain: "browser",
+    method: "closeSessionTabs",
+    request: BrowserSessionIdSchema,
+    sensitive: true,
+  },
+  "browser:selectTab": {
+    domain: "browser",
+    method: "selectTab",
+    request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:resolveFavicon": {
+    domain: "browser",
+    method: "resolveFavicon",
+    request: BrowserResolveFaviconSchema,
+    sensitive: true,
+  },
+  "browser:setCornerColor": {
+    domain: "browser",
+    method: "setCornerColor",
+    request: BrowserCornerColorSchema,
+    sensitive: true,
+  },
+  "browser:listTasks": {
+    domain: "browser",
+    method: "listTasks",
+    request: null,
+    sensitive: true,
+  },
+  "browser:showTask": {
+    domain: "browser",
+    method: "showTask",
+    request: BrowserSessionIdSchema,
+    sensitive: true,
+  },
+  "browser:showUserTabs": {
+    domain: "browser",
+    method: "showUserTabs",
+    request: null,
+    sensitive: true,
+  },
+  "browser:listTabs": {
+    domain: "browser",
+    method: "listTabs",
+    request: null,
+    sensitive: true,
+  },
+  "browser:setOverlay": {
+    domain: "browser",
+    method: "setOverlay",
+    request: BrowserSetOverlaySchema,
+    sensitive: true,
+  },
+  "browser:setSidebarWidth": {
+    domain: "browser",
+    method: "setSidebarWidth",
+    request: BrowserSidebarWidthSchema,
+    sensitive: true,
+  },
+  "browser:setBottomInset": {
+    domain: "browser",
+    method: "setBottomInset",
+    request: BrowserBottomInsetSchema,
+    sensitive: true,
+  },
+  "browser:back": {
+    domain: "browser",
+    method: "back",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:forward": {
+    domain: "browser",
+    method: "forward",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:reload": {
+    domain: "browser",
+    method: "reload",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:setDevToolsPanel": {
+    domain: "browser",
+    method: "setDevToolsPanel",
+    request: BrowserDevToolsPanelSchema,
+    sensitive: true,
+  },
+  "browser:toggleDevTools": {
+    domain: "browser",
+    method: "toggleDevTools",
+    request: BrowserDevToolsSchema,
+    sensitive: true,
+  },
+  "browser:listExtensions": {
+    domain: "browser",
+    method: "listExtensions",
+    request: null,
+    sensitive: true,
+  },
+  "browser:installExtension": {
+    domain: "browser",
+    method: "installExtension",
+    request: BrowserInstallExtensionSchema,
+    sensitive: true,
+  },
+  "browser:removeExtension": {
+    domain: "browser",
+    method: "removeExtension",
+    request: z.object({ id: z.string().min(1).max(64) }),
+    sensitive: true,
+  },
+  "browser:history": {
+    domain: "browser",
+    method: "history",
+    request: BrowserTabRefSchema,
+    sensitive: true,
+  },
+  "browser:historyRemove": {
+    domain: "browser",
+    method: "historyRemove",
+    request: z.object({ urls: z.array(z.string().min(1).max(4096)).min(1).max(500) }),
+    sensitive: true,
+  },
+  "browser:downloads": {
+    domain: "browser",
+    method: "downloads",
+    request: null,
+    sensitive: true,
+  },
+  "browser:downloadAction": {
+    domain: "browser",
+    method: "downloadAction",
+    request: BrowserDownloadActionSchema,
+    sensitive: true,
+  },
+  "bookmarks:list": {
+    domain: "bookmarks",
+    method: "list",
+    request: null,
+    sensitive: true,
+  },
+  "bookmarks:add": {
+    domain: "bookmarks",
+    method: "add",
+    request: BookmarkAddSchema,
+    sensitive: true,
+  },
+  "bookmarks:remove": {
+    domain: "bookmarks",
+    method: "remove",
+    request: BookmarkRemoveSchema,
+    sensitive: true,
+  },
+  "browser:savePage": {
+    domain: "browser",
+    method: "savePage",
+    request: SavePageSchema,
+    sensitive: true,
+  },
+};

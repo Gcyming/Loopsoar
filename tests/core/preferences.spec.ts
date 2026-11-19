@@ -102,6 +102,14 @@ describe("浏览器打开布局偏好（browserOpenLayout）", () => {
     expect(mergePreferences({ browserOpenLayout: "ask" }).browserOpenLayout).toBe("docked");
   });
 
+  it("历史值 float（旧版持久化的小窗态）迁移为 docked", () => {
+    expect(mergePreferences({ sidebarMode: "float" }).sidebarMode).toBe("docked");
+  });
+
+  it("float 不再是合法持久化枚举", () => {
+    expect(() => PreferencesSchema.parse({ ...DEFAULT_PREFERENCES, sidebarMode: "float" })).toThrow();
+  });
+
   it("未知字符串被拒（与既有非法枚举行为一致）", () => {
     expect(() => mergePreferences({ browserOpenLayout: "popup" })).toThrow(/browserOpenLayout/);
   });

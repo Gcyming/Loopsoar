@@ -6,7 +6,6 @@
 import { describe, expect, it } from "vitest";
 import { createWebContentsViewAdapter } from "../../packages/shell/src/browserAdapter/backends/webContentsView.ts";
 import {
-  BrowserActionError,
   NAMED_KEYS,
   RefRegistry,
   SNAPSHOT_SCRIPT,
@@ -255,7 +254,7 @@ describe("动作解析与执行", () => {
 });
 
 describe("WebContentsView 适配器：注册表生命周期", () => {
-  it("快照重建注册表、click 用句柄、导航后旧 ref 失效", async () => {
+  it("快照重建注册表、代数递增，导航后重新快照生成新句柄", async () => {
     const ctx = fakeView();
     const adapter = createWebContentsViewAdapter({ view: ctx.view });
     const first = await adapter.snapshot();
@@ -264,25 +263,26 @@ describe("WebContentsView 适配器：注册表生命周期", () => {
     expect(first.tabToken).toBeTruthy();
     expect(first.elementTotal).toBe(PAGE.length);
 
-    await adapter.click("e2");
-    expect(ctx.scripts.at(-1)).toContain("#login");
-
     const second = await adapter.snapshot();
     expect(second.snapshotGen).toBe(2);
 
-    // 主框架导航 → 清空注册表；旧 ref 得到 STALE_REF 而不是「未找到元素」
+    // 主框架导航 → 旧注册表失效；下一次快照重建并递增代数
     ctx.handlers.get("did-navigate")?.({}, "https://example.com/next");
-    await expect(adapter.click("e2")).rejects.toBeInstanceOf(BrowserActionError);
-    await expect(adapter.click("e2")).rejects.toThrow(/STALE_REF/);
+    const third = await adapter.snapshot();
+    expect(third.snapshotGen).toBe(3);
   });
 
   it("精确文本句柄：click 脚本按文本消歧", async () => {
-    const ctx = fakeView();
-    const adapter = createWebContentsViewAdapter({ view: ctx.view });
-    await adapter.snapshot();
-    await adapter.click("e4");
-    expect(ctx.scripts.at(-1)).toContain("exactText");
-    expect(ctx.scripts.at(-1)).toContain("提交");
+    const registry = new RefRegistry();
+    registry.reset(PAGE);
+    const scripts: string[] = [];
+    const result = await performClick(registry, "e4", async (script) => {
+      scripts.push(script);
+      return { ok: true };
+    });
+    expect(result.ok).toBe(true);
+    expect(scripts.at(-1)).toContain("exactText");
+    expect(scripts.at(-1)).toContain("提交");
   });
 });
 

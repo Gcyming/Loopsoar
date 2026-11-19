@@ -1,7 +1,7 @@
 # 框架灵活性审查（面向「扩展 / 插件化 / skill / MCP / 浏览器智能体」）
 
 > **归档提示（2026-11-19）**：本文是 2026-11-14 的能力盘点，保留作历史脉络；任务编号、行数与“缺口”结论可能已过时。
-> 当前状态以 [FRAMEWORK-AUDIT-P2.md](./FRAMEWORK-AUDIT-P2.md) 为准：P0-1/P0-2、P1-1、P1-4～P1-7、P2-1/P2-2/P2-4 已完成；全源码 <=1500 行。
+> 当前状态以 [FRAMEWORK-AUDIT-P2.md](./FRAMEWORK-AUDIT-P2.md) 为准：P0/P1/P2 全部闭环，全源码 <=1500 行。
 
 > 最近重写：2026-11-14（第二阶段 Slice F）。上一版停留在 2026-10 月的骨架期，结论已全部过时——本文按**当前代码**重写，作为「框架还缺什么」的唯一口径。
 > 相关文档：`docs/decisions/ADR.md`（活文档）、`docs/FRAMEWORK-AUDIT-P2.md`（第二阶段开工前审计）、`docs/research/agent-browser-survey.md`（Agent 浏览器操作调研）、`docs/规划/第二阶段-Agent与浏览器打通.md`（第二阶段切片计划）。

@@ -78,20 +78,8 @@ export interface BrowserAdapter {
   navigate(url: string): Promise<{ url: string }>;
   /** 页面可访问性快照（语义元素 + 稳定句柄，元素优先于坐标） */
   snapshot(): Promise<BrowserSnapshot>;
-  /** 按元素编号（#eN）/选择器点击；失败抛 BrowserActionError（带可行动错误码） */
-  click(target: string): Promise<void>;
-  /** 向元素输入文本（原生 setter + 回读校验）；失败抛 BrowserActionError */
-  type(target: string, text: string): Promise<void>;
-  /**
-   * 滚动：down/up/top/bottom（可选历史成员）。
-   * 主实现不再提供：滚动由工具层用 executeScript 直接实现，
-   * 保留为可选是为了 <webview> 兼容后端的接口同形。
-   */
-  scroll?(dir: "down" | "up" | "top" | "bottom"): Promise<void>;
   /** 截图（返回 base64 PNG） */
   screenshot(): Promise<string>;
-  /** 等待指定毫秒（可选历史成员；browser_wait 在工具层用定时器实现，主实现不再提供）。 */
-  wait?(ms: number): Promise<void>;
   /** 在页面执行 JS 并取回 JSON-safe 结果 */
   executeJs(code: string): Promise<unknown>;
   /** 页面缩放（可选：后端不支持时忽略）。 */

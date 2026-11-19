@@ -6,7 +6,7 @@
  * App 只消费派生样式与回调，不再自己维护这些 ref/effect。
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { LoopsoarAPI, Preferences, SidebarMode } from "./types.js";
+import type { LoopsoarAPI, Preferences, SidebarModeAction } from "./types.js";
 import { getLanguage, t } from "./i18n.js";
 
 export interface AgentWindowRect {
@@ -36,7 +36,7 @@ export interface AgentWindowLayoutOptions {
 export interface AgentWindowLayout {
   contentRef: React.MutableRefObject<HTMLDivElement | null>;
   beginIconDrag: (event: React.PointerEvent<HTMLDivElement>) => void;
-  changeSidebarMode: (next: SidebarMode) => void;
+  changeSidebarMode: (next: SidebarModeAction) => void;
   agentWindowOpen: boolean;
   agentIconMode: boolean;
   agentFloat: AgentFloatTransition | null;
@@ -261,7 +261,7 @@ export function useAgentWindowLayout(options: AgentWindowLayoutOptions): AgentWi
 
   /** 侧栏模式切换：收起/展开写偏好；「小窗化」打开独立 Agent 窗口。 */
   const changeSidebarMode = useCallback(
-    (next: SidebarMode): void => {
+    (next: SidebarModeAction): void => {
       if (!api) return;
       setSessionOpen(false);
       if (next === "float") {

@@ -32,7 +32,7 @@ import Composer from "./Composer.js";
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
 import { setLanguage, getLanguage, t } from "./i18n.js";
 import { splitAgentTabs } from "./agentWorkspace.js";
-import type { ChromePageKind, SidebarMode, ThemeMode } from "./types.js";
+import type { ChromePageKind, SidebarMode, SidebarModeAction, ThemeMode } from "./types.js";
 import AppDialogs from "./AppDialogs.js";
 const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
 import AgentSidebar from "./AgentSidebar.js";
@@ -122,8 +122,7 @@ export default function App(): React.JSX.Element {
     applyTheme(theme === "classic" ? "classic" : "soft");
   }, [theme]);
   // 右侧会话栏：常驻 / 收起；「小窗化」= 打开独立 BrowserWindow（真窗口，可拖动/缩放）
-  const storedSidebarMode: SidebarMode = preferences?.sidebarMode ?? "docked";
-  const sidebarMode: SidebarMode = storedSidebarMode === "float" ? "docked" : storedSidebarMode;
+  const sidebarMode: SidebarMode = preferences?.sidebarMode ?? "docked";
   // 独立窗口模式：?mini=1 时本渲染器只画 Agent 会话栏（由主进程 Agent 窗口加载）
   const miniWindow =
     typeof location !== "undefined" && new URLSearchParams(location.search).get("mini") === "1";
@@ -1144,7 +1143,7 @@ export default function App(): React.JSX.Element {
           mode={miniWindow ? "docked" : sidebarMode}
           onModeChange={
             miniWindow
-              ? (m: SidebarMode): void => {
+              ? (m: SidebarModeAction): void => {
                   // 独立窗口里点「小窗化/收起」= 收回主窗口
                   if (m !== "docked") void api?.ui.closeAgentWindow().catch(() => {});
                 }

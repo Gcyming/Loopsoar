@@ -2,11 +2,11 @@
  * Agent 侧栏外壳（从 App 抽出）：侧栏头部（复制会话 / Agent 名 / 收起 / 小窗化）+
  * 工作区条 + 会话切换条（含会话历史下拉与删除）+ 插槽 children（消息列表 / 终端 / 输入区）。
  *
- * 三态（由 App 通过 preferences.sidebarMode 持久化，组件只受控渲染）：
+ * 两态（由 App 通过 preferences.sidebarMode 持久化，组件只受控渲染）：
  *   · docked    常驻右侧（默认）；根节点 data-mode="docked"
  *   · collapsed 收起为 48px 竖条，只显示右上角的星标开关方块（点开即展开）；内容**不卸载**，
  *               用 opacity 淡出 + 指针禁用，宽度与透明度同步过渡 → 展开时布局不跳变
- *   · float     浮动小窗：外面包一层 `floatCard`（圆角/阴影/外边距由 .is-float/.floatCard 的 CSS 负责）
+ * 小窗化不是布局状态，而是 onModeChange("float") 发出的「打开独立 Agent 窗口」动作。
  *
  * 宽度所有权（避免「收起/展开位置反逻辑」）：
  *   · 外层 wrapper（App.tsx）拥有唯一可过渡的 width；本组件根节点恒为 width:100% 跟随父级，
@@ -18,21 +18,21 @@
  *     宽度过渡时右缘固定，所以动作只有「向右展开 / 向左收起」一个方向。
  *
  * 约定类名（V1 主题任务按此写 CSS，组件只提供结构与内联骨架）：
- *   `.agent-sidebar[data-mode="docked|collapsed|float"]`、`.agent-sidebar.is-float`、`.agent-sidebar.is-collapsed`、
- *   `.agent-sidebar-inner`、`.agent-sidebar-content`、`.floatCard`、`.sidebar-toggle`、`.sidebar-mode-btn`
+ *   `.agent-sidebar[data-mode="docked|collapsed"]`、`.agent-sidebar.is-collapsed`、
+ *   `.agent-sidebar-inner`、`.agent-sidebar-content`、`.sidebar-toggle`、`.sidebar-mode-btn`
  *
  * 纯展示 + 受控 props：所有业务动作（切换会话、新建、删除、复制、打开工作区面板、模式切换）由 App 实现；
  * 宽度拖拽仍由 App 的 splitter 控制。
  */
 import * as React from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
-import { BRAND, MOTION, NO_DRAG_REGION, RADIUS, SHADOW } from "./theme.js";
+import { BRAND, MOTION, NO_DRAG_REGION, RADIUS } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { usePopover } from "./popover.js";
 import SessionListPanel from "./SessionListPanel.js";
 import { getLanguage, useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
-import type { SessionMeta, SidebarMode, WorkspaceRecord } from "./types.js";
+import type { SessionMeta, SidebarMode, SidebarModeAction, WorkspaceRecord } from "./types.js";
 import type { TimelineStep } from "./timeline.js";
 
 export interface AgentSidebarProps {
@@ -41,10 +41,10 @@ export interface AgentSidebarProps {
    * 传 0 表示铺满父容器（Agent 独立窗口 / mini 模式）。
    */
   width: number;
-  /** 侧栏模式：docked 常驻 / collapsed 收起 / float 小窗浮动（App 持久化到 preferences.sidebarMode）。 */
+  /** 侧栏布局：docked 常驻 / collapsed 收起（只有这两态会被持久化）。 */
   mode: SidebarMode;
-  /** 模式切换回调（收起/展开/小窗化按钮触发；App 负责持久化 + 原生视图宽度重算）。 */
-  onModeChange: (mode: SidebarMode) => void;
+  /** 模式切换回调：收起/展开写偏好；float 是打开独立窗口的动作（App 负责持久化 + 原生视图宽度重算）。 */
+  onModeChange: (mode: SidebarModeAction) => void;
   /** 默认 Agent 名称（状态栏与侧栏头部展示）。 */
   agentLabel: string;
   /** 当前会话消息：仅用于「复制整段会话为 Markdown」。 */
@@ -156,8 +156,6 @@ export default function AgentSidebar({
     }, 1000);
   }, [onExpandFromRail]);
   React.useEffect(() => cancelRailExpand, [cancelRailExpand]);
-  const isFloat = mode === "float";
-
   /**
    * i18n 兜底：词典里还没有侧栏模式 key 时用中/英兜底文案（i18n 任务补 key 后自动切换）。
    * 不直接 tr(key) 是因为缺失 key 会回显 key 本身，界面上会很怪。
@@ -171,8 +169,8 @@ export default function AgentSidebar({
     [tr],
   );
 
-  /** 记住收起前的非收起态（expand 时回到 docked 或 float，而不是永远 docked）。 */
-  const lastExpandedModeRef = React.useRef<Exclude<SidebarMode, "collapsed">>("docked");
+  /** 记住收起前的布局态（expand 时回到 docked，而不是永远 docked）。 */
+  const lastExpandedModeRef = React.useRef<SidebarMode>("docked");
   React.useEffect(() => {
     if (mode !== "collapsed") lastExpandedModeRef.current = mode;
   }, [mode]);
@@ -191,9 +189,7 @@ export default function AgentSidebar({
 
   const collapseLabel = localized("chat.sidebarCollapse", "收起会话栏", "Collapse sidebar");
   const expandLabel = localized("chat.sidebarExpand", "展开会话栏", "Expand sidebar");
-  const floatLabel = isFloat
-    ? localized("chat.sidebarDock", "恢复常驻", "Dock sidebar")
-    : localized("chat.sidebarFloat", "小窗化", "Float sidebar");
+  const floatLabel = localized("chat.sidebarFloat", "小窗化", "Float sidebar");
 
   const fill = width <= 0;
   /**
@@ -223,11 +219,10 @@ export default function AgentSidebar({
     );
     return () => window.clearTimeout(timer);
   }, [vibeMode]);
-  const rootClassName = `agent-sidebar${isFloat ? " is-float" : ""}${isCollapsed ? " is-collapsed" : ""}`;
-  const innerClassName = isFloat ? "floatCard agent-sidebar-inner" : "agent-sidebar-inner";
+  const rootClassName = `agent-sidebar${isCollapsed ? " is-collapsed" : ""}`;
 
   return (
-    <aside className={rootClassName} data-mode={mode} style={{ ...styles.sidebar, ...(isFloat ? styles.sidebarFloat : {}) }}>
+    <aside className={rootClassName} data-mode={mode} style={styles.sidebar}>
       {/* 收起/展开开关：同一个绝对定位元素在两态间连续变形（右缘钉住窗口右边）。
           收起 = 32×32 圆角方块（仅 Loopsoar 星标）；展开 = 长方形，星标随容器左扩平滑左移，
           右侧让出的空间渐入「收起」箭头。点击方块展开、点击箭头收起，不再有两个分散的按钮。 */}
@@ -318,12 +313,11 @@ export default function AgentSidebar({
         </div>
       ) : null}
 
-      {/* float 态外包 floatCard；collapsed 态整体 opacity:0 + pointer-events:none（常驻 DOM 不卸载） */}
+      {/* collapsed 态整体 opacity:0 + pointer-events:none（常驻 DOM 不卸载） */}
       <div
-        className={innerClassName}
+        className="agent-sidebar-inner"
         style={{
           ...styles.inner,
-          ...(isFloat ? styles.floatCard : {}),
           width: contentWidth,
           transition: contentMasked
             ? `width ${MOTION.sidebarDuration} ${MOTION.ease}, opacity 0ms`
@@ -412,10 +406,10 @@ export default function AgentSidebar({
                       className="icon-btn sidebar-mode-btn"
                       title={floatLabel}
                       aria-label={floatLabel}
-                      aria-pressed={isFloat}
-                      onClick={() => onModeChange(isFloat ? "docked" : "float")}
+                      aria-pressed={false}
+                      onClick={() => onModeChange("float")}
                     >
-                      <Icon name={isFloat ? "float-exit" : "float"} size={13} />
+                      <Icon name="float" size={13} />
                     </button>
                   </span>
                 </span>
@@ -553,11 +547,6 @@ const styles: Record<string, React.CSSProperties> = {
     // 只过渡颜色类属性：width 由父级驱动，不能在本节点再过渡（否则每一帧都落后于父级）
     transition: `opacity ${MOTION.sidebarDuration} ${MOTION.ease}, border-radius ${MOTION.sidebarDuration} ${MOTION.ease}, box-shadow ${MOTION.sidebarDuration} ${MOTION.ease}`,
   },
-  /** 小窗：外层透明，卡片视觉交给 floatCard（CSS 负责 8px 外边距与视口宽度夹取）。 */
-  sidebarFloat: {
-    background: "transparent",
-    borderLeft: "none",
-  },
   inner: {
     display: "flex",
     flexDirection: "column",
@@ -568,15 +557,6 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     marginLeft: "auto",
     transition: `opacity ${MOTION.sidebarDuration} ${MOTION.ease}`,
-  },
-  /** 浮动卡片骨架：圆角/阴影用主题 token（与 V1 设计规范一致，CSS 可再覆写）。 */
-  floatCard: {
-    minWidth: 0,
-    minHeight: 0,
-    background: BRAND.inkPanel,
-    borderRadius: RADIUS.lg,
-    boxShadow: SHADOW.float,
-    overflow: "hidden",
   },
   content: {
     display: "flex",

@@ -4,17 +4,14 @@
  *   ① 适配器保持零 electron 依赖 → 可在测试里用假 view 验证语义（不启真窗口）；
  *   ② 换基座（Tauri/WebView2+CDP）时只换后端，不动 Agent 内核。
  * 引用约定（P0-2）：快照返回的 #eN 只是显示别名，句柄是页面内算出的稳定选择器；
- * 注册表在本适配器内（每标签一份），快照重建、主框架导航清空；click/type 的解析与
- * 页面脚本全部走 refs.ts（工具层与适配器共用同一份实现，不再各写一套 querySelector）。
+ * 注册表在本适配器内（每标签一份），快照重建、主框架导航清空；
+ * 动作由 BrowserHost 统一走 refs.ts 的真实输入链路，适配器只负责快照/导航/脚本/视图生命周期。
  */
 import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../types.js";
 import {
-  BrowserActionError,
   SNAPSHOT_SCRIPT,
   createTabRegistry,
   dropTabRegistry,
-  performClick,
-  performType,
   type RawBrowserElement,
 } from "../refs.js";
 
@@ -212,17 +209,6 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
         elementTotal: typeof raw?.elementTotal === "number" ? raw.elementTotal : elements.length,
         tabToken: refs.token,
       };
-    },
-
-    async click(target: string) {
-      // ref/CSS/text= 的解析与脚本都在 refs.ts：失败抛可行动错误（STALE_REF / ELEMENT_NOT_FOUND + 候选）
-      const result = await performClick(refs.registry, target, (script) => wc.executeJavaScript(script, true));
-      if (!result.ok) throw new BrowserActionError(result);
-    },
-
-    async type(target: string, text: string) {
-      const result = await performType(refs.registry, target, text, (script) => wc.executeJavaScript(script, true));
-      if (!result.ok) throw new BrowserActionError(result);
     },
 
     async screenshot(): Promise<string> {

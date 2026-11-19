@@ -52,7 +52,7 @@ describe("会话列表悬浮操作", () => {
   });
 
   it("主进程 workspace 域：rename / openFolder 通道 + App 对接", () => {
-    const schemas = read("packages/contracts/src/schemas.ts");
+    const schemas = read("packages/contracts/src/channels/workspace.ts");
     expect(schemas).toContain('"workspace:rename"');
     expect(schemas).toContain('"workspace:openFolder"');
     const domain = read("packages/shell/src/main/domains/workspace.ts");

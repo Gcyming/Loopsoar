@@ -2,7 +2,7 @@ import React, { useCallback, useEffect } from "react";
 import type {
   LoopsoarAPI,
   Preferences,
-  SidebarMode,
+  SidebarModeAction,
   ChromePageKind,
   BrowserSnapshotResult,
   SessionMeta,
@@ -56,7 +56,7 @@ export interface UseSessionActionsOptions {
   closeTab: (tabId: string) => void;
   bindWorkspaceToCurrentSession: (workspaceId: string) => void;
   addWorkspaceForChat: () => void;
-  changeSidebarMode: (next: SidebarMode) => void;
+  changeSidebarMode: (next: SidebarModeAction) => void;
   createFreshSessionAndTab: (options?: CreateFreshOptions) => Promise<void>;
   openSettings: (section?: string) => void;
   sessionIdRef: MutableRef<string>;

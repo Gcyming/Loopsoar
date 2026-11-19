@@ -46,6 +46,9 @@ export function mergePreferences(raw: unknown): Preferences {
   if (source.searchEngine === "duckduckgo" || typeof source.searchEngine !== "string") {
     delete source.searchEngine;
   }
+  // 历史兼容：旧版把「小窗化」持久化成 float；现在 float 是打开独立窗口的动作，
+  // 持久化状态只允许 docked/collapsed，旧值迁移到 docked，避免整份偏好判为非法。
+  if (source.sidebarMode === "float") source.sidebarMode = "docked";
   // 历史兼容：「每次询问」策略已下线（首启向导选一次，之后在设置里改）。
   // 老配置里的 "ask" 迁移为默认的 docked，否则 schema 校验失败会让整份偏好判为非法。
   if (source.browserOpenLayout === "ask") source.browserOpenLayout = "docked";

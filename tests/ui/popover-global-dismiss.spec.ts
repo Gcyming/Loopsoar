@@ -41,7 +41,7 @@ describe("点击列表外收起（全局）", () => {
 
 describe("工具栏浮层：再次点击按钮 = 收起（原子 toggle，不连闪）", () => {
   it("协议层提供 ui:togglePopover 且主进程按 isOpen() 原子切换", () => {
-    const contracts = read("packages/contracts/src/schemas.ts");
+    const contracts = read("packages/contracts/src/channels/system.ts");
     expect(contracts).toContain('"ui:togglePopover"');
     const domain = read("packages/shell/src/main/domains/chromePopover.ts");
     expect(domain).toContain("ui:togglePopover");

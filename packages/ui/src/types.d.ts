@@ -792,7 +792,10 @@ export type ChromePageKind = "history" | "downloads" | "bookmarks" | "settings";
 export type ThemeMode = "soft" | "classic";
 
 /** 右侧会话栏模式：常驻 / 收起 / 小窗浮动。 */
-export type SidebarMode = "docked" | "collapsed" | "float";
+/** 持久化的侧栏模式（只有两种稳定布局）。 */
+export type SidebarMode = "docked" | "collapsed";
+/** 侧栏按钮可触发的动作：float 不是持久化状态，而是「打开独立 Agent 窗口」的命令。 */
+export type SidebarModeAction = SidebarMode | "float";
 
 export interface LoopsoarAPI {
   chat: LoopsoarDomain & {
