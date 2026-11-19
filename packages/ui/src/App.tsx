@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
   AskUserRequest,
@@ -19,6 +18,7 @@ import { useSidebarLayout } from "./useSidebarLayout.js";
 import { useModelPicker } from "./useModelPicker.js";
 import { useBrowserPopoverOverlay, isNativePageVisible } from "./useBrowserPopoverOverlay.js";
 import { useWorkspaces } from "./useWorkspaces.js";
+import { useBrowserTabs, type CreateFreshSession } from "./useBrowserTabs.js";
 import { useBottomDock } from "./useBottomDock.js";
 const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
@@ -94,8 +94,6 @@ export default function App(): React.JSX.Element {
   const [maximized, setMaximized] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [address, setAddress] = useState("");
-  const [currentUrl, setCurrentUrl] = useState<string>("");
   /** 跨会话任务条：所有带 Agent 工作区的会话（浏览器控制触发的折叠工作区）。 */
   const [agentTasks, setAgentTasks] = useState<{ sessionId: string; tabs: TabState[] }[]>([]);
   /** 浏览器当前可见组（USER 或某个任务会话）：任务 chip 去重必须用它，不能用聊天会话。 */
@@ -129,7 +127,6 @@ export default function App(): React.JSX.Element {
   const [chromePage, setChromePage] = useState<ChromePageKind | null>(null);
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => !isOnboardingDone());
-  const [tabs, setTabs] = useState<TabState[]>([]);
   /** Agent 工作区（折叠标签组）是否展开：展开时隐藏原生网页视图，否则列表面板会被网页盖住。 */
 
   /** 新标签页/整页会话处于 Vibecoding 状态（侧栏会话按钮据此变成「会话列表」按钮）。 */
@@ -164,6 +161,10 @@ export default function App(): React.JSX.Element {
   const [sessionResetToken, setSessionResetToken] = useState(0);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
+  /** 浏览器动作回调需要读「最新」会话，但 hook 必须在 createFreshSessionAndTab 之前调用。 */
+  const currentSessionRef = useRef<string | null>(null);
+  currentSessionRef.current = currentSession;
+  const createFreshSessionRef = useRef<CreateFreshSession | null>(null);
   const {
     contentRef,
     beginIconDrag,
@@ -237,6 +238,32 @@ export default function App(): React.JSX.Element {
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   /** 最近一次同步到地址栏的 URL（仅活动标签 URL 变化时才覆盖，避免打断用户输入）。 */
   const lastSyncedUrlRef = useRef<string>("");
+  const {
+    tabs,
+    setTabs,
+    address,
+    setAddress,
+    currentUrl,
+    setCurrentUrl,
+    activeTabId,
+    applyTabSnapshot,
+    navigate,
+    newTab,
+    selectTab,
+    closeTab,
+    closeAgentWorkspace,
+    goBack,
+    goForward,
+    reloadPage,
+    retryActivePage,
+  } = useBrowserTabs({
+    api,
+    preferences,
+    setNotice,
+    lastSyncedUrlRef,
+    createFreshSessionRef,
+    currentSessionRef,
+  });
   /** 时间线「思考过程」卡的开合（按消息 id；流式中默认展开，收尾后自动收起）。 */
   const [thinkingOpen, setThinkingOpen] = useState<Record<string, boolean>>({});
   /** 上下文占用估算：used=约 4 字符/token；cap=模型声明上下文窗口 */
@@ -434,7 +461,6 @@ export default function App(): React.JSX.Element {
   // 工作区里最后一个网页也没了（Agent 关页/会话切走）：折叠面板不该悬空留着。
 
 
-  const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
   const activeTabIdRef = React.useRef<string | null>(null);
   activeTabIdRef.current = activeTabId;
   /** 最新标签列表的同步镜像：effect 里要读「这一刻」的标签，state 可能晚一帧。 */
@@ -624,6 +650,8 @@ export default function App(): React.JSX.Element {
     },
     [api, activeWorkspaceId, applyWorkspaces],
   );
+  // useBrowserTabs 早于 createFreshSessionAndTab 调用；这里把最新实现桥接给浏览器动作。
+  createFreshSessionRef.current = createFreshSessionAndTab;
 
   /** 新建标签页 = 新会话（每次都进入一个新的搜索页，不再和当前会话共用标签组）。 */
   /** 新标签页/整页会话的「+ 新加工作区」：原生文件夹选择器 → 挂载并设为当前工作区。 */
@@ -1090,32 +1118,6 @@ export default function App(): React.JSX.Element {
     [api, preferences],
   );
 
-  const navigate = useCallback(
-    (raw?: string): void => {
-      if (!api) return;
-      const input = raw ?? address;
-      const engine = preferences?.searchEngine ?? "bing";
-      const resolved = resolveOmniboxInput(input, engine);
-      if (resolved.kind === "invalid") {
-        setNotice(`导航被拒绝：${resolved.reason}`);
-        return;
-      }
-      setNotice("");
-      // 乐观切换：地址栏/加载页立刻指向目标，加载完成后再用真实 URL 覆盖（重定向场景）。
-      setCurrentUrl(resolved.url);
-      void api.browser.navigate({ url: resolved.url }).then((result) => {
-        if (result.ok) {
-          setCurrentUrl(result.url ?? resolved.url);
-          setAddress(result.url ?? resolved.url);
-          void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
-        } else {
-          setNotice(`导航失败：${result.error ?? "未知"}`);
-        }
-      });
-    },
-    [address, api, preferences],
-  );
-
   // 浮层动作（独立子窗口经主进程转发）：打开整页管理 / 主窗口导航 / 保存页面
   const savePageRef = React.useRef<null | (() => void)>(null);
   // 工具栏浮层（独立子窗口）的「点击列表外收起」：主窗口内任何非触发按钮的按下都关闭它。
@@ -1169,117 +1171,6 @@ export default function App(): React.JSX.Element {
       }
     });
   }, [api, navigate, bindWorkspaceToCurrentSession, addWorkspaceForChat]);
-
-  const newTab = useCallback((): void => {
-    if (!api) return;
-    void createFreshSessionAndTab({ newBlankTab: true }).catch((err: unknown) =>
-      setNotice("新建标签页失败：" + (err instanceof Error ? err.message : String(err))),
-    );
-  }, [api, createFreshSessionAndTab]);
-
-  const selectTab = useCallback(
-    (tabId: string): void => {
-      if (!api) return;
-      // 切标签属于切换界面：所有已展开列表/浮层先收起（用户 m02115 全局规则）。
-      dismissAllPopovers();
-      void api.browser
-        .selectTab({ tabId })
-        .then(async () => {
-          // 以切换后的真实活动标签为准，而不是切换前的闭包快照：
-          // 切到空白「搜索主页」时必须把 currentUrl 清空，否则原生网页可见性判断会
-          // 继续把上一个网页当成当前页，浮层底图也会冻结旧网页。
-          const r = await api.browser.listTabs();
-          setTabs(r.tabs);
-          const active = r.tabs.find((tab) => tab.active);
-          const url = active?.url ?? "";
-          lastSyncedUrlRef.current = url;
-          setAddress(url);
-          setCurrentUrl(url);
-        })
-        .catch(() => undefined);
-    },
-    [api],
-  );
-
-  const closeTab = useCallback(
-    (tabId: string): void => {
-      if (!api) return;
-      const closedBound = tabs.find((tab) => tab.id === tabId)?.agentBound === true;
-      // 关掉最后一个网页 = 回到空白搜索页（会话与侧栏保持原样），**绝不退出程序**。
-      // 退出只认窗口关闭/菜单退出这类显式手势；「关网页顺手关掉整个应用」是用户明确反馈的痛点。
-      void api.browser
-        .closeTab({ tabId })
-        .then(() => api.browser.listTabs())
-        .then((r) => {
-          setTabs(r.tabs);
-          const active = r.tabs.find((tab) => tab.active);
-          const url = active?.url ?? "";
-          lastSyncedUrlRef.current = url;
-          setAddress(url);
-          setCurrentUrl(url);
-          // 关掉任务工作区的最后一个绑定页：离开特殊会话，回到空白会话。
-          if (closedBound && !r.tabs.some((tab) => tab.agentBound === true)) {
-            void Promise.resolve(currentSession ? api.browser.endTask({ sessionId: currentSession }) : undefined)
-              .catch(() => undefined)
-              .then(() => createFreshSessionAndTab({ newBlankTab: true }))
-              .catch(() => undefined);
-          }
-        })
-        .catch(() => undefined);
-    },
-    [api, tabs, currentSession, createFreshSessionAndTab],
-  );
-
-  /** 关闭整个 Agent 工作区：关闭全部绑定页（任务会话本身保留，页面关闭不等于会话结束）。 */
-  const closeAgentWorkspace = useCallback((): void => {
-    if (!api) return;
-    const ids = tabs.filter((tab) => tab.agentBound === true).map((tab) => tab.id);
-    if (ids.length === 0) return;
-    void (async () => {
-      if (currentSession) {
-        // 任务确实结束：关页 + 清任务快照/标记，避免点回会话时旧页面复活。
-        await api.browser.endTask({ sessionId: currentSession }).catch(() => undefined);
-      } else {
-        for (const id of ids) {
-          await api.browser.closeTab({ tabId: id }).catch(() => undefined);
-        }
-      }
-      const result = await api.browser.listTabs().catch(() => null);
-      if (!result) return;
-      setTabs(result.tabs);
-      const active = result.tabs.find((tab) => tab.active);
-      const url = active?.url ?? "";
-      lastSyncedUrlRef.current = url;
-      setAddress(url);
-      setCurrentUrl(url);
-      // 关掉折叠工作区 = 任务结束：离开特殊会话，回到一个新的空白会话。
-      if (tabs.some((tab) => tab.agentBound === true)) {
-        await createFreshSessionAndTab({ newBlankTab: true }).catch(() => undefined);
-      }
-    })();
-  }, [api, tabs, currentSession, createFreshSessionAndTab]);
-
-  const goBack = useCallback((): void => {
-    if (!api) return;
-    void api.browser.back({}).then((r) => {
-      if (r.ok && r.url) {
-        setCurrentUrl(r.url);
-        setAddress(r.url);
-      }
-      void api.browser.listTabs().then((x) => setTabs(x.tabs)).catch(() => {});
-    });
-  }, [api]);
-
-  const goForward = useCallback((): void => {
-    if (!api) return;
-    void api.browser.forward({}).then((r) => {
-      if (r.ok && r.url) {
-        setCurrentUrl(r.url);
-        setAddress(r.url);
-      }
-      void api.browser.listTabs().then((x) => setTabs(x.tabs)).catch(() => {});
-    });
-  }, [api]);
 
   const refreshSessions = useCallback((): void => {
     if (!api) return;
@@ -1606,36 +1497,6 @@ export default function App(): React.JSX.Element {
     },
     [api, currentSession, switchSession],
   );
-
-  /** 刷新当前页：走 browser:reload（区别于地址栏导航，不重置历史栈）。 */
-  const reloadPage = useCallback((): void => {
-    if (!api) return;
-    void api.browser
-      .reload({})
-      .then((result) => {
-        if (!result.ok) {
-          setNotice(`刷新失败：${result.error ?? "未知错误"}`);
-          return;
-        }
-        if (result.url) {
-          lastSyncedUrlRef.current = result.url;
-          setAddress(result.url);
-          setCurrentUrl(result.url);
-        }
-        void api.browser.listTabs().then((r) => setTabs(r.tabs)).catch(() => {});
-      })
-      .catch((err: unknown) => setNotice(`刷新失败：${err instanceof Error ? err.message : String(err)}`));
-  }, [api]);
-
-  /** 加载失败页的「重试」：有失败 URL 就重新导航（首次加载失败时标签 url 还是空的，reload 会 no-op）。 */
-  const retryActivePage = useCallback((): void => {
-    const active = tabs.find((tab) => tab.active);
-    if (active?.loadFailure?.url) {
-      navigate(active.loadFailure.url);
-      return;
-    }
-    reloadPage();
-  }, [navigate, reloadPage, tabs]);
 
   /** 保存当前页面 HTML 全页（主进程写到下载目录 saved-pages/），成功 toast 显示路径。 */
   const savePage = useCallback((): void => {

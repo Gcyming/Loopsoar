@@ -108,10 +108,14 @@ describe("dismissAllPopovers（全局收起入口）", () => {
 
   it("切回空白标签必须清空 currentUrl（否则旧网页会冒充搜索主页）", () => {
     const app = read("packages/ui/src/App.tsx");
-    const selectTab = app.slice(app.indexOf("const selectTab"), app.indexOf("const closeTab"));
-    expect(selectTab).toContain("const url = active?.url ?? \"\"");
-    expect(selectTab).toContain("setCurrentUrl(url)");
-    expect(selectTab).not.toMatch(/if \(tab\?\.url\)/);
+    const tabsHook = read("packages/ui/src/useBrowserTabs.ts");
+    const selectTab = tabsHook.slice(tabsHook.indexOf("const selectTab"), tabsHook.indexOf("const closeTab"));
+    const snapshot = tabsHook.slice(tabsHook.indexOf("const applyTabSnapshot"), tabsHook.indexOf("const navigate"));
+    expect(snapshot).toContain("const url = active?.url ?? \"\"");
+    expect(snapshot).toContain("setCurrentUrl(url)");
+    expect(snapshot).not.toMatch(/if \(tab\?\.url\)/);
+    expect(selectTab).toContain("applyTabSnapshot(r.tabs)");
+    expect(app).toContain("useBrowserTabs(");
   });
 
   it("搜索主页没有原生网页时绝不抓底图（否则旧网页截图会冻结到主页上）", () => {
@@ -141,10 +145,12 @@ describe("dismissAllPopovers（全局收起入口）", () => {
 
   it("App 在切界面/切会话/新会话/切标签/失焦时调用 dismissAllPopovers", () => {
     const app = read("packages/ui/src/App.tsx");
+    const tabsHook = read("packages/ui/src/useBrowserTabs.ts");
     expect(app).toContain('window.addEventListener("blur"');
     expect((app.match(/dismissAllPopovers\(\)/g) ?? []).length).toBeGreaterThanOrEqual(6);
     expect(app).toMatch(/const openSettings[\s\S]{0,200}dismissAllPopovers\(\)/);
-    expect(app).toMatch(/const selectTab[\s\S]{0,200}dismissAllPopovers\(\)/);
+    expect(tabsHook).toMatch(/const selectTab[\s\S]{0,200}dismissAllPopovers\(\)/);
+    expect(app).toContain("useBrowserTabs(");
     // 新建会话/新标签统一走 createFreshSessionAndTab（内部先 dismissAllPopovers）
     expect(app).toMatch(/const createFreshSessionAndTab[\s\S]{0,400}dismissAllPopovers\(\)/);
     expect(app).toMatch(/const newSession[\s\S]{0,200}createFreshSessionAndTab/);
