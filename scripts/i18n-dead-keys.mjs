@@ -27,6 +27,7 @@ const DYNAMIC_PREFIXES = [
   'settings.appearance.demo.', // 预览行 1..8
   'settings.appearance.slider.', // 滑块参数名
   'settings.permission.level.', // L0-L5 权限档
+  'settings.permissions.cat.', // 权限类别按 category.key 拼（Settings.tsx）
   'settings.provider.', // 供应商卡片按字段拼
   'settings.extensions.', // 扩展状态文案按 state 拼
   'settings.memory.category.', // 记忆分类按 category 拼
@@ -98,7 +99,7 @@ if (process.argv.includes('--md')) {
     '| --- | --- | --- |',
     ...report.map((item) => '| `' + item.file + '` | ' + item.total + ' | ' + item.dead + ' |'),
     '',
-    '合计：' + totals.total + ' 键，' + totals.dead + ' 个候选死键。删除前必须人工确认（可能被运行时拼接引用）。',
+    '合计：' + totals.total + ' 键，' + totals.dead + ' 个候选死键。' + (totals.dead > 0 ? '删除前必须人工确认（可能被运行时拼接引用）。' : '当前无需删除。'),
     '',
     ...report.flatMap((item) => [
       '## ' + item.file,

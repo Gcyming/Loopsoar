@@ -1,8 +1,13 @@
 # 外层容器清点与归档建议（2026-11-19）
 
 > 仓库真实根：`D:\tool\AI\real-project\Loopsoar\Parent file`。
-> 外层 `D:\tool\AI\real-project\Loopsoar` 只是容器目录，**本轮不删除、不移动任何文件**，只给清单与建议。
-> 为什么不自动做：handoff §3 P3-2 要求「先确认哪些是历史备份」，删除/移动外层文件不属于代码改动，误删不可恢复。
+> 外层 `D:\tool\AI\real-project\Loopsoar` 只是容器目录。本文件是执行前的清点与建议；**执行记录见 §0**，历史清单保留作对照。
+
+## 0. 执行记录（2026-11-19 20:22）
+
+- 已归档：`前期准备工作/`、旧 `docs/`、旧 `e2e-evidence/`、`Parent%20file/` → `_archive-2026-11-19.tar.gz`（131MB，746 条目，已 `tar -tzf` 验证可读）。
+- 已删除：上述已归档目录、`.tmp/`、`.tmp-chrome*/`（4 个）、空 `packages/`、空 `loopsoar download/`、外层空 `.git/`。
+- 已保留：`Parent file/`（真实仓库）、`loopsoar webfrontenddev/`、`.memsearch/`、`.slime/`、`.pnpm-store/`、`icon/`、`IDEA.md`、`icon-512.png`、`audit-fixes-2026-11-19.patch`、归档包。
 
 ## 1. 清点
 
@@ -10,17 +15,22 @@
 | --- | --- | --- | --- |
 | `Parent file/` | — | **真实仓库**（git 仓库根） | 保留 |
 | `loopsoar webfrontenddev/` | 1.3M | 官网静态站产物（index/docs/changelog 等） | 保留（独立交付物） |
-| `前期准备工作/` | 3.2M | 立项前调研/命名/借鉴资料 | 归档后删（历史资料） |
-| `docs/` | 52K | 旧文档快照（4 个文件，与仓库 docs 重复） | 归档后删 |
-| `e2e-evidence/` | 133M | 旧 E2E 截图（仓库内已有新的 e2e-evidence） | 归档后删 |
-| `.tmp/` | 379M | 临时脚本/探针/中间产物 | 可直接删（无源码价值） |
-| `.tmp-chrome*/`（4 个） | 159M | E2E 用 Chrome profile 缓存 | 可直接删（下次运行会重建） |
-| `.git/` | 80K | 空仓库（**没有任何 commit**） | 建议删，避免误以为外层是仓库 |
+| `前期准备工作/` | 3.2M | 立项前调研/命名/借鉴资料 | 已归档并删除（历史资料） |
+| `docs/` | 52K | 旧文档快照（4 个文件，与仓库 docs 重复） | 已归档并删除 |
+| `e2e-evidence/` | 133M | 旧 E2E 截图（仓库内已有新的 e2e-evidence） | 已归档并删除 |
+| `.tmp/` | 379M | 临时脚本/探针/中间产物 | 已删除 |
+| `.tmp-chrome*/`（4 个） | 159M | E2E 用 Chrome profile 缓存 | 已删除 |
+| `.git/` | 80K | 空仓库（**没有任何 commit**） | 已删除（空仓库，无 commit） |
 | `.memsearch/` | 44K | 记忆插件数据 | 保留 |
-| `.pnpm-store/`、`.slime/`、`packages/`、`icon/`、`loopsoar download/`、`Parent%20file/` | 0–956K | 空目录 / URL 编码残留（`Parent%20file` 只有 .tmp-bench 数据） | 确认后删（`icon` 有品牌资源，先看再删） |
+| `.pnpm-store/` | 8K | 旧 pnpm store 缓存 | 保留（体积很小） |
+| `.slime/` | 4K | 旧记忆笔记 | 保留（数据文件） |
+| `packages/` | 0 | 空骨架目录 | 已删除 |
+| `loopsoar download/` | 0 | 空目录 | 已删除 |
+| `Parent%20file/` | 10K | URL 编码残留（`.tmp-bench` 数据） | 已归档并删除 |
+| `icon/` | 883K | 品牌资源 | 保留 |
 | `IDEA.md`、`icon-512.png` | 25K | 项目一句话定位 / 图标 | 保留 |
 
-## 2. 建议操作（需你确认后执行）
+## 2. 执行命令（已执行，保留作记录）
 
 ```bash
 cd "D:/tool/AI/real-project/Loopsoar"
