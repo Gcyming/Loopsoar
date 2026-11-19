@@ -1,0 +1,23 @@
+{
+  "id": "prompt-commands",
+  "name": "提示词命令示例",
+  "version": "0.1.0",
+  "description": "演示 contributes.commands / instructions / hooks（不执行扩展代码）。",
+  "author": "Loopsoar",
+  "contributes": {
+    "commands": [
+      {
+        "id": "summarize",
+        "title": "总结当前页面",
+        "prompt": "总结当前页面的要点，列出 3 条结论。"
+      }
+    ],
+    "instructions": "回答前先确认事实来源，不要臆测。",
+    "hooks": [
+      {
+        "event": "turn.start",
+        "prompt": "如需读取网页，先 browser_snapshot 再判断。"
+      }
+    ]
+  }
+}

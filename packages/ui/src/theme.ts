@@ -10,6 +10,7 @@
  * 用法：`applyTheme("classic")` 切主题（加 200ms 颜色过渡 class）；设置面板/Settings 由 App 接线。
  */
 import { LAYOUT } from "loopsoar-contracts/layout";
+import { EXTENSION_THEME_TOKENS } from "loopsoar-contracts/extension";
 
 const cssVar = (token: string, fallback: string): string => `var(--${token}, ${fallback})`;
 const sidebarMs = `${LAYOUT.SIDEBAR_MOTION_MS}ms`;
@@ -117,6 +118,24 @@ export function getTheme(): ThemeName {
  * 让全局 CSS 的 200ms 颜色过渡只作用于切换过程（不影响 hover/布局动画）。
  * `prefers-reduced-motion` 下不挂过渡 class。
  */
+const THEME_TOKEN_SET = new Set<string>(EXTENSION_THEME_TOKENS);
+const THEME_VALUE_PATTERN = /^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,%\s]+\)|hsla?\([0-9.,%\s]+\))$/;
+
+/**
+ * 应用扩展贡献的主题：只写白名单 CSS 变量，传 null 清空。
+ * 契约层已校验过一遍，这里再做一次白名单 + 值格式检查（渲染层不信任 IPC 载荷）。
+ */
+export function applyContributedTheme(tokens: Record<string, string> | null | undefined): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  for (const token of EXTENSION_THEME_TOKENS) root.style.removeProperty(`--${token}`);
+  if (!tokens) return;
+  for (const [token, value] of Object.entries(tokens)) {
+    if (!THEME_TOKEN_SET.has(token) || typeof value !== "string" || !THEME_VALUE_PATTERN.test(value)) continue;
+    root.style.setProperty(`--${token}`, value);
+  }
+}
+
 export function applyTheme(theme: ThemeName): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;

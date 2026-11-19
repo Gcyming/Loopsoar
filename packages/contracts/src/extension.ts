@@ -38,7 +38,56 @@ export const ExtensionHookSchema = z.object({
 });
 export type ExtensionHook = z.infer<typeof ExtensionHookSchema>;
 
-/** 声明式贡献点：commands / instructions / ui / hooks，均为数据，不执行扩展代码。 */
+/** 可贡献的主题 token 白名单：只允许覆盖颜色变量，禁止任意 CSS（防第三方扩展注入样式/截图）。 */
+export const EXTENSION_THEME_TOKENS = [
+  "ls-bg",
+  "ls-surface",
+  "ls-surface-raised",
+  "ls-surface-hover",
+  "ls-border",
+  "ls-border-strong",
+  "ls-text",
+  "ls-text-muted",
+  "ls-text-faint",
+  "ls-accent",
+  "ls-accent-hover",
+  "ls-danger",
+  "ls-teal",
+] as const;
+export type ExtensionThemeToken = (typeof EXTENSION_THEME_TOKENS)[number];
+
+/** 颜色值只接受 hex / rgb(a) / hsl(a)：不接受 var()/url()/分号，杜绝 CSS 注入。 */
+const ThemeColorSchema = z
+  .string()
+  .max(80)
+  .regex(/^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,%\s]+\)|hsla?\([0-9.,%\s]+\))$/, "主题颜色只允许 hex / rgb() / hsl()");
+
+/** 扩展贡献的 loop（L2 声明式）：只收紧预算 + 追加提示词，不执行扩展代码。 */
+export const ExtensionLoopSchema = z.object({
+  id: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/i, "loop id 仅允许字母数字 . _ -"),
+  name: z.string().min(1).max(160),
+  description: z.string().max(400).optional(),
+  /** 追加为本 loop 运行时的额外用户消息（不动 stable 系统提示）。 */
+  systemPromptAppend: z.string().max(4_000).optional(),
+  /** 只能收紧内置预算（applyDeclarativeLoop 内与硬上限取 min）。 */
+  maxRounds: z.number().int().min(1).max(200).optional(),
+  maxToolCalls: z.number().int().min(1).max(500).optional(),
+  allowedTools: z.array(z.string().min(1).max(80)).max(80).optional(),
+});
+export type ExtensionLoopContribution = z.infer<typeof ExtensionLoopSchema>;
+
+/** 扩展贡献的主题：只允许覆盖白名单 CSS 变量（token），不做任意 CSS。 */
+export const ExtensionThemeSchema = z.object({
+  id: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._-]*$/i, "theme id 仅允许字母数字 . _ -"),
+  name: z.string().min(1).max(160),
+  description: z.string().max(400).optional(),
+  tokens: z
+    .record(z.enum(EXTENSION_THEME_TOKENS), ThemeColorSchema)
+    .refine((tokens) => Object.keys(tokens).length > 0, "主题至少要覆盖一个 token"),
+});
+export type ExtensionThemeContribution = z.infer<typeof ExtensionThemeSchema>;
+
+/** 声明式贡献点：commands / instructions / ui / hooks / loops / themes，均为数据，不执行扩展代码。 */
 export const ExtensionContributionsSchema = z.object({
   commands: z.array(ExtensionCommandSchema).max(32).optional(),
   /** 启用后注入 Agent volatile 段的系统指令（不是工具，不执行代码）。 */
@@ -47,6 +96,10 @@ export const ExtensionContributionsSchema = z.object({
   ui: z.array(ExtensionPanelSchema).max(8).optional(),
   /** 每轮会话开始注入的声明式提示（不是回调，不执行代码）。 */
   hooks: z.array(ExtensionHookSchema).max(8).optional(),
+  /** 可插拔 loop（L2 声明式）：注册进 LoopRegistry，与内置同样受静态校验与回退约束。 */
+  loops: z.array(ExtensionLoopSchema).max(8).optional(),
+  /** 主题（只覆盖白名单 CSS 变量）。 */
+  themes: z.array(ExtensionThemeSchema).max(8).optional(),
 });
 export type ExtensionContributions = z.infer<typeof ExtensionContributionsSchema>;
 

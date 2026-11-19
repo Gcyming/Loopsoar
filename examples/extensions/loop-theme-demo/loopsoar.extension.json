@@ -1,0 +1,35 @@
+{
+  "id": "loop-theme-demo",
+  "name": "Loop / 主题示例",
+  "version": "0.1.0",
+  "description": "演示 contributes.loops 与 contributes.themes：纯声明式贡献，不含入口脚本。",
+  "author": "Loopsoar",
+  "contributes": {
+    "loops": [
+      {
+        "id": "focused",
+        "name": "专注模式",
+        "description": "更少轮次、只读工具，适合核对事实。",
+        "systemPromptAppend": "本轮以核对事实为主，不要修改文件。",
+        "maxRounds": 6,
+        "maxToolCalls": 12,
+        "allowedTools": [
+          "file_read",
+          "memory_search"
+        ]
+      }
+    ],
+    "themes": [
+      {
+        "id": "midnight",
+        "name": "午夜",
+        "description": "低亮度暖色 token 覆盖。",
+        "tokens": {
+          "ls-bg": "#0b0d12",
+          "ls-surface": "#12151c",
+          "ls-accent": "#e0a15a"
+        }
+      }
+    ]
+  }
+}

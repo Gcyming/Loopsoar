@@ -32,6 +32,7 @@ import { TerminalSessionManager } from "./terminalSession.js";
 import { SubagentTaskStore } from "./subagentTaskStore.js";
 import { AskBus } from "./askBus.js";
 import { createLoopRuntime } from "./loopRuntime.js";
+import { ExtensionContributions } from "./extensionContributions.js";
 
 export interface CoreServiceInput {
   dirs: { dataDir: string; configDir: string };
@@ -267,6 +268,11 @@ export async function createCoreServices(input: CoreServiceInput) {
     push: (event, payload) => pushToRenderer(event, payload),
   });
   const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
+  // 扩展贡献点（第三阶段 C）：loops → LoopRegistry；themes → UI（启停/卸载自动精确撤下）。
+  const extensionContributions = new ExtensionContributions(loopRuntime, extensions, () => {
+    pushToRenderer("loop:changed", loopRuntime.list());
+  });
+  extensionContributions.sync();
   const skills = new SkillHost(path.join(dirs.dataDir, "skills"));
   skills.watch((installed) => pushToRenderer("skills:updated", { action: "watch", installed }));
   const subagentTasks = new SubagentTaskStore(path.join(dirs.dataDir, "subagents"));
@@ -292,6 +298,7 @@ export async function createCoreServices(input: CoreServiceInput) {
     memory,
     askBus,
     loopRuntime,
+    extensionContributions,
     sessions,
     workspaces,
     worktreesRoot,

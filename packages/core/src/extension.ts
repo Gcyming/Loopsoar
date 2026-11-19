@@ -18,19 +18,25 @@ export const EXTENSION_MANIFEST_FILE = "loopsoar.extension.json";
 
 export {
   EXTENSION_PERMISSION_KEYS,
+  EXTENSION_THEME_TOKENS,
   ExtensionCommandSchema,
   ExtensionContributionsSchema,
   ExtensionHookSchema,
+  ExtensionLoopSchema,
   ExtensionManifestSchema,
   ExtensionPanelSchema,
+  ExtensionThemeSchema,
 } from "loopsoar-contracts/extension";
 export type {
   ExtensionCommand,
   ExtensionContributions,
   ExtensionHook,
+  ExtensionLoopContribution,
   ExtensionManifest,
   ExtensionPanel,
   ExtensionPermission,
+  ExtensionThemeContribution,
+  ExtensionThemeToken,
 } from "loopsoar-contracts/extension";
 
 /**
@@ -111,6 +117,105 @@ export function collectExtensionCommands(extensions: readonly InstalledExtension
     }
   }
   return out;
+}
+
+/** 扩展贡献的 loop：全局 id 加 ext. 前缀，避免与用户手写 loop（<dataDir>/loops）撞名。 */
+export interface ExtensionLoopView {
+  /** 全局唯一 id：`ext.<extensionId>.<loopId>`。 */
+  id: string;
+  name: string;
+  description?: string;
+  extensionId: string;
+  extensionName: string;
+  config: {
+    systemPromptAppend?: string;
+    maxRounds?: number;
+    maxToolCalls?: number;
+    allowedTools?: string[];
+  };
+}
+
+/** 扩展贡献的主题：tokens 已通过白名单校验，UI 只按 token 写 CSS 变量。 */
+export interface ExtensionThemeView {
+  /** 全局唯一 id：`ext.<extensionId>.<themeId>`。 */
+  id: string;
+  name: string;
+  description?: string;
+  extensionId: string;
+  extensionName: string;
+  tokens: Record<string, string>;
+}
+
+export const EXTENSION_LOOP_PREFIX = "ext.";
+/** 内置 loop id（core-loop）不可被扩展覆盖；这里用常量避免 core 反向依赖 shell。 */
+const RESERVED_LOOP_IDS = new Set(["core-loop"]);
+
+/**
+ * 收集已启用扩展贡献的 loop（L2 声明式）。冲突（重复 id / 占用内置 id）一律跳过并上报，
+ * 不做「后到者覆盖」——冲突必须可见，否则用户不知道哪个扩展没生效。
+ */
+export function collectExtensionLoops(extensions: readonly InstalledExtension[]): {
+  loops: ExtensionLoopView[];
+  conflicts: string[];
+} {
+  const loops: ExtensionLoopView[] = [];
+  const conflicts: string[] = [];
+  const seen = new Set<string>();
+  for (const item of extensions) {
+    if (!item.enabled) continue;
+    for (const loop of item.manifest.contributes?.loops ?? []) {
+      const id = `${EXTENSION_LOOP_PREFIX}${item.manifest.id}.${loop.id}`;
+      if (RESERVED_LOOP_IDS.has(id) || seen.has(id)) {
+        conflicts.push(`loop ${id} 与已有 loop 冲突，已跳过`);
+        continue;
+      }
+      seen.add(id);
+      loops.push({
+        id,
+        name: loop.name,
+        ...(loop.description ? { description: loop.description } : {}),
+        extensionId: item.manifest.id,
+        extensionName: item.manifest.name,
+        config: {
+          ...(loop.systemPromptAppend ? { systemPromptAppend: loop.systemPromptAppend } : {}),
+          ...(loop.maxRounds !== undefined ? { maxRounds: loop.maxRounds } : {}),
+          ...(loop.maxToolCalls !== undefined ? { maxToolCalls: loop.maxToolCalls } : {}),
+          ...(loop.allowedTools ? { allowedTools: [...loop.allowedTools] } : {}),
+        },
+      });
+    }
+  }
+  return { loops, conflicts };
+}
+
+/** 收集已启用扩展贡献的主题（同 id 冲突跳过并上报）。 */
+export function collectExtensionThemes(extensions: readonly InstalledExtension[]): {
+  themes: ExtensionThemeView[];
+  conflicts: string[];
+} {
+  const themes: ExtensionThemeView[] = [];
+  const conflicts: string[] = [];
+  const seen = new Set<string>();
+  for (const item of extensions) {
+    if (!item.enabled) continue;
+    for (const theme of item.manifest.contributes?.themes ?? []) {
+      const id = `${EXTENSION_LOOP_PREFIX}${item.manifest.id}.${theme.id}`;
+      if (seen.has(id)) {
+        conflicts.push(`theme ${id} 与已有主题冲突，已跳过`);
+        continue;
+      }
+      seen.add(id);
+      themes.push({
+        id,
+        name: theme.name,
+        ...(theme.description ? { description: theme.description } : {}),
+        extensionId: item.manifest.id,
+        extensionName: item.manifest.name,
+        tokens: { ...theme.tokens },
+      });
+    }
+  }
+  return { themes, conflicts };
 }
 
 export class ExtensionRegistry {

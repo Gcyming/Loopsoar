@@ -20,6 +20,10 @@ interface ExtensionsState {
 export class ExtensionHost {
   private registry = new ExtensionRegistry();
   private stateFile: string;
+  /** 变更钩子（启停/卸载/重扫后触发）：装配层用来同步扩展贡献点（loop/theme）。 */
+  onChange?: () => void;
+  /** 贡献点快照（由 ExtensionContributions 注入；未装配时为 null）。 */
+  contributions?: () => unknown;
 
   constructor(private dir: string) {
     this.stateFile = path.join(path.dirname(dir), "extensions.json");
@@ -94,6 +98,7 @@ export class ExtensionHost {
       skipped.push({ dir: this.dir, reason: err instanceof Error ? err.message : String(err) });
     }
     this.writeState(state);
+    this.onChange?.();
     return { installed, skipped };
   }
 
@@ -107,6 +112,7 @@ export class ExtensionHost {
     const state = this.readState();
     state.enabled[id] = enabled;
     this.writeState(state);
+    this.onChange?.();
     return item;
   }
 
@@ -127,6 +133,7 @@ export class ExtensionHost {
     } catch {
       return false;
     }
+    this.onChange?.();
     return true;
   }
 

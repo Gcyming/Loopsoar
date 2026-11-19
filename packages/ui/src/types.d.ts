@@ -507,6 +507,21 @@ export interface InstalledExtension {
   installedAt: number;
 }
 
+/** 扩展贡献点快照（shell ExtensionContributions.state()）：loop 已进 LoopRegistry，theme 由 UI 应用。 */
+export interface ExtensionContributionsState {
+  loops: { id: string; name: string; description?: string; extensionId: string; extensionName: string }[];
+  themes: {
+    id: string;
+    name: string;
+    description?: string;
+    extensionId: string;
+    extensionName: string;
+    tokens: Record<string, string>;
+  }[];
+  conflicts: string[];
+  registeredLoopIds: string[];
+}
+
 export interface ChatHistoryMessage {
   role: "user" | "assistant";
   text: string;
@@ -1170,6 +1185,7 @@ export interface LoopsoarAPI {
       dir: string;
       skipped: { dir: string; reason: string }[];
       runtime?: Record<string, ExtensionRuntimeStatus>;
+      contributions?: ExtensionContributionsState | null;
     }>;
     setEnabled(payload: { id: string; enabled: boolean }): Promise<{
       ok: boolean;

@@ -11,7 +11,8 @@ import type {
   SessionMeta,
   TabState,
 } from "./types.js";
-import { MOTION, NO_DRAG_REGION, applyTheme } from "./theme.js";
+import { MOTION, NO_DRAG_REGION } from "./theme.js";
+import { useContributedTheme } from "./useContributedTheme.js";
 import { styles } from "./appStyles.js";
 import { useAgentWindowLayout } from "./useAgentWindowLayout.js";
 import { useSidebarLayout } from "./useSidebarLayout.js";
@@ -116,11 +117,9 @@ export default function App(): React.JSX.Element {
     return new URLSearchParams(location.search).get("e2e") === "settings";
   });
   const [preferences, setPreferences] = useState<Preferences | null>(null);
-  // 主题（soft 柔和无框默认 / classic 旧观感）：写到 html[data-theme]，CSS 变量整体切换
-  const theme: ThemeMode = preferences?.theme ?? "soft";
-  React.useEffect(() => {
-    applyTheme(theme === "classic" ? "classic" : "soft");
-  }, [theme]);
+  // 主题（soft / classic / 扩展贡献的主题）：内置走 data-theme，扩展主题只覆盖白名单 CSS 变量。
+  const theme = preferences?.theme ?? "soft";
+  useContributedTheme(theme);
   // 右侧会话栏：常驻 / 收起；「小窗化」= 打开独立 BrowserWindow（真窗口，可拖动/缩放）
   const sidebarMode: SidebarMode = preferences?.sidebarMode ?? "docked";
   // 独立窗口模式：?mini=1 时本渲染器只画 Agent 会话栏（由主进程 Agent 窗口加载）

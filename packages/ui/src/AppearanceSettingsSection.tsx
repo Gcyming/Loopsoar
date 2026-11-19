@@ -12,6 +12,11 @@ import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } fr
 import { useT } from "./i18n.js";
 import type { LoopsoarAPI, Preferences } from "./types.js";
 
+const THEME_BASE_OPTIONS: [string, string][] = [
+  ["soft", "settings.appearance.theme.soft"],
+  ["classic", "settings.appearance.theme.classic"],
+];
+
 const SLIDER_DEFS: {
   key: keyof Pick<RailParams, "w" | "amp" | "lam0" | "lam1" | "spd" | "tap" | "bumpReach" | "bumpSigma">;
   labelKey: string;
@@ -49,6 +54,25 @@ export default function AppearanceSettingsSection({
   const [rail, setRail] = useState<RailParams>(() =>
     typeof window === "undefined" ? DEFAULT_CHAT_RAIL : loadRailParams(),
   );
+  // 扩展贡献主题：跟随扩展启停即时刷新（未装扩展时为空）。
+  const [extThemes, setExtThemes] = useState<{ id: string; name: string }[]>([]);
+  React.useEffect(() => {
+    let alive = true;
+    const load = (): void => {
+      void api.extensions
+        .list()
+        .then((result) => {
+          if (alive) setExtThemes((result.contributions?.themes ?? []).map((item) => ({ id: item.id, name: item.name })));
+        })
+        .catch(() => {});
+    };
+    load();
+    const off = api.on("extensions:updated", load);
+    return () => {
+      alive = false;
+      off();
+    };
+  }, [api]);
 
   const updateRail = (patch: Partial<RailParams>): void => {
     setRail(saveRailParams(patch));
@@ -108,8 +132,8 @@ export default function AppearanceSettingsSection({
               <Seg
                 v={prefs?.theme ?? "soft"}
                 opts={[
-                  ["soft", tr("settings.appearance.theme.soft")],
-                  ["classic", tr("settings.appearance.theme.classic")],
+                  ...THEME_BASE_OPTIONS.map(([value, key]) => [value, tr(key)] as [string, string]),
+                  ...extThemes.map((item) => [item.id, item.name] as [string, string]),
                 ]}
                 on={(x) => {
                   if (!prefs) return;

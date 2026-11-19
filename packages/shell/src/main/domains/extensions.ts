@@ -26,6 +26,8 @@ export function registerExtensionsDomain(deps: ExtensionsDeps): void {
       dir: deps.extensions.dirPath(),
       skipped: scan.skipped,
       runtime: deps.extensionStatus?.() ?? {},
+      /** 扩展贡献点（loops/themes + 冲突）：启停后由 ExtensionHost.onChange 同步。 */
+      contributions: deps.extensions.contributions?.() ?? null,
     };
   });
 

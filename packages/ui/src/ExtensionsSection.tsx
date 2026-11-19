@@ -6,7 +6,7 @@ import * as React from "react";
 import { BADGE, BRAND } from "./theme.js";
 import { useT } from "./i18n.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
-import type { ExtensionRuntimeStatus, InstalledExtension } from "./types.js";
+import type { ExtensionContributionsState, ExtensionRuntimeStatus, InstalledExtension } from "./types.js";
 
 const S = {
   note: { fontSize: 11.5, color: BRAND.linenFaint, lineHeight: 1.7, marginBottom: 8 },
@@ -81,6 +81,7 @@ export default function ExtensionsSection({ onError }: ExtensionsSectionProps): 
   const tr = useT();
   const [extensions, setExtensions] = React.useState<InstalledExtension[]>([]);
   const [runtime, setRuntime] = React.useState<Record<string, ExtensionRuntimeStatus>>({});
+  const [contributions, setContributions] = React.useState<ExtensionContributionsState | null>(null);
   const [dir, setDir] = React.useState("");
   const [skips, setSkips] = React.useState<{ dir: string; reason: string }[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -92,6 +93,7 @@ export default function ExtensionsSection({ onError }: ExtensionsSectionProps): 
     setDir(result.dir);
     setSkips(result.skipped);
     setRuntime(result.runtime ?? {});
+    setContributions(result.contributions ?? null);
   }, [api]);
 
   React.useEffect(() => {
@@ -200,6 +202,30 @@ export default function ExtensionsSection({ onError }: ExtensionsSectionProps): 
           );
         })
       )}
+      {contributions &&
+      (contributions.loops.length > 0 || contributions.themes.length > 0 || contributions.conflicts.length > 0) ? (
+        <div className="panel-card" style={S.card}>
+          <div style={S.rowBetween}>
+            <span style={S.metaTitle}>{tr("settings.extensions.contributions")}</span>
+            <span style={S.tag}>{tr("settings.extensions.contributionsHint")}</span>
+          </div>
+          {contributions.loops.map((loop) => (
+            <div key={loop.id} style={S.providerRow}>
+              <span style={S.providerKey}>{tr("settings.extensions.loops")}</span>
+              <span style={S.providerVal}>{loop.name} · {loop.extensionName} · {loop.id}</span>
+            </div>
+          ))}
+          {contributions.themes.map((theme) => (
+            <div key={theme.id} style={S.providerRow}>
+              <span style={S.providerKey}>{tr("settings.extensions.themes")}</span>
+              <span style={S.providerVal}>{theme.name} · {theme.extensionName} · {theme.id}</span>
+            </div>
+          ))}
+          {contributions.conflicts.map((conflict) => (
+            <div key={conflict} style={S.errText}>{conflict}</div>
+          ))}
+        </div>
+      ) : null}
       <div style={S.note}>{tr("settings.extensions.isolation")}</div>
     </div>
   );
