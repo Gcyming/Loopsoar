@@ -1008,6 +1008,8 @@ export class MemoryService {
     if (mode === "similarity") {
       return this.store.recallPrompt(text, 6, workspaceId ? { workspaceId } : {});
     }
+    // 每次召回重置邻居缓存：记忆可能在两次同 query 召回之间新增/改链，不能复用上一次的邻居表。
+    this.neighborCache = null;
     // 一次召回内共享快照：usage / 存活会话 / 邻居集合都不按 fact 重复计算。
     const context = {
       query: text,
