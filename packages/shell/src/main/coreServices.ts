@@ -33,6 +33,7 @@ import { SubagentTaskStore } from "./subagentTaskStore.js";
 import { AskBus } from "./askBus.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { ExtensionContributions } from "./extensionContributions.js";
+import { createMemoryReranker } from "./memoryRerank.js";
 
 export interface CoreServiceInput {
   dirs: { dataDir: string; configDir: string };
@@ -206,6 +207,8 @@ export async function createCoreServices(input: CoreServiceInput) {
   // 记忆库（路径可在设置里改）+ 会话持久化
   const memoryFile = initialPrefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
   const memory = new MemoryService({ platform, filePath: memoryFile });
+  // 可选 LLM 重排：只在显式搜索且模型可用时触发；失败/超时自动回退 ranker（fail-open）。
+  memory.setReranker(createMemoryReranker(() => buildLlmFromActive()));
   // 记忆加载不阻塞首次出窗：load() 在重建向量索引时会探测本地 embedding（最坏 embedTimeout=3000ms，
   // 见 memoryService.ts:84 + buildExternalIndex），等待它会把窗口创建一起拖住。
   // 读取路径在「尚未 loaded」时按空库返回空结果（MemoryService 的读方法直接读 store），

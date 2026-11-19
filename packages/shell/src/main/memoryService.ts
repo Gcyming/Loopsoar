@@ -54,6 +54,15 @@ import { resolveVectorBackend, type VectorBackend, type VectorBackendKind } from
 /** 外部 embedding 注入签名（与 llama-server /v1/embeddings 同构；失败必须 throw，由服务降级）。 */
 export type MemoryEmbedder = (texts: string[]) => Promise<number[][]>;
 
+/**
+ * 可选 LLM 重排（方案 §3.4）：只给显式搜索用。
+ * 返回候选 id 的优先顺序；null/空/抛错/超时 → 调用方回退 ranker 的顺序（绝不阻断检索）。
+ */
+export type MemoryReranker = (input: {
+  query: string;
+  candidates: { id: string; content: string; category: string; tags: string[]; score: number }[];
+}) => Promise<string[] | null>;
+
 /** 当前向量空间：hash=纯 TS 词法向量；external=外部模型（BGE-M3 等）真实语义向量。 */
 export type MemoryEmbeddingMode = "hash" | "external";
 
@@ -93,6 +102,8 @@ export interface MemoryServiceOptions {
   rankingMode?: () => MemoryRankingMode;
   /** 存活会话 id（L1/L2/L3 判定）：会话存储就绪后由壳层注入；缺省时按 provenance 判 L1。 */
   liveSessionIds?: () => string[];
+  /** 可选 LLM 重排（显式搜索，候选 > limit 时触发）；缺省 = 不重排。 */
+  rerank?: MemoryReranker;
 }
 
 /** 向量诊断信息（设置·诊断/基准报告/测试用）。 */
@@ -112,6 +123,8 @@ export interface MemoryVectorStats {
 }
 
 const DEFAULT_EMBED_TIMEOUT_MS = 3_000;
+/** 显式搜索给 LLM 重排的候选池上限（方案 §3.4：30–50 条候选里选 top-k）。 */
+const RERANK_POOL = 30;
 
 /** sidecar（usage.json）版本：只放易变字段与使用事件，随时可删可重建。 */
 const SIDECAR_VERSION = 1;
@@ -1098,6 +1111,12 @@ export class MemoryService {
     this.liveSessionIds = provider;
   }
 
+  /** 注入/替换 LLM 重排器（壳层在模型可用时装配；缺省 = 不重排）。 */
+  private reranker: MemoryReranker | null = null;
+  setReranker(reranker: MemoryReranker | null): void {
+    this.reranker = reranker;
+  }
+
   /** 召回门控是否生效（默认开启；显式 recallGate:false 才关闭，便于测试/兼容对照）。 */
   private recallGateEnabled(): boolean {
     return this.opts.recallGate !== false;
@@ -1135,6 +1154,7 @@ export class MemoryService {
     facts: readonly MemoryFact[],
     hits: readonly RetrievalHit[],
     limit: number,
+    opts: { touch?: boolean } = {},
   ): { fact: MemoryFact; score: number }[] {
     const byId = new Map(facts.map((fact) => [fact.id, fact]));
     const now = Date.now();
@@ -1171,7 +1191,8 @@ export class MemoryService {
     });
     const mapped = ranked.map((hit) => ({ fact: byId.get(hit.id) as MemoryFact, score: hit.score }));
     // D3：显式检索命中才算一次使用（自动注入不算，避免富者愈富）。
-    if (mapped.length > 0) {
+    // 重排池阶段传 touch:false，最终结果由调用方统一 touch，避免给未展示的候选虚增使用次数。
+    if (opts.touch !== false && mapped.length > 0) {
       this.store.touch(mapped.map((hit) => hit.fact.id));
       this.scheduleSave();
     }
@@ -1184,24 +1205,85 @@ export class MemoryService {
    */
   async searchAsync(query: string, limit = 6, workspaceId?: string): Promise<{ fact: MemoryFact; score: number }[]> {
     const safeLimit = this.clampLimit(limit);
-    if (!this.externalVectors || !this.embedFn) return this.search(query, safeLimit, workspaceId);
     const facts = this.store.list(workspaceId ? { workspaceId } : {});
     if (facts.length === 0) return [];
-    try {
-      const queryVectors = await this.embedTexts([query]);
-      if (!queryVectors || queryVectors.length !== 1) return this.search(query, safeLimit, workspaceId);
-      const hits = retrieveMemory({
+    let hits: RetrievalHit[] = [];
+    let usedExternal = false;
+    if (this.externalVectors && this.embedFn) {
+      try {
+        const queryVectors = await this.embedTexts([query]);
+        if (queryVectors && queryVectors.length === 1) {
+          hits = retrieveMemory({
+            query,
+            docs: facts,
+            vectors: (id) => this.externalVectors?.get(id) ?? null,
+            queryVector: queryVectors[0],
+            limit: DEFAULT_CANDIDATE_LIMIT,
+            minScore: -1,
+            tokenCache: this.tokenCache,
+          });
+          usedExternal = true;
+        }
+      } catch {
+        // 外部向量失败 → 下面走 hash 候选（不抛错）
+      }
+    }
+    if (!usedExternal) {
+      hits = retrieveMemory({
         query,
         docs: facts,
-        vectors: (id) => this.externalVectors?.get(id) ?? null,
-        queryVector: queryVectors[0],
+        vectors: (id) => this.hashIndex.get(id),
+        vectorDim: this.hashDim,
         limit: DEFAULT_CANDIDATE_LIMIT,
         minScore: -1,
         tokenCache: this.tokenCache,
       });
-      return this.rankExplicit(query, facts, hits, safeLimit);
+    }
+    // 显式搜索先取一个较大的池（供 LLM 重排），最终按 safeLimit 截断。
+    const poolLimit = Math.max(safeLimit, Math.min(RERANK_POOL, DEFAULT_CANDIDATE_LIMIT));
+    const pool = this.rankExplicit(query, facts, hits, poolLimit, { touch: false });
+    const final = await this.applyRerank(query, pool, safeLimit);
+    if (final.length > 0) {
+      this.store.touch(final.map((hit) => hit.fact.id));
+      this.scheduleSave();
+    }
+    return final;
+  }
+
+  /** LLM 重排（方案 §3.4）：候选数 > limit 且注入了重排器才调用；失败/空/超时回退原顺序。 */
+  private async applyRerank(
+    query: string,
+    pool: { fact: MemoryFact; score: number }[],
+    limit: number,
+  ): Promise<{ fact: MemoryFact; score: number }[]> {
+    const base = pool.slice(0, limit);
+    const reranker = this.reranker ?? this.opts.rerank;
+    if (!reranker || pool.length <= limit) return base;
+    try {
+      const ids = await reranker({
+        query,
+        candidates: pool.map((hit) => ({
+          id: hit.fact.id,
+          content: hit.fact.content.slice(0, 400),
+          category: hit.fact.category,
+          tags: [...hit.fact.tags],
+          score: hit.score,
+        })),
+      });
+      if (!ids || ids.length === 0) return base;
+      const byId = new Map(pool.map((hit) => [hit.fact.id, hit]));
+      const ordered: { fact: MemoryFact; score: number }[] = [];
+      for (const id of ids) {
+        const hit = byId.get(id);
+        if (hit) {
+          ordered.push(hit);
+          byId.delete(id);
+        }
+      }
+      for (const hit of byId.values()) ordered.push(hit);
+      return ordered.slice(0, limit);
     } catch {
-      return this.search(query, safeLimit, workspaceId);
+      return base;
     }
   }
 
