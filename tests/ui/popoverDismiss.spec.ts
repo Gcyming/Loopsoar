@@ -91,7 +91,11 @@ describe("dismissAllPopovers（全局收起入口）", () => {
     expect(app).toContain("useAnyPopoverOpen()");
     expect(app).toContain("popoverOverPage");
     expect(app).toContain("browserPreview");
-    expect(app).toContain("screenshot({})");
+    expect(app).toContain("useBrowserPopoverOverlay");
+    const hook = read("packages/ui/src/useBrowserPopoverOverlay.ts");
+    expect(hook).toContain("screenshot({})");
+    expect(hook).toContain("setPopoverOverPage(true)");
+    expect(hook).toContain("getBoundingClientRect()");
     expect(app).toMatch(/popoverOverPage[\s\S]{0,200}setOverlay\(\{ open: overlay \}\)/);
     expect(app).not.toMatch(/anyPopoverOpen;\s*\n\s*void api\.browser\.setOverlay/);
     const popover = read("packages/ui/src/popover.ts");
