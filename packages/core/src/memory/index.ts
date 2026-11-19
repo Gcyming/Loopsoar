@@ -11,6 +11,7 @@ export * from "./store.js";
 export * from "./extract.js";
 export * from "./vector.js";
 export * from "./retrieval.js";
+export * from "./ranker.js";
 export * from "./graph.js";
 export * from "./supersede.js";
 export * from "./markdown.js";

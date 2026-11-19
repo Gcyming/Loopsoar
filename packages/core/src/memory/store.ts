@@ -24,6 +24,12 @@ import {
   DEFAULT_AGENT_ID,
 } from "./fiveGate.js";
 import { detectSupersede } from "./supersede.js";
+import {
+  rankMemory,
+  type MemoryBand,
+  type MemoryRankingMode,
+  type RankCandidate,
+} from "./ranker.js";
 
 export interface MemoryCandidate {
   content: string;
@@ -63,6 +69,17 @@ export interface UsageEvent {
   /** 权重：mention 1.0 / tool 0.8 / search 0.6 / view 0.3。 */
   w: number;
   kind: UsageKind;
+}
+
+/** 召回排序信号：P1 接图后由 MemoryService 提供激活值 / 图邻居 / 层级；缺省 = 旧行为。 */
+export interface RecallRankingSignal {
+  mode?: MemoryRankingMode;
+  signal?: (fact: MemoryFact) => {
+    activation?: number;
+    graph?: number;
+    band?: MemoryBand;
+    exact?: boolean;
+  };
 }
 
 export const USAGE_EVENT_CAP = 50;
@@ -527,29 +544,46 @@ export class MemoryStore {
 
   /**
    * 召回：先用「召回门控」决定要不要检索（廉价字符串信号，见 recallGate），
-   * 命中后按 effectiveValue（时间衰减×重要度×置信度×重复次数）排序取前 N 条。
+   * 命中后交给 rankMemory 排序取前 N 条。
+   * 缺省 mode=similarity：公式与旧实现逐项一致（effectiveValue × (0.2 + jaccard) + tag 加分，阈值 0.02），
+   * 保证零回归；hybrid / distance 由调用方显式传入（见 docs/规划/记忆召回-原点图与混合检索方案.md）。
    * 为什么不由调用方传入全量：记忆会增长，检索必须自带预算。
    */
-  recall(query: string, limit = 6, opts: { workspaceId?: string } = {}): { fact: MemoryFact; score: number }[] {
+  recall(
+    query: string,
+    limit = 6,
+    opts: { workspaceId?: string; ranking?: RecallRankingSignal } = {},
+  ): { fact: MemoryFact; score: number }[] {
     const nowMs = this.now();
     // D2：失效条目默认不参与召回（可被显式查回，但不再自动注入）。
     const pool = (opts.workspaceId
       ? this.facts.filter((f) => (f.workspaceId ?? DEFAULT_WORKSPACE_ID) === opts.workspaceId)
       : this.facts
     ).filter((f) => f.status === "active" && !f.invalidatedAt);
-    const scored: { fact: MemoryFact; score: number }[] = [];
+    const byId = new Map<string, MemoryFact>();
+    const candidates: RankCandidate[] = [];
     for (const fact of pool) {
       const similarity = jaccardCJK(query, fact.content);
       const tagHit = fact.tags.some((tag) => query.includes(tag));
       // 拒答门控（D4）：只共享单字（「的」「是」）不算相关，必须共享实词 bigram 或 tag 命中。
       if (!tagHit && sharedBigrams(query, fact.content) === 0) continue;
-      const score = effectiveValue(fact, nowMs) * (0.2 + similarity) + (tagHit ? 0.15 : 0);
-      scored.push({ fact, score });
+      const extra = opts.ranking?.signal?.(fact);
+      byId.set(fact.id, fact);
+      candidates.push({
+        id: fact.id,
+        similarity,
+        value: effectiveValue(fact, nowMs),
+        tagHit,
+        exact: extra?.exact ?? tagHit,
+        activation: extra?.activation,
+        graph: extra?.graph,
+        band: extra?.band,
+      });
     }
-    return scored
-      .filter((item) => item.score > 0.02)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+    return rankMemory(candidates, { mode: opts.ranking?.mode, limit }).map((hit) => ({
+      fact: byId.get(hit.id) as MemoryFact,
+      score: hit.score,
+    }));
   }
 
   /** 召回结果格式化为提示词片段（空 = 不注入）。 */
