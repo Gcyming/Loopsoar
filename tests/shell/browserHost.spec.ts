@@ -4,8 +4,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BrowserHost,
-  SIDEBAR_ANIMATION_MS,
-  SIDEBAR_ANIMATION_TICK_MS,
   USER_TABS_SESSION,
   type BrowserHostDeps,
   type HostView,
@@ -72,37 +70,6 @@ function makeHost(size = { width: 1360, height: 860 }, extraDeps: Partial<Browse
     ...extraDeps,
   });
   return { host, created };
-}
-
-/** 侧栏宽度动画测试：手动调度器 + 假 View，便于逐帧断言。 */
-function makeAnimatedHost() {
-  const tasks = new Map<number, () => void>();
-  let seq = 0;
-  const scheduler = {
-    setIntervalFn: (callback: () => void): unknown => {
-      seq += 1;
-      tasks.set(seq, callback);
-      return seq;
-    },
-    clearIntervalFn: (handle: unknown): void => {
-      tasks.delete(handle as number);
-    },
-    tick(frames = 1): void {
-      for (let i = 0; i < frames; i += 1) {
-        for (const [id, callback] of [...tasks]) {
-          if (tasks.has(id)) callback();
-        }
-      }
-    },
-    pending(): number {
-      return tasks.size;
-    },
-  };
-  const harness = makeHost(undefined, {
-    setIntervalFn: scheduler.setIntervalFn,
-    clearIntervalFn: scheduler.clearIntervalFn,
-  });
-  return { ...harness, scheduler };
 }
 
 describe("BrowserHost（多标签）", () => {
@@ -369,82 +336,40 @@ describe("BrowserHost（底部让位：全宽终端面板）", () => {
   });
 });
 
-describe("BrowserHost（侧栏宽度动画：与 DOM 侧栏同拍）", () => {
-  it("animate=false（拖拽）→ 立即生效、不创建定时器", async () => {
-    const { host, created, scheduler } = makeAnimatedHost();
+describe("BrowserHost（侧栏宽度：主进程不做逐帧动画）", () => {
+  it("拖拽与展开都立即生效，不创建定时器", async () => {
+    const { host, created } = makeHost();
     await host.navigate("https://example.com");
     expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
     host.setSidebarWidth(542);
     expect(host.getSidebarWidth()).toBe(542);
     expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 804, height: 724 });
-    expect(scheduler.pending()).toBe(0);
-  });
-
-  it("animate=true → 320ms 逐帧插值，每帧都重算原生视图 bounds", async () => {
-    const { host, created, scheduler } = makeAnimatedHost();
-    await host.navigate("https://example.com");
-    host.setSidebarWidth(48, true);
-    // 首帧前不改（下一 tick 才动），避免动画启动瞬间闪跳
-    expect(created[0].bounds?.width).toBe(986);
-    expect(scheduler.pending()).toBe(1);
-
-    scheduler.tick(1);
-    const firstFrameWidth = created[0].bounds?.width as number;
-    // 侧栏变窄 → 网页视图变宽（从 986 向 1300 过渡，第一帧只走了一小段）
-    expect(firstFrameWidth > 986).toBe(true);
-    expect(firstFrameWidth < 1300).toBe(true);
-
-    scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
-    // 收起态：无分隔条让位（1360-48-16=1300），定时器清理
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1300, height: 724 });
-    expect(host.getSidebarWidth()).toBe(48);
-    expect(scheduler.pending()).toBe(0);
-  });
-
-  it("动画中途再次调用 → 取消旧动画，从当前插值位置继续（不跳变）", async () => {
-    const { host, created, scheduler } = makeAnimatedHost();
-    await host.navigate("https://example.com");
-    host.setSidebarWidth(48, true);
-    scheduler.tick(4);
-    const midWidth = host.getSidebarWidth();
-    expect(midWidth < 360).toBe(true);
-    expect(midWidth > 48).toBe(true);
-
-    // 用户中途点「展开」：从当前宽度继续动画到 360，而不是先跳回 48 或 360
+    // animate=true 是旧 IPC 的兼容参数：不再启动主进程动画，仍然立即落位。
     host.setSidebarWidth(360, true);
-    expect(host.getSidebarWidth()).toBe(midWidth);
-    expect(scheduler.pending()).toBe(1);
-
-    scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
     expect(host.getSidebarWidth()).toBe(360);
     expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 986, height: 724 });
-    expect(scheduler.pending()).toBe(0);
   });
 
-  it("动画进行中拖拽（animate=false）→ 立即定格并取消动画", async () => {
-    const { host, created, scheduler } = makeAnimatedHost();
+  it("收起态 48 不沿用拖拽最小值 240（否则左侧铺不满）", async () => {
+    const { host, created } = makeHost();
     await host.navigate("https://example.com");
     host.setSidebarWidth(48, true);
-    scheduler.tick(3);
-    host.setSidebarWidth(500);
-    expect(host.getSidebarWidth()).toBe(500);
-    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 846, height: 724 });
-    expect(scheduler.pending()).toBe(0);
+    // 收起态：无分隔条让位（1360-48-16=1300）
+    expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1300, height: 724 });
+    expect(host.getSidebarWidth()).toBe(48);
   });
 
-  it("无标签时也可预设动画目标：后续导航直接落在最终几何", async () => {
-    const { host, created, scheduler } = makeAnimatedHost();
+  it("无标签时也可预设宽度：后续导航直接落在最终几何", async () => {
+    const { host, created } = makeHost();
     host.setSidebarWidth(48, true);
-    scheduler.tick(Math.ceil(SIDEBAR_ANIMATION_MS / SIDEBAR_ANIMATION_TICK_MS));
     await host.navigate("https://example.com");
     expect(created[0].bounds).toEqual({ x: 8, y: 96, width: 1300, height: 724 });
   });
 
-  it("目标与当前相同 → 不启动动画（避免无意义的逐帧重排）", async () => {
-    const { host, scheduler } = makeAnimatedHost();
+  it("目标与当前相同也不会产生额外重排", async () => {
+    const { host } = makeHost();
     await host.navigate("https://example.com");
     host.setSidebarWidth(360, true);
-    expect(scheduler.pending()).toBe(0);
     expect(host.getSidebarWidth()).toBe(360);
   });
 });

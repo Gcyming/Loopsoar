@@ -1763,7 +1763,8 @@ export default function App(): React.JSX.Element {
         ) : null}
         {/* 侧栏外框：唯一拥有 width 过渡的节点（收起/展开/窗口化都在这里动）。
             右对齐 + overflow:hidden：宽度变窄时裁掉内容左侧、右缘钉住窗口右边；
-            原生网页视图由 browser:setSidebarWidth({animate:true}) 用同曲线同步让位。 */}
+            原生网页视图由 useSidebarLayout 在 rAF 中逐帧调用 browser:setSidebarWidth({animate:false})
+            同步让位（主进程不再跑第二套动画，避免两套计时器互相追帧）。 */}
         <div
           style={{
             width: miniWindow ? "100%" : effectiveSidebarWidth,

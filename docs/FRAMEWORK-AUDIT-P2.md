@@ -268,7 +268,7 @@
 | **P1-1** | Preferences 三份定义、无漂移守卫；新增字段会被 IPC 校验静默 strip | `schemas.ts:345,712` / `preferences.ts:11,43,76` / `types.d.ts:48`；`trustedIpc.ts:84-92` | 见 §4.1：契约出类型，core/UI 复用；补 `DEFAULT_PREFERENCES` ⊆ schema 守卫 |
 | **P1-2** | `sidebarMode:"float"` 是死值（UI 强制降级），且与"独立小窗"语义冲突 | `App.tsx:149-150`、`:600-616`、`schemas.ts:369` | 先定 float 语义（窗口 or 卡片），再决定策略枚举（`ask/docked/window`） |
 | **P1-3** | 浏览器动作两套实现，适配器 4 个方法不可达且未测 | `webContentsView.ts:230-260`、`browserAdapter/types.ts:29-37`、`browserTools.ts:130-212`、`webContentsAdapter.spec.ts` 只测 `close` | 收敛为一套（宿主方法），删死表面 |
-| **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout` |
+| **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout`。**已完成**：主进程不再创建 setInterval，`setSidebarWidth` 兼容旧参数但立即落位；UI 的 rAF 逐帧驱动保留。 |
 | **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | 快照格式升级前先补类型（与 P0-2 同批做） |
 | **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | 改为"生成到临时目录再比对"，或在 `finally` 里恢复 |
 | **P1-7** | 4 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:2494`、`index.ts:2130`、`Settings.tsx:2057`、`StartPage.tsx:1578` | 至少先把 `Settings.tsx` 按分区拆文件、`index.ts` 抽 bootstrap |
