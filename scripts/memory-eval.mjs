@@ -8,7 +8,15 @@
  *   pnpm build            # 脚本消费 core/dist
  *   node scripts/memory-eval.mjs
  */
-import { MemoryStore, createFact } from "../packages/core/dist/memory/index.js";
+import {
+  MemoryStore,
+  createFact,
+  effectiveValue,
+  detectExactHit,
+  sharedBigrams,
+  jaccardCJK,
+  GHOST_IDLE_DAYS,
+} from "../packages/core/dist/memory/index.js";
 
 const NOW = Date.now();
 const DAY = 86_400_000;
@@ -146,35 +154,75 @@ for (let i = 0; i < 12; i += 1) {
   q("隔离", "部署目标是什么", (hits, ws) => hits.length > 0 && hits.every((h) => (h.fact.workspaceId ?? "default") === ws));
 }
 
-const groups = {};
-let pass = 0;
-const latencies = [];
-let promptChars = 0;
-for (const question of QUESTIONS) {
-  const ws = question.group === "隔离" ? WS_B : WS_A;
-  const store =
-    question.group === "时序" ? temporalStore : question.group === "更新" ? updateStore : question.group === "隔离" ? isolationStore : makeStore(CORPUS);
-  const started = performance.now();
-  const hits = store.recall(question.query, 6, { workspaceId: ws });
-  latencies.push(performance.now() - started);
-  promptChars += store.recallPrompt(question.query, 6, { workspaceId: ws }).length;
-  const ok = question.group === "隔离" ? question.check(hits, ws) : question.check(hits);
-  const bucket = (groups[question.group] ??= { total: 0, pass: 0 });
-  bucket.total += 1;
-  if (ok) {
-    bucket.pass += 1;
-    pass += 1;
-  } else if (process.env.MEMORY_EVAL_VERBOSE === "1") {
-    console.log("MISS", question.group, question.query, hits.map((h) => h.fact.id));
+/** 评测用排序信号：冷启动激活值 + 1 跳邻居 + 层级（与 MemoryService 的接线同语义）。 */
+function signalFor(query, facts) {
+  const seeds = new Set();
+  for (const fact of facts) {
+    const tagHit = fact.tags.some((tag) => query.includes(tag));
+    if (!tagHit && sharedBigrams(query, fact.content) === 0) continue;
+    seeds.add(fact.id);
   }
+  const neighbors = new Set();
+  for (const fact of facts) {
+    if (!seeds.has(fact.id)) continue;
+    for (const id of fact.links) neighbors.add(id);
+    for (const id of fact.backlinks) neighbors.add(id);
+  }
+  return (fact) => {
+    const idleDays = Math.max(0, (NOW - fact.lastAccessed) / DAY);
+    const band = fact.provenance?.sessionId ? "L1" : idleDays > GHOST_IDLE_DAYS ? "L3" : "L2";
+    return {
+      activation: Math.min(1, effectiveValue(fact, NOW)),
+      graph: neighbors.has(fact.id) ? 1 : 0,
+      band,
+      exact: detectExactHit(query, fact.content, fact.tags),
+    };
+  };
 }
 
-latencies.sort((a, b) => a - b);
-const p95 = latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))];
-console.log("记忆质量评测（D4）");
-for (const [name, bucket] of Object.entries(groups)) {
-  console.log(`  ${name}: ${bucket.pass}/${bucket.total}`);
+function evaluate(mode) {
+  const groups = {};
+  let pass = 0;
+  const latencies = [];
+  let promptChars = 0;
+  for (const question of QUESTIONS) {
+    const ws = question.group === "隔离" ? WS_B : WS_A;
+    const store =
+      question.group === "时序" ? temporalStore : question.group === "更新" ? updateStore : question.group === "隔离" ? isolationStore : makeStore(CORPUS);
+    const facts = store.list({ workspaceId: ws });
+    const ranking =
+      mode === "similarity"
+        ? undefined
+        : { mode, signal: signalFor(question.query, facts) };
+    const started = performance.now();
+    const hits = store.recall(question.query, 6, { workspaceId: ws, ...(ranking ? { ranking } : {}) });
+    latencies.push(performance.now() - started);
+    promptChars += store.recallPrompt(question.query, 6, { workspaceId: ws, ...(ranking ? { ranking } : {}) }).length;
+    const ok = question.group === "隔离" ? question.check(hits, ws) : question.check(hits);
+    const bucket = (groups[question.group] ??= { total: 0, pass: 0 });
+    bucket.total += 1;
+    if (ok) {
+      bucket.pass += 1;
+      pass += 1;
+    } else if (process.env.MEMORY_EVAL_VERBOSE === "1") {
+      console.log("MISS", mode, question.group, question.query, hits.map((h) => h.fact.id));
+    }
+  }
+  latencies.sort((a, b) => a - b);
+  const p95 = latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))];
+  return { mode, groups, pass, total: QUESTIONS.length, p95, promptChars };
 }
-console.log(`  总计: ${pass}/${QUESTIONS.length}（${((pass / QUESTIONS.length) * 100).toFixed(1)}%）`);
-console.log(`  P95 延迟: ${p95.toFixed(2)}ms · 平均注入长度: ${Math.round(promptChars / QUESTIONS.length)} 字符`);
-if (pass < QUESTIONS.length) process.exitCode = 1;
+
+const modes = process.argv.includes("--modes") ? ["similarity", "hybrid", "distance"] : ["similarity"];
+const results = modes.map((mode) => evaluate(mode));
+console.log("记忆质量评测（D4）");
+for (const result of results) {
+  console.log(` [${result.mode}]`);
+  for (const [name, bucket] of Object.entries(result.groups)) {
+    console.log(`   ${name}: ${bucket.pass}/${bucket.total}`);
+  }
+  console.log(
+    `   总计: ${result.pass}/${result.total}（${((result.pass / result.total) * 100).toFixed(1)}%） · P95 ${result.p95.toFixed(2)}ms · 平均注入 ${Math.round(result.promptChars / result.total)} 字符`,
+  );
+}
+if (results.some((result) => result.pass < result.total)) process.exitCode = 1;

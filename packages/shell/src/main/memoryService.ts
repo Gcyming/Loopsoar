@@ -28,13 +28,19 @@ import {
   renderMemoryMarkdown,
   renderVaultIndex,
   retrieveMemory,
+  activationOf,
+  detectExactHit,
+  sharedBigrams,
+  GHOST_IDLE_DAYS,
   serializeShard,
   shardFileName,
   shardOf,
   shouldRecall,
   type IndexEntry,
   type MemoryCandidate,
+  type MemoryBand,
   type MemoryFact,
+  type MemoryRankingMode,
   type UsageEvent,
   type VectorLookup,
 } from "loopsoar-core/memory";
@@ -76,6 +82,13 @@ export interface MemoryServiceOptions {
   vectorBackend?: VectorBackendKind;
   /** 后端工厂覆盖（测试/高级用法）：返回 null 表示不可用 → 自动降级 flat。 */
   vectorBackendFactory?: (dimension: number) => VectorBackend | null;
+  /**
+   * 自动召回排序模式（记忆召回方案 P1）：默认 hybrid（相似度做资格 + 激活/图先验），
+   * similarity = 旧行为零回归，distance = 模糊指代场景显式开启。
+   */
+  rankingMode?: () => MemoryRankingMode;
+  /** 存活会话 id（L1/L2/L3 判定）：会话存储就绪后由壳层注入；缺省时按 provenance 判 L1。 */
+  liveSessionIds?: () => string[];
 }
 
 /** 向量诊断信息（设置·诊断/基准报告/测试用）。 */
@@ -990,7 +1003,72 @@ export class MemoryService {
    */
   recallPrompt(text: string, workspaceId?: string): string {
     if (this.recallGateEnabled() && !shouldRecall(text).hit) return "";
-    return this.store.recallPrompt(text, 6, workspaceId ? { workspaceId } : {});
+    const mode = this.opts.rankingMode?.() ?? "hybrid";
+    // similarity = 旧行为（零回归，也用于做 A/B 对照）；不需要图信号。
+    if (mode === "similarity") {
+      return this.store.recallPrompt(text, 6, workspaceId ? { workspaceId } : {});
+    }
+    // 一次召回内共享快照：usage / 存活会话 / 邻居集合都不按 fact 重复计算。
+    const context = {
+      query: text,
+      usage: this.store.usageSnapshot(),
+      live: new Set(this.opts.liveSessionIds?.() ?? this.liveSessionIds?.() ?? []),
+      neighbors: this.neighborIds(text),
+    };
+    return this.store.recallPrompt(text, 6, {
+      ...(workspaceId ? { workspaceId } : {}),
+      ranking: { mode, signal: (fact) => this.rankingSignalOf(fact, context) },
+    });
+  }
+
+  /**
+   * 召回排序信号（方案 P1）：ACT-R 激活值 + 1 跳图邻居 + 层级。
+   * 邻居只来自「词法命中」的事实（不递归扩散），避免把整张图塞进候选；
+   * L3（90 天未用且无存活会话）默认被 ranker 排除，exact 命中才放行。
+   */
+  private rankingSignalOf(
+    fact: MemoryFact,
+    context: { query: string; usage: Record<string, UsageEvent[]>; live: Set<string>; neighbors: Set<string> },
+  ): { activation: number; graph: number; band: MemoryBand; exact: boolean } {
+    const now = Date.now();
+    const activation = activationOf(`fact:${fact.id}`, fact.lastAccessed, fact.importance, now, context.usage);
+    const sessionId = fact.provenance?.sessionId;
+    let band: MemoryBand;
+    if (sessionId && context.live.has(sessionId)) band = "L1";
+    else {
+      const idleDays = Math.max(0, (now - fact.lastAccessed) / 86_400_000);
+      band = idleDays > GHOST_IDLE_DAYS ? "L3" : "L2";
+    }
+    const graph = context.neighbors.has(fact.id) ? 1 : 0;
+    return { activation, graph, band, exact: detectExactHit(context.query, fact.content, fact.tags) };
+  }
+
+  /** 词法命中的事实 → 1 跳邻居集合（links + backlinks），缓存一次召回内多次调用。 */
+  private neighborCache: { query: string; ids: Set<string> } | null = null;
+  private neighborIds(query: string): Set<string> {
+    if (this.neighborCache && this.neighborCache.query === query) return this.neighborCache.ids;
+    const facts = this.store.list({});
+    const seeds = new Set<string>();
+    for (const fact of facts) {
+      const tagHit = fact.tags.some((tag) => query.includes(tag));
+      if (!tagHit && sharedBigrams(query, fact.content) === 0) continue;
+      seeds.add(fact.id);
+    }
+    const ids = new Set<string>();
+    for (const fact of facts) {
+      if (!seeds.has(fact.id)) continue;
+      for (const id of fact.links) ids.add(id);
+      for (const id of fact.backlinks) ids.add(id);
+    }
+    ids.delete("");
+    this.neighborCache = { query, ids };
+    return ids;
+  }
+
+  /** 壳层在会话存储就绪后注入存活会话（L1 判定）；未注入时按 provenance 判 L1。 */
+  private liveSessionIds: (() => string[]) | null = null;
+  setLiveSessionProvider(provider: () => string[]): void {
+    this.liveSessionIds = provider;
   }
 
   /** 召回门控是否生效（默认开启；显式 recallGate:false 才关闭，便于测试/兼容对照）。 */

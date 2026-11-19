@@ -587,7 +587,11 @@ export class MemoryStore {
   }
 
   /** 召回结果格式化为提示词片段（空 = 不注入）。 */
-  recallPrompt(query: string, limit = 6, opts: { workspaceId?: string } = {}): string {
+  recallPrompt(
+    query: string,
+    limit = 6,
+    opts: { workspaceId?: string; ranking?: RecallRankingSignal } = {},
+  ): string {
     const hits = this.recall(query, limit, opts);
     if (hits.length === 0) return "";
     // 读取侧格式（D1 轻量版）：每条带分类 / 时间 / 来源，模型与用户都能判断「这条从哪来」。

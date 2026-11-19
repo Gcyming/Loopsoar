@@ -232,6 +232,8 @@ export async function createCoreServices(input: CoreServiceInput) {
     dataDir: dirs.dataDir,
   });
   const sessions = new SessionStore(path.join(dirs.dataDir, "sessions"));
+  // 记忆召回 L1 判定：会话存储就绪后注入存活会话（未注入时按 provenance 判 L1）。
+  memory.setLiveSessionProvider(() => sessions.list().map((session) => session.id));
   // 工作区：挂载项目文件夹。旧偏好里的 workspaceRoot 作为默认工作区，兼容升级用户。
   const workspaces = new WorkspaceStore(
     path.join(dirs.dataDir, "workspaces.json"),
