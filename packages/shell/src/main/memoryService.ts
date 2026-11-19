@@ -28,6 +28,9 @@ import {
   renderMemoryMarkdown,
   renderVaultIndex,
   retrieveMemory,
+  DEFAULT_CANDIDATE_LIMIT,
+  effectiveValue,
+  rankMemory,
   activationOf,
   detectExactHit,
   sharedBigrams,
@@ -41,6 +44,7 @@ import {
   type MemoryBand,
   type MemoryFact,
   type MemoryRankingMode,
+  type RetrievalHit,
   type UsageEvent,
   type VectorLookup,
 } from "loopsoar-core/memory";
@@ -1088,15 +1092,63 @@ export class MemoryService {
     const facts = this.store.list(workspaceId ? { workspaceId } : {});
     if (facts.length === 0) return [];
     const lookup: VectorLookup = (id) => this.hashIndex.get(id);
+    // 候选仍由四阶段检索（BM25 → 向量）产生；排序统一交给 rankMemory（方案 P1：显式搜索共用 ranker）。
     const hits = retrieveMemory({
       query,
       docs: facts,
       vectors: lookup,
       vectorDim: this.hashDim,
-      limit: safeLimit,
+      limit: DEFAULT_CANDIDATE_LIMIT,
+      minScore: -1, // 候选阶段不做阈值，阈值/排序由 ranker 统一处理
       tokenCache: this.tokenCache,
     });
-    const mapped = this.mapHits(hits, facts);
+    return this.rankExplicit(query, facts, hits, safeLimit);
+  }
+
+  /**
+   * 显式搜索排序（方案 P1）：候选沿用 BM25+向量，排序走同一个 rankMemory。
+   * 与自动召回的区别：关闭资格门槛（用户主动搜索允许弱相关）、放行 L3（rehydrate 后参与）、top-k 更大。
+   */
+  private rankExplicit(
+    query: string,
+    facts: readonly MemoryFact[],
+    hits: readonly RetrievalHit[],
+    limit: number,
+  ): { fact: MemoryFact; score: number }[] {
+    const byId = new Map(facts.map((fact) => [fact.id, fact]));
+    const now = Date.now();
+    this.neighborCache = null;
+    const context = {
+      query,
+      usage: this.store.usageSnapshot(),
+      live: new Set(this.opts.liveSessionIds?.() ?? this.liveSessionIds?.() ?? []),
+      neighbors: this.neighborIds(query),
+    };
+    const candidates = [];
+    for (const hit of hits) {
+      const fact = byId.get(hit.id);
+      if (!fact) continue;
+      const signal = this.rankingSignalOf(fact, context);
+      candidates.push({
+        id: fact.id,
+        // 关键词 + 向量合成相似度（保留语义重排信号，钳到 0..1）
+        similarity: Math.max(0, Math.min(1, hit.keywordScore + 0.5 * Math.max(0, hit.vectorScore))),
+        value: effectiveValue(fact, now),
+        tagHit: fact.tags.some((tag) => query.includes(tag)),
+        exact: signal.exact,
+        activation: signal.activation,
+        graph: signal.graph,
+        band: signal.band,
+      });
+    }
+    const ranked = rankMemory(candidates, {
+      mode: this.opts.rankingMode?.() ?? "hybrid",
+      limit,
+      minScore: 0.02,
+      requireQualification: false,
+      includeL3: true,
+    });
+    const mapped = ranked.map((hit) => ({ fact: byId.get(hit.id) as MemoryFact, score: hit.score }));
     // D3：显式检索命中才算一次使用（自动注入不算，避免富者愈富）。
     if (mapped.length > 0) {
       this.store.touch(mapped.map((hit) => hit.fact.id));
@@ -1122,16 +1174,11 @@ export class MemoryService {
         docs: facts,
         vectors: (id) => this.externalVectors?.get(id) ?? null,
         queryVector: queryVectors[0],
-        limit: safeLimit,
+        limit: DEFAULT_CANDIDATE_LIMIT,
+        minScore: -1,
         tokenCache: this.tokenCache,
       });
-      const mapped = this.mapHits(hits, facts);
-      // 显式检索命中才算一次使用；自动注入不走这里，避免富者愈富。
-      if (mapped.length > 0) {
-        this.store.touch(mapped.map((hit) => hit.fact.id));
-        this.scheduleSave();
-      }
-      return mapped;
+      return this.rankExplicit(query, facts, hits, safeLimit);
     } catch {
       return this.search(query, safeLimit, workspaceId);
     }

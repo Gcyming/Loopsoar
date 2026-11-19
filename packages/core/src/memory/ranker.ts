@@ -59,6 +59,12 @@ export interface RankOptions {
   l2Penalty?: number;
   /** 是否放行 L3（方案 §7：默认排除，显式提及时才 rehydrate）。 */
   includeL3?: boolean;
+  /**
+   * 是否要求「相似度门槛或 exact 命中」资格。
+   * 自动召回必须 true（防只靠激活值把无关记忆排上来）；显式搜索可传 false
+   * （用户主动搜索，允许弱相关结果，保持旧 memory_search 语义）。
+   */
+  requireQualification?: boolean;
 }
 
 /** 方案 §3.3 的权重。 */
@@ -90,6 +96,7 @@ function scoreOf(
   l2Penalty: number,
   minSimilarity: number,
   includeL3: boolean,
+  requireQualification: boolean,
 ): RankedHit | null {
   const similarity = clamp01(candidate.similarity);
   const band = candidate.band ?? "L1";
@@ -105,8 +112,8 @@ function scoreOf(
   }
 
   // hybrid / distance：相似度（或 exact）是资格，激活值只是先验。
-  const qualified = exact || similarity >= minSimilarity;
-  if (!qualified) return null;
+  // 显式搜索可关闭资格门槛（requireQualification=false），但仍保留 L3 规则。
+  if (requireQualification && !exact && similarity < minSimilarity) return null;
   if (band === "L3" && !exact && !includeL3) return null;
 
   const activation = clamp01(candidate.activation ?? coldStartActivation(candidate.value));
@@ -144,9 +151,10 @@ export function rankMemory(candidates: readonly RankCandidate[], opts: RankOptio
   const l2Penalty = opts.l2Penalty ?? DEFAULT_L2_PENALTY;
   const minSimilarity = Math.max(0, opts.minSimilarity ?? DEFAULT_MIN_SIMILARITY);
   const includeL3 = Boolean(opts.includeL3);
+  const requireQualification = opts.requireQualification !== false;
   const scored: RankedHit[] = [];
   for (const candidate of candidates) {
-    const hit = scoreOf(candidate, mode, l2Penalty, minSimilarity, includeL3);
+    const hit = scoreOf(candidate, mode, l2Penalty, minSimilarity, includeL3, requireQualification);
     if (hit && hit.score > minScore) scored.push(hit);
   }
   scored.sort((a, b) => (b.score - a.score) || a.id.localeCompare(b.id));
