@@ -52,6 +52,21 @@ describe("② 关键词候选（BM25 简化）", () => {
     expect(candidates[0].jaccard).toBeGreaterThan(0);
   });
 
+  it("tokenCache 复用未变文档的分词；内容变化时按 source 失效重算", () => {
+    const cache = new Map<string, { source: string; tokens: readonly string[] }>();
+    keywordCandidates(docs, "量子引力波", 10, cache);
+    const cachedTokens = cache.get("rare")?.tokens;
+    expect(cachedTokens).toBeDefined();
+
+    const second = keywordCandidates(docs, "深色主题", 10, cache);
+    expect(second.map((c) => c.doc.id)).toEqual(keywordCandidates(docs, "深色主题", 10).map((c) => c.doc.id));
+    expect(cache.get("rare")?.tokens).toBe(cachedTokens); // 未变文档不重新分词
+
+    const changed = [doc("rare", "量子引力波的新观测记录", { tags: ["物理"] }), ...docs.slice(1)];
+    keywordCandidates(changed, "观测", 10, cache);
+    expect(cache.get("rare")?.source).toContain("新观测");
+  });
+
   it("查询无可分词内容 → 按文档顺序回退（保持旧 search 的弱相关返回语义）", () => {
     const candidates = keywordCandidates(docs, "。。。", 2);
     expect(candidates).toHaveLength(2);

@@ -135,6 +135,26 @@ describe("外部 embedding（注入 embed）", () => {
     expect(syncHits.length).toBeGreaterThan(0);
   });
 
+  it("searchAsync 无外部向量/降级时仍按工作区隔离（不串到别的库）", async () => {
+    const { service } = await makeService();
+    await service.add({ content: "A 项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-a" });
+    await service.add({ content: "B 项目使用 pnpm 管理依赖", category: "fact", workspaceId: "ws-b" });
+
+    const hits = await service.searchAsync("pnpm 依赖", 20, "ws-a");
+    expect(hits.length).toBe(1);
+    expect(hits[0].fact.workspaceId).toBe("ws-a");
+  });
+
+  it("searchAsync 外部语义命中同样记一次显式使用（accessCount/usage 不丢）", async () => {
+    const { service } = await makeService({ embed: fakeSemanticEmbedder });
+    const added = await service.add({ content: "用户偏好深色主题界面", category: "preference", importance: 8 });
+    expect(service.get(added.id)?.accessCount).toBe(0);
+
+    const hits = await service.searchAsync("夜间模式", 2);
+    expect(hits[0]?.fact.id).toBe(added.id);
+    expect(service.get(added.id)?.accessCount).toBe(1);
+  });
+
   it("embed 抛错 → 自动降级 hash，search/searchAsync 都不抛错", async () => {
     const failing: MemoryEmbedder = async () => {
       throw new Error("llama-server 未运行");

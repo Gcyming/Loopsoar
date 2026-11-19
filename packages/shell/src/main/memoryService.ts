@@ -194,6 +194,8 @@ export class MemoryService {
   private watcher: fs.FSWatcher | null = null;
   private watcherTimer: NodeJS.Timeout | null = null;
   private pendingPaths = new Set<string>();
+  /** BM25 token 缓存：跨查询复用不变记忆的分词结果（按内容+标签指纹校验）。 */
+  private readonly tokenCache = new Map<string, { source: string; tokens: readonly string[] }>();
 
   constructor(private opts: MemoryServiceOptions) {
     this.store = new MemoryStore({ capacity: opts.capacity, agentId: opts.agentId });
@@ -225,6 +227,7 @@ export class MemoryService {
     this.lastIndexHash = "";
     this.indexEntries = new Map();
     this.touchedShards = new Set();
+    this.tokenCache.clear();
     this.store = new MemoryStore({ capacity: this.opts.capacity, agentId: this.opts.agentId });
     this.loaded = false;
     // 换库时重新给本地模型一次机会（可能刚启动）
@@ -956,6 +959,7 @@ export class MemoryService {
   async remove(id: string): Promise<boolean> {
     const removed = this.store.remove(id);
     if (removed) {
+      this.tokenCache.delete(id);
       this.hashIndex.remove(id);
       this.externalVectors?.delete(id);
       await this.save();
@@ -965,6 +969,7 @@ export class MemoryService {
 
   async clear(): Promise<void> {
     this.store.clear();
+    this.tokenCache.clear();
     this.hashIndex.clear();
     this.externalVectors = null;
     this.externalDim = 0;
@@ -1009,6 +1014,7 @@ export class MemoryService {
       vectors: lookup,
       vectorDim: this.hashDim,
       limit: safeLimit,
+      tokenCache: this.tokenCache,
     });
     const mapped = this.mapHits(hits, facts);
     // D3：显式检索命中才算一次使用（自动注入不算，避免富者愈富）。
@@ -1030,17 +1036,24 @@ export class MemoryService {
     if (facts.length === 0) return [];
     try {
       const queryVectors = await this.embedTexts([query]);
-      if (!queryVectors || queryVectors.length !== 1) return this.search(query, safeLimit);
+      if (!queryVectors || queryVectors.length !== 1) return this.search(query, safeLimit, workspaceId);
       const hits = retrieveMemory({
         query,
         docs: facts,
         vectors: (id) => this.externalVectors?.get(id) ?? null,
         queryVector: queryVectors[0],
         limit: safeLimit,
+        tokenCache: this.tokenCache,
       });
-      return this.mapHits(hits, facts);
+      const mapped = this.mapHits(hits, facts);
+      // 显式检索命中才算一次使用；自动注入不走这里，避免富者愈富。
+      if (mapped.length > 0) {
+        this.store.touch(mapped.map((hit) => hit.fact.id));
+        this.scheduleSave();
+      }
+      return mapped;
     } catch {
-      return this.search(query, safeLimit);
+      return this.search(query, safeLimit, workspaceId);
     }
   }
 

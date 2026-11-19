@@ -63,6 +63,18 @@ export interface RetrievalHit {
 
 export type VectorLookup = (id: string) => Float32Array | null;
 
+export interface RetrievalTokenCacheEntry {
+  /** 内容+标签的指纹；只有指纹一致才复用 token，避免陈旧缓存。 */
+  source: string;
+  tokens: readonly string[];
+}
+
+/** 只读缓存接口：让调用方把 tokenize 结果跨查询复用。 */
+export interface RetrievalTokenCache {
+  get(id: string): RetrievalTokenCacheEntry | undefined;
+  set(id: string, entry: RetrievalTokenCacheEntry): unknown;
+}
+
 export interface RetrieveMemoryInput {
   query: string;
   docs: readonly RetrievalDoc[];
@@ -80,6 +92,8 @@ export interface RetrieveMemoryInput {
   gate?: boolean;
   lastTaskType?: string;
   now?: number;
+  /** 可选：同一批记忆在连续查询间复用 token（记忆服务持有，按 id+source 校验）。 */
+  tokenCache?: RetrievalTokenCache;
 }
 
 /** 文档有效值（与 fiveGate.effectiveValue 公式一致；缺省 confidence=0.8/repeated=0）。 */
@@ -106,6 +120,7 @@ export function keywordCandidates(
   docs: readonly RetrievalDoc[],
   query: string,
   limit: number = DEFAULT_CANDIDATE_LIMIT,
+  tokenCache?: RetrievalTokenCache,
 ): KeywordCandidate[] {
   const queryTokens = tokenize(query);
   const candidateLimit = Math.max(1, Math.floor(limit));
@@ -122,7 +137,11 @@ export function keywordCandidates(
   const perDocLen: number[] = [];
   const df = new Uint32Array(uniqueQueryTokens.length);
   for (const doc of docs) {
-    const tokens = tokenize(`${doc.content} ${(doc.tags ?? []).join(" ")}`);
+    // tokenize 是候选阶段的固定成本；同一记忆连续查询时复用，内容/标签变了才重算。
+    const source = `${doc.content} ${(doc.tags ?? []).join(" ")}`;
+    const cached = tokenCache?.get(doc.id);
+    const tokens = cached && cached.source === source ? cached.tokens : tokenize(source);
+    if (tokenCache && (!cached || cached.source !== source)) tokenCache.set(doc.id, { source, tokens });
     const tf = new Uint16Array(uniqueQueryTokens.length);
     for (const token of tokens) {
       const index = tokenIndex.get(token);
@@ -236,7 +255,12 @@ export function retrieveMemory(input: RetrieveMemoryInput): RetrievalHit[] {
   // ① 门控
   if (input.gate && !stageGate(input.query, input.lastTaskType).hit) return [];
   // ② 关键词候选
-  const candidates = keywordCandidates(input.docs, input.query, input.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT);
+  const candidates = keywordCandidates(
+    input.docs,
+    input.query,
+    input.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT,
+    input.tokenCache,
+  );
   if (candidates.length === 0) return [];
   // ③ 向量重排
   const dim = input.vectorDim ?? input.queryVector?.length ?? DEFAULT_EMBED_DIM;
