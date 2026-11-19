@@ -999,7 +999,7 @@ app.whenReady().then(async () => {
       browserStates.set(meta.id, state);
     }
     const userState = browserHost?.snapshotSession(USER_TABS_SESSION);
-    if (userState) browserStates.set(USER_TABS_SESSION, userState);
+    if (userState) browserStates.set(USER_TABS_SESSION, userState); browserStates.flush();
   };
 
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI

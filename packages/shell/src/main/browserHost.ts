@@ -85,6 +85,8 @@ interface TabEntry {
   lastVisible?: boolean;
   /** 最近一次 setBounds 的矩形：几何未变时跳过 setBounds。 */
   lastBounds?: { x: number; y: number; width: number; height: number };
+  /** 隐藏期间被标记：切回可见时强制重新布局一次（P2-3，避免隐藏标签每次 resize 都 setBounds）。 */
+  layoutDirty?: boolean;
   /** 最近一次主框架加载失败（-3 ERR_ABORTED 已过滤）；非空时隐藏原生视图、DOM 错误页接管。 */
   loadFailure: BrowserLoadFailure | null;
   /** 站点图标（data: URL，来自 page-favicon-updated）。 */
@@ -383,14 +385,30 @@ export class BrowserHost {
       bottomInset: this.bottomInset,
       topInset: this.topInset,
     });
-    for (const [sessionId, group] of this.groups) {
-      for (const [id, entry] of group.tabs) {
-        // 启动恢复先于窗口创建：createTab 时 attachView 拿不到主窗口（旧实现静默 no-op），
-        // 窗口就绪后必须在这里补挂，否则恢复的页面永远不会出现在窗口里（刷新也无效）。
-        // 幂等：attached 为 true 时不重复 addChildView。
+    // 启动恢复先于窗口创建：createTab 时 attachView 拿不到主窗口（旧实现静默 no-op），
+    // 窗口就绪后必须在这里补挂，否则恢复的页面永远不会出现在窗口里（刷新也无效）。
+    // 补挂与布局解耦：所有组的标签都补挂（幂等），只有可见组的活动标签参与 setBounds。
+    for (const group of this.groups.values()) {
+      for (const entry of group.tabs.values()) {
         if (!entry.attached) entry.attached = this.tryAttach(entry.view);
+      }
+    }
+    const activeGroup = this.groups.get(this.visibleSession);
+    // 只布局「可见组的活动标签」：隐藏标签/后台会话不参与每帧布局（拖侧栏/终端面板时不再全量 setBounds）。
+    // 隐藏期间置 layoutDirty，切回时强制重新布局一次，避免沿用旧几何。
+    if (activeGroup) {
+      for (const [id, entry] of activeGroup.tabs) {
+        if (id !== activeGroup.activeId) {
+          entry.layoutDirty = true;
+          if (entry.lastVisible !== false) {
+            entry.view.setVisible?.(false);
+            entry.lastVisible = false;
+          }
+          continue;
+        }
         const last = entry.lastBounds;
         if (
+          entry.layoutDirty ||
           !last ||
           last.x !== bounds.x ||
           last.y !== bounds.y ||
@@ -401,16 +419,12 @@ export class BrowserHost {
           // setBounds 之后重新声明圆角：视图重建/重新挂载后半径可能丢，四角会回到直角。
           entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);
           entry.lastBounds = bounds;
+          entry.layoutDirty = false;
         }
         // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
         // 加载中/失败也不显示：让 DOM 的加载页/错误页露出来（原生视图只能显示 Chromium 白屏/默认错误页）
         const visible =
-          sessionId === this.visibleSession &&
-          id === group.activeId &&
-          !this.overlayOpen &&
-          Boolean(entry.url) &&
-          !entry.loading &&
-          entry.loadFailure === null;
+          !this.overlayOpen && Boolean(entry.url) && !entry.loading && entry.loadFailure === null;
         if (entry.lastVisible !== visible) {
           entry.view.setVisible?.(visible);
           entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);
@@ -418,9 +432,19 @@ export class BrowserHost {
         }
       }
     }
+    // 后台会话：只保证「不可见」，不布局、不 setBounds（切会话时 applyLayout 会重新处理）。
+    for (const [sessionId, group] of this.groups) {
+      if (sessionId === this.visibleSession) continue;
+      for (const entry of group.tabs.values()) {
+        entry.layoutDirty = true;
+        if (entry.lastVisible !== false) {
+          entry.view.setVisible?.(false);
+          entry.lastVisible = false;
+        }
+      }
+    }
     // 覆盖窗口只跟随「当前会话的当前标签」：后台会话的页面不可见，指针也不该出现在屏幕上
     // （会话隔离要求：只有进入对应会话才看到对应内容）。几何与原生视图同源，避免两套坐标。
-    const activeGroup = this.groups.get(this.visibleSession);
     const activeEntry = activeGroup?.activeId ? activeGroup.tabs.get(activeGroup.activeId) : null;
     this.deps.onViewLayout?.(
       activeEntry?.lastVisible
@@ -1198,15 +1222,6 @@ export class BrowserHost {
     const id = tabId ?? group.activeId;
     if (!id) return null;
     return this.listTabs(sessionId).find((tab) => tab.id === id) ?? null;
-  }
-
-  /** 页面缩放：0.5～2.0，按会话的活动标签生效（Ctrl + +/-/0）。 */
-  setZoom(nextFactor: number, sessionId?: string): { ok: boolean; factor?: number; error?: string } {
-    const entry = this.activeEntry(sessionId);
-    if (!entry || !entry.url) return { ok: false, error: "当前没有打开的网页" };
-    const factor = Math.max(0.5, Math.min(2, Math.round(nextFactor * 10) / 10));
-    entry.adapter.setZoom?.(factor);
-    return { ok: true, factor };
   }
 
   async screenshot(sessionId?: string): Promise<string | null> {

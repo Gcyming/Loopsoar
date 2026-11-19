@@ -184,7 +184,8 @@ describe("浏览器工具集", () => {
     const { registry } = makeRegistry();
     const result = await run(registry, "browser_snapshot", {}, "fmt-1");
     expect(result.ok).toBe(true);
-    expect(result.content.split("\n")[0]).toBe("[快照 #1 | https://example.com/ | 示例页]");
+    // 首行带 source（P2-4）：agent-tab=任务页，user-tab=用户全局标签
+    expect(result.content.split("\n")[0]).toMatch(/^\[快照 #1 \| https:\/\/example\.com\/ \| 示例页 \| source=(agent|user)-tab\]$/);
     expect(result.content).toContain("正文内容 ABC");
     expect(result.content).toContain("可交互元素（共 5 个");
     expect(result.content).toContain('[#e1] navigation "主导航"');

@@ -11,6 +11,7 @@ import {
 
 interface FakeView extends HostView {
   bounds: { x: number; y: number; width: number; height: number } | null;
+  boundsCalls: number;
   navigated: string[];
   visible: boolean;
   closed: boolean;
@@ -24,6 +25,7 @@ function makeHost(size = { width: 1360, height: 860 }, extraDeps: Partial<Browse
     createView: (): HostView => {
       const view: FakeView = {
         bounds: null,
+        boundsCalls: 0,
         navigated: [],
         visible: true,
         closed: false,
@@ -31,6 +33,7 @@ function makeHost(size = { width: 1360, height: 860 }, extraDeps: Partial<Browse
         wcClosed: false,
         setBounds(b) {
           view.bounds = b;
+          view.boundsCalls += 1;
         },
         setVisible(v) {
           view.visible = v;
@@ -406,5 +409,24 @@ describe("BrowserHost（工作区 > 会话 > 网页）", () => {
     const again = await host.newTab("https://c.example");
     expect(again.ok).toBe(true);
     expect(host.listTabs().length).toBe(1);
+  });
+});
+
+describe("BrowserHost 布局范围（P2-3）", () => {
+  it("隐藏标签不参与每次 setBounds；切回可见时强制重排一次", async () => {
+    const { host, created } = makeHost();
+    await host.navigate("https://a.example"); // 默认会话（可见）
+    await host.navigate("https://b.example", undefined, "s2"); // 后台会话（隐藏）
+    const visible = created[0];
+    const hidden = created[created.length - 1];
+    const visibleBefore = visible.boundsCalls;
+    const hiddenBefore = hidden.boundsCalls;
+
+    host.setSidebarWidth(300);
+    expect(visible.boundsCalls).toBe(visibleBefore + 1);
+    expect(hidden.boundsCalls).toBe(hiddenBefore);
+
+    host.showTask("s2");
+    expect(hidden.boundsCalls).toBeGreaterThan(hiddenBefore);
   });
 });

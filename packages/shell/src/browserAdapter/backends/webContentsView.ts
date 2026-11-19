@@ -220,10 +220,6 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
       return wc.executeJavaScript(code, true);
     },
 
-    setZoom(factor: number) {
-      wc.setZoomFactor?.(factor);
-    },
-
     async close() {
       // 关闭标签必须真正销毁页面：只 detach 视图时 WebContents 仍活着，
       // 正在播放的音视频会继续出声（用户实机反馈）。先静音兜底，再销毁。

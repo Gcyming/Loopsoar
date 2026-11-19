@@ -82,8 +82,6 @@ export interface BrowserAdapter {
   screenshot(): Promise<string>;
   /** 在页面执行 JS 并取回 JSON-safe 结果 */
   executeJs(code: string): Promise<unknown>;
-  /** 页面缩放（可选：后端不支持时忽略）。 */
-  setZoom?(factor: number): void;
   /** 关闭当前视图 */
   close(): Promise<void>;
 }

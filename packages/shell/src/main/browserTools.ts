@@ -15,7 +15,7 @@ import { z } from "zod";
 import type { NetAdapter } from "loopsoar-core/platform";
 import { classifySensitiveStep } from "loopsoar-core/sensitiveSteps";
 import { agentLoopbackAllowed, isLoopbackTarget } from "./browserRequestGuard.js";
-import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
+import type { ToolDefinition, ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import type { BrowserBackend } from "./browserBackend.js";
 import type { TabState } from "./browserHost.js";
 import type { BrowserElementSnapshot } from "../browserAdapter/types.js";
@@ -49,6 +49,55 @@ const STATUS_PROBE_MS = 120;
 /** 加载中轮询间隔与最长等待：命中即返回，不无谓等待。 */
 const STATUS_POLL_MS = 100;
 const STATUS_SETTLE_MAX_MS = 1500;
+
+/**
+ * 浏览器工具错误码（P2-1）：所有 ok:false 必须同时给 `error`，上层才能按码分流重试/降级，
+ * 而不是让模型去正则解析中文文案。
+ */
+export const BROWSER_ERROR_CODES = [
+  "NO_TAB",
+  "NO_HOST",
+  "STALE_REF",
+  "NO_TARGET",
+  "TARGET_MOVED",
+  "FOCUS_MISMATCH",
+  "SCRIPT_ERROR",
+  "NAV_FAILED",
+  "TIMEOUT",
+  "NOTHING_FOUND",
+  "BLOCKED_LOOPBACK",
+  "DENIED",
+  "CANCELLED",
+  "INVALID_ARGS",
+  "CLICK_FAILED",
+  "TYPE_FAILED",
+  "UNKNOWN",
+] as const;
+export type BrowserToolError = (typeof BROWSER_ERROR_CODES)[number];
+
+/** 从失败文案推导错误码：[CODE] 前缀优先，其次关键词映射（顺序即优先级）。 */
+export function deriveBrowserErrorCode(content: string): BrowserToolError {
+  const bracketed = /^\[([A-Z_]+)\]/.exec(content);
+  if (bracketed && (BROWSER_ERROR_CODES as readonly string[]).includes(bracketed[1])) {
+    return bracketed[1] as BrowserToolError;
+  }
+  if (content.startsWith("[已取消]")) return "CANCELLED";
+  if (/缺少/.test(content)) return "INVALID_ARGS";
+  if (/没有打开的网页标签|标签不存在/.test(content)) return "NO_TAB";
+  if (/浏览器未就绪/.test(content)) return "NO_HOST";
+  if (/导航失败|打开失败/.test(content)) return "NAV_FAILED";
+  if (/点击失败/.test(content)) return "CLICK_FAILED";
+  if (/输入失败/.test(content)) return "TYPE_FAILED";
+  if (/超时/.test(content)) return "TIMEOUT";
+  if (/未找到|找不到|没有找到/.test(content)) return "NOTHING_FOUND";
+  return "UNKNOWN";
+}
+
+/** 统一收口：失败结果缺 error 时补码（已显式给码的不覆盖）。 */
+export function withBrowserErrorCode(result: ToolResult): ToolResult {
+  if (result.ok || result.error) return result;
+  return { ...result, error: deriveBrowserErrorCode(result.content) };
+}
 
 /**
  * 会话 → 标签 → 最近一次快照的令牌（键 `${sessionId}::${tabId}`）。
@@ -354,6 +403,14 @@ export function registerBrowserTools(
   resolveSessionRoot?: (sessionId?: string) => string,
   hooks?: BrowserToolHooks,
 ): void {
+  /** 所有浏览器工具都经这里注册：失败结果统一补 error 码（P2-1）。 */
+  const register = (def: ToolDefinition): void => {
+    const execute = def.execute;
+    registry.register({
+      ...def,
+      execute: async (ctx) => withBrowserErrorCode(await execute(ctx)),
+    });
+  };
   const needHost = (): BrowserBackend => {
     const host = browserHost();
     if (!host) throw new Error("浏览器未就绪");
@@ -392,10 +449,10 @@ export function registerBrowserTools(
     setTimeout(() => hooks?.pointer?.highlight(null), 700);
   };
 
-  registry.register({
+  register({
     name: "browser_snapshot",
     description:
-      "读取当前标签页的地址、标题、可见正文与可交互元素（元素以 #eN 编号，可直接用于 browser_click/browser_type；Agent 浏览网页的首选：先快照再决策）。像用户一样操作：搜索/输入框用 browser_type 点进去逐字输入，提交用 browser_press_key（Enter），不要用脚本直接改值或 el.click()。#eN 绑定到标签：切换标签后需在该标签重新快照",
+      "读取当前标签页的地址、标题、可见正文与可交互元素（元素以 #eN 编号，可直接用于 browser_click/browser_type；Agent 浏览网页的首选：先快照再决策）。像用户一样操作：搜索/输入框用 browser_type 点进去逐字输入，提交用 browser_press_key（Enter），不要用脚本直接改值或 el.click()。#eN 绑定到标签：切换标签后需在该标签重新快照。返回头里的 source 标明来源：agent-tab=本会话任务页，user-tab=用户全局标签（不是 Agent 打开的页面）",
     permissions: { read: true },
     schema: z.object({ maxChars: z.number().int().min(200).max(30000).optional() }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -425,9 +482,19 @@ export function registerBrowserTools(
           ? `可交互元素（共 ${total} 个；用 #eN 定位，也可用 CSS 选择器或 text=...）：\n${lines.join("\n")}${more}`
           : "可交互元素：未发现。";
         const gen = snapshot.snapshotGen ?? 0;
+        // P2-4：只读工具回落到用户全局标签时，必须让模型知道「这不是我打开的任务页」。
+        const tabInfo =
+          tabId && typeof host.listTabs === "function"
+            ? (host.listTabs(ctx.sessionId).find((tab) => tab.id === tabId) ?? null)
+            : null;
+        const source = tabInfo?.agentBound === true ? "agent-tab" : "user-tab";
+        const sourceNote =
+          source === "user-tab"
+            ? "\n来源：用户全局标签（user-tab）——不是 Agent 任务页，操作前先确认目标。"
+            : "";
         return {
           ok: true,
-          content: `[快照 #${gen} | ${snapshot.url} | ${snapshot.title}]\n\n${body}\n\n${elementBlock}`,
+          content: `[快照 #${gen} | ${snapshot.url} | ${snapshot.title} | source=${source}]\n\n${body}\n\n${elementBlock}${sourceNote}`,
         };
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
@@ -435,7 +502,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_navigate",
     description: "在当前标签页打开一个 http(s) 网址（等价于用户输入地址回车）；返回地址/标题/加载态状态行",
     permissions: { browser: true },
@@ -478,7 +545,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_click",
     description:
       "点击页面元素（真实鼠标事件，像用户一样移动光标并按下去）：优先用快照里的 #eN（如 e5 或 5），也支持 CSS 选择器或 'text=登录'。点前做命中验证（被浮层遮挡返回 BLOCKED_BY_OVERLAY），点后返回地址/标题/加载态状态行",
@@ -602,7 +669,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_dismiss_popup",
     description:
       "关闭当前页面上的遮挡弹窗（登录/引导/广告/公告层）：按「关闭/×/Esc」启发式处理并返回做了什么。点击被 BLOCKED_BY_OVERLAY 时也可直接调用",
@@ -639,7 +706,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_type",
     description:
       "在输入框输入文本：优先用快照里的 #eN（如 e2），也支持 CSS 选择器；会像用户一样点进输入框、全选后逐字敲键盘（CJK 经输入法上屏），回读校验不通过时回退原生 setter；返回地址/标题/加载态状态行",
@@ -725,7 +792,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_tabs",
     description:
       "管理当前会话的标签页：action=list 列出全部标签（序号/tabId/标题/URL/活动标记）；new 新建标签并自动切过去（可选 url）；select 切换；close 关闭（关最后一页只关闭标签，不退出应用）",
@@ -807,7 +874,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_back",
     description: "在当前标签（可选 tabId）后退一页，返回 URL、是否成功与状态行",
     permissions: { browser: true },
@@ -831,7 +898,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_forward",
     description: "在当前标签（可选 tabId）前进一页，返回 URL、是否成功与状态行",
     permissions: { browser: true },
@@ -855,7 +922,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_reload",
     description: "刷新当前标签（可选 tabId），返回 URL、是否成功与状态行",
     permissions: { browser: true },
@@ -879,7 +946,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_press_key",
     description:
       "发送按键：Enter/Tab/Escape/Backspace/Delete/方向键/Home/End/PageUp/PageDown 或单个可见字符；可选 target（#eN 或 CSS）先聚焦该元素，缺省发到当前焦点/body。Enter 的表单提交用 requestSubmit 兜底，结果里说明实际触发的路径",
@@ -967,7 +1034,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_select",
     description:
       "在下拉框（<select>）里选择选项：target 必填（#eN 或 CSS），values 依次按 option 的 value 匹配、退而按可见文本匹配；原生 setter 设值 + input/change，并回读 selectedOptions 校验",
@@ -1008,7 +1075,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_drag",
     description:
       "拖拽元素：从 from 拖到 to（#eN / CSS / text=），真实鼠标按下 → 分帧移动 → 抬起；用于滑块、拖拽排序、画布/编辑器等场景",
@@ -1055,7 +1122,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_hover",
     description:
       "把鼠标悬停到元素上（#eN 或 CSS）：滚进视野并派发 pointerover/pointerenter/mouseover/mouseenter/mousemove，用于展开菜单/悬浮提示",
@@ -1098,7 +1165,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_scroll",
     description:
       "滚动当前页面：down / up 走真实鼠标滚轮（虚拟光标移到页面中间后按 notch 滚动），top / bottom 直达；长页面分页阅读",
@@ -1142,7 +1209,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_screenshot",
     description:
       "对当前标签页截图（可见区域，PNG）并保存到会话工作根 .loopsoar/screenshots/；可选 selector 先把元素滚动到可视区。视觉模型会直接收到图片附件，text-only 模型只返回路径",
@@ -1197,7 +1264,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "browser_wait",
     description:
       "等待页面就绪：轮询指定选择器出现/文本出现在页面中，或简单等待若干毫秒（默认 3000ms，上限 10s）。适合等异步内容加载",
@@ -1260,7 +1327,7 @@ export function registerBrowserTools(
     },
   });
 
-  registry.register({
+  register({
     name: "web_fetch",
     description: "直接抓取一个 http(s) URL 的文本内容（不打开标签页；用于查资料/API）",
     // web_fetch 不是「浏览器操控」：直接抓取 URL 文本、不开标签页，语义属于网络访问，
@@ -1359,7 +1426,7 @@ export function registerBrowserTools(
               }
             }
           }
-          return execute(ctx);
+          return withBrowserErrorCode(await execute(ctx));
         },
       },
       { force: true },
