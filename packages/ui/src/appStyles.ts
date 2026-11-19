@@ -57,6 +57,20 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   // 网页列：导航工具条（第二行）只覆盖这一列；页框在 StartPage 里内缩成圆角面板。
   pageColumn: { display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" },
+  /** 隐藏原生网页视图期间显示的静态底图：只占网页面板几何，不拦截交互。 */
+  browserFreeze: {
+    position: "absolute",
+    left: LAYOUT.BROWSER_VIEW_INSET,
+    right: LAYOUT.BROWSER_VIEW_INSET_RIGHT,
+    top: LAYOUT.TOP_BAR_HEIGHT + LAYOUT.BROWSER_VIEW_INSET,
+    bottom: LAYOUT.BROWSER_VIEW_INSET,
+    zIndex: 1,
+    overflow: "hidden",
+    borderRadius: LAYOUT.BROWSER_VIEW_RADIUS,
+    background: BRAND.ink,
+    pointerEvents: "none",
+  },
+  browserFreezeImage: { display: "block", width: "100%", height: "100%", objectFit: "cover" },
   splitter: {
     // 净占位仍是 2px，但命中区向左多覆盖 4px，正好盖住页框右侧留白 —— 鼠标停在
     // 「网页深色面板 ↔ 抬高外壳」的视觉交界处就能拖拽（用户 m04830：之前命中区在交界右侧 4px）。

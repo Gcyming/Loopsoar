@@ -86,10 +86,14 @@ describe("dismissAllPopovers（全局收起入口）", () => {
     expect(text).not.toMatch(/\.stopPropagation\(/);
   });
 
-  it("所有 usePopover 列表打开时主进程原生视图让位（防止菜单被网页盖住）", () => {
+  it("所有 usePopover 列表打开时先判断是否压到网页，并抓静态底图后再让原生视图让位", () => {
     const app = read("packages/ui/src/App.tsx");
     expect(app).toContain("useAnyPopoverOpen()");
-    expect(app).toMatch(/anyPopoverOpen[\s\S]{0,200}setOverlay\(\{ open: overlay \}\)/);
+    expect(app).toContain("popoverOverPage");
+    expect(app).toContain("browserPreview");
+    expect(app).toContain("screenshot({})");
+    expect(app).toMatch(/popoverOverPage[\s\S]{0,200}setOverlay\(\{ open: overlay \}\)/);
+    expect(app).not.toMatch(/anyPopoverOpen;\s*\n\s*void api\.browser\.setOverlay/);
     const popover = read("packages/ui/src/popover.ts");
     expect(popover).toContain("export function useAnyPopoverOpen");
   });

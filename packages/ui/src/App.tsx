@@ -183,6 +183,10 @@ export default function App(): React.JSX.Element {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   /** 任意 usePopover 列表打开时都要让原生 WebContentsView 让位，否则菜单会被网页整块盖住。 */
   const anyPopoverOpen = useAnyPopoverOpen();
+  /** 只有列表真的压到网页列时才需要隐藏原生视图；隐藏前先抓一张静态快照，避免网页整块变黑。 */
+  const [popoverOverPage, setPopoverOverPage] = useState(false);
+  const [browserPreview, setBrowserPreview] = useState<string | null>(null);
+  const pageColumnRef = useRef<HTMLDivElement | null>(null);
   // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
   const [, setDownloads] = useState<DownloadItem[]>([]);
   // 浏览器工具栏浮层（更多/收藏夹/历史/下载）打开：需隐藏原生 WebContentsView，否则菜单被网页遮挡
@@ -1886,7 +1890,12 @@ export default function App(): React.JSX.Element {
   // 注意不要每次依赖变化都 cleanup 成 false（会在连续切换时闪一帧页面），只在卸载时复位。
   useEffect(() => {
     if (!api) return;
-    const overlay =
+    /**
+     * 是否需要让原生网页视图让位，必须看「菜单矩形是否真的压到网页列」。
+     * 旧实现只要任意列表打开就整块隐藏视图，右侧会话栏里的模型菜单也会把左侧网页
+     * 变成空白；现在先抓一张网页快照做静态底图，再隐藏原生视图，菜单关闭即恢复。
+     */
+    const baseOverlay =
       settingsOpen ||
       workspacePanelOpen ||
       snapshotData !== null ||
@@ -1895,12 +1904,57 @@ export default function App(): React.JSX.Element {
       // 询问与权限确认也是主窗口 DOM：原生 WebContentsView 会整块盖住它们，
       // 用户看到的会是「弹窗只露出一条边」（敏感确认尤其需要看清上下文）。
       activeAsk !== null ||
+      permReq !== null;
+    let cancelled = false;
+    const sync = async (): Promise<void> => {
+      let overPage = false;
+      if (anyPopoverOpen && !baseOverlay) {
+        const menu = document.querySelector<HTMLElement>("[data-popover]");
+        const page = pageColumnRef.current;
+        if (menu && page) {
+          const a = menu.getBoundingClientRect();
+          const b = page.getBoundingClientRect();
+          overPage = a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        }
+      }
+      if (overPage) {
+        // 必须在 setOverlay 之前抓图：视图一旦隐藏，capturePage 只会得到空白。
+        const shot = await api.browser.screenshot({}).catch(() => null);
+        if (cancelled) return;
+        if (shot?.ok && shot.data) {
+          setBrowserPreview(`data:image/png;base64,${shot.data}`);
+          setPopoverOverPage(true);
+        } else {
+          // 抓不到底图就不隐藏视图：宁可菜单暂时被盖住，也不要把网页整块变黑。
+          setPopoverOverPage(false);
+          setBrowserPreview(null);
+        }
+      } else {
+        setPopoverOverPage(false);
+        setBrowserPreview(null);
+      }
+    };
+    void sync();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, anyPopoverOpen, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, activeAsk, permReq]);
+
+  useEffect(() => {
+    if (!api) return;
+    const overlay =
+      settingsOpen ||
+      workspacePanelOpen ||
+      snapshotData !== null ||
+      onboardingOpen ||
+      chromePage !== null ||
+      activeAsk !== null ||
       permReq !== null ||
-      // 任何 usePopover 列表（模型/权限/命令/会话/工作区）打开时，原生 WebContentsView
-      // 也必须让位；否则列表会被网页整块盖住（用户反馈的「展开列表被主页覆盖」根因）。
-      anyPopoverOpen;
+      // 仅当列表与网页列真实相交时才隐藏原生视图；右侧栏内不压网页的菜单
+      // 保持网页可见，避免「展开列表 → 主页内容消失」的回归。
+      popoverOverPage;
     void api.browser.setOverlay({ open: overlay }).catch(() => {});
-  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, activeAsk, permReq, anyPopoverOpen]);
+  }, [api, settingsOpen, workspacePanelOpen, snapshotData, onboardingOpen, chromePage, activeAsk, permReq, popoverOverPage]);
   useEffect(() => {
     return () => {
       void api?.browser.setOverlay({ open: false }).catch(() => undefined);
@@ -2020,8 +2074,12 @@ export default function App(): React.JSX.Element {
           （x=inset、y=titlebar+topbar+inset、宽度让出侧栏与 splitter）。 */}
       <div style={styles.workRow}>
         {miniWindow ? null : (
-          <div style={{ ...styles.pageColumn, position: "relative" }}>
-            {/* 呼吸灯已移到 Agent 覆盖窗口（原生视图之上）：DOM 层再画一圈会和它叠成双环。 */}
+          <div ref={pageColumnRef} style={{ ...styles.pageColumn, position: "relative" }}>
+            {popoverOverPage && browserPreview ? (
+              <div style={styles.browserFreeze} aria-hidden="true">
+                <img src={browserPreview} alt="" style={styles.browserFreezeImage} />
+              </div>
+            ) : null}
             <BrowserChrome
               tabs={tabs}
               address={address}
