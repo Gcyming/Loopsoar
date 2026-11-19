@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LAYOUT } from "loopsoar-contracts/layout";
 import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import type {
   AgentSummary,
@@ -19,6 +18,7 @@ import { styles } from "./appStyles.js";
 import { useAgentWindowLayout } from "./useAgentWindowLayout.js";
 import { useSidebarLayout } from "./useSidebarLayout.js";
 import { useBrowserPopoverOverlay } from "./useBrowserPopoverOverlay.js";
+import { useBottomDock } from "./useBottomDock.js";
 const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
 import MessageList from "./MessageList.js";
@@ -86,26 +86,6 @@ import {
  * 所有拆分均为「受控 props + 回调」，状态仍集中在本组件，避免出现第二套数据源。
  */
 
-/** 终端抽屉高度持久化键（与 railParams 等本地设置一致，放 localStorage）。 */
-const TERMINAL_HEIGHT_STORAGE_KEY = "loopsoar_terminal_height";
-
-/** 读取持久化的终端抽屉高度：夹紧到契约范围，读失败回默认值。 */
-function readTerminalHeight(): number {
-  const fallback = LAYOUT.TERMINAL_PANEL_HEIGHT;
-  if (typeof localStorage === "undefined") return fallback;
-  try {
-    const raw = localStorage.getItem(TERMINAL_HEIGHT_STORAGE_KEY);
-    const value = raw === null ? Number.NaN : Number(raw);
-    if (!Number.isFinite(value)) return fallback;
-    return Math.min(
-      LAYOUT.TERMINAL_PANEL_MAX_HEIGHT,
-      Math.max(LAYOUT.TERMINAL_PANEL_MIN_HEIGHT, Math.round(value)),
-    );
-  } catch {
-    return fallback; // 隐私模式等不允许访问 localStorage
-  }
-}
-
 /* ---------------------------------- 主界面 ---------------------------------- */
 
 export default function App(): React.JSX.Element {
@@ -117,12 +97,6 @@ export default function App(): React.JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
-  // 应用内终端（P0-4）：面板开合 + 高度（高度 localStorage 持久化；布局范围来自契约 LAYOUT）。
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  /** 底部开发者工具面板（与终端同区域；打开时终端自动收起）。 */
-  const [devtoolsOpen, setDevtoolsOpen] = useState(false);
-  const [devtoolsHeight] = useState(360);
-  const [terminalHeight, setTerminalHeight] = useState<number>(() => readTerminalHeight());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [address, setAddress] = useState("");
@@ -437,57 +411,6 @@ export default function App(): React.JSX.Element {
     };
   }, [api]);
 
-  // 全宽终端占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
-  React.useEffect(() => {
-    if (!api) return;
-    const bottom = terminalOpen ? terminalHeight : devtoolsOpen ? devtoolsHeight : 0;
-    const timer = window.setTimeout(() => {
-      void api.browser.setBottomInset({ bottom }).catch(() => {});
-    }, 60);
-    return () => window.clearTimeout(timer);
-  }, [api, terminalOpen, terminalHeight, devtoolsOpen, devtoolsHeight]);
-
-  // 底部开发者工具：主进程负责面板开合（含页面内 F12 / devtools 自身关闭），渲染层只同步状态。
-  React.useEffect(() => {
-    if (!api) return;
-    return api.on("chrome:devToolsPanel", (payload) => {
-      const open = Boolean((payload as { open?: boolean } | null)?.open);
-      setDevtoolsOpen(open);
-    });
-  }, [api]);
-
-  // 面板高度/开合同步给主进程（窗口 resize 由主进程自己重算）。
-  React.useEffect(() => {
-    if (!api) return;
-    const timer = window.setTimeout(() => {
-      void api.browser.setDevToolsPanel({ open: devtoolsOpen, height: devtoolsHeight }).catch(() => undefined);
-    }, 60);
-    return () => window.clearTimeout(timer);
-  }, [api, devtoolsOpen, devtoolsHeight]);
-
-  const toggleDevtools = useCallback((): void => {
-    if (!api) return;
-    if (terminalOpen) setTerminalOpen(false);
-    void api.browser
-      .toggleDevTools({})
-      .then((result) => {
-        if (!result.ok) setNotice(result.error ?? "无法打开开发者工具");
-      })
-      .catch((err: unknown) => setNotice(`无法打开开发者工具：${err instanceof Error ? err.message : String(err)}`));
-  }, [api, terminalOpen]);
-
-  // F12 / Ctrl+Shift+I：DOM 焦点在主窗口时也能开关底部调试面板（网页内由浏览器 adapter 处理）。
-  React.useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      const inspect = (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "i";
-      if (event.key !== "F12" && !inspect) return;
-      event.preventDefault();
-      toggleDevtools();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleDevtools]);
-
   // Agent 工作区：Agent 打开/导航过的标签折叠进一个 chip，其余仍是普通标签条
   // （分组规则在 agentWorkspace.ts，纯函数可单测；这里只负责渲染与副作用）。
   const { user: userTabs, bound: boundTabs } = useMemo(() => splitAgentTabs(tabs), [tabs]);
@@ -500,6 +423,17 @@ export default function App(): React.JSX.Element {
   /** 最新标签列表的同步镜像：effect 里要读「这一刻」的标签，state 可能晚一帧。 */
   const tabsRef = React.useRef<TabState[]>(tabs);
   tabsRef.current = tabs;
+
+  const {
+    terminalOpen,
+    setTerminalOpen,
+    devtoolsOpen,
+    devtoolsHeight,
+    terminalHeight,
+    toggleDevtools,
+    toggleTerminal,
+    changeTerminalHeight,
+  } = useBottomDock({ api, activeTabId, setNotice });
 
   /**
    * Agent 浏览器活动（会话隔离）：只让「当前会话」的浏览器显示呼吸灯；
@@ -605,28 +539,6 @@ export default function App(): React.JSX.Element {
     setPendingSteers(readPending(mapped));
     setBusy(metaFor(mapped).busy);
   }, [activeTabId]);
-
-  // 切标签时收起调试面板（面板绑定的是原标签的 WebContents，避免显示错页）。
-  React.useEffect(() => {
-    if (!devtoolsOpen || !api) return;
-    void api.browser.setDevToolsPanel({ open: false }).catch(() => undefined);
-    // 只在标签切换时触发；devtoolsOpen 作为守卫读取
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId, api]);
-
-  // 终端抽屉高度：夹紧到契约范围并持久化（TerminalPanel 拖拽/键盘调整后回调）
-  const changeTerminalHeight = useCallback((next: number): void => {
-    const clamped = Math.min(
-      LAYOUT.TERMINAL_PANEL_MAX_HEIGHT,
-      Math.max(LAYOUT.TERMINAL_PANEL_MIN_HEIGHT, Math.round(next)),
-    );
-    setTerminalHeight(clamped);
-    try {
-      localStorage.setItem(TERMINAL_HEIGHT_STORAGE_KEY, String(clamped));
-    } catch {
-      // 忽略（隐私模式等）
-    }
-  }, []);
 
   const openModelMenu = useCallback((): void => {
     if (!api || !provider?.configured) {
@@ -2278,12 +2190,7 @@ export default function App(): React.JSX.Element {
         currentUrl={currentUrl}
         mode={mode}
         terminalOpen={terminalOpen}
-        onToggleTerminal={() => {
-          if (!terminalOpen && devtoolsOpen) {
-            void api?.browser.setDevToolsPanel({ open: false }).catch(() => undefined);
-          }
-          setTerminalOpen((value) => !value);
-        }}
+        onToggleTerminal={toggleTerminal}
         devtoolsOpen={devtoolsOpen}
         onToggleDevtools={toggleDevtools}
       />
