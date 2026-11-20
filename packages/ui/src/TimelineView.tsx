@@ -152,10 +152,14 @@ function TimelineGroupBlock({
       {group.steps.map((step, index) => {
         const isLastOfGroup = index === group.steps.length - 1;
         const streamingTail = Boolean(liveStream && group.isLast && isLastOfGroup && (step.kind === "think" || step.kind === "body"));
+        const stepNo = step.kind === "tool"
+          ? group.steps.slice(0, index + 1).filter((item) => item.kind === "tool").length
+          : undefined;
         return (
           <TimelineNode
             key={`s${group.from + index}`}
             step={step}
+            stepNo={stepNo}
             autoExpand={group.isLast && isLastOfGroup}
             forceExpand={expandAll}
             streamingTail={streamingTail}
@@ -194,6 +198,7 @@ function TimelineGroupBlock({
 
 function TimelineNode({
   step,
+  stepNo,
   autoExpand,
   forceExpand,
   streamingTail,
@@ -202,6 +207,8 @@ function TimelineNode({
   onOpenUrl,
 }: {
   step: TimelineStep;
+  /** 工具步骤序号（同一工作阶段内从 1 开始；让浏览器操作一眼可见「第几步」）。 */
+  stepNo?: number;
   autoExpand?: boolean;
   /** E2E/演示：强制展开所有思考段（?expandAllGroups=1）。 */
   forceExpand?: boolean;
@@ -302,7 +309,7 @@ function TimelineNode({
     );
   }
 
-  return <ToolNode step={step} expanded={expanded} onToggle={() => setExpanded((value) => !value)} onOpenUrl={onOpenUrl} />;
+  return <ToolNode step={step} stepNo={stepNo} expanded={expanded} onToggle={() => setExpanded((value) => !value)} onOpenUrl={onOpenUrl} />;
 }
 
 function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
@@ -338,11 +345,13 @@ function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
 
 function ToolNode({
   step,
+  stepNo,
   expanded,
   onToggle,
   onOpenUrl,
 }: {
   step: Extract<TimelineStep, { kind: "tool" }>;
+  stepNo?: number;
   expanded: boolean;
   onToggle: () => void;
   onOpenUrl?: (url: string) => void;
@@ -385,6 +394,7 @@ function ToolNode({
         style={{ cursor: hasBody ? "pointer" : "default" }}
       >
         <span className="think-tool-glyph" aria-hidden><Icon name={visual.icon} size={12} /></span>
+        {stepNo ? <span className="think-tool-step" aria-label={`第 ${stepNo} 步`}>{stepNo}</span> : null}
         <span className="think-tool-type">{visual.label}</span>
         <span className="think-tool-name" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
         {diffStats ? (

@@ -11,6 +11,7 @@ import { formatHeaderLines, formatWhen, localized, loopKindOf, parseHeaderLines 
 import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import AppearanceSettingsSection from "./AppearanceSettingsSection.js";
+import { LoopStudioSection } from "./LoopStudioSection.js";
 import RulesSettingsSection from "./RulesSettingsSection.js";
 import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
 import ExtensionsSection from "./ExtensionsSection.js";
@@ -42,6 +43,7 @@ type SectionId =
   | "permissions"
   | "providers"
   | "rules"
+  | "loop"
   | "skills"
   | "memory"
   | "extensions"
@@ -60,6 +62,7 @@ const SECTIONS: { id: SectionId; icon: string; group: "basic" | "capability" | "
   { id: "permissions", group: "basic", icon: "check" },
   { id: "providers", group: "capability", icon: "cloud-upload" },
   { id: "rules", group: "capability", icon: "file" },
+  { id: "loop", group: "capability", icon: "agent" },
   { id: "skills", group: "capability", icon: "bulb" },
   { id: "memory", group: "capability", icon: "notes" },
   { id: "extensions", group: "capability", icon: "extension-feature" },
@@ -360,6 +363,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             onPrefsChange={setPrefs}
             onPreferencesSaved={onPreferencesSaved}
             onNotice={ok}
+            onError={bad}
+          />
+        );
+
+      case "loop":
+        return (
+          <LoopStudioSection
+            list={loopInfo}
+            onReload={async () => { await reloadLoops(); }}
             onError={bad}
           />
         );

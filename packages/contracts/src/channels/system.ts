@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AskRespondSchema, ChromePopoverActionSchema, LoopSetActiveSchema, MoveAgentWindowSchema, OpenAgentWindowSchema, OpenChromePopoverSchema, TerminalCloseSchema, TerminalHistorySchema, TerminalInputSchema, TerminalInterruptSchema, TerminalOpenSchema, TerminalRunSchema } from "../validators.js";
+import { AskRespondSchema, ChromePopoverActionSchema, LoopDeleteSchema, LoopGetSchema, LoopSaveSchema, LoopSetActiveSchema, MoveAgentWindowSchema, OpenAgentWindowSchema, OpenChromePopoverSchema, TerminalCloseSchema, TerminalHistorySchema, TerminalInputSchema, TerminalInterruptSchema, TerminalOpenSchema, TerminalRunSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 system 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -140,6 +140,24 @@ export const systemChannels: Record<string, ChannelBinding> = {
     domain: "loop",
     method: "reload",
     request: null,
+    sensitive: true,
+  },
+  "loop:get": {
+    domain: "loop",
+    method: "get",
+    request: LoopGetSchema,
+    sensitive: true,
+  },
+  "loop:save": {
+    domain: "loop",
+    method: "save",
+    request: LoopSaveSchema,
+    sensitive: true,
+  },
+  "loop:delete": {
+    domain: "loop",
+    method: "delete",
+    request: LoopDeleteSchema,
     sensitive: true,
   },
   "terminal:history": {

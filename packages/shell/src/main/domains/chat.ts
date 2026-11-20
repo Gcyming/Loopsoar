@@ -290,6 +290,40 @@ export function registerChatDomain(deps: ChatDeps): void {
     return { stopped };
   });
 
+  // 暂停/恢复：缺省会话 = 壳层当前会话（输入区控制条无需自己查会话 id）。
+  handleTrusted(deps, "chat:pause", (payload) => {
+    const p = payload as { sessionId?: string };
+    const sessionId = p.sessionId ?? deps.sessions?.currentId() ?? "";
+    if (!sessionId) return { paused: false, error: "没有可暂停的活动会话" };
+    const paused = deps.chatService.pause(sessionId);
+    if (paused) deps.push("chat:pauseState", { sessionId, paused: true });
+    return { paused, sessionId };
+  });
+
+  handleTrusted(deps, "chat:resume", (payload) => {
+    const p = payload as { sessionId?: string; change?: string };
+    const sessionId = p.sessionId ?? deps.sessions?.currentId() ?? "";
+    if (!sessionId) return { resumed: false, error: "没有可恢复的活动会话" };
+    const change = p.change?.trim();
+    // 先投递改动，再放行：下一次轮次边界 drain 时模型已能拿到新约束。
+    let steer: { accepted: boolean; reason?: string } | null = null;
+    if (change) {
+      steer = deps.chatService.steer(sessionId, `【暂停期间用户修改】\n${change}`, undefined);
+      // 投递失败（运行已结束/队列满）不能假装恢复成功：保持暂停态让用户重试或终止。
+      if (!steer.accepted) {
+        return {
+          resumed: false,
+          sessionId,
+          error: steer.reason === "full" ? "改动队列已满，请先取消一条待发指令" : "改动未能注入（运行可能已结束），请重试",
+          steer,
+        };
+      }
+    }
+    const resumed = deps.chatService.resume(sessionId);
+    if (resumed) deps.push("chat:pauseState", { sessionId, paused: false });
+    return { resumed, sessionId, steer };
+  });
+
   handleTrusted(deps, "perm:respond", (payload) => {
     const p = payload as {
       requestId: string;

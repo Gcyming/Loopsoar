@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUDGET_HARD } from "loopsoar-contracts/security-policy";
+import { LOOP_STAGE_CATALOG, type LoopStageConfig } from "loopsoar-contracts/schemas";
 import { LoopRegistry, type LoopDefinition, type LoopRunContext } from "loopsoar-core/loop";
 import {
   runToolLoop,
@@ -25,7 +26,7 @@ import {
   type ToolLoopOpts,
   type ToolLoopOutcome,
 } from "loopsoar-core/tool_loop";
-import { scanLoopDefs, type DeclarativeLoopDef, type LoopDefError, type ScriptLoopDef } from "./loopDefs.js";
+import { scanLoopDefs, type DeclarativeLoopConfig, type DeclarativeLoopDef, type LoopDefError, type ScriptLoopDef } from "./loopDefs.js";
 import {
   runScriptLoop,
   type ScriptHostOptions,
@@ -48,6 +49,15 @@ export interface LoopListEntry {
   valid: boolean;
   description?: string;
   error?: string;
+  /** 设置页是否允许编辑（仅扫描到的普通 L2 JSON；builtin/脚本/扩展 loop 为 false）。 */
+  editable?: boolean;
+}
+
+/** loop:get 返回：单个 loop 的完整声明配置（设置页编译/编辑用）。 */
+export interface LoopGetPayload {
+  ok: boolean;
+  error?: string;
+  loop?: LoopListEntry & { config?: DeclarativeLoopConfig };
 }
 
 export interface LoopFallbackEntry {
@@ -79,6 +89,8 @@ export interface DeclarativeLoopRuntimeConfig {
   maxToolCalls?: number;
   /** 工具白名单（省略/空 = 不限制）：既过滤给模型的工具清单，也拦截执行。 */
   allowedTools?: string[];
+  /** 阶段开关：关闭阶段对应工具被禁用（与 allowedTools 取交集）。 */
+  stages?: LoopStageConfig[];
   /** 采样温度（0~2）：当前 LlmRequest 尚无 temperature 字段，先校验留存（见报告"风险"）。 */
   temperature?: number;
 }
@@ -110,6 +122,8 @@ export interface LoopRuntime {
   /** 运行当前（或指定）loop；回退由 LoopRegistry 内部完成并推 loop:fallback。 */
   run(input: LoopRunInput): Promise<ToolLoopOutcome>;
   list(): LoopListPayload;
+  /** 读取单个 loop 的完整配置；未知/不可编辑定义返回 ok:false + error。 */
+  get(id: string): LoopGetPayload;
   /** 切换活动 loop：校验 → 持久化回调 → push loop:changed；未知 id 抛错（域层转 {ok:false}）。 */
   setActive(id: string): LoopListPayload;
   /** 重新扫描 `<dataDir>/loops`（L2/L3 增删改即时生效）→ push loop:changed；返回最新列表。 */
@@ -136,11 +150,27 @@ export function applyDeclarativeLoop(
   opts: ToolLoopOpts,
 ): ToolLoopOpts {
   const append = config.systemPromptAppend?.trim();
+  const stageConfigById = new Map((config.stages ?? []).map((stage) => [stage.id, stage.enabled]));
+  const blocked = new Set<string>();
+  const stageLines: string[] = [];
+  if (config.stages && config.stages.length > 0) {
+    for (const stage of LOOP_STAGE_CATALOG) {
+      const enabled = stageConfigById.get(stage.id) ?? true;
+      if (enabled) {
+        stageLines.push(`✓ ${stage.name}：${stage.prompt}`);
+      } else {
+        stageLines.push(`✕ ${stage.name}：本阶段已由用户关闭，不要调用其工具（${stage.tools.join("、")}）。`);
+        for (const tool of stage.tools) blocked.add(tool);
+      }
+    }
+  }
+  const stagePrompt = stageLines.length > 0 ? `【Loop 阶段能力】\n${stageLines.join("\n")}` : "";
+  const combinedAppend = [append, stagePrompt].filter((text): text is string => Boolean(text && text.trim())).join("\n\n");
   const messages = opts.messages ? [...opts.messages] : [];
-  if (append) {
+  if (combinedAppend) {
     messages.push({
       role: "user",
-      content: `【Loop 指令：${config.name}】\n${append}`,
+      content: `【Loop 指令：${config.name}】\n${combinedAppend}`,
     });
   }
 
@@ -156,6 +186,8 @@ export function applyDeclarativeLoop(
     config.allowedTools && config.allowedTools.length > 0
       ? new Set(config.allowedTools)
       : null;
+  const blockedTools = [...blocked];
+  const blockedSet = new Set(blockedTools);
   const baseTools = opts.tools;
   const baseExecutor = opts.executeTool;
 
@@ -168,6 +200,13 @@ export function applyDeclarativeLoop(
           error: "loop-tool-denied",
         };
       }
+      if (blockedSet.has(toolCall.name)) {
+        return {
+          ok: false,
+          content: `[Loop 阶段] 工具 ${toolCall.name} 所属阶段已关闭，本次调用被拒绝`,
+          error: "loop-stage-denied",
+        };
+      }
       return baseExecutor.invoke(toolCall);
     },
   };
@@ -176,7 +215,8 @@ export function applyDeclarativeLoop(
     ...opts,
     ...(messages.length > 0 ? { messages } : {}),
     limits,
-    tools: allowed ? () => baseTools().filter((tool) => allowed.has(tool.name)) : baseTools,
+    ...(blockedTools.length > 0 ? { blockedTools } : {}),
+    tools: () => baseTools().filter((tool) => (!allowed || allowed.has(tool.name)) && !blockedSet.has(tool.name)),
     executeTool: gatedExecutor,
   };
 }
@@ -191,6 +231,7 @@ function toDeclarativeConfig(def: DeclarativeLoopDef): DeclarativeLoopRuntimeCon
     maxRounds: def.config.maxRounds,
     maxToolCalls: def.config.maxToolCalls,
     allowedTools: def.config.allowedTools,
+    stages: def.config.stages,
     temperature: def.config.temperature,
   };
 }
@@ -213,6 +254,8 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
   /** 扫描注册的 loop（id → kind/描述）；builtin 与手工 register 的 loop 不进这些表。 */
   const scannedKinds = new Map<string, LoopKind>();
   const scannedDescriptions = new Map<string, string | undefined>();
+  /** 仅普通 L2 JSON 的完整配置（设置页编辑用；扩展注册/脚本 loop 不在此表）。 */
+  const scannedConfigs = new Map<string, DeclarativeLoopConfig>();
   let scanErrors: LoopDefError[] = [];
   const scriptHost: ScriptHostOptions = options.scriptHost ?? {};
 
@@ -241,6 +284,7 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
       limits: clampScriptLimits(opts.limits),
       signal: opts.signal,
       sink: opts.sink,
+      pauseGate: opts.pauseGate,
       workerPath: scriptHost.workerPath,
       startTimeoutMs: scriptHost.startTimeoutMs,
       callTimeoutMs: scriptHost.callTimeoutMs,
@@ -267,6 +311,7 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
     }
     scannedKinds.clear();
     scannedDescriptions.clear();
+    scannedConfigs.clear();
     scanErrors = [];
     if (!options.dataDir) return;
 
@@ -294,6 +339,7 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
         registry.register(definition);
         scannedKinds.set(def.id, def.kind);
         scannedDescriptions.set(def.id, def.description);
+        if (def.kind === "declarative") scannedConfigs.set(def.id, def.config);
       } catch (err) {
         scanErrors.push({
           path: def.filePath,
@@ -336,6 +382,7 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
         active: loop.id === registry.current(),
         valid: true,
         ...(description ? { description } : {}),
+        editable: scannedConfigs.has(loop.id),
       };
     });
 
@@ -379,6 +426,19 @@ export function createLoopRuntime(options: LoopRuntimeOptions): LoopRuntime {
       return registry.run(loopId, ctx);
     },
     list,
+    get: (id: string): LoopGetPayload => {
+      const loop = list().loops.find((entry) => entry.id === id);
+      if (!loop) return { ok: false, error: `loop 不存在：${id}` };
+      const config = scannedConfigs.get(id);
+      if (!config) {
+        return {
+          ok: false,
+          error: loop.builtin ? "内置 loop 不可编辑" : "该 loop 不是普通 L2 声明式文件，不可在设置页编辑",
+          loop,
+        };
+      }
+      return { ok: true, loop: { ...loop, config } };
+    },
     setActive: (id: string): LoopListPayload => {
       registry.switchTo(id); // 未知 id → throw，由域层转成可读错误（不崩溃）
       try {

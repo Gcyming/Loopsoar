@@ -12,6 +12,8 @@ export const EVENTS = [
   "chat:stream:error",
   "chat:stream:heartbeat",
   "chat:steer:applied",
+  /** 会话运行控制状态：{ sessionId, paused }（暂停/恢复时推送，多窗口同步）。 */
+  "chat:pauseState",
   "perm:request",
   "perm:resolved",
   "browser:tabs",

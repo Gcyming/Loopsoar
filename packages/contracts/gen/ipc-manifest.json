@@ -71,6 +71,20 @@
       "hasRequest": true
     },
     {
+      "channel": "chat:pause",
+      "domain": "chat",
+      "method": "pause",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "chat:resume",
+      "domain": "chat",
+      "method": "resume",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "perm:respond",
       "domain": "perm",
       "method": "respond",
@@ -1072,6 +1086,27 @@
       "hasRequest": false
     },
     {
+      "channel": "loop:get",
+      "domain": "loop",
+      "method": "get",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "loop:save",
+      "domain": "loop",
+      "method": "save",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "loop:delete",
+      "domain": "loop",
+      "method": "delete",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "bookmarks:list",
       "domain": "bookmarks",
       "method": "list",
@@ -1124,6 +1159,7 @@
     "chat:stream:error",
     "chat:stream:heartbeat",
     "chat:steer:applied",
+    "chat:pauseState",
     "perm:request",
     "perm:resolved",
     "browser:tabs",

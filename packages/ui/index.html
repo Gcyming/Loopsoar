@@ -1119,6 +1119,14 @@
       flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: 7px;
       line-height: 1.4; background: #1a1d24; border: 1px solid #2c2c31; color: #a8a296;
     }
+    /* 工具步骤序号：同一工作阶段内 1..N，浏览器连续操作一眼可数 */
+    .think-tool-step {
+      flex-shrink: 0; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 5px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 9px; font-weight: 700; font-variant-numeric: tabular-nums;
+      color: var(--ls-accent-hover); background: var(--ls-accent-soft);
+      border: 1px solid rgba(200,118,60,0.35);
+    }
     .think-tool-detail {
       flex: 1 1 auto; min-width: 0; font-size: 11px; color: #7c766a;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

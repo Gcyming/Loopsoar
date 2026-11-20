@@ -28,6 +28,53 @@ export interface ToolExecutor {
   invoke(toolCall: ToolCall): Promise<ToolResult>;
 }
 
+/**
+ * 运行控制门（暂停/恢复）：
+ *   · pause() 只置状态，不打断正在执行的工具；
+ *   · wait(signal) 在暂停期间挂起，恢复后 resolve；中止信号会 reject，避免「停止」被暂停卡住；
+ *   · 门本身不持有定时器/进程，可安全跨层传递。
+ */
+export interface PauseGate {
+  isPaused(): boolean;
+  pause(): void;
+  resume(): void;
+  wait(signal?: AbortSignal): Promise<void>;
+}
+
+export function createPauseGate(): PauseGate {
+  let paused = false;
+  let waiters: Array<() => void> = [];
+  return {
+    isPaused: () => paused,
+    pause: () => {
+      paused = true;
+    },
+    resume: () => {
+      paused = false;
+      const pending = waiters;
+      waiters = [];
+      for (const resolve of pending) resolve();
+    },
+    wait: (signal?: AbortSignal) => {
+      if (!paused) return Promise.resolve();
+      if (signal?.aborted) return Promise.reject(new Error("loop-aborted"));
+      return new Promise<void>((resolve, reject) => {
+        const onAbort = (): void => {
+          waiters = waiters.filter((item) => item !== done);
+          signal?.removeEventListener("abort", onAbort);
+          reject(new Error("loop-aborted"));
+        };
+        const done = (): void => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        waiters.push(done);
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  };
+}
+
 // 工具循环选项
 export interface ToolLoopOpts {
   llm: LlmClient;                                 // LLM 流式客户端
@@ -43,6 +90,10 @@ export interface ToolLoopOpts {
   repeatToolStopAt?: number;
   steers: SteerBus;                                  // 转向总线
   signal?: AbortSignal;                              // 外部中止信号
+  /** 暂停门：工具/轮次边界等待用户恢复；缺省不暂停。 */
+  pauseGate?: PauseGate;
+  /** loop 阶段关闭后被禁用的工具（模型不可见 + 执行器二次拦截）。 */
+  blockedTools?: readonly string[];
   noProgressRounds?: number;                         // 无进度检测阈值（默认 5 轮）
   /** 调用方已组装好的消息（系统提示/记忆/技能/历史）；不传则用默认执行提示。 */
   messages?: LlmMessage[];
@@ -186,8 +237,16 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
     else signal.addEventListener("abort", onExternalAbort, { once: true });
   }
 
+  const blockedTools = new Set(opts.blockedTools ?? []);
+  /** 暂停是「边界暂停」：当前工具跑完再等，避免半截操作破坏页面状态。 */
+  const waitForPause = async (): Promise<void> => {
+    if (!opts.pauseGate) return;
+    await Promise.race([opts.pauseGate.wait(abortController.signal), waitAbort()]);
+  };
+
   try {
     for (let round = 0; round < maxRounds; round++) {
+      await waitForPause();
       // 外部中止检查
       if (abortController.signal.aborted) {
         return {
@@ -270,7 +329,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
       }
       const request: LlmRequest = {
         messages: conversation,
-        tools: tools(),
+        tools: tools().filter((tool) => !blockedTools.has(tool.name)),
         // max_tokens 由模型能力推导（ChatService 注入 getMaxOutputTokens）；未配置时不传，
         // 交给上游默认。长度上限仍由 finish_reason=length 的同轮续写兜底（ADR-0045/0047）。
         maxTokens: opts.maxTokens,
@@ -325,6 +384,17 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 args: tc.toolCall.args,
               };
 
+              // 暂停门在工具开始前等待：暂停只拦「下一个动作」，绝不把正在执行的点击/输入撕成两半。
+              await waitForPause();
+              if (abortController.signal.aborted) {
+                return {
+                  status: "aborted",
+                  reason: "工具开始前收到外部中止信号",
+                  finalText,
+                  usage,
+                };
+              }
+
               // 工具开始执行：先发 tool_start（UI 用它在时间线里显示「执行中」呼吸状态）
               emit("tool_start", {
                 toolCallId: toolCall.id,
@@ -353,11 +423,17 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
                 // 为什么带中止：MCP/终端工具自身无法可靠取消，但「用户点了停止」不能让循环
                 // 一直卡在工具上（终端命令/子代理可能几分钟）——工具还在跑也要立刻收束本轮。
                 const races: Array<Promise<ToolResult>> = [
-                  executeTool.invoke(toolCall).catch((err) => ({
-                    ok: false,
-                    content: "",
-                    error: err instanceof Error ? err.message : String(err),
-                  } as ToolResult)),
+                  blockedTools.has(toolCall.name)
+                    ? Promise.resolve({
+                        ok: false,
+                        content: `[Loop 阶段] 工具 ${toolCall.name} 所属阶段已关闭，本次调用被拒绝`,
+                        error: "loop-stage-denied",
+                      } as ToolResult)
+                    : executeTool.invoke(toolCall).catch((err) => ({
+                        ok: false,
+                        content: "",
+                        error: err instanceof Error ? err.message : String(err),
+                      } as ToolResult)),
                   waitAbort(),
                 ];
                 if (silentTimeoutMs > 0) {

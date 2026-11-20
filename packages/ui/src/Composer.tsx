@@ -157,6 +157,18 @@ export default function Composer({
   /** 斜杠命令面板：当前选中项 + 是否被 Esc 手动关闭（继续输入会重新展开）。 */
   const [commandIndex, setCommandIndex] = React.useState(0);
   const [commandDismissed, setCommandDismissed] = React.useState(false);
+  /** 运行控制条：暂停态 + 「暂停期间是否有改动」表单（复位条件：busy=false / 重新发送）。 */
+  const [paused, setPaused] = React.useState(false);
+  const [pauseBusy, setPauseBusy] = React.useState(false);
+  const [resumeDraft, setResumeDraft] = React.useState("");
+
+  // 流结束（正常完成/停止/出错）后控制条必须收起，避免「已暂停」挂在空会话上。
+  React.useEffect(() => {
+    if (!busy) {
+      setPaused(false);
+      setResumeDraft("");
+    }
+  }, [busy]);
   /** 扩展贡献的提示词命令：只填输入框，用户可改；启停扩展后自动刷新。 */
   const [extensionCommands, setExtensionCommands] = React.useState<SlashCommand[]>([]);
 
@@ -440,8 +452,118 @@ export default function Composer({
       permissions: { ...permSummary.permissions, [category]: value },
     });
   };
+
+  /** 暂停：只在下一次工具边界生效；返回 false（流已结束）时不进入暂停态。 */
+  const requestPause = async (): Promise<void> => {
+    if (!api || pauseBusy) return;
+    setPauseBusy(true);
+    try {
+      const result = await api.chat.pause({});
+      if (result.paused) setPaused(true);
+      else onNotice?.(result.error ?? tr("composer.pauseUnavailable"));
+    } catch (err) {
+      onNotice?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPauseBusy(false);
+    }
+  };
+
+  /** 恢复：无改动 → 直接放行；有改动 → 先 steer 再放行（注入下一轮）。 */
+  const requestResume = async (change?: string): Promise<void> => {
+    if (!api || pauseBusy) return;
+    const text = change?.trim();
+    setPauseBusy(true);
+    try {
+      const result = await api.chat.resume(text ? { change: text } : {});
+      if (result.resumed) {
+        setPaused(false);
+        setResumeDraft("");
+        onNotice?.(text ? tr("composer.resumeChanged") : tr("composer.resumePlain"));
+      } else {
+        onNotice?.(result.error ?? tr("composer.resumeUnavailable"));
+      }
+    } catch (err) {
+      onNotice?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPauseBusy(false);
+    }
+  };
+
   return (
     <div style={styles.composer}>
+      {busy ? (
+        <div style={styles.runBar} data-testid="composer-run-bar">
+          <div style={styles.runBarHead}>
+            <span style={{ ...styles.runDot, ...(paused ? styles.runDotPaused : {}) }} aria-hidden />
+            <span style={styles.runLabel}>
+              {paused ? tr("composer.paused") : tr("composer.running")}
+            </span>
+            <span style={styles.runHint}>
+              {paused ? tr("composer.pausedHint") : tr("composer.runningHint")}
+            </span>
+            <span style={{ flex: 1 }} />
+            {paused ? (
+              <button
+                type="button"
+                className="run-action run-action-primary"
+                style={styles.runActionPrimary}
+                disabled={pauseBusy}
+                onClick={() => void requestResume()}
+              >
+                {tr("composer.noChanges")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="run-action"
+                style={styles.runAction}
+                disabled={pauseBusy}
+                onClick={() => void requestPause()}
+              >
+                {tr("composer.pause")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="run-action run-action-danger"
+              style={styles.runActionDanger}
+              onClick={onStop}
+            >
+              {tr("composer.terminate")}
+            </button>
+          </div>
+          {paused ? (
+            <div style={styles.resumePanel}>
+              <div style={styles.resumeQuestion}>{tr("composer.resumeQuestion")}</div>
+              <textarea
+                style={styles.resumeInput}
+                rows={2}
+                value={resumeDraft}
+                placeholder={tr("composer.resumePlaceholder")}
+                onChange={(event) => setResumeDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void requestResume(resumeDraft);
+                  }
+                }}
+              />
+              <div style={styles.resumeActions}>
+                <span style={styles.resumeHint}>{tr("composer.resumeSendHint")}</span>
+                <button
+                  type="button"
+                  className="run-action run-action-primary"
+                  style={styles.runActionPrimary}
+                  disabled={pauseBusy || resumeDraft.trim() === ""}
+                  onClick={() => void requestResume(resumeDraft)}
+                >
+                  {tr("composer.resumeWithChanges")}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div ref={boxRef} style={styles.composerBox} data-squeeze={squeezeRatio.toFixed(2)}>
         <div ref={measureRef} aria-hidden style={styles.measureRow}>
           <span style={styles.measureChip}><Icon name="bolt" size={12} style={{ marginRight: 4 }} />Build</span>
@@ -800,6 +922,87 @@ const styles: Record<string, React.CSSProperties> = {
   // 只让「输入框本身」是一个独立色块：外层保持会话栏底色（raised），
   // 卡片下沉到更深的 ink 一档并保留圆角，形成清晰的凹陷输入区，而不是把周围整条涂深。
   composer: { flex: "none", padding: "10px 12px 8px" },
+  runBar: {
+    marginBottom: 8,
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: 10,
+    background: BRAND.inkPanel,
+    padding: "8px 10px",
+  },
+  runBarHead: { display: "flex", alignItems: "center", gap: 8, minWidth: 0 },
+  runDot: {
+    width: 7,
+    height: 7,
+    borderRadius: "50%",
+    background: BRAND.teal,
+    boxShadow: `0 0 8px ${BRAND.teal}`,
+    flexShrink: 0,
+  },
+  runDotPaused: { background: BRAND.ochre, boxShadow: `0 0 8px ${BRAND.ochre}` },
+  runLabel: { fontSize: 11.5, fontWeight: 700, color: BRAND.linen, flexShrink: 0 },
+  runHint: {
+    fontSize: 10.5,
+    color: BRAND.linenFaint,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    minWidth: 0,
+  },
+  runAction: {
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: "transparent",
+    color: BRAND.linenMuted,
+    borderRadius: 7,
+    padding: "3px 10px",
+    fontSize: 11.5,
+    cursor: "pointer",
+    flexShrink: 0,
+  },
+  runActionPrimary: {
+    border: `1px solid ${BRAND.ochre}`,
+    background: BRAND.ochreSoft,
+    color: BRAND.ochreHover,
+    borderRadius: 7,
+    padding: "3px 10px",
+    fontSize: 11.5,
+    fontWeight: 700,
+    cursor: "pointer",
+    flexShrink: 0,
+  },
+  runActionDanger: {
+    border: `1px solid ${BRAND.danger}`,
+    background: BRAND.dangerSoft,
+    color: BRAND.danger,
+    borderRadius: 7,
+    padding: "3px 10px",
+    fontSize: 11.5,
+    fontWeight: 700,
+    cursor: "pointer",
+    flexShrink: 0,
+  },
+  resumePanel: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTop: `1px solid ${BRAND.border}`,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  resumeQuestion: { fontSize: 11.5, color: BRAND.linen, fontWeight: 600 },
+  resumeInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    resize: "vertical",
+    borderRadius: 7,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.ink,
+    color: BRAND.linen,
+    fontSize: 12,
+    padding: 7,
+    outline: "none",
+  },
+  resumeActions: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  resumeHint: { fontSize: 10, color: BRAND.linenFaint },
   workspaceRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 6, minWidth: 0 },
   workspaceChip: {
     maxWidth: 240,

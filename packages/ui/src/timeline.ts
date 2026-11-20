@@ -164,8 +164,13 @@ export function groupTimeline(steps: TimelineStep[]): TimelineGroup[] {
 const TOOL_LABELS: Record<string, string> = {
   browser_snapshot: "读取页面",
   browser_navigate: "打开网页",
+  browser_back: "返回上一页",
+  browser_reload: "刷新页面",
   browser_click: "点击元素",
   browser_type: "输入文本",
+  browser_input: "输入文本",
+  browser_select: "选择选项",
+  browser_wait: "等待页面",
   browser_drag: "拖拽元素",
   browser_hover: "悬停元素",
   browser_scroll: "滚动页面",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LoopStagesSchema } from "./loopStages.js";
 
 /**
  * Named Zod schemas for each channel request payload.
@@ -319,6 +320,54 @@ export const AskRespondSchema = z.object({
 
 export const LoopSetActiveSchema = z.object({ id: z.string().min(1).max(64) });
 
+/** 自定义 L2 loop 的 id：与 shell 的 LOOP_ID_RE 同形（小写字母数字/连字符）。 */
+export const LOOP_EDITOR_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * 设置页「编译/保存自定义 Loop」的请求体。
+ * 只接受声明式字段；脚本 loop 不通过该入口创建（脚本需落盘并人工审查）。
+ */
+export const LoopSaveConfigSchema = z.object({
+  kind: z.literal("declarative"),
+  id: z.string().regex(LOOP_EDITOR_ID_RE, "id 仅允许小写字母/数字/连字符，1~64 字符"),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(4000).optional(),
+  systemPromptAppend: z.string().max(20_000).optional(),
+  maxRounds: z.number().int().min(1).max(2000).optional(),
+  maxToolCalls: z.number().int().min(1).max(4000).optional(),
+  /** 阶段开关；省略 = 不启用阶段限制（兼容旧 loop）。 */
+  stages: LoopStagesSchema.optional(),
+  /** 显式工具白名单（与阶段开关取交集；省略/空 = 不额外限制）。 */
+  allowedTools: z.array(z.string().min(1).max(120)).max(200).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+});
+
+export const LoopSaveSchema = z.object({
+  config: LoopSaveConfigSchema,
+  /** 保存后立即设为活动 loop（设置页「编译并启用」）。 */
+  activate: z.boolean().optional(),
+});
+
+export const LoopGetSchema = z.object({ id: z.string().min(1).max(64) });
+export const LoopDeleteSchema = z.object({ id: z.string().min(1).max(64) });
+
+/* ───────────────────────── 运行控制（暂停 / 恢复） ───────────────────────── */
+
+/**
+ * 会话级暂停：暂停后当前工具调用自然结束，循环在下一个工具/轮次边界等待；
+ * 恢复时可携带「暂停期间的改动」，壳层会作为 steer 注入下一轮。
+ */
+export const ChatPauseSchema = z.object({
+  /** 缺省 = 当前活动会话（由壳层解析）。 */
+  sessionId: SessionIdSchema.optional(),
+});
+
+export const ChatResumeSchema = z.object({
+  sessionId: SessionIdSchema.optional(),
+  /** 暂停期间的页面/需求改动；空 = 用户确认无改动。 */
+  change: z.string().trim().max(4000).optional(),
+});
+
 /* ───────────────────────── 会话压缩（/compact） ───────────────────────── */
 
 /* ───────────────────────── 浏览器工具栏浮层（独立窗口渲染） ───────────────────────── */
@@ -452,8 +501,12 @@ export const PreferencesSchema = z.object({
   sidebarWidth: z.number().int().min(240).max(720),
   /** Vibecoding 模式侧栏宽度（独立于标准宽度；约标准最小宽度的一半~3/5）。 */
   vibeSidebarWidth: z.number().int().min(100).max(720).optional(),
-  /** 界面主题：soft=柔和无框（默认）/ classic=旧版条框观感。 */
-  theme: z.enum(["soft", "classic"]).optional(),
+  /** 界面主题：soft=柔和无框（默认）/ classic=旧版条框观感 / ext.<扩展>.<主题>=扩展贡献主题。 */
+  theme: z
+    .string()
+    .max(160)
+    .regex(/^(soft|classic|ext\.[A-Za-z0-9._-]+)$/, "主题必须是 soft、classic 或扩展贡献主题 id")
+    .optional(),
   /** 右侧会话栏模式：docked=常驻 / collapsed=收起成图标条；小窗化是动作，不是持久化状态。 */
   sidebarMode: z.enum(["docked", "collapsed"]).optional(),
   /**

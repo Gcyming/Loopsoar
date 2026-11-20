@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { BUDGET_HARD } from "loopsoar-contracts/security-policy";
+import { LoopStagesSchema } from "loopsoar-contracts/schemas";
 
 /** 数据目录下的 loops 子目录名。 */
 export const LOOPS_DIR_NAME = "loops";
@@ -50,6 +51,11 @@ export const DeclarativeLoopSchema = z.object({
   maxToolCalls: z.number().int().min(1).max(BUDGET_HARD.maxToolCalls).optional(),
   /** 工具白名单（省略/空 = 不限制）；白名单外的工具既不给模型也不允许执行。 */
   allowedTools: z.array(z.string().min(1).max(120)).max(200).optional(),
+  /**
+   * 阶段能力开关：关闭某阶段时，该阶段工具对模型不可见且执行器拒绝调用。
+   * 省略 = 旧 loop 行为（不做阶段限制）；空数组 = 所有阶段都未配置，不额外限制。
+   */
+  stages: LoopStagesSchema.optional(),
   /** 采样温度（0~2）。当前 LlmRequest 尚无 temperature 字段，先校验留存（见报告"风险"）。 */
   temperature: z.number().min(0).max(2).optional(),
 });
@@ -354,8 +360,94 @@ export function scanLoopDefs(
     loops.push(def);
   }
 
-  // 扫描结果按 id 稳定排序：输出顺序不受文件系统/目录项顺序影响（UI 与测试可预期）。
+  /** 扫描结果按 id 稳定排序：输出顺序不受文件系统/目录项顺序影响（UI 与测试可预期）。 */
   loops.sort((a, b) => a.id.localeCompare(b.id));
 
   return { loops, errors, dir, seededExample, createdDir };
+}
+
+/* ───────────────────────── 自定义 Loop 编辑（设置页「编译」入口） ───────────────────────── */
+
+/** builtin id 不可被用户文件覆盖；与 core 的 CORE_LOOP_ID 同值。 */
+export const RESERVED_LOOP_IDS: readonly string[] = ["core-loop"];
+
+export interface SavedDeclarativeLoop {
+  config: DeclarativeLoopConfig;
+  filePath: string;
+}
+
+function assertEditableId(id: string): void {
+  if (!LOOP_ID_RE.test(id)) {
+    throw new Error("id 仅允许小写字母/数字/连字符，1~64 字符");
+  }
+  if (RESERVED_LOOP_IDS.includes(id)) {
+    throw new Error(`id "${id}" 是内置保留名，不能覆盖`);
+  }
+}
+
+function declarativePath(dataDir: string, id: string): string {
+  return path.join(loopsDirFor(dataDir), `${id}.json`);
+}
+
+/**
+ * 保存/编译一个 L2 声明式 loop：校验 → 原子写入 `<dataDir>/loops/<id>.json`。
+ * 不直接注册进运行时；调用方随后 `runtime.reload()` 即可让改动生效（与手工改文件同一条路径）。
+ */
+export function saveDeclarativeLoop(dataDir: string, input: unknown): SavedDeclarativeLoop {
+  const normalized: unknown = { kind: "declarative", ...(isRecord(input) ? input : {}) };
+  const parsed = DeclarativeLoopSchema.safeParse(normalized);
+  if (!parsed.success) throw new Error(`Loop 校验失败：${issuesOf(parsed.error)}`);
+  const id = parsed.data.id;
+  if (!id) throw new Error("缺少 loop id");
+  assertEditableId(id);
+
+  const dir = loopsDirFor(dataDir);
+  fs.mkdirSync(dir, { recursive: true });
+  const target = declarativePath(dataDir, id);
+  if (fs.existsSync(target)) {
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`目标 ${id}.json 不是普通文件，拒绝覆盖`);
+    }
+  }
+  // 同 id 的 L3 目录：不允许用 JSON 文件遮住脚本 loop 目录（扫描时会报重复/歧义）。
+  const scriptDir = path.join(dir, id);
+  if (fs.existsSync(scriptDir)) {
+    throw new Error(`已存在同名脚本 loop 目录 ${id}/，不能创建声明式 loop`);
+  }
+
+  const serialized: Record<string, unknown> = {
+    kind: "declarative",
+    id,
+    name: parsed.data.name,
+  };
+  if (parsed.data.description !== undefined) serialized.description = parsed.data.description;
+  if (parsed.data.systemPromptAppend !== undefined) serialized.systemPromptAppend = parsed.data.systemPromptAppend;
+  if (parsed.data.maxRounds !== undefined) serialized.maxRounds = parsed.data.maxRounds;
+  if (parsed.data.maxToolCalls !== undefined) serialized.maxToolCalls = parsed.data.maxToolCalls;
+  if (parsed.data.allowedTools !== undefined) serialized.allowedTools = parsed.data.allowedTools;
+  if (parsed.data.stages !== undefined) serialized.stages = parsed.data.stages;
+  if (parsed.data.temperature !== undefined) serialized.temperature = parsed.data.temperature;
+
+  const temp = path.join(dir, `.${id}.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(temp, `${JSON.stringify(serialized, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    fs.renameSync(temp, target);
+  } catch {
+    // Windows 上目标已存在时 rename 可能失败：退回覆盖写，仍保证 JSON 完整后再落盘。
+    fs.copyFileSync(temp, target);
+    fs.unlinkSync(temp);
+  }
+  return { config: parsed.data, filePath: target };
+}
+
+/** 删除一个用户自定义的声明式 loop（只删 `<loops>/<id>.json`，绝不碰脚本目录/内置）。 */
+export function deleteDeclarativeLoop(dataDir: string, id: string): { filePath: string } {
+  assertEditableId(id);
+  const target = declarativePath(dataDir, id);
+  if (!fs.existsSync(target)) throw new Error(`自定义 loop 不存在：${id}`);
+  const stat = fs.lstatSync(target);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`目标 ${id}.json 不是普通文件，拒绝删除`);
+  fs.unlinkSync(target);
+  return { filePath: target };
 }

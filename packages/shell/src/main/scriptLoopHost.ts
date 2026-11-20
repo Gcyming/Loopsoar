@@ -22,7 +22,7 @@ import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
 import type { EventSink, LoopEventType } from "loopsoar-core/events";
 import type { LlmClient, LlmMessage, LlmRequest } from "loopsoar-core/llm";
-import type { ToolExecutor, ToolLoopOutcome } from "loopsoar-core/tool_loop";
+import type { PauseGate, ToolExecutor, ToolLoopOutcome } from "loopsoar-core/tool_loop";
 
 /** worker 脚本文件名（与 extensionWorker.mjs 同目录）。 */
 export const SCRIPT_WORKER_FILE = "scriptLoopWorker.mjs";
@@ -78,6 +78,8 @@ export interface ScriptRunInput {
   limits?: ScriptRunLimits;
   signal?: AbortSignal;
   sink?: EventSink;
+  /** 暂停门：脚本每次 LLM/工具代理调用前等待（与内置 loop 一致）。 */
+  pauseGate?: PauseGate;
   /** 覆盖 worker 脚本路径（默认 resolveScriptWorkerPath()）。 */
   workerPath?: string;
   startTimeoutMs?: number;
@@ -389,7 +391,6 @@ export async function runScriptLoop(input: ScriptRunInput): Promise<ToolLoopOutc
             finishFail(`脚本 loop 触发预算收束（${hit}）`);
             return;
           }
-          armCallTimer(id, "LLM 代理超时");
           const request: LlmRequest = {
             messages: (frame.request?.messages ?? []) as LlmMessage[],
             tools: frame.request?.tools as LlmRequest["tools"],
@@ -399,6 +400,9 @@ export async function runScriptLoop(input: ScriptRunInput): Promise<ToolLoopOutc
           };
           void (async () => {
             try {
+              await input.pauseGate?.wait(input.signal);
+              if (settled) return;
+              armCallTimer(id, "LLM 代理超时");
               for await (const chunk of input.llm.invoke(request)) {
                 if (settled) return;
                 if ("tokens" in chunk && typeof chunk.tokens === "number") totalTokens += chunk.tokens;
@@ -428,9 +432,11 @@ export async function runScriptLoop(input: ScriptRunInput): Promise<ToolLoopOutc
             finishFail(`脚本 loop 触发预算收束（${hit}）`);
             return;
           }
-          armCallTimer(id, "工具代理超时");
           void (async () => {
             try {
+              await input.pauseGate?.wait(input.signal);
+              if (settled) return;
+              armCallTimer(id, "工具代理超时");
               const result = await input.executeTool.invoke({
                 id: frame.call.id,
                 name: frame.call.name,

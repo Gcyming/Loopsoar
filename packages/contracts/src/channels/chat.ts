@@ -1,4 +1,4 @@
-import { BrowserControlSchema, ChatCompactSchema, ChatForkSchema, ChatRenameSessionSchema, ChatRollbackSchema, ChatSaveTimelineSchema, ChatSteerCancelSchema, ChatSteerSchema, ChatStopSchema, ChatStreamSchema, NewSessionSchema, PermRespondSchema, SessionRefSchema } from "../validators.js";
+import { BrowserControlSchema, ChatCompactSchema, ChatForkSchema, ChatPauseSchema, ChatRenameSessionSchema, ChatResumeSchema, ChatRollbackSchema, ChatSaveTimelineSchema, ChatSteerCancelSchema, ChatSteerSchema, ChatStopSchema, ChatStreamSchema, NewSessionSchema, PermRespondSchema, SessionRefSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 chat 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -49,6 +49,18 @@ export const chatChannels: Record<string, ChannelBinding> = {
     domain: "chat",
     method: "stop",
     request: ChatStopSchema,
+    sensitive: true,
+  },
+  "chat:pause": {
+    domain: "chat",
+    method: "pause",
+    request: ChatPauseSchema,
+    sensitive: true,
+  },
+  "chat:resume": {
+    domain: "chat",
+    method: "resume",
+    request: ChatResumeSchema,
     sensitive: true,
   },
   "perm:respond": {

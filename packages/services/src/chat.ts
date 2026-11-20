@@ -10,6 +10,8 @@ import { canUseTool } from "loopsoar-core/agent";
 import { currentWallClockLine, withWallClockPrefix } from "loopsoar-core/messageTime";
 import {
   runToolLoop,
+  createPauseGate,
+  type PauseGate,
   type ToolCall,
   type ToolLoopOpts,
   type ToolLoopOutcome,
@@ -523,6 +525,8 @@ export class ChatService {
   /** sessionId → 当前运行中的转向总线（steer 注入用） */
   private steerBuses = new Map<string, SteerBus>();
   private aborts = new Map<string, AbortController>();
+  /** sessionId → 暂停门（当前流结束即清理；暂停不打断正在执行的工具）。 */
+  private pauseGates = new Map<string, PauseGate>();
   /** sessionId → 上一轮 stable 段 + 输入指纹；同输入下必须字节级不变。 */
   private stableSegments = new Map<string, { key: string; stable: string }>();
 
@@ -543,8 +547,33 @@ export class ChatService {
     if (!controller) return false;
     controller.abort();
     this.aborts.delete(sessionId);
-      this.steerBuses.delete(sessionId);
+    this.steerBuses.delete(sessionId);
+    this.pauseGates.delete(sessionId);
     return true;
+  }
+
+  /**
+   * 暂停某会话：只置门状态，当前工具执行完才在下一个边界等待。
+   * 返回 false = 该会话当前没有运行中的流（UI 不必显示暂停态）。
+   */
+  pause(sessionId: string): boolean {
+    const gate = this.pauseGates.get(sessionId);
+    if (!gate) return false;
+    gate.pause();
+    return true;
+  }
+
+  /** 恢复某会话；返回 false = 该会话没有可恢复的运行流。 */
+  resume(sessionId: string): boolean {
+    const gate = this.pauseGates.get(sessionId);
+    if (!gate) return false;
+    gate.resume();
+    return true;
+  }
+
+  /** 查询暂停态（供壳层 push 事件/幂等 UI 使用）。 */
+  isPaused(sessionId: string): boolean {
+    return this.pauseGates.get(sessionId)?.isPaused() ?? false;
   }
 
   /**
@@ -733,6 +762,8 @@ export class ChatService {
     this.aborts.set(sessionId, controller);
     const steers = new SteerBus();
     this.steerBuses.set(sessionId, steers);
+    const pauseGate = createPauseGate();
+    this.pauseGates.set(sessionId, pauseGate);
 
     // 工具面只解析一次：模型可见面（toolSchemas）与执行闸共用同一份名单，
     // 否则会出现「模型看不见却仍可被调用」或反之（审计 P0-1）。
@@ -843,6 +874,7 @@ export class ChatService {
         maxTokens: this.opts.getMaxOutputTokens?.(),
         steers,
         signal: controller.signal,
+        pauseGate,
         verifyRound,
         debug: this.opts.loopDebug,
       } satisfies ToolLoopOpts;
@@ -902,6 +934,7 @@ export class ChatService {
       // 只清理「本次流」的控制器：同一会话可能已经开始了新流（停止后的排队续发），
       // 老流收尾不能把新流的控制器删掉 —— 否则新流再点停止会返回 false、永远停不下来。
       if (this.aborts.get(sessionId) === controller) this.aborts.delete(sessionId);
+      if (this.pauseGates.get(sessionId) === pauseGate) this.pauseGates.delete(sessionId);
       // 收尾：把流式过滤器里跨 chunk 缓冲的尾部（<20 字符）补发，否则最后一段正文会丢
       if (filterEnabled) {
         const textTail = textFilter.flush();

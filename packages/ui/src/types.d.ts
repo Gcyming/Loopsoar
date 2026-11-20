@@ -750,75 +750,22 @@ export interface AskRespondResult {
   received: boolean;
 }
 
-/* ── Agent-Loop（ADR-0010：内置 loop + 安全回退 + 选择） ── */
-
-/** 一个可运行的 Agent 执行循环（builtin 不可删除、不可原位修改）。 */
-export interface LoopInfo {
-  id: string;
-  name: string;
-  builtin: boolean;
-  /** 是否为当前活动 loop。 */
-  active: boolean;
-  /** 三档 loop 类型（builtin / 声明式 / 脚本）；旧后端可缺省。 */
-  kind?: "builtin" | "declarative" | "script" | "custom";
-  /** 定义是否可用（坏 JSON / 脚本缺失时 false，UI 应灰显）。 */
-  valid?: boolean;
-  error?: string;
-  description?: string;
-}
-
-/** 安全回退记录（自定义 loop 失败 → 用同一 ctx 回退 builtin）。 */
-export interface LoopFallbackRecord {
-  reason: string;
-  at: number;
-}
-
-/** loop:list 返回：可选 loop 列表 + 当前选择 + 回退历史。 */
-/** /compact 结果。 */
-export interface CompactResult {
-  ok: boolean;
-  before: { messages: number; chars: number };
-  after: { messages: number; chars: number };
-  dropped: number;
-  savedRatio: number;
-  applied: boolean;
-  /** 是否真的超出预算（false 时 apply 也幂等无副作用）。 */
-  compressed?: boolean;
-  sessionId?: string;
-  /** 压缩摘要正文（apply 时写入会话）。 */
-  summary?: string;
-  /** 预览条目（apply=false 时最多 24 条）。 */
-  preview?: Array<{ role?: string; text: string }>;
-  error?: string;
-}
-
-export interface LoopListResult {
-  loops: LoopInfo[];
-  activeId: string | null;
-  fallbacks: LoopFallbackRecord[];
-}
-
-/** loop:setActive 返回（失败带中文原因；成功时同时带最新列表，省一次 loop:list 往返）。 */
-export interface LoopSetActiveResult {
-  ok: boolean;
-  error?: string;
-  activeId?: string | null;
-  /** 成功时返回的最新 loop 列表（与 loop:list 同构字段）。 */
-  loops?: LoopInfo[];
-  fallbacks?: LoopFallbackRecord[];
-}
-
-/** loop:changed 事件负载：活动 loop 变更（可能携带最新列表）。 */
-export interface LoopChangedPayload {
-  activeId: string | null;
-  loops?: LoopInfo[];
-}
-
-/** loop:fallback 事件负载：安全回退（界面必须显著提示）。 */
-export interface LoopFallbackPayload {
-  reason: string;
-  at?: number;
-}
+/* Agent-Loop 类型已拆到 loopTypes.ts（types.d.ts 只做 re-export，避免声明文件超 1400 行）。 */
+export type {
+  LoopInfo,
+  LoopStageId,
+  LoopStageConfig,
+  LoopEditorConfig,
+  LoopGetResult,
+  LoopSaveResult,
+  LoopDeleteResult,
+  LoopFallbackRecord,
+  CompactResult,
+  LoopListResult,
+  LoopSetActiveResult,
+  LoopChangedPayload,
+  LoopFallbackPayload
+} from "./loopTypes.js";
 
 /* ── 书签（浏览器功能面） ── */
 
@@ -899,6 +846,15 @@ export interface LoopsoarAPI {
       reasoningEffort?: string;
     }): Promise<{ accepted: boolean; sessionId: string }>;
     stop(payload: { sessionId?: string }): Promise<{ stopped: boolean }>;
+    /** 暂停当前运行（缺省会话）：当前工具结束后在边界等待；返回 paused=false 表示无可暂停流。 */
+    pause(payload?: { sessionId?: string }): Promise<{ paused: boolean; sessionId?: string; error?: string }>;
+    /** 恢复运行；change 非空时作为「暂停期间改动」注入下一轮 steer。 */
+    resume(payload?: { sessionId?: string; change?: string }): Promise<{
+      resumed: boolean;
+      sessionId?: string;
+      error?: string;
+      steer?: { accepted?: boolean; reason?: string } | null;
+    }>;
     rollback(payload: { keepCount: number; sessionId?: string }): Promise<{ ok: boolean; session: unknown }>;
     /** 从源会话第 keepCount 条消息处分支：复制前缀到新会话并切过去（不继承运行态/浏览器任务）。 */
     renameSession(payload: { sessionId: string; title: string }): Promise<{ ok: boolean; sessions: SessionMeta[] }>;
@@ -962,6 +918,12 @@ export interface LoopsoarAPI {
     setActive(payload: { id: string }): Promise<LoopSetActiveResult>;
     /** 重新扫描 loops/ 目录（L2 声明式 / L3 脚本）。 */
     reload(): Promise<LoopListResult>;
+    /** 读取单个声明式 loop 的完整配置（设置页编辑器）。 */
+    get(payload: { id: string }): Promise<LoopGetResult>;
+    /** 编译/保存自定义声明式 loop（校验 + 原子写盘 + 重扫 + 可选启用）。 */
+    save(payload: { config: LoopEditorConfig; activate?: boolean }): Promise<LoopSaveResult>;
+    /** 删除用户自定义声明式 loop（活动 loop 被删时回落 builtin）。 */
+    delete(payload: { id: string }): Promise<LoopDeleteResult>;
   };
   file: LoopsoarDomain;
   workspace: LoopsoarDomain & {

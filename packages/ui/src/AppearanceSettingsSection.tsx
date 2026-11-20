@@ -5,7 +5,7 @@
  * useMemo 里只会把父级依赖数组越拉越长。拆出后父组件只负责把偏好和通知回调传进来。
  */
 import React, { useState } from "react";
-import { BRAND } from "./theme.js";
+import { BRAND, applyContributedTheme, applyTheme } from "./theme.js";
 import { Btn, Field, Head, S, Seg } from "./settingsUi.js";
 import TopicRail from "./TopicRail.js";
 import { DEFAULT_CHAT_RAIL, loadRailParams, saveRailParams, type RailParams } from "./railParams.js";
@@ -54,6 +54,8 @@ export default function AppearanceSettingsSection({
   const [rail, setRail] = useState<RailParams>(() =>
     typeof window === "undefined" ? DEFAULT_CHAT_RAIL : loadRailParams(),
   );
+  /** 主题直存请求序号：快速连点只让最后一次响应回写，避免旧 IPC 覆盖新选择。 */
+  const themeSaveSeq = React.useRef(0);
   // 扩展贡献主题：跟随扩展启停即时刷新（未装扩展时为空）。
   const [extThemes, setExtThemes] = useState<{ id: string; name: string }[]>([]);
   React.useEffect(() => {
@@ -137,8 +139,26 @@ export default function AppearanceSettingsSection({
                 ]}
                 on={(x) => {
                   if (!prefs) return;
-                  // theme 属于偏好：写入 prefs 后由通用 400ms 防抖 effect 调用 setPreferences 落盘
-                  onPrefsChange({ ...prefs, theme: x as Preferences["theme"] });
+                  // theme 属于偏好：写入 prefs 后由通用 400ms 防抖 effect 调用 setPreferences 落盘。
+                  // 先把内置主题直接挂到 documentElement：主题切换是视觉动作，不能等 IPC 往返/400ms 防抖。
+                  if (x === "soft" || x === "classic") {
+                    applyContributedTheme(null); // 先清掉扩展主题的 token 覆盖，避免 classic/soft 被旧变量染色
+                    applyTheme(x);
+                  }
+                  const next = { ...prefs, theme: x as Preferences["theme"] };
+                  onPrefsChange(next);
+                  // 立刻落盘：关掉设置会取消父级防抖 effect，等 400ms 会把这次主题选择丢掉。
+                  const seq = ++themeSaveSeq.current;
+                  void api.settings
+                    .setPreferences(next)
+                    .then((r) => {
+                      if (seq !== themeSaveSeq.current) return;
+                      onPrefsChange(r.preferences);
+                      onPreferencesSaved?.(r.preferences);
+                    })
+                    .catch((err) => {
+                      if (seq === themeSaveSeq.current) onError(err);
+                    });
                 }}
               />
             </Field>

@@ -210,8 +210,17 @@ const comboItem: React.CSSProperties = {
   cursor: "pointer",
 };
 
-export function In({ v, ph, on, type, style }: { v: string; ph?: string; on: (x: string) => void; type?: string; style?: React.CSSProperties }) {
-  return <input style={{ ...S.input, ...style }} value={v} placeholder={ph} type={type ?? "text"} onChange={(e) => on(e.target.value)} />;
+export function In({ v, ph, on, type, style, disabled = false }: { v: string; ph?: string; on: (x: string) => void; type?: string; style?: React.CSSProperties; disabled?: boolean }) {
+  return (
+    <input
+      style={{ ...S.input, ...(disabled ? { opacity: 0.65, cursor: "not-allowed" } : {}), ...style }}
+      value={v}
+      placeholder={ph}
+      type={type ?? "text"}
+      disabled={disabled}
+      onChange={(e) => on(e.target.value)}
+    />
+  );
 }
 export function Area({ v, rows, on, wide, full, ph }: { v: string; rows: number; on: (x: string) => void; wide?: boolean; full?: boolean; ph?: string }) {
   return (

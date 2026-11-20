@@ -11,8 +11,11 @@ import {
   EXAMPLE_LOOP_FILE,
   EXAMPLE_LOOP_TEMPLATE,
   LOOP_ID_RE,
+  RESERVED_LOOP_IDS,
+  deleteDeclarativeLoop,
   ensureExampleLoop,
   loopsDirFor,
+  saveDeclarativeLoop,
   scanLoopDefs,
   type DeclarativeLoopDef,
   type ScriptLoopDef,
@@ -209,5 +212,71 @@ describe("loopDefs：L3 脚本", () => {
     expect(messages).toMatch(/缺少 loop.json/);
     // *.json 里写 kind:"script"（L3 位置错误）→ 给出可执行的修正提示
     expect(messages).toMatch(/kind 必须是 "declarative"/);
+  });
+});
+
+describe("自定义 loop 编译 / 删除（设置页链路）", () => {
+  it("saveDeclarativeLoop：校验 → 原子写 loops/<id>.json → 可被扫描并保留阶段开关", () => {
+    const dataDir = tempDir();
+    const dir = prepareLoopsDir(dataDir);
+
+    const saved = saveDeclarativeLoop(dataDir, {
+      kind: "declarative",
+      id: "web-research",
+      name: "网页调研",
+      description: "先检索再整理",
+      maxRounds: 6,
+      maxToolCalls: 24,
+      stages: [
+        { id: "plan", enabled: true },
+        { id: "research", enabled: true },
+        { id: "browse", enabled: false },
+        { id: "interact", enabled: false },
+        { id: "workspace", enabled: true },
+        { id: "delegate", enabled: false },
+      ],
+      allowedTools: ["web_search", "todo_write"],
+    });
+
+    expect(saved.filePath).toBe(path.join(dir, "web-research.json"));
+    expect(saved.config.id).toBe("web-research");
+    const raw = JSON.parse(fs.readFileSync(saved.filePath, "utf8")) as Record<string, unknown>;
+    expect(raw.kind).toBe("declarative");
+    expect(raw.stages).toEqual((saved.config.stages ?? []));
+
+    const scanned = scanLoopDefs(dataDir);
+    const def = scanned.loops.find((loop) => loop.id === "web-research");
+    expect(def?.kind).toBe("declarative");
+    if (def?.kind === "declarative") {
+      expect(def.config.stages?.find((stage) => stage.id === "browse")?.enabled).toBe(false);
+      expect(def.config.allowedTools).toEqual(["web_search", "todo_write"]);
+    }
+  });
+
+  it("saveDeclarativeLoop：非法 id/保留 id/重复脚本目录都拒绝，且不写半截文件", () => {
+    const dataDir = tempDir();
+    const dir = prepareLoopsDir(dataDir);
+    fs.mkdirSync(path.join(dir, "taken"), { recursive: true });
+
+    expect(() => saveDeclarativeLoop(dataDir, { id: "../escape", name: "坏 id" })).toThrow(/id/);
+    expect(() => saveDeclarativeLoop(dataDir, { id: RESERVED_LOOP_IDS[0], name: "内置" })).toThrow(/保留名/);
+    expect(() => saveDeclarativeLoop(dataDir, { id: "taken", name: "冲突" })).toThrow(/脚本 loop 目录/);
+    expect(fs.existsSync(path.join(dir, "taken.json"))).toBe(false);
+  });
+
+  it("deleteDeclarativeLoop：只删除 JSON；脚本目录与未知 id 拒绝", () => {
+    const dataDir = tempDir();
+    const dir = prepareLoopsDir(dataDir);
+    saveDeclarativeLoop(dataDir, { id: "temp-loop", name: "临时" });
+    const target = path.join(dir, "temp-loop.json");
+    expect(fs.existsSync(target)).toBe(true);
+
+    expect(deleteDeclarativeLoop(dataDir, "temp-loop").filePath).toBe(target);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(() => deleteDeclarativeLoop(dataDir, "temp-loop")).toThrow(/不存在/);
+
+    fs.mkdirSync(path.join(dir, "script-loop"), { recursive: true });
+    expect(() => deleteDeclarativeLoop(dataDir, "script-loop")).toThrow(/不存在/);
+    expect(fs.existsSync(path.join(dir, "script-loop"))).toBe(true);
   });
 });

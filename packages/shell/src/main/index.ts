@@ -1189,7 +1189,7 @@ app.whenReady().then(async () => {
     }
   });
   registerTerminalDomain(deps, terminals);
-  registerLoopDomain(deps, loopRuntime);
+  registerLoopDomain(deps, loopRuntime, dirs.dataDir);
   registerAskDomain(deps, askBus);
   // 浮层域：ui:openPopover/closePopover/popoverAction（仅主窗口可打开；动作转发主窗口执行）
   registerChromePopoverDomain(

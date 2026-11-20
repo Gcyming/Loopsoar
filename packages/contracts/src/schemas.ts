@@ -10,6 +10,7 @@
  * 拆分不改变任何导出名、通道顺序或生成物字节。
  */
 export * from "./validators.js";
+export * from "./loopStages.js";
 export { CHANNEL_BINDINGS } from "./channels/index.js";
 export { EVENTS, type EventName } from "./events.js";
 
