@@ -69,6 +69,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # pnpm 默认不执行依赖的安装脚本；electron 的 postinstall 负责下载二进制。
+      # 干净 runner 上不做这一步，dev-gui 会报“未找到 electron 二进制”。
+      - name: Rebuild Electron binary
+        run: pnpm rebuild electron
+
       # Electron 在无显示环境需要 xvfb 与一组 Chromium 运行库
       - name: Install Electron runtime libs
         run: |
