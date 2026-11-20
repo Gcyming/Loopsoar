@@ -16,6 +16,7 @@ import {
   In,
   Area,
   S,
+  Seg,
   Toggle,
 } from "./settingsUi.js";
 import type {
@@ -42,7 +43,65 @@ const STAGES: StageMeta[] = LOOP_STAGE_CATALOG.map((stage) => ({
 }));
 
 const DEFAULT_STAGES: LoopStageConfig[] = STAGES.map((stage) => ({ id: stage.id, enabled: true }));
+const CUSTOM_TEMPLATE: LoopStageConfig[] = [
+  { id: "scout", name: "侦察", enabled: true, tools: ["web_search", "web_fetch"], prompt: "先收集候选来源，给出取舍理由。" },
+  { id: "act", name: "执行", enabled: true, tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type"], prompt: "在浏览器里完成页面操作，每步核对结果。" },
+  { id: "report", name: "汇总", enabled: true, tools: ["todo_write", "file_write"], prompt: "整理可复用的结论与文件。" },
+];
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** 是否为用户完全自定义的阶段集合（含任意非内置阶段 id、自定义字段或重排/裁剪）。 */
+function hasCustomStages(stages: LoopStageConfig[] | undefined): boolean {
+  if (!stages || stages.length === 0) return false;
+  if (stages.length !== STAGES.length) return true;
+  return stages.some((stage, index) => {
+    const builtin = STAGES[index];
+    return (
+      stage.id !== builtin?.id ||
+      stage.name !== undefined ||
+      stage.tools !== undefined ||
+      stage.prompt !== undefined
+    );
+  });
+}
+
+/**
+ * 完全自定义阶段 JSON 的本地校验：后端仍是最终裁判，这里先给出可读错误并归一化。
+ * 只接受数组；每项至少 id/enabled，名称/工具/提示可选。
+ */
+function parseCustomStages(text: string): { stages?: LoopStageConfig[]; error?: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    return { error: `JSON 解析失败：${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return { error: "必须是非空阶段数组" };
+  if (raw.length > 32) return { error: "最多 32 个阶段" };
+  const seen = new Set<string>();
+  const stages: LoopStageConfig[] = [];
+  for (const [index, item] of raw.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return { error: `第 ${index + 1} 项必须是对象` };
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || !ID_RE.test(row.id)) return { error: `第 ${index + 1} 项的 id 不合法` };
+    if (seen.has(row.id)) return { error: `阶段 id 重复：${row.id}` };
+    seen.add(row.id);
+    if (row.enabled !== undefined && typeof row.enabled !== "boolean") return { error: `阶段 ${row.id} 的 enabled 必须是布尔值` };
+    if (row.name !== undefined && typeof row.name !== "string") return { error: `阶段 ${row.id} 的 name 必须是字符串` };
+    if (row.prompt !== undefined && typeof row.prompt !== "string") return { error: `阶段 ${row.id} 的 prompt 必须是字符串` };
+    if (row.tools !== undefined && (!Array.isArray(row.tools) || row.tools.some((tool) => typeof tool !== "string"))) {
+      return { error: `阶段 ${row.id} 的 tools 必须是字符串数组` };
+    }
+    stages.push({
+      id: row.id,
+      enabled: row.enabled !== false,
+      ...(typeof row.name === "string" && row.name.trim() ? { name: row.name.trim() } : {}),
+      ...(Array.isArray(row.tools) ? { tools: row.tools.map((tool) => String(tool).trim()).filter(Boolean) } : {}),
+      ...(typeof row.prompt === "string" && row.prompt.trim() ? { prompt: row.prompt.trim() } : {}),
+    });
+  }
+  return { stages };
+}
 
 function emptyDraft(): LoopEditorConfig {
   return {
@@ -59,6 +118,16 @@ function emptyDraft(): LoopEditorConfig {
 }
 
 function fromConfig(config: LoopEditorConfig): LoopEditorConfig {
+  // 完全自定义配置：原样保留用户阶段（名称/工具/提示），不要被内置六阶段覆盖。
+  if (hasCustomStages(config.stages)) {
+    return {
+      ...config,
+      description: config.description ?? "",
+      systemPromptAppend: config.systemPromptAppend ?? "",
+      stages: (config.stages ?? []).map((stage) => ({ ...stage, enabled: stage.enabled !== false })),
+      allowedTools: config.allowedTools ?? [],
+    };
+  }
   const byId = new Map((config.stages ?? []).map((stage) => [stage.id, stage.enabled]));
   return {
     ...config,
@@ -69,9 +138,11 @@ function fromConfig(config: LoopEditorConfig): LoopEditorConfig {
   };
 }
 
-function stageSummary(config: LoopEditorConfig | null): string {
+function stageSummary(config: LoopEditorConfig | null, custom: boolean, customText?: string): string {
   if (!config) return "—";
-  const enabled = (config.stages ?? DEFAULT_STAGES).filter((stage) => stage.enabled).length;
+  const stages = custom && customText ? (parseCustomStages(customText).stages ?? config.stages ?? DEFAULT_STAGES) : (config.stages ?? DEFAULT_STAGES);
+  const enabled = stages.filter((stage) => stage.enabled).length;
+  if (custom) return `完全自定义 · ${enabled}/${stages.length} 个阶段开启`;
   return `${enabled}/${STAGES.length} 个阶段开启`;
 }
 
@@ -88,6 +159,9 @@ export function LoopStudioSection({
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [selectedReadonly, setSelectedReadonly] = React.useState<LoopInfo | null>(null);
   const [draft, setDraft] = React.useState<LoopEditorConfig | null>(null);
+  /** 内置六阶段开关 / 完全自定义阶段 JSON 两种编辑模式。 */
+  const [customMode, setCustomMode] = React.useState(false);
+  const [customText, setCustomText] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [activate, setActivate] = React.useState(true);
@@ -131,6 +205,9 @@ export function LoopStudioSection({
         return;
       }
       setDraft(fromConfig(got.loop.config));
+      const custom = hasCustomStages(got.loop.config.stages);
+      setCustomMode(custom);
+      setCustomText(JSON.stringify(got.loop.config.stages ?? DEFAULT_STAGES, null, 2));
       setActivate(loop.active);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err));
@@ -144,9 +221,18 @@ export function LoopStudioSection({
     setSelectedId(null);
     setSelectedReadonly(null);
     setDraft(emptyDraft());
+    setCustomMode(false);
+    setCustomText(JSON.stringify(DEFAULT_STAGES, null, 2));
     setActivate(true);
     setLocalError(null);
     setNote(null);
+  }
+
+  /** 直接从列表入口进入「完全自定义」：不要求用户先点新建再找模式开关。 */
+  function startNewCustom(): void {
+    startNew();
+    setCustomMode(true);
+    setCustomText(JSON.stringify(CUSTOM_TEMPLATE, null, 2));
   }
 
   function fromReadonly(): void {
@@ -160,6 +246,8 @@ export function LoopStudioSection({
       name: `${loop.name}（自定义）`,
       description: loop.description ?? "",
     });
+    setCustomMode(false);
+    setCustomText(JSON.stringify(DEFAULT_STAGES, null, 2));
     setActivate(true);
     setLocalError(null);
     setNote(null);
@@ -192,7 +280,26 @@ export function LoopStudioSection({
     if (draft.maxToolCalls !== undefined && (!Number.isInteger(draft.maxToolCalls) || draft.maxToolCalls < 1 || draft.maxToolCalls > 500)) {
       return tr("settings.loop.badCalls");
     }
+    if (customMode) {
+      const parsed = parseCustomStages(customText);
+      if (parsed.error) return `完全自定义阶段：${parsed.error}`;
+      if (!parsed.stages || parsed.stages.length === 0) return "完全自定义阶段不能为空";
+    }
     return null;
+  }
+
+  function setEditorMode(mode: "builtin" | "custom"): void {
+    if (mode === "custom") {
+      setCustomMode(true);
+      setCustomText(JSON.stringify(draft?.stages ?? DEFAULT_STAGES, null, 2));
+      setLocalError(null);
+      return;
+    }
+    setCustomMode(false);
+    // 回到内置模式时重置为六阶段目录，避免把自定义阶段误带到开关网格。
+    setDraft((current) => (current ? { ...current, stages: DEFAULT_STAGES.map((stage) => ({ ...stage })) } : current));
+    setCustomText(JSON.stringify(DEFAULT_STAGES, null, 2));
+    setLocalError(null);
   }
 
   async function save(): Promise<void> {
@@ -217,6 +324,12 @@ export function LoopStudioSection({
       return;
     }
     try {
+      const parsedStages = customMode ? parseCustomStages(customText) : null;
+      if (parsedStages?.error || (customMode && !parsedStages?.stages?.length)) {
+        setLocalError(`完全自定义阶段：${parsedStages?.error ?? "不能为空"}`);
+        return;
+      }
+      const stagesToSave = customMode ? parsedStages!.stages! : (draft.stages ?? DEFAULT_STAGES);
       const config: LoopEditorConfig = {
         kind: "declarative",
         id: draft.id,
@@ -225,7 +338,7 @@ export function LoopStudioSection({
         ...(draft.systemPromptAppend?.trim() ? { systemPromptAppend: draft.systemPromptAppend.trim() } : {}),
         ...(draft.maxRounds !== undefined ? { maxRounds: draft.maxRounds } : {}),
         ...(draft.maxToolCalls !== undefined ? { maxToolCalls: draft.maxToolCalls } : {}),
-        stages: draft.stages ?? DEFAULT_STAGES,
+        stages: stagesToSave,
         ...(draft.allowedTools && draft.allowedTools.length > 0 ? { allowedTools: draft.allowedTools } : {}),
         ...(draft.temperature !== undefined ? { temperature: draft.temperature } : {}),
       };
@@ -293,7 +406,10 @@ export function LoopStudioSection({
         <div style={listCol}>
           <div style={{ ...S.rowBetween, marginBottom: 8 }}>
             <span style={S.tag}>{tr("settings.loop.count", { n: loops.length })}</span>
-            <Btn label={tr("settings.loop.new")} small primary onClick={startNew} />
+            <div style={{ display: "flex", gap: 6 }}>
+              <Btn label={tr("settings.loop.modeCustom")} small onClick={startNewCustom} />
+              <Btn label={tr("settings.loop.new")} small primary onClick={startNew} />
+            </div>
           </div>
           {loops.length === 0 ? <div style={emptyBox}>{tr("settings.loop.empty")}</div> : null}
           {loops.map((loop) => {
@@ -352,7 +468,7 @@ export function LoopStudioSection({
                 <div style={{ fontSize: 13.5, fontWeight: 700 }}>
                   {selectedId ? tr("settings.loop.editTitle", { id: selectedId }) : tr("settings.loop.newTitle")}
                 </div>
-                <span style={S.tag}>{stageSummary(draft)}</span>
+                <span style={S.tag}>{stageSummary(draft, customMode, customText)}</span>
               </div>
 
               <div style={formGrid}>
@@ -390,32 +506,59 @@ export function LoopStudioSection({
               <div style={stageHead}>
                 <div>
                   <div style={stageTitle}>{tr("settings.loop.stages")}</div>
-                  <div style={stageHint}>{tr("settings.loop.stagesHint")}</div>
+                  <div style={stageHint}>{customMode ? tr("settings.loop.customHint") : tr("settings.loop.stagesHint")}</div>
                 </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <Btn label={tr("settings.loop.allOn")} small onClick={() => {
-                    update({ stages: STAGES.map((stage) => ({ id: stage.id, enabled: true })) });
-                  }} />
-                  <Btn label={tr("settings.loop.allOff")} small onClick={() => {
-                    update({ stages: STAGES.map((stage) => ({ id: stage.id, enabled: false })) });
-                  }} />
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <Seg
+                    v={customMode ? "custom" : "builtin"}
+                    opts={[
+                      ["builtin", tr("settings.loop.modeBuiltin")],
+                      ["custom", tr("settings.loop.modeCustom")],
+                    ]}
+                    on={(mode) => setEditorMode(mode === "custom" ? "custom" : "builtin")}
+                  />
+                  {!customMode ? (
+                    <>
+                      <Btn label={tr("settings.loop.allOn")} small onClick={() => {
+                        update({ stages: STAGES.map((stage) => ({ id: stage.id, enabled: true })) });
+                      }} />
+                      <Btn label={tr("settings.loop.allOff")} small onClick={() => {
+                        update({ stages: STAGES.map((stage) => ({ id: stage.id, enabled: false })) });
+                      }} />
+                    </>
+                  ) : null}
                 </div>
               </div>
-              <div style={stageGrid}>
-                {STAGES.map((stage) => {
-                  const enabled = (draft.stages ?? DEFAULT_STAGES).find((item) => item.id === stage.id)?.enabled ?? true;
-                  return (
-                    <div key={stage.id} style={{ ...stageCard, ...(enabled ? {} : stageCardOff) }}>
-                      <div style={S.rowBetween}>
-                        <span style={stageLabel}>{stage.label}</span>
-                        <Toggle v={enabled} on={(next) => setStage(stage.id, next)} title={stage.label} />
+              {customMode ? (
+                <div style={customBox}>
+                  <Area
+                    v={customText}
+                    rows={14}
+                    full
+                    on={setCustomText}
+                    ph={'[\n  { "id": "scout", "name": "侦察", "enabled": true, "tools": ["web_search"], "prompt": "先搜索并汇总候选来源" }\n]'}
+                  />
+                  <div style={customExample}>
+                    {tr("settings.loop.customHelp")}
+                  </div>
+                </div>
+              ) : (
+                <div style={stageGrid}>
+                  {STAGES.map((stage) => {
+                    const enabled = (draft.stages ?? DEFAULT_STAGES).find((item) => item.id === stage.id)?.enabled ?? true;
+                    return (
+                      <div key={stage.id} style={{ ...stageCard, ...(enabled ? {} : stageCardOff) }}>
+                        <div style={S.rowBetween}>
+                          <span style={stageLabel}>{stage.label}</span>
+                          <Toggle v={enabled} on={(next) => setStage(stage.id, next)} title={stage.label} />
+                        </div>
+                        <div style={stageDesc}>{stage.desc}</div>
+                        <div style={stageTools}>{stage.tools.join(" · ")}</div>
                       </div>
-                      <div style={stageDesc}>{stage.desc}</div>
-                      <div style={stageTools}>{stage.tools.join(" · ")}</div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
 
               <div style={formGrid}>
                 <Field l={tr("settings.loop.rounds")} h={tr("settings.loop.roundsHint")}>
@@ -476,13 +619,10 @@ const layout: React.CSSProperties = {
   alignItems: "start",
 };
 const listCol: React.CSSProperties = {
-  border: `1px solid ${BRAND.border}`,
-  borderRadius: 10,
-  padding: 10,
-  background: BRAND.inkPanel,
+  padding: "2px 0",
   display: "flex",
   flexDirection: "column",
-  gap: 4,
+  gap: 2,
   minWidth: 0,
 };
 const editorCol: React.CSSProperties = {
@@ -497,7 +637,7 @@ const loopRow: React.CSSProperties = {
   alignItems: "center",
   gap: 8,
   width: "100%",
-  border: "1px solid transparent",
+  border: "none",
   borderRadius: 8,
   background: "transparent",
   color: BRAND.linen,
@@ -505,8 +645,8 @@ const loopRow: React.CSSProperties = {
   cursor: "pointer",
 };
 const loopRowOn: React.CSSProperties = {
-  borderColor: BRAND.ochre,
   background: BRAND.ochreSoft,
+  boxShadow: `inset 2px 0 0 ${BRAND.ochre}`,
 };
 const loopRowInvalid: React.CSSProperties = { opacity: 0.6 };
 const loopDot: React.CSSProperties = {
@@ -575,6 +715,16 @@ const stageHead: React.CSSProperties = {
   margin: "14px 0 8px",
   paddingTop: 12,
   borderTop: `1px solid ${BRAND.border}`,
+};
+const customBox: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+  padding: "2px 0 12px",
+};
+const customExample: React.CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.6,
+  color: BRAND.linenMuted,
 };
 const stageTitle: React.CSSProperties = { fontSize: 12.5, fontWeight: 700 };
 const stageHint: React.CSSProperties = { marginTop: 3, fontSize: 10.5, color: BRAND.linenFaint };

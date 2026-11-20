@@ -253,6 +253,29 @@ describe("自定义 loop 编译 / 删除（设置页链路）", () => {
     }
   });
 
+  it("完全自定义阶段：任意 id/名称/工具/提示可保存并原样扫描", () => {
+    const dataDir = tempDir();
+    const saved = saveDeclarativeLoop(dataDir, {
+      kind: "declarative",
+      id: "fully-custom",
+      name: "全自定义",
+      stages: [
+        { id: "scout", name: "侦察", enabled: true, tools: ["web_search"], prompt: "先搜索候选来源" },
+        { id: "publish", name: "发布", enabled: false, tools: ["file_write"], prompt: "已完成审核才允许写文件" },
+      ],
+      allowedTools: ["web_search", "file_write"],
+    });
+    const raw = JSON.parse(fs.readFileSync(saved.filePath, "utf8")) as { stages?: unknown };
+    expect(raw.stages).toEqual(saved.config.stages);
+    const scanned = scanLoopDefs(dataDir);
+    const def = scanned.loops.find((loop) => loop.id === "fully-custom");
+    expect(def?.kind).toBe("declarative");
+    if (def?.kind === "declarative") {
+      expect(def.config.stages?.map((stage) => stage.id)).toEqual(["scout", "publish"]);
+      expect(def.config.stages?.[1]?.tools).toEqual(["file_write"]);
+    }
+  });
+
   it("saveDeclarativeLoop：非法 id/保留 id/重复脚本目录都拒绝，且不写半截文件", () => {
     const dataDir = tempDir();
     const dir = prepareLoopsDir(dataDir);

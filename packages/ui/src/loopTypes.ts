@@ -21,8 +21,15 @@ export interface LoopInfo {
 export type LoopStageId = "plan" | "research" | "browse" | "interact" | "workspace" | "delegate";
 
 export interface LoopStageConfig {
-  id: LoopStageId;
+  /** 内置阶段 id 或完全自定义阶段 id。 */
+  id: string;
   enabled: boolean;
+  /** 完全自定义阶段的展示名（内置阶段可省略，以契约目录为准）。 */
+  name?: string;
+  /** 完全自定义阶段的工具集合（关闭时拦截这些工具）。 */
+  tools?: string[];
+  /** 完全自定义阶段的能力提示。 */
+  prompt?: string;
 }
 
 /** 设置页编辑的声明式配置（loop:get/save 的载荷）。 */

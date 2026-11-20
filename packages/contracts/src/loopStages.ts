@@ -126,17 +126,27 @@ export const LOOP_STAGE_CATALOG: readonly LoopStageDefinition[] = [
   },
 ];
 
-/** 阶段开关的持久化结构（id 固定，enabled 可被用户逐项切换）。 */
+/** 自定义阶段 id：与 loop id 同形，允许用户完全自建阶段。 */
+export const LOOP_STAGE_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** 阶段开关/自定义阶段的持久化结构（内置 id 或任意合法自定义 id）。 */
 export const LoopStageConfigSchema = z.object({
-  id: z.enum(LOOP_STAGE_IDS),
+  /** 内置阶段用 LOOP_STAGE_IDS；自定义阶段允许任意合法 id。 */
+  id: z.string().regex(LOOP_STAGE_ID_RE, "阶段 id 仅允许小写字母/数字/连字符，1~64 字符"),
   enabled: z.boolean(),
+  /** 完全自定义阶段的展示名（内置阶段忽略，以目录为准）。 */
+  name: z.string().trim().min(1).max(80).optional(),
+  /** 完全自定义阶段的工具集合；省略 = 该阶段不限制具体工具。 */
+  tools: z.array(z.string().min(1).max(120)).max(200).optional(),
+  /** 完全自定义阶段注入的能力说明；省略 = 不注入额外提示。 */
+  prompt: z.string().max(4000).optional(),
 });
 
 export type LoopStageConfig = z.infer<typeof LoopStageConfigSchema>;
 
 export const LoopStagesSchema = z
   .array(LoopStageConfigSchema)
-  .max(LOOP_STAGE_IDS.length)
+  .max(32)
   .superRefine((stages, ctx) => {
     const seen = new Set<string>();
     for (const stage of stages) {

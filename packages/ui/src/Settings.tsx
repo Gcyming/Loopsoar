@@ -7,7 +7,7 @@ import { Area, Btn, CategoryCombo, Combo, Field, Head, In, Kv, S, SaveBtn, Seg, 
 import {
   HEADER_TEMPLATE_VARIABLES,
 } from "loopsoar-contracts/headerTemplate";
-import { formatHeaderLines, formatWhen, localized, loopKindOf, parseHeaderLines } from "./settingsModel.js";
+import { formatHeaderLines, localized, parseHeaderLines } from "./settingsModel.js";
 import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import AppearanceSettingsSection from "./AppearanceSettingsSection.js";
@@ -153,11 +153,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, [editingProviderId]);
   const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
-  /** Agent-Loop：可运行 loop 列表 + 当前选择 + 回退历史（设置 · 通用）。 */
+  /** Agent-Loop：仅由「Loop 工作台」使用；通用设置不再暴露第二套 loop 控件。 */
   const [loopInfo, setLoopInfo] = useState<LoopListResult | null>(null);
   const [loopBusy, setLoopBusy] = useState(false);
-  /** 最近一次安全回退（有则显示在 Agent Loop 行下方；ADR-0010：回退可见）。 */
-  const latestLoopFallback = loopInfo && loopInfo.fallbacks.length > 0 ? loopInfo.fallbacks[loopInfo.fallbacks.length - 1] : null;
 
   const ok = useCallback((text: string) => setNotice({ kind: "ok", text }), []);
   /** 供应商变更广播：主界面据此刷新模型 chip / 模型列表 */
@@ -308,31 +306,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     };
   }, [api, refreshLoops, tr]);
 
-  const chooseLoop = useCallback(async (loop: LoopInfo): Promise<void> => {
-    if (!api || loopBusy || loop.active) return;
-    setLoopBusy(true);
-    try {
-      const result = await api.loop.setActive({ id: loop.id });
-      if (!result?.ok) {
-        bad(result?.error ?? tr("settings.general.loopSwitchFailed"));
-        return;
-      }
-      // 成功返回里带最新列表（域层 {ok:true, ...LoopListPayload}）；没有则再拉一次兜底
-      if (Array.isArray(result.loops)) {
-        setLoopInfo({ loops: result.loops, activeId: result.activeId ?? null, fallbacks: result.fallbacks ?? [] });
-      } else {
-        setLoopInfo(await api.loop.list());
-      }
-      // 同步本地偏好副本里的 loopId：否则之后任何一次「通用设置」自动保存都会把旧 loopId 写回去
-      setPrefs((prev) => (prev ? { ...prev, loopId: loop.id } : prev));
-      ok(tr("settings.general.loopSwitched", { name: loop.name }));
-    } catch (e) {
-      bad(e);
-    } finally {
-      setLoopBusy(false);
-    }
-  }, [api, loopBusy, ok, bad, tr]);
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -480,48 +453,6 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           </Field>
           <Field l={tr("settings.general.memoryAuto")} h={tr("settings.general.memoryAutoHint")}><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
           <Field l={tr("settings.general.skillAuto")} h={tr("settings.general.skillAutoHint")}><Toggle v={prefs.skillAutoCandidate ?? false} on={(x) => setPrefs({ ...prefs, skillAutoCandidate: x })} /></Field>
-          <Field l={tr("settings.general.loop")} h={tr("settings.general.loopHint")}>
-            <div className="loop-picker" aria-busy={loopBusy}>
-              <div style={S.rowEnd}>
-                <Btn label={tr("settings.general.loopReload")} small onClick={() => void reloadLoops()} />
-              </div>
-              {loopInfo ? (
-                loopInfo.loops.length > 0 ? (
-                  loopInfo.loops.map((loop) => {
-                    const kind = loopKindOf(loop);
-                    return (
-                      <button
-                        key={loop.id}
-                        type="button"
-                        className={`loop-item${loop.active ? " is-active" : ""}`}
-                        disabled={loopBusy}
-                        aria-pressed={loop.active}
-                        title={loop.builtin ? tr("settings.general.loopBuiltinTitle") : tr("settings.general.loopCustomTitle")}
-                        onClick={() => void chooseLoop(loop)}
-                      >
-                        <span className="loop-item-name">{loop.name}</span>
-                        <span className="loop-item-tags">
-                          <span style={kind === "builtin" ? BADGE.neutral : kind === "custom" ? BADGE.warn : BADGE.neutral}>
-                            {tr(`settings.general.loopKind.${kind}`)}
-                          </span>
-                          {loop.active ? <span style={BADGE.ok}>{tr("settings.general.loopCurrent")}</span> : null}
-                        </span>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <span className="loop-empty">{tr("settings.general.loopEmpty")}</span>
-                )
-              ) : (
-                <span className="loop-empty">{tr("settings.general.loopUnavailable")}</span>
-              )}
-              {latestLoopFallback ? (
-                <div className="loop-fallback" role="status">
-                  {tr("settings.general.loopFallback", { when: formatWhen(latestLoopFallback.at, tr), reason: latestLoopFallback.reason })}
-                </div>
-              ) : null}
-            </div>
-          </Field>
           <div style={S.note}>{tr("settings.general.note")}</div>
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
 
@@ -1343,7 +1274,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       default:
         return null;
     }
-  }, [section, loading, api, prefs, locations, perms, pForm, testRes, diag, about, savePrefs, savePerms, bad, providerItems, activeProviderId, editingProviderId, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, pModelQuery, loopInfo, loopBusy, latestLoopFallback, chooseLoop, reloadLoops, onOpenOnboarding, tr, provider]);
+  }, [section, loading, api, prefs, locations, perms, pForm, testRes, diag, about, savePrefs, savePerms, bad, providerItems, activeProviderId, editingProviderId, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, pModelQuery, loopInfo, loopBusy, reloadLoops, onOpenOnboarding, tr, provider]);
 
   return (
     <div

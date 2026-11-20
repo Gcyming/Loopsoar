@@ -150,17 +150,33 @@ export function applyDeclarativeLoop(
   opts: ToolLoopOpts,
 ): ToolLoopOpts {
   const append = config.systemPromptAppend?.trim();
-  const stageConfigById = new Map((config.stages ?? []).map((stage) => [stage.id, stage.enabled]));
+  const configuredStages = config.stages ?? [];
+  const catalogById = new Map<string, (typeof LOOP_STAGE_CATALOG)[number]>(
+    LOOP_STAGE_CATALOG.map((stage) => [stage.id, stage]),
+  );
   const blocked = new Set<string>();
+  const stageTools = new Set<string>();
+  let restrictToStageTools = false;
   const stageLines: string[] = [];
-  if (config.stages && config.stages.length > 0) {
-    for (const stage of LOOP_STAGE_CATALOG) {
-      const enabled = stageConfigById.get(stage.id) ?? true;
+  if (configuredStages.length > 0) {
+    // 声明顺序即提示顺序：内置阶段（省略 name/tools/prompt）从目录补全；自定义阶段完全以用户编译为准。
+    for (const stage of configuredStages) {
+      const builtin = catalogById.get(stage.id);
+      const name = stage.name ?? builtin?.name ?? stage.id;
+      const tools = stage.tools ?? builtin?.tools ?? [];
+      const prompt = stage.prompt ?? builtin?.prompt ?? "";
+      const enabled = stage.enabled;
       if (enabled) {
-        stageLines.push(`✓ ${stage.name}：${stage.prompt}`);
+        // 完全自定义阶段显式写了 tools 时，它就是该阶段的可用工具集合；
+        // 多个开启阶段的 tools 取并集（未写 tools 的阶段不参与收窄，避免误伤 MCP 等动态工具）。
+        if (stage.tools !== undefined) {
+          restrictToStageTools = true;
+          for (const tool of stage.tools) stageTools.add(tool);
+        }
+        stageLines.push(`✓ ${name}：${prompt || "按任务需要执行本阶段。"}`);
       } else {
-        stageLines.push(`✕ ${stage.name}：本阶段已由用户关闭，不要调用其工具（${stage.tools.join("、")}）。`);
-        for (const tool of stage.tools) blocked.add(tool);
+        stageLines.push(`✕ ${name}：本阶段已由用户关闭，不要调用其工具（${tools.length > 0 ? tools.join("、") : "无工具限制"}）。`);
+        for (const tool of tools) blocked.add(tool);
       }
     }
   }
@@ -207,6 +223,13 @@ export function applyDeclarativeLoop(
           error: "loop-stage-denied",
         };
       }
+      if (restrictToStageTools && !stageTools.has(toolCall.name)) {
+        return {
+          ok: false,
+          content: `[Loop 阶段] 工具 ${toolCall.name} 不在已开启阶段的 tools 内，本次调用被拒绝`,
+          error: "loop-stage-denied",
+        };
+      }
       return baseExecutor.invoke(toolCall);
     },
   };
@@ -216,7 +239,11 @@ export function applyDeclarativeLoop(
     ...(messages.length > 0 ? { messages } : {}),
     limits,
     ...(blockedTools.length > 0 ? { blockedTools } : {}),
-    tools: () => baseTools().filter((tool) => (!allowed || allowed.has(tool.name)) && !blockedSet.has(tool.name)),
+    tools: () => baseTools().filter((tool) =>
+      (!allowed || allowed.has(tool.name)) &&
+      !blockedSet.has(tool.name) &&
+      (!restrictToStageTools || stageTools.has(tool.name)),
+    ),
     executeTool: gatedExecutor,
   };
 }

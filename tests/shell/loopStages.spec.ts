@@ -76,6 +76,26 @@ describe("applyDeclarativeLoop：阶段能力开关", () => {
     expect(denied.error).toBe("loop-tool-denied");
   });
 
+  it("完全自定义阶段：按数组顺序注入，自定义名称/工具/提示生效", async () => {
+    const applied = applyDeclarativeLoop(
+      {
+        id: "full-custom",
+        name: "全自定义",
+        stages: [
+          { id: "scout", name: "侦察", enabled: true, tools: ["web_search"], prompt: "先搜索候选来源" },
+          { id: "publish", name: "发布", enabled: false, tools: ["file_write"], prompt: "审核后才写文件" },
+        ],
+      },
+      baseOpts(),
+    );
+
+    expect(applied.tools().map((tool) => tool.name)).toEqual(["web_search"]);
+    expect(applied.blockedTools).toContain("file_write");
+    const last = applied.messages?.[applied.messages.length - 1];
+    expect(String(last?.content)).toContain("侦察：先搜索候选来源");
+    expect(String(last?.content)).toContain("发布：本阶段已由用户关闭");
+  });
+
   it("阶段提示注入到消息尾部（模型能读到哪些阶段被关闭）", () => {
     const applied = applyDeclarativeLoop(
       { id: "prompt", name: "带阶段提示", stages: [{ id: "browse", enabled: false }] },
