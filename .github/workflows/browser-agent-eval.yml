@@ -82,6 +82,7 @@ jobs:
         env:
           LOOPSOAR_ELECTRON_ARGS: "--no-sandbox"
           BROWSER_EVAL_TASK_TIMEOUT_MS: "90000"
+          BROWSER_EVAL_VERBOSE: "1"
         run: xvfb-run -a node scripts/browser-agent-eval.mjs --core
 
       - name: Run browser agent eval (30 full tasks)
@@ -90,6 +91,7 @@ jobs:
         env:
           LOOPSOAR_ELECTRON_ARGS: "--no-sandbox"
           BROWSER_EVAL_TASK_TIMEOUT_MS: "90000"
+          BROWSER_EVAL_VERBOSE: "1"
         run: xvfb-run -a node scripts/browser-agent-eval.mjs --all
 
       - name: Upload eval report
@@ -101,4 +103,5 @@ jobs:
             e2e-evidence/browser-agent-eval/report.md
             e2e-evidence/browser-agent-eval/report.json
             e2e-evidence/browser-agent-eval/window.png
+            e2e-evidence/browser-agent-eval/run.log
           if-no-files-found: warn

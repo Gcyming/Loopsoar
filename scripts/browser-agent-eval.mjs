@@ -471,6 +471,10 @@ try {
     } catch (err) {
       console.error(`E2E_EVAL 解析失败：${err instanceof Error ? err.message : String(err)}`);
     }
+  } else {
+    // 远端 runner 上应用可能启动失败；把子进程日志带进 CI 输出，避免只看到 0/0。
+    const tail = logText.split(/\r?\n/).slice(-120).join("\n");
+    console.error(`E2E_EVAL 未产生，run.log 尾部：\n${tail}`);
   }
   // 页面服务仍活着时读支付计数：确认被拒绝的支付没有真的发出请求。
   payState = await fetch(`http://127.0.0.1:${PAGE_PORT}/api/pay-count`).then((r) => r.json()).catch(() => null);
