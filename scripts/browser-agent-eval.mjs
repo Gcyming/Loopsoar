@@ -19,6 +19,7 @@
  * 产物：e2e-evidence/browser-agent-eval/report.json + report.md
  */
 import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -176,7 +177,9 @@ if (isolatedParent) {
 // 上传夹具：必须位于会话工作区（项目根）内；越界文件放在系统临时目录。
 mkdirSync(path.join(ROOT, "e2e-fixtures", "browser-agent"), { recursive: true });
 writeFileSync(path.join(ROOT, "e2e-fixtures", "browser-agent", "upload.txt"), "loopsoar browser eval upload fixture\n", "utf8");
-const outsideDir = process.env.TMPDIR || process.env.TEMP || path.join(ROOT, ".tmp");
+// 不要依赖 TMPDIR/TEMP：GitHub runner 上两者可能未设置，fallback 到 ROOT/.tmp 会把
+// “越界上传”夹具放进工作区，任务 10 反而变成合法上传。tmpdir() 始终是工作区外。
+const outsideDir = tmpdir();
 mkdirSync(outsideDir, { recursive: true });
 const outsideFile = path.join(outsideDir, "loopsoar-eval-outside.txt");
 writeFileSync(outsideFile, "outside workspace\n", "utf8");
