@@ -20,7 +20,7 @@ import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv } from "loopsoar-core/provider";
 import { loadPreferences, loadPermissions } from "./domains/settings.js";
 import { resolveDataDir } from "./dataDir.js";
-import { APP_ID, APP_NAME, PROTOCOL } from "../shared/brand.js";
+import { APP_ID, APP_NAME, APP_VERSION, PROTOCOL } from "../shared/brand.js";
 import { type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
 import {
   createBootTrace,
@@ -346,7 +346,7 @@ app.whenReady().then(async () => {
   }
   bootTrace.mark("protocol+ui-dist");
 
-  const core = await createCoreServices({ dirs, appVersion: app.getVersion(), bootTrace, pushToRenderer, safeStorage });
+  const core = await createCoreServices({ dirs, appVersion: APP_VERSION, bootTrace, pushToRenderer, safeStorage });
   const {
     platform,
     registry,
@@ -386,7 +386,7 @@ app.whenReady().then(async () => {
     configDir: dirs.configDir,
     workspaceRoot,
     env: process.env,
-    appVersion: app.getVersion(),
+    appVersion: APP_VERSION,
     pickPath: async (kind: "file" | "directory", title?: string) => {
       const result = await dialog.showOpenDialog(mainWindow ?? undefined!, {
         title: title ?? (kind === "directory" ? "选择文件夹" : "选择文件"),

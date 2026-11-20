@@ -21,7 +21,7 @@ import { compileRuleGuards } from "loopsoar-core/rules/guard";
 import { compileCommandGuards } from "loopsoar-core/rules/commandGuard";
 import { analyzeRuleConflicts } from "loopsoar-core/rules/health";
 import { buildRuleChecklist, type Checklist } from "loopsoar-core/rules/checklist";
-import { APP_ID, APP_NAME, PROTOCOL } from "../../shared/brand.js";
+import { APP_ID, APP_NAME, APP_VERSION, PROTOCOL } from "../../shared/brand.js";
 import type { RuleHit } from "../ruleStats.js";
 import type { RuleHistoryStore } from "../ruleHistory.js";
 import { withProviderDefaults } from "../providerDefaults.js";
@@ -1021,6 +1021,6 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     electron: process.versions.electron ?? "—",
     node: process.versions.node,
     brandAssetSource: "app icon（官方 Lp 火花图标）",
-    license: "内部构建（未发布）",
+    license: `内测构建 v${APP_VERSION}（未公开发布）`,
   }));
 }
