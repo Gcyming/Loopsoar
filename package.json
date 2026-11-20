@@ -9,6 +9,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
+    "push:api": "node scripts/github-api-sync.mjs",
     "bundle:shell": "node scripts/bundle-shell.mjs",
     "ext:keygen": "tsx scripts/extension-sign.ts keygen",
     "ext:sign": "tsx scripts/extension-sign.ts sign",

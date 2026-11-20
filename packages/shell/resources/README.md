@@ -1,18 +1,22 @@
-# Loopsoar 品牌资产（来源：前期准备官方资产）
+# Loopsoar 品牌资产（来源：官方 app 图标）
 
 > **产品名：Loopsoar**（仓库/包名/appId/userData/protocol 均用 Loopsoar）。
-> 图标沿用 `D:\tool\AI\real-project\Loopsoar\前期准备工作\brand\quilt-inf\` 的官方设计
-> 「破环·化片（Break the Loop · Shards）」——深墨 `#111318` / 亚麻白 `#F4EFE6` / 赭石 `#C8763C`，
-> ∞ 居中、线宽周期收细、右下环断裂化为布片。
+> 图标来自 `D:\tool\AI\real-project\Loopsoar\app icon\` 的官方应用图标：
+> 黑色圆角底 + 米白 `Lp` 连字 + 右上橙色火花。主色约为
+> 墨黑 `#0A0A0A` / 米白 `#FCF7F1` / 橙 `#FA9C38`；界面文字仍沿用现有
+> `loop`（亚麻白）+ `soar`（赭石）的深浅色分配。
 
 ## 文件
 
 | 文件 | 用途 | 来源 |
 |---|---|---|
-| `packages/shell/resources/icon.png` | Electron 窗口图标（256×256） | `quilt-inf/fin-256.png` |
-| `packages/shell/resources/icon.ico` | Windows 多档图标（打包/安装器用） | `quilt-inf/quilt-icon.ico` |
-| `packages/ui/public/logo.png` | 界面内 logo（顶部栏） | `quilt-inf/fin-256.png` |
-| `packages/ui/public/logo-mono-dark.png` | 单色深底变体（后续标题栏/托盘） | `quilt-inf/fin-mono-dark-256.png` |
+| `packages/shell/resources/icon.png` | Electron 窗口图标（512×512） | `app icon/icon-512.png` |
+| `packages/shell/resources/icon.ico` | Windows 多档图标（16–256，打包/安装器用） | 由 `app icon/icon-1024.png` 生成 |
+| `packages/ui/public/logo.png` | 界面内 logo（标题栏/欢迎页/加载态） | `app icon/icon-512.png` |
+| `packages/ui/public/favicon.ico` | 渲染层 favicon | `app icon/favicon.ico` |
+| `packages/ui/public/icon-32.png` | favicon PNG（32） | `app icon/icon-32.png` |
+| `packages/ui/public/icon-192.png` | PWA/快捷方式图标（192） | `app icon/icon-192.png` |
+| `packages/ui/public/apple-touch-icon.png` | Apple touch icon | `app icon/apple-touch-icon.png` |
 
 ## 铁律
 

@@ -7,6 +7,7 @@
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
+import BrandWordmark from "./BrandWordmark.js";
 import { Icon } from "./Icon.js";
 import ContextRing from "./ContextRing.js";
 import LiveStatus from "./LiveStatus.js";
@@ -121,7 +122,7 @@ export default function ChatMessageView({
       <span style={styles.avatar}>L</span>
       <div style={styles.assistantMain}>
         <div style={styles.assistantHead}>
-          <span style={styles.assistantName}>Loopsoar</span>
+          <BrandWordmark size={12} weight={700} letterSpacing={0.2} style={styles.assistantName} />
           {streaming ? <span style={styles.streamDot} /> : null}
           {/* 上下文环：真实渲染在助手头部（空数据不渲染，避免 0/0 误导） */}
           {contextCap > 0 && contextUsed > 0 ? (

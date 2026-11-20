@@ -2,6 +2,7 @@
 import * as React from "react";
 import type { SearchEngine } from "loopsoar-contracts/omnibox";
 import { Icon } from "./Icon.js";
+import BrandWordmark from "./BrandWordmark.js";
 import { useT } from "./i18n.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { autoGrow, hostOf } from "./startPageModel.js";
@@ -95,7 +96,7 @@ export default function NewTabPage({
       <div style={styles.ntpInner}>
         <div style={styles.brandRow}>
           <img src="./logo.png" alt="Loopsoar" width={44} height={44} />
-          <span style={styles.brandName}>Loopsoar</span>
+          <BrandWordmark size={18} weight={800} letterSpacing={0.4} style={styles.brandName} />
         </div>
 
         {/* 搜索 / Vibecoding 拨片：滑块 + 两个标签，切换时内容淡入 */}

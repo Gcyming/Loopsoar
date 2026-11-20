@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BADGE } from "./theme.js";
+import BrandWordmark from "./BrandWordmark.js";
 import { Area, Btn, CategoryCombo, Combo, Field, Head, In, Kv, S, SaveBtn, Seg, Stat, Toggle } from "./settingsUi.js";
 import {
   HEADER_TEMPLATE_VARIABLES,
@@ -1311,7 +1312,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         return about ? (<div>
           <Head t={tr("settings.about.head")} h={tr("settings.about.headHint")} />
           <div style={S.about}><img src="./logo.png" alt="Loopsoar" width={56} height={56} style={{ borderRadius: 10 }} />
-            <div><div style={{ fontSize: 18, fontWeight: 800 }}>{about.name}</div><div style={S.tag}>{tr("settings.about.version", { version: about.version })}</div></div></div>
+            <div><BrandWordmark size={18} weight={800} /><div style={S.tag}>{tr("settings.about.version", { version: about.version })}</div></div></div>
           <div style={S.kv}>
             <Kv k={tr("settings.about.appId")} v={about.appId} /><Kv k={tr("settings.about.protocol")} v={about.protocol} /><Kv k="Electron" v={about.electron} />
             <Kv k="Node" v={about.node} /><Kv k={tr("settings.about.brand")} v={about.brandAssetSource} />

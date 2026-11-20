@@ -10,6 +10,7 @@
  */
 import * as React from "react";
 import { Icon } from "./Icon.js";
+import BrandWordmark from "./BrandWordmark.js";
 import { useT } from "./i18n.js";
 
 /** localStorage 标记：向导是否已看过（跳过/完成都算）。 */
@@ -115,7 +116,7 @@ export default function Onboarding({
           <div className="onboarding-hero">
             <img src="./logo.png" alt="Loopsoar" width={56} height={56} style={{ borderRadius: 12 }} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 16, fontWeight: 800 }}>Loopsoar</div>
+              <BrandWordmark size={16} weight={800} />
               <div className="onboarding-dim">{tr("onboarding.welcome.desc")}</div>
             </div>
           </div>

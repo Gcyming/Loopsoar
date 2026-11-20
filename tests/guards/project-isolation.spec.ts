@@ -94,10 +94,14 @@ describe("守卫：项目隔离（不与被测/旧项目串扰）", () => {
     expect(existsSync(ico), "缺少多档图标（shell/resources/icon.ico）").toBe(true);
     expect(existsSync(logo), "缺少界面 logo（ui/public/logo.png）").toBe(true);
     expect(existsSync(provenance), "缺少品牌资产来源说明（shell/resources/README.md）").toBe(true);
-    // 来源必须指向官方品牌目录，且明确禁止旧项目图标
+    // 来源必须指向官方 app icon，且明确禁止旧项目图标
     const note = readFileSync(provenance, "utf8");
-    expect(note).toContain("quilt-inf");
+    expect(note).toContain("官方 app 图标");
+    expect(note).toContain("app icon");
     expect(note).toContain("_old-slime-icons");
+    for (const name of ["favicon.ico", "icon-32.png", "icon-192.png", "apple-touch-icon.png"]) {
+      expect(existsSync(path.join(ROOT, "packages/ui/public", name)), `缺少界面图标（ui/public/${name}）`).toBe(true);
+    }
   });
 
   it("UI/shell 不引用仓库外资产或旧项目资源路径", () => {

@@ -1020,7 +1020,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     protocol: `${PROTOCOL}://`,
     electron: process.versions.electron ?? "—",
     node: process.versions.node,
-    brandAssetSource: "前期准备/brand/quilt-inf（官方 ∞ 破环·化片）",
+    brandAssetSource: "app icon（官方 Lp 火花图标）",
     license: "内部构建（未发布）",
   }));
 }
