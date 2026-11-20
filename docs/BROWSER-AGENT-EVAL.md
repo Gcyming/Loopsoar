@@ -1,7 +1,7 @@
 # 浏览器 Agent 评测集（30 任务版）
 
 > 这是**任务级**评测集，不是单测。目标：把「工具都注册了」升级为「真实浏览器夹具页面上能稳定完成任务」。
-> 当前状态：30 个任务在本地真实浏览器夹具上**同一 Electron 进程连续跑通 29/30 + 1 个环境跳过**（连续两轮，0 失败、0 重试）；CI 已接入 10 个核心任务（PR/push）与每日全量 30 任务。
+> 当前状态：30 个任务在本地真实浏览器夹具上**同一 Electron 进程连续跑通 29/30 + 1 个环境跳过**（连续两轮，0 失败、0 重试）；GitHub Actions 的 clean Linux runner 已实跑 **30/30**（run `44734964466`），push 触发的核心门禁 **10/10**（run `44734822500`）。
 > 运行方式：使用 `scripts/e2e-page-server.mjs` 的本地夹具 + 真实 Electron 宿主；每个任务独立会话、独立标签组，记录工具序列、步数、耗时、错误码。
 
 ## 评分口径
@@ -59,6 +59,7 @@
 4. 失败样本落 `e2e-evidence/browser-agent/<task-id>/`：截图、快照、trace JSON。
 5. CI 现已分两层：PR/push 跑 10 个核心任务；每日定时与手动 `full` 跑 30 个全量任务。同一进程连续跑已稳定，不需要 `--isolated`；该开关仅保留给排障。
 6. 单任务首轮上限 90s；只有 `stream_not_done` 允许重试一次，重试上限 30s；`stream_error` 不重试。
+7. clean runner 必须先 `pnpm build`（workspace 包通过 `dist` 暴露 exports），并显式执行 `node node_modules/electron/install.js`；否则 UI 构建找不到 `loopsoar-contracts/layout`，或 dev-gui 找不到 Electron 二进制。
 
 ## 当前已覆盖的契约回归
 
@@ -86,9 +87,11 @@
 | **隔离模式核心 10（历史）** | **10/10** | CI PR 门禁旧命令 `--core --isolated` |
 | **同进程修复后全量（第一轮）** | **29/30 + 1 跳过** | `node scripts/browser-agent-eval.mjs --all`；0 失败、0 重试；最大单任务 3.3s |
 | **同进程修复后全量（第二轮）** | **29/30 + 1 跳过** | 连续复跑，同样 0 失败、0 重试；#11 环境跳过 |
+| **GitHub Actions clean runner 全量** | **30/30** | run `44734964466`；Linux/xvfb；先 `pnpm build` + 显式安装 Electron；3m11s |
+| **GitHub Actions push 核心门禁** | **10/10** | run `44734822500`；同一 workflow 的 PR/push 路径 |
 | **重试冒烟** | **1/1（attempts=2）** | `BROWSER_EVAL_TASK_TIMEOUT_MS=100` 强制首轮超时；`firstFailures=[stream_not_done]`，重试通过 |
 
-**有效结论：任务本身在同一进程连续跑时 29/30 稳定（#11 环境跳过），可以作为 CI 门禁；不再需要 `--isolated`。**
+**有效结论：任务本身在同一进程连续跑时 29/30 稳定（#11 环境跳过），可以作为 CI 门禁；不再需要 `--isolated`。GitHub Actions 的 clean runner 已实跑 30/30，核心门禁 10/10。**
 
 - #11「下载并等待完成」：本机 Electron 网络层在 0 B 处 `interrupted`；用普通 `BrowserWindow` 的隔离探针复现同样结果，证明不是工具接线问题。工具层由 `tests/shell/browserDataTools.spec.ts` 覆盖（下载等待、失败态、超时）。
 - `stream_not_done`：单任务首轮 90s 上限；同一任务只有 `stream_not_done` 会重试一次（30s），`stream_error` 立即失败。重试冒烟已用 100ms 强制超时验证：attempts=2、`firstFailures=[stream_not_done]`、最终通过。
@@ -98,4 +101,4 @@
   修复：`AskBus` / `PermRequestBus` 在结算时推送 `ask:resolved` / `perm:resolved`，UI 统一出队并撤掉遮罩；`buildTargetPointScript` 对 `visibilityState === 'hidden'` 直接跳过动画等待，并给 rAF 加 100ms 超时兜底。回归见 `tests/shell/askBus.spec.ts`、`tests/services/permRequestBus.spec.ts`、`tests/shell/browserRefs.spec.ts`。
 - 未覆盖的评测维度：登录墙（需要外部账号，按安全约束不内置凭据）、跨站 OAuth 弹窗（用合成页替代）。
 
-**下一步**：每日全量 `--all` 同进程运行，监控 #11 环境问题与任何新的 `stream_not_done`；若 CI 出现机器级抖动，再临时加 `--isolated` 排障，而不是作为默认门禁。
+**下一步**：每日全量 `--all` 同进程运行，监控 #11 环境问题与任何新的 `stream_not_done`；若 CI 出现机器级抖动，再临时加 `--isolated` 排障，而不是作为默认门禁。当前 GitHub Actions 已验证：全量 30/30、push 核心 10/10。

@@ -26,7 +26,7 @@
 
 | 维度 | 当前覆盖 | 主要缺口 |
 | --- | --- | --- |
-| 浏览器 Agent | ~85% | **20 个工具**；30 任务评测本地同进程跑通（29/30，1 项下载环境跳过）；CI 已接 10 个核心任务（PR/push）与每日 30 任务全量 |
+| 浏览器 Agent | ~85% | **20 个工具**；30 任务评测本地同进程 29/30（1 项下载环境跳过），GitHub Actions clean runner 已实跑 **30/30**；CI 10 核心门禁已实跑 **10/10**，每日 30 任务全量已接入 |
 | Harness 对标 | ~94% | 后台终端任务、可写子代理、跨进程恢复、checkpoint、trace 落盘 + 可视化面板/成本估算、MCP resources/prompts/roots/sampling、技能 allowed-tools + 资源包导入均已就位；仍缺 headless/SDK（属架构拆分）与 MCP OAuth；`roots` 在 MCP 工具调用期间按 `ctx.sessionId` 回答，无上下文回退活动会话，连接仍按 server 共享（并发严格隔离未做） |
 | 架构稳固性 | ~95% | 3 个组合根登记：`index.ts:1413`、`memoryService.ts:1449`、`App.tsx:1468`；其余默认档 ≤1400；故障注入（10）/并发（13）/迁移（17）测试已补；仍缺 `AppBody` 拆分与 headless/SDK |
 | 插件生态 | ~97% | API v2、semver/依赖图、Ed25519 签名/信任、安装/更新/回滚/静态市场、富 UI/事件钩子、四档认证、目录签名/撤销列表/过期/灰度通道/发布 CLI 已落地；仍缺自动更新轮询、中心化审核与评分、企业 SSO/审计 |
@@ -58,7 +58,7 @@
 4. **浏览器评测**
    - [x] 30 个任务级用例：搜索、表单、弹窗、多标签、SPA、下载/上传、敏感确认（`scripts/browser-agent-tasks.json`，30 个；页面是本地真实浏览器夹具，不是公网站点）。
    - [x] 指标：成功率、步数、延迟、错误码分布（`scripts/browser-agent-eval.mjs` 产出 markdown 报告）。
-   - [x] 进 CI 或发布前门禁：`.github/workflows/browser-agent-eval.yml`（10 个核心任务，xvfb + mock 模型，失败即红；首次需在 CI 实跑校准）。
+   - [x] 进 CI 或发布前门禁：`.github/workflows/browser-agent-eval.yml`（10 个核心任务，xvfb + mock 模型，失败即红；已在 GitHub Actions clean runner 实跑 10/10）；全量 30 任务同日定时/手动，实跑 30/30。
 
 5. **架构前置**
    - 拆分已完成（ADR-0147）：`browserTools.ts` 1495 → 55（`browserTools/` 五模块）、`browserHost.ts` 1498 → 1132（`browserViewLayout.ts`）、`index.ts` 1500 → 1414（`taskForks.ts`）、`refs.ts` 1496 → 1400（`userLock.ts`）；其余源码默认档 ≤1400。
@@ -127,7 +127,7 @@
 **本轮之后仍未做的浏览器维度：**
 
 - [x] `--root` 子树下钻：快照返回 `parentIndex`，`browser_snapshot` 的 `root` 解析到同代 ref 的子树（2026-11-20）。
-- [x] 30 任务评测接 CI 全量：脚本可跑真实 Electron 并产出报告（`node scripts/browser-agent-eval.mjs --all`）；CI 已分 10 核心（PR/push）与 30 全量（每日/手动），同进程运行。
+- [x] 30 任务评测接 CI 全量：脚本可跑真实 Electron 并产出报告（`node scripts/browser-agent-eval.mjs --all`）；CI 已分 10 核心（PR/push，实跑 10/10）与 30 全量（每日/手动，clean runner 实跑 30/30），同进程运行。
 
 ---
 
@@ -160,5 +160,5 @@
 
 1. 提交四维工作树并统一文档基线（本地提交，不混入证据截图）。
 2. 已修掉审计发现的质量缺口：`taskForks` fake 复用真实语义、P2 E2E 的 `forkMatch` 与扩展 E2E 的 `ready+resize` 都变成硬断言、MCP roots 已传入工具调用会话；市场 SSRF 仍按「协议/元数据地址校验」的收窄表述，不宣称完整私网沙箱。
-3. 把 30 任务全量评测接入 CI（当前 workflow 只跑 10 个核心任务），再处理 headless/SDK 与 MCP OAuth。
+3. 把 30 任务全量评测接入 CI（已完成：clean runner 全量 30/30，push 核心 10/10），再处理 headless/SDK 与 MCP OAuth。
 4. 最后才进入服务端运营项（自动更新、中心化审核、企业能力）；没有浏览器杀手能力之前不做市场扩张。
