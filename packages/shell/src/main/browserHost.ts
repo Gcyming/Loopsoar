@@ -22,8 +22,13 @@ import {
 } from "../browserAdapter/backends/webContentsView.js";
 import type { BrowserAdapter, BrowserLoadFailure, BrowserSnapshot } from "../browserAdapter/types.js";
 import { buildAgentDrivingScript, buildUserLockScript } from "../browserAdapter/refs.js";
+import { uploadFileInput } from "./browserUpload.js";
+import { BrowserObservability } from "./browserObservability.js";
 import { sanitizeBrowserState, type PersistedBrowserState, type PersistedBrowserTab } from "./browserSessionState.js";
 import type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browserHostTypes.js";
+import { AgentInputDriver } from "./agentInput.js";
+import { BrowserViewLayout, type LayoutGroup } from "./browserViewLayout.js";
+import { mergeRecent, toTabStates } from "./browserTabView.js";
 export type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browserHostTypes.js";
 
 /**
@@ -35,32 +40,6 @@ const USER_LOCK_MAX_ATTEMPTS = 3;
 
 /** 全局用户标签组（不属于任何会话）：网页 ＜ 会话 的解耦锚点。 */
 export const USER_TABS_SESSION = "__user_tabs__";
-
-/** sendInputEvent/getZoomFactor 的最小面：真实 WebContents 满足，测试假件可选实现。 */
-interface AgentInputWebContents {
-  sendInputEvent?: (event: Record<string, unknown>) => void;
-  getZoomFactor?: () => number;
-  /** 输入法式插入（CJK 等无法用单键字符表达的文字）；可信输入，会触发 beforeinput/input。 */
-  insertText?: (text: string) => void;
-  isDestroyed?: () => boolean;
-}
-
-/** 按键白名单里的命名键 → Electron keyCode（单字符直接用字符本身）。 */
-const ELECTRON_KEY_CODES: Record<string, string> = {
-  Enter: "Enter",
-  Tab: "Tab",
-  Escape: "Escape",
-  Backspace: "Backspace",
-  Delete: "Delete",
-  ArrowUp: "Up",
-  ArrowDown: "Down",
-  ArrowLeft: "Left",
-  ArrowRight: "Right",
-  Home: "Home",
-  End: "End",
-  PageUp: "PageUp",
-  PageDown: "PageDown",
-};
 
 export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
 
@@ -106,16 +85,15 @@ export type NavigateOutcome = { ok: true; url: string; tabId: string } | { ok: f
 
 export class BrowserHost {
   private groups = new Map<string, SessionGroup>();
+  /** 控制台/网络旁路观测：不参与标签生命周期，只保留最近 N 条。 */
+  private observability = new BrowserObservability();
   private activeSession: string;
   /** 当前显示的标签组：默认用户全局标签；进入任务会话时指向该会话的 Agent 工作区。 */
   private visibleSession: string;
-  private overlayOpen = false;
-  /** 侧栏当前宽度（用户可拖拽；偏好持久化在 UI 层）。 */
-  private sidebarWidth: number = LAYOUT.SIDEBAR_WIDTH;
-  /** 底部 DOM 面板（全宽终端）占用的高度：原生视图必须让出，否则会被面板盖住。 */
-  private bottomInset = 0;
-  /** 顶部 DOM 面板（Agent 工作区展开列表）占用的高度：原生视图下移，页面不被隐藏。 */
-  private topInset = 0;
+  /** 几何单一产地：侧栏/上下让位/覆盖层开关 → 唯一矩形（见 browserViewLayout）。 */
+  private layout: BrowserViewLayout;
+  /** 真实输入驱动（存活检查/可见等待/驱动令牌见 agentInput）。 */
+  private input: AgentInputDriver;
   private seq = 0;
   /** 会话 → 接管锁（运行中的会话锁住它绑定/启动的网页，停止后解锁）。 */
   private userLocks = new Map<string, { locked: boolean; label: string }>();
@@ -123,6 +101,17 @@ export class BrowserHost {
   private lockAttempts = new Map<string, number>();
 
   constructor(private deps: BrowserHostDeps) {
+    this.layout = new BrowserViewLayout({
+      getWindowSize: () => this.deps.getWindowSize(),
+      onViewLayout: (rect) => this.deps.onViewLayout?.(rect),
+    });
+    this.input = new AgentInputDriver({
+      activeSessionId: () => this.activeSession,
+      resolve: (tabId, sessionId) => this.resolveTab(tabId, sessionId),
+      zoom: (sessionId, tabId) => this.getPageZoom(sessionId, tabId),
+      owns: (entry, sessionId, tabId) =>
+        this.groups.get(sessionId ?? this.activeSession)?.tabs.get(tabId) === (entry as unknown as TabEntry),
+    });
     this.activeSession = deps.initialSessionId?.trim() || "default";
     this.ensureGroup(this.activeSession);
     this.ensureGroup(USER_TABS_SESSION);
@@ -262,6 +251,7 @@ export class BrowserHost {
     group.tabs.set(id, entry);
     // 新标签必须立即成为该会话的活动标签
     group.activeId = id;
+    this.observability.attach(sessionId, id, view.webContents);
     return entry;
   }
 
@@ -281,13 +271,13 @@ export class BrowserHost {
    * 仍让出 240px，用户看到的就是「左侧没有铺满」。
    */
   setSidebarWidth(width: number, _animate = false): void {
-    this.sidebarWidth = Math.max(0, Math.min(720, Number.isFinite(width) ? Math.round(width) : 0));
+    this.layout.setSidebarWidth(width);
     this.applyLayout();
   }
 
   /** 当前侧栏宽度（debugBounds 之外的显式读取；诊断/测试断言用）。 */
   getSidebarWidth(): number {
-    return this.sidebarWidth;
+    return this.layout.getSidebarWidth();
   }
 
   /**
@@ -295,20 +285,18 @@ export class BrowserHost {
    * 契约/UI 层已校验 0..2000，这里再夹一次（宿主也可能被测试或其它内部路径直接调用）。
    */
   setBottomInset(height: number): void {
-    const next = Number.isFinite(height) ? Math.round(height) : 0;
-    this.bottomInset = Math.max(0, Math.min(2000, next));
+    this.layout.setBottomInset(height);
     this.applyLayout();
   }
 
   /** 当前底部让位高度（UI 恢复终端高度时可先读回，避免首帧跳动）。 */
   getBottomInset(): number {
-    return this.bottomInset;
+    return this.layout.getBottomInset();
   }
 
   /** 顶部 DOM 面板高度（Agent 工作区展开列表）：页面整体下移，不隐藏原生视图。 */
   setTopInset(height: number): void {
-    const next = Number.isFinite(height) ? Math.round(height) : 0;
-    this.topInset = Math.max(0, Math.min(2000, next));
+    this.layout.setTopInset(height);
     this.applyLayout();
   }
 
@@ -331,12 +319,6 @@ export class BrowserHost {
     bottomInset: number;
     topInset: number;
   } {
-    const windowSize = this.deps.getWindowSize();
-    const bounds = computeBrowserViewBounds(windowSize, LAYOUT, {
-      sidebarWidth: this.sidebarWidth,
-      bottomInset: this.bottomInset,
-      topInset: this.topInset,
-    });
     const entry = this.activeEntry();
     let actual: { x: number; y: number; width: number; height: number } | null = null;
     try {
@@ -345,15 +327,13 @@ export class BrowserHost {
       actual = null;
     }
     return {
-      window: windowSize,
-      bounds,
+      window: this.deps.getWindowSize(),
+      bounds: this.layout.bounds(),
       actual,
       sessionId: this.activeSession,
       tabId: this.activeEntryId(),
       attached: entry?.attached ?? false,
-      sidebarWidth: this.sidebarWidth,
-      bottomInset: this.bottomInset,
-      topInset: this.topInset,
+      ...this.layout.insets(),
     };
   }
 
@@ -377,81 +357,16 @@ export class BrowserHost {
     }
   }
 
+  /**
+   * 重排所有视图（唯一入口）。几何规则全在 BrowserViewLayout：
+   * 宿主只提供「当前有哪些组」「哪个组可见」「怎么把视图挂到窗口」。
+   */
   private applyLayout(): void {
-    // 几何单一产地：侧栏宽度与底部 DOM 面板（全宽终端）高度都作为 options 传入，
-    // 原生视图让出这两块区域，否则会被 DOM 盖住/盖住 DOM。
-    const bounds = computeBrowserViewBounds(this.deps.getWindowSize(), LAYOUT, {
-      sidebarWidth: this.sidebarWidth,
-      bottomInset: this.bottomInset,
-      topInset: this.topInset,
-    });
-    // 启动恢复先于窗口创建：createTab 时 attachView 拿不到主窗口（旧实现静默 no-op），
-    // 窗口就绪后必须在这里补挂，否则恢复的页面永远不会出现在窗口里（刷新也无效）。
-    // 补挂与布局解耦：所有组的标签都补挂（幂等），只有可见组的活动标签参与 setBounds。
-    for (const group of this.groups.values()) {
-      for (const entry of group.tabs.values()) {
-        if (!entry.attached) entry.attached = this.tryAttach(entry.view);
-      }
-    }
-    const activeGroup = this.groups.get(this.visibleSession);
-    // 只布局「可见组的活动标签」：隐藏标签/后台会话不参与每帧布局（拖侧栏/终端面板时不再全量 setBounds）。
-    // 隐藏期间置 layoutDirty，切回时强制重新布局一次，避免沿用旧几何。
-    if (activeGroup) {
-      for (const [id, entry] of activeGroup.tabs) {
-        if (id !== activeGroup.activeId) {
-          entry.layoutDirty = true;
-          if (entry.lastVisible !== false) {
-            entry.view.setVisible?.(false);
-            entry.lastVisible = false;
-          }
-          continue;
-        }
-        const last = entry.lastBounds;
-        if (
-          entry.layoutDirty ||
-          !last ||
-          last.x !== bounds.x ||
-          last.y !== bounds.y ||
-          last.width !== bounds.width ||
-          last.height !== bounds.height
-        ) {
-          entry.view.setBounds(bounds);
-          // setBounds 之后重新声明圆角：视图重建/重新挂载后半径可能丢，四角会回到直角。
-          entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);
-          entry.lastBounds = bounds;
-          entry.layoutDirty = false;
-        }
-        // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
-        // 加载中/失败也不显示：让 DOM 的加载页/错误页露出来（原生视图只能显示 Chromium 白屏/默认错误页）
-        const visible =
-          !this.overlayOpen && Boolean(entry.url) && !entry.loading && entry.loadFailure === null;
-        if (entry.lastVisible !== visible) {
-          entry.view.setVisible?.(visible);
-          entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);
-          entry.lastVisible = visible;
-        }
-      }
-    }
-    // 后台会话：只保证「不可见」，不布局、不 setBounds（切会话时 applyLayout 会重新处理）。
-    for (const [sessionId, group] of this.groups) {
-      if (sessionId === this.visibleSession) continue;
-      for (const entry of group.tabs.values()) {
-        entry.layoutDirty = true;
-        if (entry.lastVisible !== false) {
-          entry.view.setVisible?.(false);
-          entry.lastVisible = false;
-        }
-      }
-    }
-    // 覆盖窗口只跟随「当前会话的当前标签」：后台会话的页面不可见，指针也不该出现在屏幕上
-    // （会话隔离要求：只有进入对应会话才看到对应内容）。几何与原生视图同源，避免两套坐标。
-    const activeEntry = activeGroup?.activeId ? activeGroup.tabs.get(activeGroup.activeId) : null;
-    this.deps.onViewLayout?.(
-      activeEntry?.lastVisible
-        ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
-        : null,
+    this.layout.apply(this.groups as unknown as Map<string, LayoutGroup>, this.visibleSession, (view) =>
+      this.tryAttach(view as unknown as HostView),
     );
   }
+
 
   /**
    * 把「某个标签的当前文档该不该有接管锁」的记账清掉。
@@ -523,19 +438,17 @@ export class BrowserHost {
   }
 
   listTabs(sessionId?: string): TabState[] {
-    const group = this.group(sessionId);
-    return [...group.tabs.entries()].map(([id, entry]) => ({
-      id,
-      url: entry.url,
-      title: entry.title,
-      active: id === group.activeId,
-      canBack: entry.index > 0,
-      canForward: entry.index >= 0 && entry.index < entry.history.length - 1,
-      loading: entry.loading,
-      loadFailure: entry.loadFailure,
-      favicon: entry.favicon,
-      agentBound: entry.agentBound,
-    }));
+    return toTabStates(this.group(sessionId));
+  }
+
+  /**
+   * 只读工具的回退地址：会话自己的任务页 → 用户全局标签。
+   * 与 browser_snapshot 的回落规则一致：Agent 还没克隆页面时，「看」用户当前页是允许的，
+   * cookie / 诊断这类只读查询不该因此返回空。
+   */
+  readableUrl(sessionId?: string): string {
+    const resolved = this.resolveTab(undefined, sessionId) ?? this.resolveTab(undefined, USER_TABS_SESSION);
+    return resolved?.[1].url ?? "";
   }
 
   /**
@@ -565,30 +478,6 @@ export class BrowserHost {
     const entry = this.activeEntry();
     if (!entry) throw new Error("无活动标签页");
     return entry.adapter.executeJs(code);
-  }
-
-  /**
-   * 输入注入前的最小存活检查：标签可能在我们 await 的几十毫秒里被关闭/导航销毁，
-   * 对已销毁的 WebContents 调 sendInputEvent 会走到 Chromium 的空指针（进程级崩溃，无法 try/catch）。
-   */
-  private inputAlive(entry: TabEntry, sessionId: string | undefined, tabId: string): boolean {
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || (typeof wc.isDestroyed === "function" && wc.isDestroyed())) return false;
-    // 隐藏中的 WebContentsView 没有可接收输入的 RenderWidgetHostView：对隐藏视图 sendInputEvent
-    // 会走到原生空指针（electron.exe 直接 AV，JS try/catch 接不住）。
-    if (entry.lastVisible === false) return false;
-    return this.groups.get(sessionId ?? this.activeSession)?.tabs.get(tabId) === entry;
-  }
-
-  /** 等页面真正可见再注入输入（刚克隆/正在加载时视图是隐藏的）。最多等 900ms。 */
-  private async waitInputReady(entry: TabEntry, sessionId: string | undefined, tabId: string): Promise<boolean> {
-    const deadline = Date.now() + 900;
-    while (Date.now() < deadline) {
-      if (this.inputAlive(entry, sessionId, tabId) && entry.lastVisible === true) return true;
-      if (!this.inputAlive(entry, sessionId, tabId)) return false;
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-    return this.inputAlive(entry, sessionId, tabId) && entry.lastVisible === true;
   }
 
   /** 指定标签（缺省=该会话语种的活动标签）。 */
@@ -659,13 +548,42 @@ export class BrowserHost {
     return this.group(sessionId).activeId;
   }
 
+  /**
+   * 给活动标签里的 input[type=file] 选择本地文件。
+   * 只在 Agent 的浏览器工具里调用；文件路径已由工具层基于会话根目录校验。
+   */
+  async uploadFiles(
+    sessionId: string | undefined,
+    selector: string,
+    files: string[],
+  ): Promise<{ ok: boolean; message: string }> {
+    const entry = this.activeEntry(sessionId);
+    if (!entry) return { ok: false, message: "当前会话没有活动标签" };
+    return uploadFileInput(entry.view.webContents, selector, files);
+  }
+
+  /** 当前会话最近的控制台日志（诊断工具用；不写入会话历史）。 */
+  console(sessionId: string | undefined, limit: number): ReturnType<BrowserObservability["console"]> {
+    const own = this.observability.console(sessionId, limit);
+    // 会话还没有自己的任务页：诊断与快照一样回落到用户全局标签，别让「页面明明报错」读成空。
+    if (!sessionId || this.listTabs(sessionId).length > 0) return own;
+    return mergeRecent(own, this.observability.console(USER_TABS_SESSION, limit), limit);
+  }
+
+  /** 当前会话最近的网络请求（诊断工具用；不写入会话历史）。 */
+  network(sessionId: string | undefined, limit: number): ReturnType<BrowserObservability["network"]> {
+    const own = this.observability.network(sessionId, limit);
+    if (!sessionId || this.listTabs(sessionId).length > 0) return own;
+    return mergeRecent(own, this.observability.network(USER_TABS_SESSION, limit), limit);
+  }
+
   hasAnyTab(sessionId?: string): boolean {
     return this.group(sessionId).tabs.size > 0;
   }
 
   /** 修复 ②：应用内浮层打开时隐藏原生视图。 */
   setOverlayOpen(open: boolean): void {
-    this.overlayOpen = open;
+    this.layout.setOverlayOpen(open);
     this.applyLayout();
   }
 
@@ -888,149 +806,37 @@ export class BrowserHost {
   /** 页面缩放系数：覆盖层与真实输入都按「CSS 像素 × 缩放」换算（假视图没有实现时按 1）。 */
   getPageZoom(sessionId?: string, tabId?: string): number {
     const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    const wc = entry?.view.webContents as AgentInputWebContents | undefined;
+    const wc = entry?.view.webContents as import("./agentInput.js").AgentInputWebContents | undefined;
     const factor = typeof wc?.getZoomFactor === "function" ? wc.getZoomFactor() : 1;
     return Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
 
-  /**
-   * Agent 点击：按页面 CSS 坐标派发**真实鼠标事件**（mouseMove → mouseDown → mouseUp）。
-   *
-   * 为什么不用 el.click()：用户 m02991 要求 Agent 像人一样用鼠标——只有真实输入事件才会经过
-   * Chromium 的命中测试、焦点、:active/hover 与页面自己的 pointer 事件链路；el.click() 只触发 click。
-   * 返回 false = 视图不支持 sendInputEvent（测试假件/旧后端），调用方回退到脚本点击。
-   */
+  /** Agent 点击：真实鼠标事件（见 agentInput.ts：存活检查/可见等待/驱动令牌都在那里）。 */
   async agentClick(
     sessionId: string | undefined,
     tabId: string | undefined,
     point: { x: number; y: number },
   ): Promise<boolean> {
-    const resolved = this.resolveTab(tabId, sessionId);
-    if (!resolved) return false;
-    const [tid, entry] = resolved;
-    const sid = sessionId ?? this.activeSession;
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || typeof wc.sendInputEvent !== "function") return false;
-    const zoom = this.getPageZoom(sessionId, tabId);
-    const x = Math.round(point.x * zoom);
-    const y = Math.round(point.y * zoom);
-    if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    const drivingToken = await this.beginAgentDriving(entry);
-    try {
-      if (!this.inputAlive(entry, sid, tid)) return false;
-      wc.sendInputEvent({ type: "mouseMove", x, y });
-      wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
-      // 真实按压有几十毫秒的停留：立刻 up 会让 :active 一闪而过，部分站点的手势识别也收不到。
-      await new Promise((resolve) => setTimeout(resolve, 35));
-      if (!this.inputAlive(entry, sid, tid)) return false;
-      wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
-    } finally {
-      this.endAgentDriving(entry, drivingToken);
-    }
-    if (process.env.LOOPSOAR_DEBUG_BROWSER === "1") {
-      console.log("[agent-click]", JSON.stringify({ zoom, x, y }));
-    }
-    return true;
+    return this.input.click(sessionId, tabId, point);
   }
 
-  /**
-   * Agent 逐字输入：像用户一样先全选再一个字一个字敲。
-   *
-   * - 开始先用 Ctrl+A 选中已有内容（首字自然替换），空文本则 Backspace 清空；
-   * - ASCII 可见字符逐字派发 keyDown/char/keyUp（真实键盘事件，React 受控组件、onKeyDown 都生效）；
-   * - CJK 等非 ASCII 走 insertText（等价输入法上屏；单键事件无法表达汉字），成段插入后让出一次事件循环保证顺序；
-   * - 多行（textarea/contenteditable）用 Enter 换行；单行 input 把换行折成空格（input 本身也不接受换行）。
-   *
-   * 返回 false = 视图不支持 sendInputEvent（测试假件/旧后端），调用方回退原生 setter。
-   */
+  /** Agent 逐字输入（真实键盘事件；CJK 走 insertText）。 */
   async agentType(
     sessionId: string | undefined,
     tabId: string | undefined,
     text: string,
     options: { multiline?: boolean } = {},
   ): Promise<boolean> {
-    const resolved = this.resolveTab(tabId, sessionId);
-    if (!resolved) return false;
-    const [tid, entry] = resolved;
-    const sid = sessionId ?? this.activeSession;
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || typeof wc.sendInputEvent !== "function") return false;
-    const multiline = options.multiline === true;
-    const normalized = text.replace(/\r\n?/g, "\n");
-    const body = multiline ? normalized : normalized.replace(/\n/g, " ");
-    if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    const drivingToken = await this.beginAgentDriving(entry);
-    try {
-      // 全选 + 退格 = 清空当前内容（和用户「点进来、全选、重输」完全一致）。
-      // macOS 全选是 Command+A，Control+A 只会把光标移到行首。
-      const selectAll = process.platform === "darwin" ? ["meta"] : ["control"];
-      wc.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: selectAll });
-      wc.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: selectAll });
-      wc.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
-      wc.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
-      const chars = Array.from(body);
-      let pendingText = "";
-      const flushText = async (): Promise<void> => {
-        if (!pendingText || !this.inputAlive(entry, sid, tid)) return;
-        const chunk = pendingText;
-        pendingText = "";
-        if (typeof wc.insertText === "function") {
-          wc.insertText(chunk);
-          // 让 IPC/渲染进程把这段文本上屏，避免后续按键插到它前面（顺序敏感）。
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        } else {
-          for (const ch of chunk) wc.sendInputEvent?.({ type: "char", keyCode: ch });
-        }
-      };
-      for (const ch of chars) {
-        if (!this.inputAlive(entry, sid, tid)) return false;
-        if (ch === "\n") {
-          await flushText();
-          wc.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
-          wc.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
-          continue;
-        }
-        const code = ch.codePointAt(0) ?? 0;
-        if (code >= 0x20 && code <= 0x7e) {
-          await flushText();
-          wc.sendInputEvent({ type: "keyDown", keyCode: ch });
-          wc.sendInputEvent({ type: "char", keyCode: ch });
-          wc.sendInputEvent({ type: "keyUp", keyCode: ch });
-        } else {
-          pendingText += ch;
-        }
-      }
-      await flushText();
-    } finally {
-      this.endAgentDriving(entry, drivingToken);
-    }
-    return true;
+    return this.input.type(sessionId, tabId, text, options);
   }
 
-  /** 真实鼠标移动（悬停）：像用户把鼠标移过去停住，触发 CSS :hover / pointerover / mouseover。 */
+  /** 真实鼠标移动（悬停）：触发 CSS :hover / pointerover / mouseover。 */
   async agentHover(
     sessionId: string | undefined,
     tabId: string | undefined,
     point: { x: number; y: number },
   ): Promise<boolean> {
-    const resolved = this.resolveTab(tabId, sessionId);
-    if (!resolved) return false;
-    const [tid, entry] = resolved;
-    const sid = sessionId ?? this.activeSession;
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || typeof wc.sendInputEvent !== "function") return false;
-    const zoom = this.getPageZoom(sessionId, tabId);
-    const x = Math.round(point.x * zoom);
-    const y = Math.round(point.y * zoom);
-    if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    const drivingToken = await this.beginAgentDriving(entry);
-    try {
-      if (!this.inputAlive(entry, sid, tid)) return false;
-      wc.sendInputEvent({ type: "mouseMove", x, y });
-    } finally {
-      this.endAgentDriving(entry, drivingToken);
-    }
-    return true;
+    return this.input.hover(sessionId, tabId, point);
   }
 
   /** 页面视口中心（CSS 像素）：滚动/悬停前把虚拟光标停到页面中间。 */
@@ -1038,24 +844,10 @@ export class BrowserHost {
     sessionId: string | undefined,
     tabId: string | undefined,
   ): Promise<{ x: number; y: number } | null> {
-    const entry = this.resolveTab(tabId, sessionId)?.[1] ?? null;
-    if (!entry) return null;
-    try {
-      const size = (await entry.adapter.executeJs("({ w: window.innerWidth, h: window.innerHeight })")) as
-        | { w?: number; h?: number }
-        | null;
-      const w = typeof size?.w === "number" && size.w > 0 ? size.w : 800;
-      const h = typeof size?.h === "number" && size.h > 0 ? size.h : 600;
-      return { x: Math.round(w / 2), y: Math.round(h / 2) };
-    } catch {
-      return { x: 400, y: 300 };
-    }
+    return this.input.viewportCenter(sessionId, tabId);
   }
 
-  /**
-   * Agent 拖拽：真实按下 → 分帧移动（像人手拖动）→ 抬起。
-   * 用于滑块、拖拽排序、画布/编辑器等需要按下-移动-抬起序列的场景。
-   */
+  /** Agent 拖拽：真实按下 → 分帧移动 → 抬起（滑块/拖拽排序/画布）。 */
   async agentDrag(
     sessionId: string | undefined,
     tabId: string | undefined,
@@ -1063,142 +855,19 @@ export class BrowserHost {
     to: { x: number; y: number },
     steps = 10,
   ): Promise<boolean> {
-    const resolved = this.resolveTab(tabId, sessionId);
-    if (!resolved) return false;
-    const [tid, entry] = resolved;
-    const sid = sessionId ?? this.activeSession;
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || typeof wc.sendInputEvent !== "function") return false;
-    const zoom = this.getPageZoom(sessionId, tabId);
-    const fx = Math.round(from.x * zoom);
-    const fy = Math.round(from.y * zoom);
-    const tx = Math.round(to.x * zoom);
-    const ty = Math.round(to.y * zoom);
-    const frames = Math.max(3, Math.min(20, Math.round(steps)));
-    if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    const drivingToken = await this.beginAgentDriving(entry);
-    try {
-      if (!this.inputAlive(entry, sid, tid)) return false;
-      wc.sendInputEvent({ type: "mouseMove", x: fx, y: fy });
-      wc.sendInputEvent({ type: "mouseDown", x: fx, y: fy, button: "left", clickCount: 1 });
-      for (let i = 1; i <= frames; i += 1) {
-        if (!this.inputAlive(entry, sid, tid)) return false;
-        const ratio = i / frames;
-        const x = Math.round(fx + (tx - fx) * ratio);
-        const y = Math.round(fy + (ty - fy) * ratio);
-        wc.sendInputEvent({ type: "mouseMove", x, y });
-        await new Promise((resolve) => setTimeout(resolve, 14));
-      }
-      if (!this.inputAlive(entry, sid, tid)) return false;
-      wc.sendInputEvent({ type: "mouseUp", x: tx, y: ty, button: "left", clickCount: 1 });
-    } finally {
-      this.endAgentDriving(entry, drivingToken);
-    }
-    return true;
+    return this.input.drag(sessionId, tabId, from, to, steps);
   }
 
-  /**
-   * 真实滚轮：按 notch（120px）把滚动量拆成多帧 mouseWheel 派发，页面收到的是可信滚轮事件，
-   * 滚动动画、滚动监听、懒加载、吸顶效果都与用户操作一致（脚本 window.scrollBy 不具备这些）。
-   * 返回 false = 视图不支持 sendInputEvent，调用方回退脚本滚动。
-   */
-  async agentWheel(
-    sessionId: string | undefined,
-    tabId: string | undefined,
-    deltaY: number,
-  ): Promise<boolean> {
-    const resolved = this.resolveTab(tabId, sessionId);
-    if (!resolved) return false;
-    const [tid, entry] = resolved;
-    const sid = sessionId ?? this.activeSession;
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || typeof wc.sendInputEvent !== "function") return false;
-    const center = (await this.getViewportCenter(sessionId, tabId)) ?? { x: 400, y: 300 };
-    const zoom = this.getPageZoom(sessionId, tabId);
-    const x = Math.round(center.x * zoom);
-    const y = Math.round(center.y * zoom);
-    const total = Math.round(deltaY);
-    if (!Number.isFinite(total) || total === 0) return false;
-    const dir = total > 0 ? 1 : -1;
-    const ticks = Math.min(42, Math.max(1, Math.ceil(Math.abs(total) / 120)));
-    if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    const drivingToken = await this.beginAgentDriving(entry);
-    try {
-      for (let i = 0; i < ticks; i += 1) {
-        if (!this.inputAlive(entry, sid, tid)) return false;
-        wc.sendInputEvent({
-          type: "mouseWheel",
-          x,
-          y,
-          deltaX: 0,
-          // 一律整数值：Chromium 的滚轮输入对非整数 delta / wheelTicks 存在原生边界，
-          // 之前用 fractional step 是这次 electron.exe 崩溃的重点怀疑对象。
-          deltaY: dir * 120,
-          wheelTicksX: 0,
-          wheelTicksY: dir,
-          canScroll: true,
-        });
-        if (i < ticks - 1) await new Promise((resolve) => setTimeout(resolve, 12));
-      }
-    } finally {
-      this.endAgentDriving(entry, drivingToken);
-    }
-    return true;
+  /** 真实滚轮：按 notch 拆帧派发（滚动动画/懒加载/吸顶都与用户操作一致）。 */
+  async agentWheel(sessionId: string | undefined, tabId: string | undefined, deltaY: number): Promise<boolean> {
+    return this.input.scroll(sessionId, tabId, deltaY);
   }
 
-  /**
-   * Agent 按键：sendInputEvent 派发真实键盘事件（Enter/Tab/Esc/方向键/单字符）。
-   * 与点击同理——页面拿到的是可信事件，表单默认行为（提交/跳转/关闭）才会真的发生。
-   */
+  /** Agent 按键：真实键盘事件（Enter 的表单提交由 char 驱动）。 */
   async agentKey(sessionId: string | undefined, tabId: string | undefined, key: string): Promise<boolean> {
-    const resolved = this.resolveTab(tabId, sessionId);
-    if (!resolved) return false;
-    const [tid, entry] = resolved;
-    const sid = sessionId ?? this.activeSession;
-    const wc = entry.view.webContents as AgentInputWebContents | undefined;
-    if (!wc || typeof wc.sendInputEvent !== "function") return false;
-    const keyCode = ELECTRON_KEY_CODES[key] ?? (key.length === 1 ? key : null);
-    if (!keyCode) return false;
-    if (!(await this.waitInputReady(entry, sid, tid))) return false;
-    const drivingToken = await this.beginAgentDriving(entry);
-    try {
-      if (!this.inputAlive(entry, sid, tid)) return false;
-      wc.sendInputEvent({ type: "keyDown", keyCode });
-      if (key.length === 1) wc.sendInputEvent({ type: "char", keyCode });
-      wc.sendInputEvent({ type: "keyUp", keyCode });
-    } finally {
-      this.endAgentDriving(entry, drivingToken);
-    }
-    return true;
+    return this.input.pressKey(sessionId, tabId, key);
   }
 
-  /** 每次开始输入都递增的 epoch：旧的 120ms 释放定时器不能清掉新一次输入的放行。 */
-  private drivingTokens = new Map<TabEntry, number>();
-
-  /** 置位「Agent 正在派发真实输入」并返回本次 epoch，页面接管锁据此放行。 */
-  private async beginAgentDriving(entry: TabEntry): Promise<number> {
-    const token = (this.drivingTokens.get(entry) ?? 0) + 1;
-    this.drivingTokens.set(entry, token);
-    try {
-      await entry.adapter.executeJs(buildAgentDrivingScript(true));
-    } catch {
-      // 页面正在导航/未就绪：锁同样不存在，无需放行
-    }
-    return token;
-  }
-
-  /** 只释放自己那次放行；事件异步派发，留 120ms 窗口，但不能把后续输入的一起清掉。 */
-  private endAgentDriving(entry: TabEntry, token: number): void {
-    setTimeout(() => {
-      if (this.drivingTokens.get(entry) !== token) return;
-      this.drivingTokens.delete(entry);
-      try {
-        void entry.adapter.executeJs(buildAgentDrivingScript(false));
-      } catch {
-        // 页面已销毁/未就绪
-      }
-    }, 120);
-  }
 
   /**
    * 快照：缺省取活动标签；返回值带上 tabId。

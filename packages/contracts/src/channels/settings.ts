@@ -106,6 +106,15 @@ export const settingsChannels: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "settings:traces": {
+    domain: "settings",
+    method: "traces",
+    request: z.object({
+      sessionId: z.string().min(1).max(120),
+      limit: z.number().int().min(1).max(200).optional(),
+    }),
+    sensitive: true,
+  },
   "settings:about": {
     domain: "settings",
     method: "about",

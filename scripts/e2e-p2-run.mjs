@@ -135,46 +135,54 @@ try {
 }
 
 // 退出后核对壳层落盘真值：会话文件里的 browserControl / 工具结果
-  try {
-    const sessionsDir = path.join(DATA_DIR, "sessions");
-    if (existsSync(sessionsDir)) {
-      const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".json") && f !== "index.json");
-      let best = null;
-      let evalDoc = null;
-      let branch = null;
-      for (const file of files) {
-        const raw = JSON.parse(readFileSync(path.join(sessionsDir, file), "utf8"));
-        if (!best || (raw.messages?.length ?? 0) > (best.messages?.length ?? 0)) best = raw;
-        if (evalSessionId && raw.sessionId === evalSessionId) evalDoc = raw;
-        if (evalSessionId && raw.forkedFrom?.sessionId === evalSessionId) {
-          if (!branch || (raw.messages?.length ?? 0) > (branch.messages?.length ?? 0)) branch = raw;
-        }
-      }
-      // 首个浏览器动作会触发任务分支：优先校验分支，但必须能追溯到 E2E_EVAL 的源会话。
-      const target = branch ?? evalDoc ?? best;
-      if (target) {
-        const texts = (target.messages ?? []).map((m) => String(m.text ?? "")).join("\n");
-        log(
-          "E2E_SESSION_VERIFY " +
-            JSON.stringify({
-              sessionId: target.sessionId,
-              evalSessionId,
-              forkedFrom: target.forkedFrom?.sessionId ?? null,
-              sessionMatch: Boolean(
-                evalDoc && (target.sessionId === evalSessionId || target.forkedFrom?.sessionId === evalSessionId),
-              ),
-              browserControl: target.browserControl === true,
-              messages: target.messages?.length ?? 0,
-              navigated: texts.includes("127.0.0.1:19443") || texts.includes("Loopsoar E2E 本地页"),
-              snapshotWithRefs: /快照 #\d+/.test(texts) && texts.includes("#e"),
-              clickedMarker: texts.includes("按钮已点击"),
-            }),
-        );
+let forkVerified = false;
+try {
+  const sessionsDir = path.join(DATA_DIR, "sessions");
+  if (existsSync(sessionsDir)) {
+    const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".json") && f !== "index.json");
+    let best = null;
+    let evalDoc = null;
+    let branch = null;
+    for (const file of files) {
+      const raw = JSON.parse(readFileSync(path.join(sessionsDir, file), "utf8"));
+      if (!best || (raw.messages?.length ?? 0) > (best.messages?.length ?? 0)) best = raw;
+      if (evalSessionId && raw.sessionId === evalSessionId) evalDoc = raw;
+      if (evalSessionId && raw.forkedFrom?.sessionId === evalSessionId) {
+        if (!branch || (raw.messages?.length ?? 0) > (branch.messages?.length ?? 0)) branch = raw;
       }
     }
-  } catch (err) {
-    log(`E2E_SESSION_VERIFY 失败：${err instanceof Error ? err.message : String(err)}`);
+    // 首个浏览器动作必须触发任务分支：优先校验分支，但必须能追溯到 E2E_EVAL 的源会话。
+    const target = branch ?? evalDoc ?? best;
+    const forkMatch = Boolean(evalSessionId && branch && branch.forkedFrom?.sessionId === evalSessionId);
+    if (target) {
+      const texts = (target.messages ?? []).map((m) => String(m.text ?? "")).join("\n");
+      log(
+        "E2E_SESSION_VERIFY " +
+          JSON.stringify({
+            sessionId: target.sessionId,
+            evalSessionId,
+            forkedFrom: target.forkedFrom?.sessionId ?? null,
+            sessionMatch: Boolean(
+              evalDoc && (target.sessionId === evalSessionId || target.forkedFrom?.sessionId === evalSessionId),
+            ),
+            forkMatch,
+            browserControl: target.browserControl === true,
+            messages: target.messages?.length ?? 0,
+            navigated: texts.includes("127.0.0.1:19443") || texts.includes("Loopsoar E2E 本地页"),
+            snapshotWithRefs: /快照 #\d+/.test(texts) && texts.includes("#e"),
+            clickedMarker: texts.includes("按钮已点击"),
+          }),
+      );
+    }
+    forkVerified = forkMatch;
   }
+} catch (err) {
+  log(`E2E_SESSION_VERIFY 失败：${err instanceof Error ? err.message : String(err)}`);
+}
+if (!forkVerified) {
+  log("E2E_FORK_VERIFY 失败：未找到从 E2E_EVAL 源会话分叉的任务分支");
+  process.exitCode = 1;
+}
 
 log(`Electron 退出码=${exitCode}`);
 log(`日志：${LOG}`);

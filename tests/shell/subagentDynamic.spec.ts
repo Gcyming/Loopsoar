@@ -19,6 +19,62 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+describe("子代理跨进程恢复", () => {
+  it("新实例从磁盘读到历史，按原任务 parentTaskId 恢复并走可写模式", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-subresume-"));
+    dirs.push(dir);
+    const before = new SubagentTaskStore(dir);
+    const parent = "sess-parent";
+    const source = before.create({
+      parentSessionId: parent,
+      kind: "work",
+      goal: "修掉 a.ts 的 off-by-one",
+      history: [
+        { role: "user", content: "修掉 a.ts 的 off-by-one" },
+        { role: "assistant", content: "已修好并通过测试" },
+      ],
+    });
+    before.finish(parent, source.id, "done", "已修好并通过测试", undefined, [
+      { role: "user", content: "修掉 a.ts 的 off-by-one" },
+      { role: "assistant", content: "已修好并通过测试" },
+    ]);
+
+    // 模拟重启：新实例只拿到同一个目录
+    const after = new SubagentTaskStore(dir);
+    let received: { mode?: string; history?: unknown[]; goal: string } | null = null;
+    const registry = new ToolRegistry();
+    registerSubagentTools(
+      registry,
+      {
+        async run(input) {
+          received = input;
+          return {
+            status: "done",
+            reason: "",
+            finalText: "已补上回归测试",
+            usage: { rounds: 1, toolCalls: 1, totalTokens: 10, wallClockMs: 5 },
+            chunks: [],
+            claims: [],
+          };
+        },
+      },
+      after,
+    );
+
+    const result = await registry.get("subagent_resume")!.execute({
+      agentId: "t",
+      sessionId: parent,
+      params: { taskId: source.id, goal: "再补一个回归测试" },
+      platform: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(received!.mode).toBe("write");
+    expect(received!.goal).toContain("再补一个回归测试");
+    expect(received!.history!.length).toBeGreaterThanOrEqual(2);
+    expect(after.list(parent).some((task) => task.parentTaskId === source.id)).toBe(true);
+  });
+});
+
 function done(text: string) {
   return {
     status: "done" as const,

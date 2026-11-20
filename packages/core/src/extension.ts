@@ -12,31 +12,52 @@
  * }
  */
 import type { ToolPermissions } from "./tools/registry.js";
-import { EXTENSION_PERMISSION_KEYS, ExtensionManifestSchema, type ExtensionManifest, type ExtensionPermission } from "loopsoar-contracts/extension";
+import {
+  EXTENSION_PERMISSION_KEYS,
+  EXTENSION_TOOL_PERMISSION_KEYS,
+  ExtensionManifestSchema,
+  type ExtensionManifest,
+  type ExtensionPermission,
+  type ExtensionToolPermission,
+} from "loopsoar-contracts/extension";
+import type { ExtensionCompatibility } from "./extensionCompat.js";
+import type { ExtensionTrustState, ExtensionCertification } from "./extensionSignature.js";
 
 export const EXTENSION_MANIFEST_FILE = "loopsoar.extension.json";
 
 export {
+  EXTENSION_EVENT_NAMES,
+  EXTENSION_HOST_API_VERSION,
+  EXTENSION_LEGACY_API_VERSION,
   EXTENSION_PERMISSION_KEYS,
   EXTENSION_THEME_TOKENS,
+  EXTENSION_TOOL_PERMISSION_KEYS,
   ExtensionCommandSchema,
   ExtensionContributionsSchema,
   ExtensionHookSchema,
   ExtensionLoopSchema,
   ExtensionManifestSchema,
   ExtensionPanelSchema,
+  ExtensionSignatureSchema,
   ExtensionThemeSchema,
+  ExtensionViewSchema,
+  SemverStringSchema,
+  VersionRangeSchema,
 } from "loopsoar-contracts/extension";
 export type {
   ExtensionCommand,
   ExtensionContributions,
+  ExtensionEventName,
   ExtensionHook,
   ExtensionLoopContribution,
   ExtensionManifest,
   ExtensionPanel,
   ExtensionPermission,
+  ExtensionSignature,
   ExtensionThemeContribution,
   ExtensionThemeToken,
+  ExtensionToolPermission,
+  ExtensionView,
 } from "loopsoar-contracts/extension";
 
 /**
@@ -46,6 +67,7 @@ export type {
  *   · manifest 未声明权限 → 拒绝（不能靠“工具自己说自己只读”放行）；
  *   · 工具未声明任何权限 → 拒绝（空权限在 kindOfTool 里会被误判成 read）；
  *   · 工具声明了 manifest 未授予的权限 → 拒绝整个工具（不做静默降级）；
+ *   · 工具不能声明 events（那是 manifest 级事件订阅，不是工具权限）；
  *   · 全部通过 → 返回交集，供 ToolRegistry/沙箱按类别判定。
  */
 export function resolveExtensionToolPermissions(
@@ -65,18 +87,39 @@ export function resolveExtensionToolPermissions(
 
   const permissions: ToolPermissions = {};
   for (const [key] of declaredTrue) {
-    if (!(EXTENSION_PERMISSION_KEYS as readonly string[]).includes(key)) {
-      errors.push(`工具声明了未知权限：${key}`);
+    if (!(EXTENSION_TOOL_PERMISSION_KEYS as readonly string[]).includes(key)) {
+      errors.push(
+        key === "events"
+          ? "工具不能声明 events（事件订阅请在 manifest.events 声明）"
+          : `工具声明了未知权限：${key}`,
+      );
       continue;
     }
     if (!granted.has(key)) {
       errors.push(`工具声明了 manifest 未授权的权限：${key}`);
       continue;
     }
-    permissions[key as ExtensionPermission] = true;
+    permissions[key as ExtensionToolPermission] = true;
   }
 
   return errors.length > 0 ? { permissions: {}, errors } : { permissions, errors };
+}
+
+/** 宿主扫描后附加的运行时信息（纯数据；不落盘，由壳层每次重算）。 */
+export interface ExtensionRuntimeInfo {
+  compatibility: ExtensionCompatibility;
+  trust: ExtensionTrustState;
+  certification: ExtensionCertification;
+  dependencies: {
+    ok: boolean;
+    issues: string[];
+    /** 依赖此扩展的其它扩展 id（禁用级联提示用）。 */
+    dependents: string[];
+  };
+  /** 安装版本记录（用于 UI 展示回滚入口）。 */
+  version?: { active: string; previous?: string };
+  /** 市场撤销记录：命中后 certification=blocked，且不可启用/安装。 */
+  revocation?: { reason: string; revokedAt: number; version?: string };
 }
 
 export interface InstalledExtension {
@@ -85,6 +128,8 @@ export interface InstalledExtension {
   dir: string;
   enabled: boolean;
   installedAt: number;
+  /** 壳层每次 scan 重算；纯逻辑注册表不填。 */
+  info?: ExtensionRuntimeInfo;
 }
 
 export interface ExtensionCommandView {

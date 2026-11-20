@@ -42,4 +42,8 @@ export const BROWSER_AGENT_TOOLS: readonly string[] = [
   "browser_hover",
   "browser_drag",
   "browser_dismiss_popup",
+  "browser_downloads",
+  "browser_cookies",
+  "browser_diagnostics",
+  "browser_upload",
 ];

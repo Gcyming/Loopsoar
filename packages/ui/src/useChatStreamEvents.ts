@@ -396,6 +396,17 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           });
         }
       }),
+      ((): () => void => {
+        try {
+          return api.on("perm:resolved", (payload) => {
+            const requestId = (payload as { requestId?: unknown } | null)?.requestId;
+            if (typeof requestId !== "string" || !requestId) return;
+            setPermReq(null);
+          });
+        } catch {
+          return () => {};
+        }
+      })(),
       // 新增事件用 try/catch 包裹：旧 shell 的 preload 白名单未登记时会抛错，降级为不订阅
       ((): () => void => {
         try {
@@ -423,6 +434,17 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
             };
             // 去重入队：同一 requestId 重复推送不弹两个窗
             setAskQueue((prev) => (prev.some((item) => item.requestId === request.requestId) ? prev : [...prev, request]));
+          });
+        } catch {
+          return () => {};
+        }
+      })(),
+      ((): () => void => {
+        try {
+          return api.on("ask:resolved", (payload) => {
+            const requestId = (payload as { requestId?: unknown } | null)?.requestId;
+            if (typeof requestId !== "string" || !requestId) return;
+            setAskQueue((prev) => prev.filter((item) => item.requestId !== requestId));
           });
         } catch {
           return () => {};

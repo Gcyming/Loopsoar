@@ -34,9 +34,12 @@ import { AskBus } from "./askBus.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { ExtensionContributions } from "./extensionContributions.js";
 import { createMemoryReranker } from "./memoryRerank.js";
+import { wireMcpBridge } from "./mcpSampling.js";
 
 export interface CoreServiceInput {
   dirs: { dataDir: string; configDir: string };
+  /** 宿主应用版本（扩展 engines.loopsoar 的比对对象）。 */
+  appVersion?: string;
   bootTrace: { mark(label: string): void };
   pushToRenderer: (event: string, payload: unknown) => void;
   safeStorage: {
@@ -272,7 +275,9 @@ export async function createCoreServices(input: CoreServiceInput) {
     resolveWorkspaceRoot: (sessionId?: string) => resolveSessionRoot(sessionId),
     push: (event, payload) => pushToRenderer(event, payload),
   });
-  const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"));
+  const extensions = new ExtensionHost(path.join(dirs.dataDir, "extensions"), {
+    hostVersion: input.appVersion ?? "0.1.0",
+  });
   // 扩展贡献点（第三阶段 C）：loops → LoopRegistry；themes → UI（启停/卸载自动精确撤下）。
   const extensionContributions = new ExtensionContributions(loopRuntime, extensions, () => {
     pushToRenderer("loop:changed", loopRuntime.list());
@@ -287,6 +292,9 @@ export async function createCoreServices(input: CoreServiceInput) {
     () => pushToRenderer("mcp:updated", { servers: mcp.list() }),
     () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
   );
+  // 反向能力：roots 优先用当前工具调用所属会话；无调用上下文时回退活动会话。
+  // sampling 借用当前供应商的模型（无模型时明确报错）。在 connect 之前注入，initialize 才会声明 sampling 能力。
+  wireMcpBridge(mcp, { roots: (sessionId) => [resolveSessionRoot(sessionId)], getLlm: () => buildLlmFromActive() });
 
   // Agent 注册表（真实实现）：内置默认 Agent → 决定身份段与工具白名单
   const agents = new AgentRegistry();

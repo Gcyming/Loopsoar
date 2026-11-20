@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
-import { readOnlyToolAllowlist, registerSubagentTools } from "../../packages/shell/src/main/subagentTools.ts";
+import { readOnlyToolAllowlist, registerSubagentTools, writeToolAllowlist } from "../../packages/shell/src/main/subagentTools.ts";
 
 function dummy(name: string, permissions: Record<string, boolean>) {
   return {
@@ -118,5 +118,60 @@ describe("只读子代理（P1-5 第一步）", () => {
     expect(result.content).toContain("[并行只读子代理 1/2 完成]");
     expect(result.content).toContain("[失败] 子模型不可用");
     expect(result.content).toContain("可用结论");
+  });
+});
+
+describe("可写子代理 delegate_work", () => {
+  it("放开读/写/终端/浏览器/联网，拦住递归委派、检查点回滚与自改配置", () => {
+    const registry = new ToolRegistry();
+    registry.register(dummy("file_read", { read: true }));
+    registry.register(dummy("file_write", { write: true }));
+    registry.register(dummy("terminal_run", { terminal: true }));
+    registry.register(dummy("browser_click", { browser: true }));
+    registry.register(dummy("web_fetch", { read: true, network: true }));
+    registry.register(dummy("ask_user", { read: true }));
+    registry.register(dummy("delegate_work", { write: true }));
+    registry.register(dummy("delegate_child", { read: true }));
+    registry.register(dummy("subagent_tasks", { read: true }));
+    registry.register(dummy("checkpoint_restore", { write: true }));
+    registry.register(dummy("loopsoar", { read: true }));
+
+    expect(writeToolAllowlist(registry)).toEqual([
+      "file_read",
+      "file_write",
+      "terminal_run",
+      "browser_click",
+      "web_fetch",
+    ]);
+  });
+
+  it("以 write 模式启动，结果带可写标记并记入任务", async () => {
+    const registry = new ToolRegistry();
+    registry.register(dummy("file_read", { read: true }));
+    let received: { mode?: string; sessionId: string } | null = null;
+    registerSubagentTools(registry, {
+      async run(input) {
+        received = input;
+        return {
+          status: "done",
+          reason: "",
+          finalText: "已改好 a.ts 并跑通测试",
+          usage: { rounds: 2, toolCalls: 3, totalTokens: 10, wallClockMs: 5 },
+          chunks: [],
+          claims: [],
+        };
+      },
+    });
+    const result = await registry.get("delegate_work")!.execute({
+      agentId: "test",
+      sessionId: "sess-parent",
+      params: { goal: "把 a.ts 的 off-by-one 修掉并跑测试" },
+      platform: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(received!.mode).toBe("write");
+    expect(received!.sessionId).toBe("sess-parent");
+    expect(result.content).toContain("[可写子代理完成]");
+    expect(result.content).toContain("已改好 a.ts");
   });
 });

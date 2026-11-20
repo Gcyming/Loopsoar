@@ -63,6 +63,7 @@ import {
 import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { ProviderStore } from "../providerStore.js";
 import type { SecretStore } from "../secretStore.js";
+import { TraceStore } from "../traceStore.js";
 
 export interface SettingsDeps extends TrustedIpcDeps {
   platform: LoopsoarPlatform;
@@ -129,9 +130,41 @@ function readJsonFile(file: string): unknown {
   }
 }
 
+/**
+ * 原子写：先写同目录临时文件再 rename。
+ *
+ * 为什么必须原子：preferences.json / permissions.json 是整个应用的启动输入，
+ * 直接覆盖写在「写到一半进程被杀 / 磁盘满」时会留下半截 JSON。以前靠 readJsonFile 的
+ * 解析容错兜底，但**结构合法、字段非法**（例如 agentMaxRounds 被写成字符串）仍然会让
+ * mergePreferences 抛错 → 启动直接失败。原子写把「写坏」的概率降到接近零。
+ */
 function writeJsonFile(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
+  const tmp = `${file}.tmp`;
+  // fsync 再 rename：只做 rename 的话，掉电后 rename 可能先落盘、内容还在页缓存，
+  // 结果是一个「存在但为空」的配置——比半截 JSON 更难诊断。顺序必须是 写 → fsync → rename。
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeFileSync(fd, JSON.stringify(value, null, 2), "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * 坏配置隔离：把无法解析的配置文件改名留证，让下次启动回到默认值而不是反复失败。
+ * 失败（只读盘/权限）不改主流程——配置读不出来也不该阻断启动。
+ */
+function quarantineConfig(file: string, err: unknown): void {
+  const detail = err instanceof Error ? err.message : String(err);
+  try {
+    if (fs.existsSync(file)) fs.renameSync(file, `${file}.invalid-${Date.now()}`);
+  } catch {
+    // 改名失败：仍以默认值继续，不抛错
+  }
+  console.warn(`[Loopsoar] 配置文件非法，已回到默认值：${file}（${detail}）`);
 }
 
 function byteLength(text: string): number {
@@ -151,12 +184,31 @@ export async function loadProviderConfig(
   }
 }
 
+/**
+ * 读偏好：**total function**，任何磁盘状态都必须返回一份可用偏好。
+ *
+ * 为什么不在 mergePreferences 里放宽：保存路径（settings:setPreferences）必须对非法输入
+ * 严格报错，否则用户改坏一个字段会被静默吞掉；容错只属于「从磁盘读」这一侧。
+ * 这里抛错 = 白屏，代价远大于「这次用默认值」。
+ */
 export function loadPreferences(configDir: string): Preferences {
-  return mergePreferences(readJsonFile(path.join(configDir, "preferences.json")) ?? {});
+  const file = path.join(configDir, "preferences.json");
+  try {
+    return mergePreferences(readJsonFile(file) ?? {});
+  } catch (err) {
+    quarantineConfig(file, err);
+    return mergePreferences({});
+  }
 }
 
 export function loadPermissions(configDir: string): Permissions {
-  return mergePermissions(readJsonFile(path.join(configDir, "permissions.json")) ?? {});
+  const file = path.join(configDir, "permissions.json");
+  try {
+    return mergePermissions(readJsonFile(file) ?? {});
+  } catch (err) {
+    quarantineConfig(file, err);
+    return mergePermissions({});
+  }
 }
 
 /**
@@ -950,6 +1002,15 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         ...(deps.diagnosticsExtra?.() ?? {}),
       },
     };
+  });
+
+  /**
+   * 运行轨迹面板：从 dataDir/traces 直接读当前会话的 JSONL（只读）。
+   * 不经过装配层单例：TraceStore 无内存态，每次读盘即可，避免为一个只读视图改 index.ts。
+   */
+  handleTrusted(deps, "settings:traces", (payload) => {
+    const p = payload as { sessionId: string; limit?: number };
+    return new TraceStore(path.join(deps.dataDir, "traces")).report(p.sessionId, p.limit ?? 50);
   });
 
   handleTrusted(deps, "settings:about", () => ({

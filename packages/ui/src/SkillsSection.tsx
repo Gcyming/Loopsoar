@@ -77,11 +77,12 @@ export interface SkillsSectionProps {
   skillSkips: { dir: string; reason: string }[];
   onOpenDir: () => Promise<void>;
   onReload: () => Promise<void>;
+  onImport: () => Promise<void>;
   onToggle: (id: string, enabled: boolean) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
 }
 
-export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir, onReload, onToggle, onRemove }: SkillsSectionProps): React.ReactElement {
+export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir, onReload, onImport, onToggle, onRemove }: SkillsSectionProps): React.ReactElement {
   const tr = useT();
   return (
     <div>
@@ -90,6 +91,7 @@ export default function SkillsSection({ skills, skillsDir, skillSkips, onOpenDir
       <div style={S.note}>{tr("settings.skills.dir")}<code style={S.code}>{skillsDir || "—"}</code></div>
       <div style={S.btns}>
         <button type="button" style={S.btn} onClick={() => void onOpenDir()}>{tr("settings.skills.openDir")}</button>
+        <button type="button" style={S.btn} onClick={() => void onImport()}>{tr("settings.skills.import")}</button>
         <button type="button" style={S.btn} onClick={() => void onReload()}>{tr("settings.rescan")}</button>
       </div>
       {skillSkips.length > 0 ? (

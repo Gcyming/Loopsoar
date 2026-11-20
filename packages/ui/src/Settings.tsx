@@ -15,6 +15,7 @@ import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
 import ExtensionsSection from "./ExtensionsSection.js";
 import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
 import SkillsSection from "./SkillsSection.js";
+import TraceSection from "./TraceSection.js";
 import MemorySettingsSection from "./MemorySettingsSection.js";
 import { setLanguage, useT } from "./i18n.js";
 import type {
@@ -1147,6 +1148,23 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                 setSkillSkips(result.skipped);
               })
             }
+            onImport={async () => {
+              const picked = await api.dialog.pickPath({ kind: "directory", title: tr("settings.skills.importTitle") });
+              if (picked.canceled || !picked.path) return;
+              const sourcePath = picked.path;
+              let result = await api.skills.import({ sourcePath }).catch((err) => (bad(err), null));
+              if (!result) return;
+              if (!result.ok && (result.error ?? "").includes("已存在") && window.confirm(tr("settings.skills.overwriteConfirm"))) {
+                result = await api.skills.import({ sourcePath, overwrite: true }).catch((err) => (bad(err), null));
+                if (!result) return;
+              }
+              if (!result.ok) {
+                bad(result.error ?? tr("settings.skills.importFailed"));
+                return;
+              }
+              setSkills(result.skills);
+              ok(tr("settings.skills.imported", { id: result.id ?? "", files: result.files ?? 0 }));
+            }}
             onToggle={(id, enabled) =>
               api.skills.setEnabled({ id, enabled }).then(() =>
                 api.skills.list().then((result) => setSkills(result.skills)),
@@ -1286,6 +1304,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <Head t={tr("settings.advanced.head")} h={tr("settings.advanced.headHint")} />
           <div style={S.kv}>{Object.entries(diag.paths).map(([k, v]) => <Kv key={k} k={k} v={v} />)}{Object.entries(diag.versions).map(([k, v]) => <Kv key={k} k={k} v={v} />)}</div>
           {diag.extra && Object.keys(diag.extra).length ? <div style={S.box}><div style={S.boxTitle}>{tr("settings.advanced.runtimeStats")}</div><div style={S.kv}>{Object.entries(diag.extra).map(([k, v]) => <Kv key={k} k={k} v={String(v)} />)}</div></div> : null}
+          <TraceSection api={api} />
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
 
       case "about":

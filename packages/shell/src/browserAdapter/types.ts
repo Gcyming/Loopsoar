@@ -18,6 +18,11 @@ export interface BrowserElementSnapshot {
   role: string;
   /** 可读名称（aria-label / 文本 / placeholder / alt …）。 */
   name: string;
+  /**
+   * 最近的可快照祖先的 ref（同一次快照内）。用于 `browser_snapshot(root=#eN)`
+   * 做真实子树下钻；缺失表示顶层元素。
+   */
+  parent?: string;
   /** 当前值（textbox/combobox；密码框不回传）。 */
   value?: string;
   /** input 的 type（text/checkbox/submit…）。 */

@@ -17,6 +17,8 @@ import type { ChatService, ChatStreamResult } from "loopsoar-services/chat";
 import type { SubagentHistoryEntry, SubagentTaskStore } from "./subagentTaskStore.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+/** 写/终端/浏览器的完整子代理需要更长的执行窗口。 */
+const WRITE_TIMEOUT_MS = 180_000;
 const MAX_GOAL_CHARS = 4_000;
 const MAX_RESULT_CHARS = 12_000;
 const MAX_PARALLEL_TASKS = 4;
@@ -91,10 +93,41 @@ export function readOnlyToolAllowlist(registry: ToolRegistry): string[] {
     .map((tool) => tool.name);
 }
 
+/**
+ * 写模式子代理的工具面：读/写/终端/浏览器/联网都可，但禁止再委派（防递归）、
+ * 禁止回滚父会话检查点（防越权撤销父代理工作）、禁止改 Loopsoar 自身配置。
+ * 权限确认不会消失：子会话沿用父 sessionId，写工具的确认会弹在父会话界面。
+ */
+export function writeToolAllowlist(registry: ToolRegistry): string[] {
+  const deny = new Set([
+    "delegate_research",
+    "delegate_parallel",
+    "delegate_tree",
+    "delegate_child",
+    "delegate_work",
+    "subagent_tasks",
+    "subagent_read",
+    "subagent_resume",
+    "checkpoint_restore",
+    "loopsoar",
+    "ask_user",
+  ]);
+  return registry
+    .list()
+    .filter((tool) => {
+      if (deny.has(tool.name)) return false;
+      const p = tool.permissions;
+      return Boolean(p.read || p.write || p.terminal || p.browser || p.network);
+    })
+    .map((tool) => tool.name);
+}
+
 export interface SubagentRunInput {
   goal: string;
   context?: string;
   sessionId: string;
+  /** read=只读调研；write=可写文件/终端/浏览器（权限仍由父会话确认）。 */
+  mode?: "read" | "write";
   /** 运行深度：根子代理为 1；动态再委派时递增。 */
   depth?: number;
   /** 当前子任务记录 id；动态再委派用它写 parentTaskId。 */
@@ -155,6 +188,57 @@ export function registerSubagentTools(
         return {
           ok: true,
           content: `[只读子代理完成]\n${text || "（子代理未返回正文）"}${tag}`,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (record) store?.finish(parent, record.id, "failed", undefined, message);
+        return { ok: false, content: `[子代理失败] ${message}${tag}` };
+      }
+    },
+  });
+
+  registry.register({
+    name: "delegate_work",
+    description:
+      "把一件需要动手的任务交给可写子代理（独立上下文；可读写文件、跑终端、操控浏览器、联网；不可再委派、不可回滚检查点）。适合「实现一个独立小改动/跑验证/采集页面」这类会塞满主上下文的工作。写操作仍会弹权限确认（出现在父会话）。启动前用户需确认一次。",
+    permissions: { write: true },
+    schema: z.object({
+      goal: z.string().min(4).max(MAX_GOAL_CHARS),
+      context: z.string().max(MAX_GOAL_CHARS).optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = ctx.params as { goal: string; context?: string };
+      const allowlist = writeToolAllowlist(registry);
+      if (allowlist.length === 0) return { ok: false, content: "[错误] 没有可用的工具，写子代理未启动" };
+      const goal = params.goal.trim();
+      const parent = ctx.sessionId ?? "";
+      const record = store?.create({ parentSessionId: parent, kind: "work", goal, context: params.context });
+      const tag = record ? `\n[任务记录] ${record.id}` : "";
+      const prompt = params.context?.trim()
+        ? `${goal}\n\n参考上下文（父代理提供，仅作线索，需自行核实）：\n${params.context.trim()}`
+        : goal;
+      try {
+        const result = await runner.run({
+          goal: prompt,
+          sessionId: parent,
+          depth: 1,
+          mode: "write",
+          ...(record ? { taskId: record.id } : {}),
+        });
+        const text = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
+        const history = appendHistory(undefined, goal, text);
+        if (result.status === "aborted") {
+          if (record) store?.finish(parent, record.id, "aborted", text, `超过 ${WRITE_TIMEOUT_MS / 1000}s 或父任务已停止`, history);
+          return { ok: false, content: `[子代理中止] 超过 ${WRITE_TIMEOUT_MS / 1000}s 或父任务已停止。${text}${tag}` };
+        }
+        if (result.status !== "done") {
+          if (record) store?.finish(parent, record.id, "failed", text, result.reason, history);
+          return { ok: false, content: `[子代理${result.status}] ${result.reason}\n${text}${tag}` };
+        }
+        if (record) store?.finish(parent, record.id, "done", text, undefined, history);
+        return {
+          ok: true,
+          content: `[可写子代理完成]\n${text || "（子代理未返回正文）"}${tag}`,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -446,39 +530,42 @@ export function registerSubagentTools(
   registry.register({
     name: "subagent_resume",
     description:
-      "按已落盘的任务记录恢复子会话上下文并重跑一次只读子任务：把原记录的历史（用户目标 + 子代理答复）注入新子会话，新记录以原任务为 parentTaskId。任务树节点缺少树结构，暂不支持恢复；完整工具轨迹不重放。",
+      "按已落盘的任务记录恢复子会话上下文并重跑：原任务历史（目标 + 子代理答复）注入新子会话；可传 goal 追加本轮指令。work 类任务以可写模式恢复，research/parallel 以只读模式恢复。任务树节点缺少树结构，暂不支持恢复；完整工具轨迹不重放。",
     permissions: { read: true },
     schema: z.object({
       taskId: z.string().min(8).max(120),
+      goal: z.string().min(1).max(MAX_GOAL_CHARS).optional(),
       sessionId: z.string().max(200).optional(),
     }),
     execute: async (ctx): Promise<ToolResult> => {
       if (!store) return { ok: false, content: "[错误] 子代理任务记录未装配" };
-      const params = ctx.params as { taskId: string; sessionId?: string };
+      const params = ctx.params as { taskId: string; goal?: string; sessionId?: string };
       const parent = params.sessionId ?? ctx.sessionId ?? "_default";
       const source = store.read(parent, params.taskId);
       if (!source) return { ok: false, content: `[错误] 未找到任务 ${params.taskId}（会话 ${parent}）` };
       if (source.kind === "tree") {
         return { ok: false, content: "[错误] 任务树子节点缺少树结构，暂不支持按记录恢复；请重新调用 delegate_tree" };
       }
+      const nextGoal = params.goal?.trim() || source.goal;
       const record = store.create({
         parentSessionId: parent,
         kind: source.kind,
-        goal: source.goal,
+        goal: nextGoal,
         ...(source.context ? { context: source.context } : {}),
         parentTaskId: source.id,
         history: source.history,
       });
       try {
         const result = await runner.run({
-          goal: source.context ? `${source.goal}\n\n参考上下文：\n${source.context}` : source.goal,
+          goal: source.context ? `${nextGoal}\n\n参考上下文：\n${source.context}` : nextGoal,
           sessionId: parent,
           depth: 1,
+          mode: source.kind === "work" ? "write" : "read",
           taskId: record.id,
           history: source.history,
         });
         const body = result.finalText.trim().slice(0, MAX_RESULT_CHARS);
-        const history = appendHistory(source.history, source.goal, body);
+        const history = appendHistory(source.history, nextGoal, body);
         if (result.status === "done") {
           store.finish(parent, record.id, "done", body, undefined, history);
           return { ok: true, content: `[恢复任务完成] ${record.id}（基于 ${source.id}）\n${body}` };
@@ -508,9 +595,11 @@ export function createChatSubagentRunner(
 ): SubagentRunner {
   return {
     async run(input) {
-      const allowlist = readOnlyToolAllowlist(registry);
+      const mode = input.mode ?? "read";
+      const allowlist = mode === "write" ? writeToolAllowlist(registry) : readOnlyToolAllowlist(registry);
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+      const timeoutMs = mode === "write" ? WRITE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       const parentSignal = input.signal;
       const abortFromParent = () => controller.abort();
       if (parentSignal) {

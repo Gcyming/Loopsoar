@@ -93,7 +93,7 @@ describe("元素引用注册表", () => {
     expect(() => new Function(SNAPSHOT_SCRIPT)).not.toThrow();
   });
 
-  it("每次快照按文档顺序重排 e1..eN，代数单调递增", () => {
+  it("每次快照按文档顺序分配 ref；重快照不复用旧 ref，代数单调递增", () => {
     const registry = new RefRegistry();
     const first = registry.reset(PAGE);
     expect(first.map((el) => el.ref)).toEqual(["e1", "e2", "e3", "e4", "e5"]);
@@ -101,9 +101,29 @@ describe("元素引用注册表", () => {
     expect(registry.gen).toBe(1);
     // matchText 是内部判别条件，不进入对外元素
     expect("matchText" in first[3]).toBe(false);
-    registry.reset([PAGE[1]]);
+    const second = registry.reset([PAGE[1]]);
     expect(registry.gen).toBe(2);
     expect(registry.size).toBe(1);
+    // 旧 e1 不再存在；新快照从 e6 起，避免旧 ref 静默落到新元素
+    expect(second.map((el) => el.ref)).toEqual(["e6"]);
+    const stale = resolveTarget(registry, "e1");
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.code).toBe("STALE_REF");
+  });
+
+  it("快照父子关系：parentIndex 映射为同代 ref，内部字段不外泄", () => {
+    const registry = new RefRegistry();
+    const out = registry.reset([
+      { tag: "main", role: "main", name: "容器", selector: "main", selectorWhy: "path" },
+      { tag: "button", role: "button", name: "A", selector: "#a", selectorWhy: "id", parentIndex: 0 },
+      { tag: "button", role: "button", name: "B", selector: "#b", selectorWhy: "id", parentIndex: 0 },
+      { tag: "span", role: "button", name: "C", selector: "#c", selectorWhy: "id", parentIndex: 1 },
+    ]);
+    expect(out.map((el) => el.ref)).toEqual(["e1", "e2", "e3", "e4"]);
+    expect(out[0].parent).toBeUndefined();
+    expect(out[1].parent).toBe("e1");
+    expect(out[3].parent).toBe("e2");
+    expect("parentIndex" in out[1]).toBe(false);
   });
 
   it("ref 别名归一化：#e5 / e5 / 5 都指向 e5，CSS 不被误判", () => {
@@ -163,19 +183,25 @@ describe("Agent 真实输入 · 坐标与锁", () => {
     if (!resolved.ok) throw new Error("解析失败");
     const script = buildTargetPointScript(resolved);
     expect(script).toContain("loopsoar:target-point");
+    // 隐藏/后台标签的 rAF 不触发：定位脚本必须有超时兜底，否则工具调用会挂到任务超时
+    expect(script).toContain("document.visibilityState === 'hidden'");
+    expect(script).toContain("setTimeout(finish, 100)");
     expect(script).toContain("elementFromPoint");
     expect(script).toContain("#login");
     expect(script).toContain("return { ok: true, x: cx, y: cy");
     expect(script).not.toContain("el.click()");
   });
 
-  it("放行脚本：置位驱动标志并把锁宿主/遮罩设为 pointer-events:none", () => {
+  it("放行脚本：只切驱动标志；锁层始终保持 pointer-events:none", () => {
     const on = buildAgentDrivingScript(true);
     expect(on).toContain("__loopsoarAgentDriving = true");
     expect(on).toContain("pointerEvents = 'none'");
     const off = buildAgentDrivingScript(false);
     expect(off).toContain("__loopsoarAgentDriving = false");
-    expect(off).toContain("pointerEvents = 'auto'");
+    // 回归：解锁时若把锁层改回 auto，会夺走 Agent 鼠标的 :hover，
+    // 悬浮菜单会在 hover→click 之间塌陷（评测任务 24）。
+    expect(off).toContain("pointerEvents = 'none'");
+    expect(off).not.toContain("pointerEvents = 'auto'");
   });
 
   it("接管锁：记住 mask，并在驱动标志为真时放行可信事件", () => {

@@ -1,0 +1,14 @@
+{
+  "id": "rich-panel-demo",
+  "name": "Rich Panel Demo",
+  "version": "1.0.0",
+  "apiVersion": "2.0.0",
+  "engines": { "loopsoar": ">=0.4.0" },
+  "publisher": "Loopsoar",
+  "permissions": ["read"],
+  "main": "index.mjs",
+  "contributes": {
+    "views": [{ "id": "panel", "title": "Rich Panel", "entry": "views/panel.html", "height": 320 }],
+    "instructions": "当用户询问示例扩展时，可以介绍 Rich Panel Demo。"
+  }
+}

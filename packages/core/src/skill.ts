@@ -31,6 +31,8 @@ export const SkillFrontmatterSchema = z.object({
   whenToUse: z.string().max(500).optional(),
   version: z.string().max(40).optional(),
   tags: z.array(z.string().max(40)).max(20).optional(),
+  /** 技能声明的工具白名单（Claude/Hermes 的 allowed-tools）；当前用于展示与审阅，不强制收窄。 */
+  allowedTools: z.array(z.string().max(120)).max(50).optional(),
 });
 
 export type SkillFrontmatter = z.infer<typeof SkillFrontmatterSchema>;
@@ -105,6 +107,18 @@ export function parseSkillMarkdown(raw: string, fallbackName = "skill"): ParsedS
       : extractSkillDescription(body);
   if (!meta.description) warnings.push("缺少 description（已从正文提取）");
 
+  const rawAllowed = meta["allowed-tools"] ?? meta.allowedTools;
+  const allowedTools = Array.isArray(rawAllowed)
+    ? (rawAllowed as unknown[]).map((item) => String(item).trim()).filter(Boolean).slice(0, 50)
+    : typeof rawAllowed === "string" && rawAllowed.trim()
+      ? rawAllowed
+          .replace(/^\[|\]$/g, "")
+          .split(/[,\s]+/)
+          .map((item) => item.trim().replace(/^["']|["']$/g, ""))
+          .filter(Boolean)
+          .slice(0, 50)
+      : undefined;
+
   const frontmatter: SkillFrontmatter = {
     name: name.slice(0, 120),
     description: description.slice(0, 500),
@@ -113,6 +127,7 @@ export function parseSkillMarkdown(raw: string, fallbackName = "skill"): ParsedS
     tags: Array.isArray(meta.tags)
       ? (meta.tags as unknown[]).map((t) => String(t).slice(0, 40)).slice(0, 20)
       : undefined,
+    ...(allowedTools && allowedTools.length > 0 ? { allowedTools } : {}),
   };
   return { frontmatter, body, warnings };
 }
@@ -248,6 +263,16 @@ export class SkillRegistry {
   }
 
   /**
+   * 命中技能声明的 allowed-tools 并集；没有任何声明则 undefined（表示不额外收窄）。
+   * 只用于「技能声明了就按它收窄」，多个命中技能取并集，避免互相排斥。
+   */
+  allowedToolsFor(userText: string): string[] | undefined {
+    const hits = this.search(userText, SKILL_MAX_MATCHES).filter((x) => x.score > 0);
+    const declared = hits.flatMap(({ record }) => record.frontmatter.allowedTools ?? []);
+    return declared.length > 0 ? [...new Set(declared)] : undefined;
+  }
+
+  /**
    * 注入文本：
    *  - 命中：Top-N 技能正文（截断 SKILL_BODY_LIMIT）；
    *  - 未命中：只给已启用技能清单（名称+描述，截断）。
@@ -267,7 +292,11 @@ export class SkillRegistry {
         record.body.length > SKILL_BODY_LIMIT
           ? `${record.body.slice(0, SKILL_BODY_LIMIT)}\n…（正文已截断；完整内容可用 file_read 读取：${record.path}）`
           : record.body;
-      return [`### 技能：${record.frontmatter.name}`, record.frontmatter.description, body].filter(Boolean).join("\n");
+      // 技能目录：脚本/资源都在这个目录下，模型按需读取时不必再猜路径。
+      const dir = record.path.replace(/[\\/][^\\/]+$/, "");
+      return [`### 技能：${record.frontmatter.name}`, `目录：${dir}`, record.frontmatter.description, body]
+        .filter(Boolean)
+        .join("\n");
     });
     return ["## 已加载技能（与当前请求相关）", ...blocks].join("\n\n");
   }

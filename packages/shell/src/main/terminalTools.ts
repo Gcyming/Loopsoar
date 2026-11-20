@@ -56,7 +56,7 @@ function clampTimeout(value: unknown): number {
  * 为什么不能只 kill 直接子进程：cmd/npx/uvx 类命令会派生孙进程并持有 stdout 管道，
  * 只杀父进程会留下孤儿进程、读取端永久挂起（见 docs/research 的教训）。
  */
-function killProcessTree(child: ChildProcess): void {
+export function killProcessTree(child: ChildProcess): void {
   const pid = child.pid;
   if (!pid) {
     try {

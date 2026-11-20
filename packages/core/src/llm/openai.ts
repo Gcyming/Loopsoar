@@ -236,7 +236,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             message?: { content?: string; reasoning_content?: string; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] };
             finish_reason?: string;
           }[];
-          usage?: { total_tokens?: number };
+          usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
         };
         const choice = data.choices?.[0] ?? {};
         const msg = choice.message ?? {};
@@ -252,7 +252,14 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             },
           };
         }
-        if (data.usage?.total_tokens) yield { kind: "usage", tokens: data.usage.total_tokens };
+        if (data.usage?.total_tokens) {
+          yield {
+            kind: "usage",
+            tokens: data.usage.total_tokens,
+            ...(data.usage.prompt_tokens !== undefined ? { inputTokens: data.usage.prompt_tokens } : {}),
+            ...(data.usage.completion_tokens !== undefined ? { outputTokens: data.usage.completion_tokens } : {}),
+          };
+        }
         yield choice.finish_reason ? { kind: "done", finishReason: choice.finish_reason } : { kind: "done" };
         return;
       }
@@ -261,6 +268,8 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
       const decoder = new TextDecoder();
       const toolCalls = new Map<number, { id: string; name: string; args: string }>();
       let usageTokens: number | undefined;
+      let usageInput: number | undefined;
+      let usageOutput: number | undefined;
       let finishReason: string | undefined;
       let buffer = "";
 
@@ -276,7 +285,14 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             },
           };
         }
-        if (usageTokens !== undefined) yield { kind: "usage", tokens: usageTokens };
+        if (usageTokens !== undefined) {
+          yield {
+            kind: "usage",
+            tokens: usageTokens,
+            ...(usageInput !== undefined ? { inputTokens: usageInput } : {}),
+            ...(usageOutput !== undefined ? { outputTokens: usageOutput } : {}),
+          };
+        }
         yield finishReason ? { kind: "done", finishReason } : { kind: "done" };
       };
 
@@ -297,7 +313,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
             delta?: { content?: string; reasoning_content?: string; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] };
             finish_reason?: string | null;
           }[];
-          usage?: { total_tokens?: number };
+          usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
           /** 部分上游在 HTTP 200 的 SSE 里返回错误对象（流内错误）。 */
           error?: { message?: string; type?: string } | string;
         };
@@ -326,7 +342,11 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
           toolCalls.set(key, cur);
         }
         if (choice?.finish_reason) finishReason = choice.finish_reason;
-        if (obj.usage?.total_tokens !== undefined) usageTokens = obj.usage.total_tokens;
+        if (obj.usage?.total_tokens !== undefined) {
+          usageTokens = obj.usage.total_tokens;
+          usageInput = obj.usage.prompt_tokens;
+          usageOutput = obj.usage.completion_tokens;
+        }
         return false;
       };
 

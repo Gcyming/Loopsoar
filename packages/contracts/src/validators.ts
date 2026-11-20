@@ -97,7 +97,12 @@ export const BrowserControlSchema = z.object({
   enabled: z.boolean(),
 });
 export const PermRespondSchema = z.object({ requestId: z.string(), choice: z.enum(["allow-once", "allow-session", "deny"]) });
-export const BrowserNavigateSchema = z.object({ url: z.string() });
+export const BrowserNavigateSchema = z.object({
+  url: z.string(),
+  /** 可选：在指定会话的 Agent 工作区打开；缺省沿用当前可见标签（UI 行为不变）。 */
+  sessionId: z.string().min(1).max(128).optional(),
+  origin: z.enum(["user", "agent"]).optional(),
+});
 export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
 /** 删除会话时一并关闭该会话名下的全部网页（工作区 > 会话 > 网页）。 */
@@ -174,6 +179,79 @@ export const WorktreeMergeSchema = z.object({
 });
 export const ExtensionToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
 export const ExtensionIdSchema = z.object({ id: z.string().min(1).max(120) });
+
+/** 扩展安装（目录或 zip）：来源由主进程 dialog 选择，渲染层不能传任意远程 URL。 */
+export const ExtensionInstallSchema = z.object({
+  sourcePath: z.string().min(1).max(4_000),
+  /** 签名未信任/未签名时必须显式确认；缺省 false（fail-closed）。 */
+  allowUntrusted: z.boolean().optional(),
+  /** 安装后是否立即启用（缺省沿用旧状态；新装缺省 false）。 */
+  activate: z.boolean().optional(),
+  /** 同版本重装（默认拒绝，避免误覆盖）。 */
+  force: z.boolean().optional(),
+});
+
+/** 信任某个签名公钥（指纹必须与公钥匹配，主进程会重算）。 */
+export const ExtensionTrustKeySchema = z.object({
+  fingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  publicKey: z.string().min(40).max(2_000).regex(/^[A-Za-z0-9+/=]+$/),
+  publisher: z.string().max(200).optional(),
+});
+
+export const ExtensionUntrustKeySchema = z.object({
+  fingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+});
+
+/** 撤销已信任密钥（保留审计记录；撤销后签名扩展立即 blocked）。 */
+export const ExtensionRevokeKeySchema = z.object({
+  fingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  reason: z.string().max(500).optional(),
+});
+
+/** 信任策略：warn=未信任可用但标记；strict=未信任禁止启用。 */
+export const ExtensionTrustPolicySchema = z.object({ policy: z.enum(["warn", "strict"]) });
+
+/** 市场索引地址（空字符串 = 关闭在线市场；只允许 http/https）。 */
+export const ExtensionRegistryUrlSchema = z.object({
+  url: z
+    .string()
+    .max(2_000)
+    .refine((value) => value === "" || /^https?:\/\//i.test(value), "registry 地址只允许 http(s)"),
+  /** 可选市场目录签名公钥（base64 SPKI）；传空字符串清除。 */
+  publicKey: z
+    .string()
+    .max(2_000)
+    .refine((value) => value === "" || /^[A-Za-z0-9+/=]+$/.test(value), "市场公钥必须是 base64")
+    .optional(),
+});
+
+export const ExtensionCatalogQuerySchema = z.object({ refresh: z.boolean().optional() }).nullish();
+
+export const ExtensionCatalogInstallSchema = z.object({
+  id: z.string().min(1).max(120),
+  version: z.string().min(1).max(80).optional(),
+  allowUntrusted: z.boolean().optional(),
+  activate: z.boolean().optional(),
+});
+
+/** 回滚：允许用户在确认指纹后放行未签名备份（与首次安装同一信任模型）。 */
+export const ExtensionRollbackSchema = z.object({
+  id: ExtensionIdSchema,
+  allowUntrusted: z.boolean().optional(),
+});
+export const ExtensionViewMessageSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    viewId: z.string().min(1).max(80),
+    message: z.unknown(),
+  })
+  .refine((value) => {
+    try {
+      return JSON.stringify(value.message ?? null).length <= 64 * 1024;
+    } catch {
+      return false;
+    }
+  }, "视图消息超过 64KB 或不是可序列化 JSON");
 export const SkillIdSchema = z.object({ id: z.string().min(1).max(120) });
 export const SkillToggleSchema = z.object({ id: z.string().min(1).max(120), enabled: z.boolean() });
 export const McpServerIdSchema = z.object({ id: z.string().min(1).max(120) });
@@ -399,6 +477,10 @@ export const PreferencesSchema = z.object({
   reasoningEffort: z.string().max(64).optional(),
   /** 当前 Agent-Loop id（缺省 = 内置 loop）；自定义 loop 接线后持久化选择。 */
   loopId: z.string().max(64).optional(),
+  /** 扩展市场 registry（空 = 关闭在线市场；只接受 http(s)）。 */
+  extensionsRegistryUrl: z.string().max(2_000).optional(),
+  /** 市场目录签名公钥（base64 SPKI）；配置后强制要求下载的 index.json 带受信 Ed25519 签名。 */
+  extensionsRegistryPublicKey: z.string().max(2_000).optional(),
   /** 敏感步骤（登录/支付/不可撤销操作）是否始终强制人工确认（默认 true，写死规则兜底）。 */
   sensitiveAlwaysConfirm: z.boolean().optional(),
 });

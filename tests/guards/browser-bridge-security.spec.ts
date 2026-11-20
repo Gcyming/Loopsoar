@@ -11,7 +11,7 @@
  * 在无法启动 Electron 的 CI 环境也能常跑；真机攻击演练见 docs/security。
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = process.cwd();
@@ -26,7 +26,24 @@ const PRELOAD = "packages/shell/src/preload/index.cjs";
 const TRUSTED_IPC = "packages/shell/src/main/trustedIpc.ts";
 const NAVIGATION = "packages/contracts/src/navigation.ts";
 const BROWSER_HOST = "packages/shell/src/main/browserHost.ts";
-const BROWSER_TOOLS = "packages/shell/src/main/browserTools.ts";
+const BROWSER_TOOLS_DIR = "packages/shell/src/main/browserTools";
+
+/**
+ * 浏览器工具集的全部源码文件（相对路径）。
+ * 拆分后是一个目录：守卫必须跟随拆分，否则新增的工具模块会落在扫描范围之外而静默失效。
+ */
+function browserToolFiles(): string[] {
+  const dir = path.join(ROOT, BROWSER_TOOLS_DIR);
+  return ["packages/shell/src/main/browserTools.ts"].concat(
+    readdirSync(dir)
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => `${BROWSER_TOOLS_DIR}/${name}`),
+  );
+}
+
+function readBrowserTools(): string {
+  return browserToolFiles().map(read).join("\n");
+}
 
 describe("守卫：浏览器桥隔离（发布门 2 四攻击路径）", () => {
   it("① 预加载脚本注入：preload 只暴露白名单 API，不暴露 ipcRenderer/electron 原始对象", () => {
@@ -69,7 +86,13 @@ describe("守卫：浏览器桥隔离（发布门 2 四攻击路径）", () => {
   });
 
   it("④ CDP 端口滥用：生产代码不得开启远程调试/使用 debugger 绕过权限", () => {
-    const suspects = [INDEX, ELECTRON_BROWSER, BROWSER_HOST, BROWSER_TOOLS, "packages/shell/src/main/domains/browserAdapter.ts"];
+    const suspects = [
+      INDEX,
+      ELECTRON_BROWSER,
+      BROWSER_HOST,
+      ...browserToolFiles(),
+      "packages/shell/src/main/domains/browserAdapter.ts",
+    ];
     for (const rel of suspects) {
       const src = read(rel);
       expect(src, `${rel} 不得包含 remote-debugging`).not.toMatch(/remote-debugging-port/i);
@@ -94,8 +117,18 @@ describe("守卫：浏览器桥隔离（发布门 2 四攻击路径）", () => {
     const nav = read(NAVIGATION);
     expect(nav).toContain("http:");
     expect(nav).toContain("https:");
-    // browserHost 导航必须先归一化/校验，不能直接 loadURL 原始输入
-    expect(read(BROWSER_HOST)).toMatch(/normalizeNavigateUrl/);
-    expect(read(BROWSER_TOOLS)).toMatch(/normalizeNavigateUrl|navigate\(/);
+    // browserHost 导航必须先归一化/校验，再交给适配层加载（不允许「先加载再校验」）
+    const host = read(BROWSER_HOST);
+    const at = host.indexOf("const normalized = normalizeNavigateUrl(rawUrl);");
+    expect(at, "navigate 必须先归一化 URL").toBeGreaterThan(-1);
+    const body = host.slice(at);
+    const loadAt = body.indexOf("adapter.navigate(normalized.url)");
+    expect(loadAt, "归一化后的 URL 才能进适配层").toBeGreaterThan(-1);
+    expect(body.indexOf("normalizeNavigateUrl")).toBeLessThan(loadAt);
+
+    // 工具层只能走 host.navigate（归一化在宿主里做），不得自己 loadURL 绕过白名单
+    const tools = readBrowserTools();
+    expect(tools).toMatch(/navigate\(/);
+    expect(tools).not.toMatch(/loadURL/);
   });
 });

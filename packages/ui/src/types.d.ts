@@ -247,6 +247,44 @@ export interface DiagnosticsInfo {
   extra?: Record<string, unknown>;
 }
 
+export interface TraceRecordView {
+  at: number;
+  sessionId: string;
+  kind: "tool" | "turn" | "error";
+  tool?: string;
+  ok?: boolean;
+  ms?: number;
+  error?: string;
+  args?: string;
+  rounds?: number;
+  toolCalls?: number;
+  tokens?: number;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  note?: string;
+}
+
+export interface TraceReportView {
+  sessionId: string;
+  generatedAt: number;
+  summary: {
+    turns: number;
+    toolCalls: number;
+    failures: number;
+    tokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    model?: string;
+    byTool: Array<{ tool: string; calls: number; failures: number; avgMs: number; maxMs: number }>;
+    lastError?: string;
+  };
+  records: TraceRecordView[];
+  pricingNote: string;
+}
+
 export interface AboutInfo {
   name: string;
   version: string;
@@ -452,6 +490,9 @@ export interface ExtensionRuntimeStatus {
   state: "idle" | "starting" | "ready" | "error";
   tools: string[];
   error?: string;
+  declarative?: boolean;
+  events?: string[];
+  protocol?: number;
 }
 
 export interface McpServerInfo {
@@ -483,6 +524,9 @@ export interface ExtensionRuntimeStatus {
   state: "idle" | "starting" | "ready" | "error";
   tools: string[];
   error?: string;
+  declarative?: boolean;
+  events?: string[];
+  protocol?: number;
 }
 
 export interface McpServerInfo {
@@ -507,6 +551,77 @@ export interface InstalledExtension {
   dir: string;
   enabled: boolean;
   installedAt: number;
+  /** 壳层每次 scan 重算：兼容性 / 信任 / 认证 / 依赖。 */
+  info?: ExtensionRuntimeInfo;
+}
+
+export type ExtensionCatalogView = import("loopsoar-contracts/extensionRegistry").ExtensionCatalogView;
+
+export interface ExtensionCompatibilityIssueView {
+  code: string;
+  level: "error" | "warning" | "info";
+  message: string;
+}
+
+export interface ExtensionCompatibilityView {
+  status: "compatible" | "compatible-with-warnings" | "blocked";
+  hostApiVersion: string;
+  hostVersion: string;
+  apiVersion: string;
+  engineRange: string | null;
+  legacyApi: boolean;
+  issues: ExtensionCompatibilityIssueView[];
+  errors: number;
+  warnings: number;
+}
+
+export interface ExtensionTrustView {
+  status: "trusted" | "unsigned" | "untrusted" | "invalid";
+  fingerprint?: string;
+  publisher?: string;
+  signedAt?: number;
+  message?: string;
+}
+
+export type ExtensionCertificationView = "certified" | "compatible" | "unverified" | "blocked";
+
+export interface ExtensionRuntimeInfo {
+  compatibility: ExtensionCompatibilityView;
+  trust: ExtensionTrustView;
+  certification: ExtensionCertificationView;
+  dependencies: { ok: boolean; issues: string[]; dependents: string[] };
+  version?: { active: string; previous?: string };
+  revocation?: { reason: string; revokedAt: number; version?: string };
+}
+
+export interface ExtensionTrustKeyView {
+  fingerprint: string;
+  publicKey: string;
+  publisher?: string;
+  trustedAt: number;
+  notBefore?: number;
+  notAfter?: number;
+  revokedAt?: number;
+  revokeReason?: string;
+}
+
+export interface ExtensionTrustStateView {
+  policy: "warn" | "strict";
+  keys: ExtensionTrustKeyView[];
+}
+
+export interface ExtensionInstallResultView {
+  ok: boolean;
+  error?: string;
+  canceled?: boolean;
+  id?: string;
+  version?: string;
+  certification?: ExtensionCertificationView;
+  compatibility?: ExtensionCompatibilityView;
+  trust?: ExtensionTrustView;
+  warnings: string[];
+  requiresTrust?: { fingerprint: string; publicKey: string; publisher?: string; message: string };
+  sourcePath?: string;
 }
 
 /** 扩展贡献点快照（shell ExtensionContributions.state()）：loop 已进 LoopRegistry，theme 由 UI 应用。 */
@@ -1089,6 +1204,7 @@ export interface LoopsoarAPI {
       checklist: RulesSnapshot["checklist"];
     }>;
     diagnostics(): Promise<DiagnosticsInfo>;
+    traces(payload: { sessionId: string; limit?: number }): Promise<TraceReportView>;
     about(): Promise<AboutInfo>;
   };
   rules: LoopsoarDomain & {
@@ -1128,6 +1244,17 @@ export interface LoopsoarAPI {
     setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; skill: SkillRecord | null }>;
     remove(payload: { id: string }): Promise<{ ok: boolean }>;
     openDir(): Promise<{ ok: boolean; dir: string }>;
+    import(payload: { sourcePath: string; id?: string; overwrite?: boolean }): Promise<{
+      ok: boolean;
+      id?: string;
+      target?: string;
+      files?: number;
+      bytes?: number;
+      warnings?: string[];
+      skipped?: string[];
+      error?: string;
+      skills: SkillRecord[];
+    }>;
   };
   mcp: LoopsoarDomain & {
     list(): Promise<{ servers: McpServerInfo[]; configPath: string }>;
@@ -1152,6 +1279,17 @@ export interface LoopsoarAPI {
     setEnabled(payload: { id: string; enabled: boolean }): Promise<{ ok: boolean; skill: SkillRecord | null }>;
     remove(payload: { id: string }): Promise<{ ok: boolean }>;
     openDir(): Promise<{ ok: boolean; dir: string }>;
+    import(payload: { sourcePath: string; id?: string; overwrite?: boolean }): Promise<{
+      ok: boolean;
+      id?: string;
+      target?: string;
+      files?: number;
+      bytes?: number;
+      warnings?: string[];
+      skipped?: string[];
+      error?: string;
+      skills: SkillRecord[];
+    }>;
   };
   mcp: LoopsoarDomain & {
     list(): Promise<{ servers: McpServerInfo[]; configPath: string }>;
@@ -1188,16 +1326,34 @@ export interface LoopsoarAPI {
       skipped: { dir: string; reason: string }[];
       runtime?: Record<string, ExtensionRuntimeStatus>;
       contributions?: ExtensionContributionsState | null;
+      trust?: ExtensionTrustStateView;
+      revocations?: import("loopsoar-contracts/extensionRegistry").ExtensionRevocation[];
+      market?: { registryUrl: string; publicKey: string };
+      host?: { apiVersion: string; version: string };
     }>;
     setEnabled(payload: { id: string; enabled: boolean }): Promise<{
       ok: boolean;
+      error?: string;
       extension: InstalledExtension | null;
       runtime?: ExtensionRuntimeStatus;
+      autoEnabled?: string[];
+      cascadeDisabled?: string[];
     }>;
     start(payload: { id: string }): Promise<{ status: ExtensionRuntimeStatus; runtime: Record<string, ExtensionRuntimeStatus> }>;
     stop(payload: { id: string }): Promise<{ status: ExtensionRuntimeStatus; runtime: Record<string, ExtensionRuntimeStatus> }>;
-    remove(payload: { id: string }): Promise<{ removed: boolean }>;
+    remove(payload: { id: string }): Promise<{ removed: boolean; error?: string; cascadeDisabled?: string[] }>;
     openDir(): Promise<{ ok: boolean; dir: string }>;
+    install(payload: { sourcePath: string; allowUntrusted?: boolean; activate?: boolean; force?: boolean }): Promise<ExtensionInstallResultView>;
+    rollback(payload: { id: string; allowUntrusted?: boolean }): Promise<ExtensionInstallResultView>;
+    verify(payload: { id: string }): Promise<{ ok: boolean; extension: InstalledExtension | null; error?: string }>;
+    trustKey(payload: { fingerprint: string; publicKey: string; publisher?: string }): Promise<{ ok: boolean; error?: string; trust?: ExtensionTrustStateView }>;
+    untrustKey(payload: { fingerprint: string }): Promise<{ ok: boolean; trust?: ExtensionTrustStateView }>;
+    revokeKey(payload: { fingerprint: string; reason?: string }): Promise<{ ok: boolean; error?: string; trust?: ExtensionTrustStateView }>;
+    setPolicy(payload: { policy: "warn" | "strict" }): Promise<{ ok: boolean; error?: string; trust?: ExtensionTrustStateView }>;
+    catalog(payload?: { refresh?: boolean }): Promise<ExtensionCatalogView>;
+    setRegistry(payload: { url: string; publicKey?: string }): Promise<{ ok: boolean; registryUrl?: string; publicKeyFingerprint?: string; error?: string }>;
+    installFromCatalog(payload: { id: string; version?: string; allowUntrusted?: boolean; activate?: boolean }): Promise<ExtensionInstallResultView>;
+    viewMessage(payload: { id: string; viewId: string; message: unknown }): Promise<{ ok: boolean }>;
   };
   on(event: LoopsoarEvent, cb: (payload: unknown) => void): () => void;
 }

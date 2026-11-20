@@ -30,6 +30,12 @@ export interface ExtensionRuntimeStatus {
   state: ExtensionRuntimeState;
   tools: string[];
   error?: string;
+  /** 纯声明式扩展（无 main）：不起进程，只有贡献点。 */
+  declarative?: boolean;
+  /** worker 实际注册的事件（诊断用）。 */
+  events?: string[];
+  /** 已协商的 worker 协议版本。 */
+  protocol?: number;
 }
 
 /** 子进程最小接口：测试可注入 fake spawn（PassThrough 流 + 手动触发 exit/error）。 */
@@ -97,6 +103,18 @@ interface PendingCall {
   timer: NodeJS.Timeout;
 }
 
+interface EventOutcome {
+  allow?: boolean;
+  reason?: string;
+  result?: unknown;
+  error?: string;
+}
+
+interface PendingEvent {
+  resolve: (outcome: EventOutcome) => void;
+  timer: NodeJS.Timeout;
+}
+
 interface ExtensionRun {
   extensionId: string;
   child: ExtensionChild;
@@ -104,9 +122,15 @@ interface ExtensionRun {
   tools: string[];
   nextId: number;
   pending: Map<number, PendingCall>;
+  pendingEvents: Map<number, PendingEvent>;
   stderrRing: string[];
   /** fail-closed 跳过注册的工具名/原因（ready 后写入状态 error）。 */
   conflicts: string[];
+  protocol: number;
+  /** worker 实际注册的事件。 */
+  events: string[];
+  /** 宿主声明的事件（用于派发过滤）。 */
+  declaredEvents: string[];
 }
 
 const START_TIMEOUT_MS = 8_000;
@@ -129,6 +153,10 @@ export class ExtensionRuntime {
       timeoutMs?: number;
       /** 调用超时（默认 20000ms；测试可调小）。 */
       callTimeoutMs?: number;
+      /** 事件钩子超时（默认 5000ms；超时按 allow 处理，不阻塞主流程）。 */
+      eventTimeoutMs?: number;
+      /** 扩展 worker → 自身富 UI 视图的消息（按 extensionId/viewId 路由）。 */
+      onViewMessage?: (id: string, viewId: string, message: unknown) => void;
       /** 测试注入（默认 node:child_process.spawn）。 */
       spawn?: ExtensionSpawn;
       /**
@@ -149,6 +177,8 @@ export class ExtensionRuntime {
       return {
         state: run.ready ? "ready" : "starting",
         tools: [...run.tools],
+        ...(run.events.length > 0 ? { events: [...run.events] } : {}),
+        protocol: run.protocol,
         // 冲突原因优先于最后一行日志：loadFailed 展示时用户才能知道「为什么少了工具」
         error: run.ready && run.conflicts.length > 0 ? `扩展工具未注册（fail-closed）：${run.conflicts.join("；")}` : run.stderrRing.at(-1),
       };
@@ -166,8 +196,19 @@ export class ExtensionRuntime {
   async start(id: string): Promise<ExtensionRuntimeStatus> {
     const item = this.opts.extensions.list().find((candidate) => candidate.manifest.id === id);
     if (!item) return this.setStatus(id, { state: "error", tools: [], error: `扩展不存在：${id}` });
+    if (item.info?.certification === "blocked") {
+      return this.setStatus(id, {
+        state: "error",
+        tools: [],
+        error: `扩展认证未通过（${item.info.dependencies.issues[0] ?? item.info.compatibility.issues[0]?.message ?? "blocked"}）`,
+      });
+    }
     const main = item.manifest.main?.trim();
-    if (!main) return this.setStatus(id, { state: "error", tools: [], error: "该扩展未声明 main 入口（当前版本不支持仅声明式扩展）" });
+    if (!main) {
+      // 纯声明式扩展：没有代码可跑，贡献点已经由 ExtensionContributions 注册。
+      this.stop(id);
+      return this.setStatus(id, { state: "ready", tools: [], declarative: true });
+    }
     // 入口必须位于扩展目录内且真实存在：提前给出可读原因（worker 侧也有一层防线，这里避免盲起进程）
     const entryPath = path.resolve(item.dir, main);
     const dirPath = path.resolve(item.dir);
@@ -195,8 +236,12 @@ export class ExtensionRuntime {
       tools: [],
       nextId: 0,
       pending: new Map(),
+      pendingEvents: new Map(),
       stderrRing: [],
       conflicts: [],
+      protocol: 1,
+      events: [],
+      declaredEvents: [...(item.manifest.events ?? [])],
     };
     this.runs.set(id, run);
     this.setStatus(id, { state: "starting", tools: [] });
@@ -218,11 +263,35 @@ export class ExtensionRuntime {
         const message = parseWorkerLine(line);
         if (!message) return;
         if (message.type === "ready") {
+          const protocol = message.protocol ?? 1;
+          run.protocol = protocol;
+          run.events = message.events ?? [];
+          if (run.declaredEvents.length > 0 && protocol < 2) {
+            this.teardown(id, run);
+            finish({
+              state: "error",
+              tools: [],
+              error: `扩展声明了 events，但 worker 协议为 ${protocol}（需要 2）；请升级扩展的 worker 模板`,
+            });
+            return;
+          }
+          const missingEvents = run.declaredEvents.filter((event) => !run.events.includes(event));
+          if (missingEvents.length > 0) {
+            this.teardown(id, run);
+            finish({
+              state: "error",
+              tools: [],
+              error: `worker 未注册 manifest 声明的事件：${missingEvents.join("、")}`,
+            });
+            return;
+          }
           run.ready = true;
           this.registerTools(item, run, message.tools);
           finish({
             state: "ready",
             tools: [...run.tools],
+            protocol,
+            ...(run.events.length > 0 ? { events: [...run.events] } : {}),
             // 有冲突仍算 ready（其余工具可用），但必须让 UI 可见「被 fail-closed 跳过了什么」
             ...(run.conflicts.length > 0 ? { error: `扩展工具未注册（fail-closed）：${run.conflicts.join("；")}` } : {}),
           });
@@ -234,6 +303,23 @@ export class ExtensionRuntime {
           run.pending.delete(message.id);
           clearTimeout(pending.timer);
           pending.resolve({ ok: message.ok, content: message.content ?? "", error: message.error });
+          return;
+        }
+        if (message.type === "eventResult") {
+          const pending = run.pendingEvents.get(message.id);
+          if (!pending) return;
+          run.pendingEvents.delete(message.id);
+          clearTimeout(pending.timer);
+          pending.resolve({
+            ...(message.allow !== undefined ? { allow: message.allow } : {}),
+            ...(message.reason ? { reason: message.reason } : {}),
+            ...(message.result !== undefined ? { result: message.result } : {}),
+            ...(message.ok ? {} : { error: message.error ?? "事件钩子失败" }),
+          });
+          return;
+        }
+        if (message.type === "viewMessage") {
+          this.opts.onViewMessage?.(id, message.viewId, message.message);
           return;
         }
         if (message.type === "fatal") {
@@ -292,9 +378,9 @@ export class ExtensionRuntime {
     for (const id of new Set([...this.runs.keys(), ...this.restartTimers.keys()])) this.stop(id);
   }
 
-  /** 启动所有「已启用且声明 main」的扩展（启动失败互相隔离）。 */
+  /** 启动所有已启用的扩展（启动失败互相隔离；纯声明式扩展只标记 ready）。 */
   async startEnabled(): Promise<void> {
-    const items = this.opts.extensions.list().filter((item) => item.enabled && item.manifest.main?.trim());
+    const items = this.opts.extensions.list().filter((item) => item.enabled);
     await Promise.all(items.map((item) => this.start(item.manifest.id).catch(() => undefined)));
   }
 
@@ -366,6 +452,79 @@ export class ExtensionRuntime {
     });
   }
 
+  /**
+   * 向所有订阅该事件的已就绪扩展派发。返回聚合决策：
+   *   · tool.before：任一扩展 allow=false 即否决（reason 取第一个否决者）；
+   *   · 其它事件：只收集结果/错误，不影响主流程；
+   *   · 超时/崩溃按 allow（fail-open）：事件钩子不是安全边界，安全靠工具权限/确认。
+   */
+  async dispatchEvent(
+    event: string,
+    payload: unknown,
+  ): Promise<{ allow: boolean; reason?: string; results: Array<{ id: string; result?: unknown; error?: string }> }> {
+    // turn.start/tool.before 在聊天关键路径上：超时要更短，坏扩展最多拖慢 2s；
+    // turn.end/tool.after 是旁路，允许 5s 做日志/通知。
+    const timeoutMs =
+      this.opts.eventTimeoutMs ??
+      (event === "turn.start" || event === "tool.before" ? 2_000 : 5_000);
+    const targets = [...this.runs.values()].filter(
+      (run) =>
+        run.ready &&
+        run.declaredEvents.includes(event) &&
+        run.events.includes(event) &&
+        this.opts.extensions.list().some((item) => item.manifest.id === run.extensionId && item.enabled),
+    );
+    let allow = true;
+    let reason: string | undefined;
+    const results = await Promise.all(
+      targets.map(
+        (run) =>
+          new Promise<{ id: string; result?: unknown; error?: string }>((resolve) => {
+            const eventId = ++run.nextId;
+            const timer = setTimeout(() => {
+              run.pendingEvents.delete(eventId);
+              resolve({ id: run.extensionId, error: `事件 ${event} 超时（${timeoutMs}ms）` });
+            }, timeoutMs);
+            run.pendingEvents.set(eventId, {
+              timer,
+              resolve: (outcome) => {
+                if (event === "tool.before" && outcome.allow === false) {
+                  allow = false;
+                  reason = reason ?? outcome.reason ?? `${run.extensionId} 否决了工具调用`;
+                }
+                resolve({
+                  id: run.extensionId,
+                  ...(outcome.result !== undefined ? { result: outcome.result } : {}),
+                  ...(outcome.error ? { error: outcome.error } : {}),
+                });
+              },
+            });
+            try {
+              const message: ParentToWorker = { type: "event", id: eventId, event, payload };
+              run.child.stdin.write(`${JSON.stringify(message)}\n`);
+            } catch (err) {
+              clearTimeout(timer);
+              run.pendingEvents.delete(eventId);
+              resolve({ id: run.extensionId, error: err instanceof Error ? err.message : String(err) });
+            }
+          }),
+      ),
+    );
+    return { allow, ...(reason ? { reason } : {}), results };
+  }
+
+  /** 应用 → 扩展富 UI 视图消息（worker 可选处理；纯声明式视图直接忽略）。 */
+  sendViewMessage(id: string, viewId: string, message: unknown): boolean {
+    const run = this.runs.get(id);
+    if (!run?.ready) return false;
+    try {
+      run.child.stdin.write(`${JSON.stringify({ type: "viewMessage", viewId, message } satisfies ParentToWorker)}\n`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private failRun(id: string, run: ExtensionRun, message: string): void {
     if (this.runs.get(id) !== run) return;
     this.unregisterTools(run);
@@ -374,6 +533,11 @@ export class ExtensionRuntime {
       pending.resolve({ ok: false, content: `[扩展已退出] ${message}` });
     }
     run.pending.clear();
+    for (const pending of run.pendingEvents.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ error: `[扩展已退出] ${message}` });
+    }
+    run.pendingEvents.clear();
     this.runs.delete(id);
     this.setStatus(id, { state: "error", tools: [], error: message });
     try {
@@ -412,6 +576,11 @@ export class ExtensionRuntime {
       pending.resolve({ ok: false, content: "[扩展已停止]" });
     }
     run.pending.clear();
+    for (const pending of run.pendingEvents.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ error: "扩展已停止" });
+    }
+    run.pendingEvents.clear();
     try {
       run.child.stdin.write(`${JSON.stringify({ type: "shutdown" } satisfies ParentToWorker)}\n`);
     } catch {

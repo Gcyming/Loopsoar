@@ -79,12 +79,14 @@ describe("Agent 真实输入", () => {
     expect(host.getPageZoom("s1", created.tabId)).toBe(1.5);
   });
 
-  it("agentKey：命名键派发 keyDown/keyUp，单字符额外派发 char", async () => {
+  it("agentKey：命名键派发 keyDown/keyUp，Enter 与单字符额外派发 char", async () => {
     const { host, views } = makeHost();
     const created = await host.newTab("https://example.com/", "s1", "agent");
     expect(await host.agentKey("s1", created.tabId, "Enter")).toBe(true);
     expect(views[0].events.map((event) => [event.type, event.keyCode])).toEqual([
       ["keyDown", "Enter"],
+      // Enter 的默认行为（表单提交/换行）由 char 驱动；只发 keyDown/keyUp 在 Chromium 里不触发。
+      ["char", "\r"],
       ["keyUp", "Enter"],
     ]);
 

@@ -627,8 +627,11 @@ export class DownloadsBridge {
     const savePath = path.join(this.dir(), filename.replace(/[\\/:*?"<>|]/g, "_"));
     try {
       item.setSavePath(savePath);
-    } catch {
+    } catch (err) {
       // 目录不可用时交给 electron 默认路径
+      if (process.env.LOOPSOAR_DEBUG_DOWNLOAD === "1") {
+        console.log("[download] setSavePath failed", JSON.stringify({ savePath, error: err instanceof Error ? err.message : String(err) }));
+      }
     }
     const view: DownloadView = {
       id,
@@ -639,6 +642,9 @@ export class DownloadsBridge {
       total: Math.max(0, item.getTotalBytes()),
       startedAt: Date.now(),
     };
+    if (process.env.LOOPSOAR_DEBUG_DOWNLOAD === "1") {
+      console.log("[download] start", JSON.stringify({ url: item.getURL(), mime: item.getMimeType(), total: view.total, savePath }));
+    }
     const handle: DownloadHandle = {
       view,
       cancel: () => {
@@ -658,6 +664,9 @@ export class DownloadsBridge {
       view.received = item.getReceivedBytes();
       view.total = Math.max(view.total, item.getTotalBytes());
       if (state === "interrupted") view.state = "interrupted";
+      if (process.env.LOOPSOAR_DEBUG_DOWNLOAD === "1") {
+        console.log("[download] updated", JSON.stringify({ state, received: view.received, total: view.total }));
+      }
       this.onChange();
     });
     item.once("done", (_e, state) => {
@@ -665,6 +674,9 @@ export class DownloadsBridge {
       view.state = state === "completed" ? "completed" : state === "cancelled" ? "cancelled" : "interrupted";
       view.received = item.getReceivedBytes();
       view.total = Math.max(view.total, item.getTotalBytes());
+      if (process.env.LOOPSOAR_DEBUG_DOWNLOAD === "1") {
+        console.log("[download] done", JSON.stringify({ state, received: view.received, total: view.total, savePath, url: item.getURL() }));
+      }
       this.onChange();
     });
     this.onChange();

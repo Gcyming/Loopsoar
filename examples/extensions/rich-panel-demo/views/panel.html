@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rich Panel</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <h1>Rich Panel Demo</h1>
+    <p class="hint">这个页面运行在 <code>loopsoar-ext://</code> 沙箱 iframe 中，拿不到主界面 DOM 或 Electron API。</p>
+    <div class="row">
+      <input id="text" value="ping" maxlength="200" />
+      <button id="send" type="button">发消息给扩展 worker</button>
+    </div>
+    <pre id="out">等待回包…</pre>
+    <script src="panel.js"></script>
+  </body>
+</html>

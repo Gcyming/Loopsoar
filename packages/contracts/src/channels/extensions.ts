@@ -1,4 +1,22 @@
-import { ExtensionIdSchema, ExtensionToggleSchema, McpServerIdSchema, McpServerSchema, SkillIdSchema, SkillToggleSchema } from "../validators.js";
+import { z } from "zod";
+import {
+  ExtensionCatalogInstallSchema,
+  ExtensionCatalogQuerySchema,
+  ExtensionIdSchema,
+  ExtensionInstallSchema,
+  ExtensionRegistryUrlSchema,
+  ExtensionToggleSchema,
+  ExtensionTrustKeySchema,
+  ExtensionRollbackSchema,
+  ExtensionRevokeKeySchema,
+  ExtensionTrustPolicySchema,
+  ExtensionUntrustKeySchema,
+  ExtensionViewMessageSchema,
+  McpServerIdSchema,
+  McpServerSchema,
+  SkillIdSchema,
+  SkillToggleSchema,
+} from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 extensions 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -39,6 +57,72 @@ export const extensionsChannels: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "extensions:install": {
+    domain: "extensions",
+    method: "install",
+    request: ExtensionInstallSchema,
+    sensitive: true,
+  },
+  "extensions:rollback": {
+    domain: "extensions",
+    method: "rollback",
+    request: ExtensionRollbackSchema,
+    sensitive: true,
+  },
+  "extensions:trustKey": {
+    domain: "extensions",
+    method: "trustKey",
+    request: ExtensionTrustKeySchema,
+    sensitive: true,
+  },
+  "extensions:untrustKey": {
+    domain: "extensions",
+    method: "untrustKey",
+    request: ExtensionUntrustKeySchema,
+    sensitive: true,
+  },
+  "extensions:revokeKey": {
+    domain: "extensions",
+    method: "revokeKey",
+    request: ExtensionRevokeKeySchema,
+    sensitive: true,
+  },
+  "extensions:setPolicy": {
+    domain: "extensions",
+    method: "setPolicy",
+    request: ExtensionTrustPolicySchema,
+    sensitive: true,
+  },
+  "extensions:verify": {
+    domain: "extensions",
+    method: "verify",
+    request: ExtensionIdSchema,
+    sensitive: true,
+  },
+  "extensions:catalog": {
+    domain: "extensions",
+    method: "catalog",
+    request: ExtensionCatalogQuerySchema,
+    sensitive: true,
+  },
+  "extensions:setRegistry": {
+    domain: "extensions",
+    method: "setRegistry",
+    request: ExtensionRegistryUrlSchema,
+    sensitive: true,
+  },
+  "extensions:installFromCatalog": {
+    domain: "extensions",
+    method: "installFromCatalog",
+    request: ExtensionCatalogInstallSchema,
+    sensitive: true,
+  },
+  "extensions:viewMessage": {
+    domain: "extensions",
+    method: "viewMessage",
+    request: ExtensionViewMessageSchema,
+    sensitive: true,
+  },
   "skills:list": {
     domain: "skills",
     method: "list",
@@ -67,6 +151,16 @@ export const extensionsChannels: Record<string, ChannelBinding> = {
     domain: "skills",
     method: "openDir",
     request: null,
+    sensitive: true,
+  },
+  "skills:import": {
+    domain: "skills",
+    method: "import",
+    request: z.object({
+      sourcePath: z.string().min(1).max(4000),
+      id: z.string().min(1).max(120).optional(),
+      overwrite: z.boolean().optional(),
+    }),
     sensitive: true,
   },
   "mcp:list": {

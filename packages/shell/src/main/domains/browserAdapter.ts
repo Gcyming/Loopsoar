@@ -29,7 +29,13 @@ export interface BrowserDeps extends TrustedIpcDeps {
 export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:navigate", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    return deps.browser.navigate((payload as { url: string }).url, undefined, deps.browser.visibleSessionId());
+    const p = (payload ?? {}) as { url: string; sessionId?: string; origin?: "user" | "agent" };
+    return deps.browser.navigate(
+      p.url,
+      undefined,
+      p.sessionId ?? deps.browser.visibleSessionId(),
+      p.origin ?? "user",
+    );
   });
 
   handleTrusted(deps, "browser:newTab", async (payload) => {

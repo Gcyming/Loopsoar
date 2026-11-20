@@ -38,6 +38,23 @@ describe("技能解析（容错）", () => {
   it("空文件才抛错", () => {
     expect(() => parseSkillMarkdown("   ", "x")).toThrow(/为空/);
   });
+
+  it("兼容 allowed-tools：数组与逗号串两种写法", () => {
+    const arrayForm = parseSkillMarkdown(
+      `---\nname: a\ndescription: d\nallowed-tools: [file_read, terminal_run]\n---\n正文`,
+      "a",
+    );
+    expect(arrayForm.frontmatter.allowedTools).toEqual(["file_read", "terminal_run"]);
+
+    const stringForm = parseSkillMarkdown(
+      `---\nname: b\ndescription: d\nallowedTools: "file_read, file_write"\n---\n正文`,
+      "b",
+    );
+    expect(stringForm.frontmatter.allowedTools).toEqual(["file_read", "file_write"]);
+
+    const none = parseSkillMarkdown(`---\nname: c\ndescription: d\n---\n正文`, "c");
+    expect(none.frontmatter.allowedTools).toBeUndefined();
+  });
 });
 
 describe("技能命中质量", () => {
@@ -86,5 +103,23 @@ describe("技能命中质量", () => {
     reg.setEnabled("review", false);
     expect(reg.promptFor("代码评审")).not.toContain("代码评审");
     expect(reg.promptFor("今天天气怎么样")).not.toContain("代码评审");
+  });
+
+  it("allowedToolsFor：命中技能的工具声明取并集，未声明返回 undefined", () => {
+    const reg = new SkillRegistry();
+    reg.install(
+      "safe",
+      "C:/skills/safe/SKILL.md",
+      parseSkillMarkdown(`---\nname: 安全评审\ndescription: 审代码\nallowed-tools: [file_read, terminal_run]\n---\n正文`, "safe"),
+    );
+    expect(reg.allowedToolsFor("安全评审")).toEqual(["file_read", "terminal_run"]);
+    expect(reg.allowedToolsFor("今天天气怎么样")).toBeUndefined();
+
+    reg.install(
+      "other",
+      "C:/skills/other/SKILL.md",
+      parseSkillMarkdown(`---\nname: 安全评审助手\ndescription: 审代码\nallowedTools: file_write\n---\n正文`, "other"),
+    );
+    expect(reg.allowedToolsFor("安全评审")!.sort()).toEqual(["file_read", "file_write", "terminal_run"]);
   });
 });

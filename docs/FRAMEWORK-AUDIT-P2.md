@@ -271,7 +271,7 @@
 | **P1-4** | 壳层侧栏动画是生产死代码；320ms 三处常量；注释已过期 | `browserHost.ts:305-336`、`App.tsx:671/684/689`（全 false）、`App.tsx:2058`（过期注释）、`theme.ts:57` | 删壳层 animate 分支（保留瞬时 set），时长收敛到 `contracts/layout`。**已完成**：主进程不再创建 setInterval，`setSidebarWidth` 兼容旧参数但立即落位；UI 的 rAF 逐帧驱动保留。 |
 | **P1-5** | `BrowserSnapshot` 无 `elements`，两层 `as` 强转 | `types.ts:8-12`、`webContentsView.ts:222-227`、`browserTools.ts:88-95` | **已完成**：`BrowserSnapshot.elements: BrowserElementSnapshot[]` 已是正式契约；`elementTotal`/`snapshotGen`/`tabToken` 同步入类型，工具层直接消费。 |
 | **P1-6** | 契约守卫测试会改写工作树，崩溃可留残留 | `contracts-sync.spec.ts:11` + `check.ts` 备份/覆盖/恢复流程 | **已完成**：`check.ts` 生成到临时目录，`gen.ts` 不再在 import 时写盘；守卫测试比对 gen 文件哈希，确保校验不改写工作树。 |
-| **P1-7** | 2 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:1469`（`useChatActions` 432 / `useSessionActions` 597）、`index.ts:1486`（`coreServices` 313 / `mainPaths` 49）、`schemas.ts:1490`（`events.ts` 55）、`browserHost.ts:1445`（`browserHostTypes.ts` 92） | **已完成**：全部源码 <=1500 行（当前最大 `refs.ts:1494`），并由 `tests/guards/source-size.spec.ts` 锁住红线 |
+| **P1-7** | 2 个 >1500 行文件继续被第二阶段加功能 | `App.tsx:1469`（`useChatActions` 432 / `useSessionActions` 597）、`index.ts:1486`（`coreServices` 313 / `mainPaths` 49）、`schemas.ts:1490`（`events.ts` 55）、`browserHost.ts:1445`（`browserHostTypes.ts` 92） | **已完成（第二代）**：红线从「≤1500 且允许不变」改为**两档 + 棘轮**（ADR-0147）——默认档 1400；组合根登记并钉死当前行数，只降不升（缩小后不下调天花板同样失败）。`browserTools.ts` 1495→55（拆为 `browserTools/` 五模块）、`browserHost.ts` 1498→1132（布局抽 `browserViewLayout.ts`）、`index.ts` 1500→1414（任务分支状态机抽 `taskForks.ts`）；`index.ts:1414` / `memoryService.ts:1449` / `App.tsx:1468` 为登记的三个组合根，其余全部 ≤1400 |
 | **P1-8** | `docs/FRAMEWORK-REVIEW.md` 全篇过时（MCP/skill/多标签/多会话/路径） | 见 §3.6 | **已归档**：文件头标注历史快照并指向本报告；不再作为当前架构依据。 |
 
 ### P2（可缓）
@@ -292,7 +292,7 @@
 **P0/P1/P2 全部闭环，第二阶段可以开工；当前没有待实现项。**
 
 依据：
-1. 框架分层 0 破口、electron 0 泄漏、preload 白名单由契约生成、152 条通道全部经 `handleTrusted`（1 处有意的浏览器 preload 例外）、生成物逐字节一致、typecheck 5/5；全源码 <=1500 行。
+1. 框架分层 0 破口、electron 0 泄漏、preload 白名单由契约生成、152 条通道全部经 `handleTrusted`（1 处有意的浏览器 preload 例外）、生成物逐字节一致、typecheck 5/5；模块体量由「两档 + 棘轮」守卫锁住（ADR-0147：默认 1400，三个组合根钉死且只降不升）。
 2. P0-1（模型可见面收窄）与 P0-2（稳定 ref/STALE_REF/真实输入动作）已闭环，第二阶段不再返工。
 3. 所有 P0/P1/P2 已闭环；没有待实现项。P1-8 文档已归档，P2-5 的通道顺序由测试/生成校验锁住。
 

@@ -10,6 +10,22 @@ interface SkillsState {
   enabled: Record<string, boolean>;
 }
 
+/** 技能资源包导入上限：防止一次导入把磁盘/扫描时间拖垮。 */
+const IMPORT_MAX_FILES = 300;
+const IMPORT_MAX_BYTES = 12 * 1024 * 1024;
+const IMPORT_MAX_DEPTH = 12;
+
+export interface SkillImportResult {
+  ok: boolean;
+  id?: string;
+  target?: string;
+  files?: number;
+  bytes?: number;
+  warnings?: string[];
+  skipped?: string[];
+  error?: string;
+}
+
 export interface CandidateInput {
   name: string;
   description: string;
@@ -115,6 +131,8 @@ export class SkillHost {
       fs.mkdirSync(this.dir, { recursive: true });
       for (const name of fs.readdirSync(this.dir)) {
         const full = path.join(this.dir, name);
+        // 跳过导入临时目录 / 隐藏目录：半成品不该被当成技能安装。
+        if (name.startsWith(".")) continue;
         try {
           if (!fs.statSync(full).isDirectory()) continue;
           const file = path.join(full, SKILL_FILE_NAME);
@@ -259,7 +277,134 @@ export class SkillHost {
     return this.dir;
   }
 
+  /**
+   * 导入 Claude/Hermes 风格的技能目录（SKILL.md + scripts/ + references/ + assets/）。
+   *
+   * 安全与一致性：
+   *  - 只接受「目录 + SKILL.md」，导入前先解析，坏技能不落盘；
+   *  - 目标目录必须在技能库内，源目录不能在目标内（防自我复制）；
+   *  - 不跟随符号链接；跳过 .git/node_modules；限制文件数/总字节/深度；
+   *  - 先写 `.import-*` 临时目录再 rename，失败清理，扫描跳过点目录；
+   *  - 导入成功后默认启用（用户显式安装），并立即重扫。
+   */
+  importSkill(sourcePath: string, opts: { id?: string; overwrite?: boolean } = {}): SkillImportResult {
+    const source = path.resolve(sourcePath.trim());
+    try {
+      if (!source || !fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
+        return { ok: false, error: `源路径不是目录：${sourcePath}` };
+      }
+      const skillFile = path.join(source, SKILL_FILE_NAME);
+      if (!fs.existsSync(skillFile)) {
+        return { ok: false, error: `目录里没有 ${SKILL_FILE_NAME}：${sourcePath}` };
+      }
+      const raw = fs.readFileSync(skillFile, "utf8");
+      if (Buffer.byteLength(raw, "utf8") > SKILL_MAX_BYTES) {
+        return { ok: false, error: `${SKILL_FILE_NAME} 超过 ${SKILL_MAX_BYTES} 字节，拒绝导入` };
+      }
+      let parsed: ReturnType<typeof SkillRegistry.parseMarkdown>;
+      try {
+        parsed = SkillRegistry.parseMarkdown(raw, path.basename(source));
+      } catch (err) {
+        return { ok: false, error: `SKILL.md 解析失败：${err instanceof Error ? err.message : String(err)}` };
+      }
+
+      const root = path.resolve(this.dir);
+      const id = (opts.id?.trim() || candidateBase(parsed.frontmatter.name) || path.basename(source)).replace(
+        /[^a-z0-9._-]/gi,
+        "-",
+      );
+      if (!id || id === "." || id === ".." || id.startsWith(".")) return { ok: false, error: `非法的技能 id：${id || "(空)"}` };
+      const target = path.resolve(root, id);
+      if (!isInside(root, target)) return { ok: false, error: "目标路径越界" };
+      if (source === target || isInside(source, target) || isInside(target, source)) {
+        return { ok: false, error: "源目录与技能库目标互相包含，不能导入" };
+      }
+      if (source === root || isInside(root, source)) {
+        return { ok: false, error: "源目录已经在技能库内，无需导入" };
+      }
+      if (fs.existsSync(target) && opts.overwrite !== true) {
+        return { ok: false, error: `技能 ${id} 已存在；确认覆盖后重试` };
+      }
+
+      const temp = path.resolve(root, `.import-${id}-${process.pid}-${Date.now()}`);
+      if (!isInside(root, temp)) return { ok: false, error: "临时目录越界" };
+      const acc = { files: 0, bytes: 0, skipped: [] as string[] };
+      fs.mkdirSync(temp, { recursive: true });
+      try {
+        this.copyTree(source, temp, "", acc, 0);
+        if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+        fs.renameSync(temp, target);
+      } catch (err) {
+        fs.rmSync(temp, { recursive: true, force: true });
+        return { ok: false, error: `复制失败：${err instanceof Error ? err.message : String(err)}` };
+      }
+
+      const state = this.readState();
+      state.enabled[id] = true;
+      this.writeState(state);
+      this.scan();
+      return {
+        ok: true,
+        id,
+        target,
+        files: acc.files,
+        bytes: acc.bytes,
+        warnings: parsed.warnings,
+        ...(acc.skipped.length > 0 ? { skipped: acc.skipped } : {}),
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** 递归复制技能包；不跟随符号链接，超出上限直接失败（宁可拒绝也不半导入）。 */
+  private copyTree(
+    sourceRoot: string,
+    targetRoot: string,
+    rel: string,
+    acc: { files: number; bytes: number; skipped: string[] },
+    depth: number,
+  ): void {
+    if (depth > IMPORT_MAX_DEPTH) throw new Error(`目录层级过深（>${IMPORT_MAX_DEPTH}）：${rel || "."}`);
+    const dir = path.join(sourceRoot, rel);
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relPath = rel ? path.join(rel, entry.name) : entry.name;
+      const src = path.join(sourceRoot, relPath);
+      const dst = path.join(targetRoot, relPath);
+      if (!isInside(targetRoot, dst)) throw new Error(`目标路径越界：${relPath}`);
+      if (entry.isSymbolicLink()) {
+        acc.skipped.push(relPath);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (entry.name === ".git" || entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+        fs.mkdirSync(dst, { recursive: true });
+        this.copyTree(sourceRoot, targetRoot, relPath, acc, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const size = fs.statSync(src).size;
+      if (acc.files + 1 > IMPORT_MAX_FILES) throw new Error(`文件数超过上限 ${IMPORT_MAX_FILES}`);
+      if (acc.bytes + size > IMPORT_MAX_BYTES) throw new Error(`总大小超过上限 ${IMPORT_MAX_BYTES} 字节`);
+      fs.copyFileSync(src, dst);
+      acc.files += 1;
+      acc.bytes += size;
+    }
+  }
+
   promptFor(userText: string): string {
     return this.registry.promptFor(userText);
+  }
+
+  /**
+   * 技能声明 allowed-tools 时收窄本轮工具面。
+   * 声明全写错（交集为空）时保留原名单：宁可技能限制失效，也不要让会话失去全部工具。
+   */
+  limitToolSurface(userText: string | undefined, names: string[] | undefined): string[] | undefined {
+    if (!userText || !names) return names;
+    const declared = this.registry.allowedToolsFor(userText);
+    if (!declared) return names;
+    const kept = names.filter((name) => declared.includes(name));
+    return kept.length > 0 ? kept : names;
   }
 }

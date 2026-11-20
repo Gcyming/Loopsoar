@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { ToolRegistry } from "../../packages/core/src/tools/registry.ts";
 import { registerFileTools } from "../../packages/shell/src/main/fileTools.ts";
+import { CheckpointStore } from "../../packages/shell/src/main/checkpointStore.ts";
 import { parseDiffResult } from "../../packages/ui/src/artifacts.ts";
 
 function makeTool(root: string) {
@@ -87,6 +88,36 @@ describe("file_write 按会话根目录", () => {
     } finally {
       fs.rmSync(rootA, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       fs.rmSync(rootB, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 20000);
+});
+
+describe("file_write × 检查点", () => {
+  it("写入前快照，checkpoint_restore 回到上一回合", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-cp-tool-"));
+    const root = path.join(base, "ws");
+    fs.mkdirSync(root, { recursive: true });
+    const registry = new ToolRegistry();
+    const store = new CheckpointStore(path.join(base, "checkpoints"));
+    registerFileTools(registry, () => root, store);
+    const write = registry.get("file_write")!;
+    const list = registry.get("checkpoint_list")!;
+    const restore = registry.get("checkpoint_restore")!;
+    try {
+      await write.execute({ agentId: "a", sessionId: "s", params: { path: "a.txt", content: "v1" }, platform: {} });
+      store.end("s");
+      await write.execute({ agentId: "a", sessionId: "s", params: { path: "a.txt", content: "v2" }, platform: {} });
+      store.end("s");
+
+      const listed = await list.execute({ agentId: "a", sessionId: "s", params: {}, platform: {} });
+      expect(listed.ok).toBe(true);
+      expect(listed.content).toContain("a.txt");
+
+      const result = await restore.execute({ agentId: "a", sessionId: "s", params: {}, platform: {} });
+      expect(result.ok).toBe(true);
+      expect(fs.readFileSync(path.join(root, "a.txt"), "utf8")).toBe("v1");
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 20000);
 });

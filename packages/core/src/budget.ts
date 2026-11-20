@@ -13,6 +13,10 @@ export interface BudgetUsage {
   rounds: number;        // 当前已执行的轮次
   toolCalls: number;     // 工具调用总次数
   totalTokens: number;   // 累计 Token 使用量
+  /** prompt tokens 累计（上游提供拆分时才有值）。 */
+  inputTokens?: number;
+  /** completion tokens 累计（上游提供拆分时才有值）。 */
+  outputTokens?: number;
   wallClockMs: number;  // 墙钟时间（毫秒）
 }
 

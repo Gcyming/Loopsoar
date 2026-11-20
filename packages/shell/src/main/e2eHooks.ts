@@ -222,9 +222,15 @@ function scheduleE2EScreenshot(win: BrowserWindow): void {
           }
 
           // E2E：任意表达式求值（LOOPSOAR_E2E_EVAL）——探针用，生产不触发
-          if (process.env.LOOPSOAR_E2E_EVAL) {
+          // LOOPSOAR_E2E_EVAL_FILE：从文件读取脚本（30 任务评测脚本超过 Windows 环境变量长度上限）。
+          const evalSource =
+            process.env.LOOPSOAR_E2E_EVAL ??
+            (process.env.LOOPSOAR_E2E_EVAL_FILE
+              ? fs.readFileSync(process.env.LOOPSOAR_E2E_EVAL_FILE, "utf8")
+              : "");
+          if (evalSource) {
             const result = await win.webContents
-              .executeJavaScript(process.env.LOOPSOAR_E2E_EVAL, true)
+              .executeJavaScript(evalSource, true)
               .catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
             console.log("E2E_EVAL", JSON.stringify(result));
           }

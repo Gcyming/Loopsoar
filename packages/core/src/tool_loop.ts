@@ -493,6 +493,8 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
             case "usage": {
               usage.totalTokens += chunk.tokens ?? 0;
+              if (chunk.inputTokens !== undefined) usage.inputTokens = (usage.inputTokens ?? 0) + chunk.inputTokens;
+              if (chunk.outputTokens !== undefined) usage.outputTokens = (usage.outputTokens ?? 0) + chunk.outputTokens;
               break;
             }
 
@@ -579,9 +581,13 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
             tool_calls: roundToolCalls.map((call) => ({ id: call.id, name: call.name, args: call.args })),
           },
           ...roundToolCalls.map((call) => {
+            // 失败也要保留人读原因：error 只是机器码（denied / NAV_FAILED），
+            // 真正的「为什么失败、下一步怎么办」在 content 里，丢掉它模型只会盲重试。
+            const readable = (call.result.content ?? "").trim();
+            const code = (call.result.error ?? "").trim();
             const raw = call.result.ok
-              ? (call.result.content ?? "")
-              : `[工具失败] ${call.result.error ?? call.result.content ?? "未知错误"}`;
+              ? readable
+              : `[工具失败] ${readable || code || "未知错误"}${code && !readable.includes(code) ? ` (${code})` : ""}`;
             const clipped =
               raw.length > MAX_TOOL_RESULT_IN_CONTEXT
                 ? `${raw.slice(0, MAX_TOOL_RESULT_IN_CONTEXT)}

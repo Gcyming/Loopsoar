@@ -30,6 +30,7 @@ import {
 } from "./boot.js";
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createCoreServices } from "./coreServices.js";
+import { TaskForkCoordinator } from "./taskForks.js";
 import { iconPath, preloadPath, openDirectoryNative } from "./mainPaths.js";
 import { ensureWritableDataDirs } from "./dataDir.js";
 import { BrowserDevToolsPanel, createElectronBrowserHost, DownloadsBridge, resolveFaviconForPage } from "./electronBrowser.js";
@@ -93,10 +94,15 @@ import { SkillHost } from "./skills.js";
 import { maybeAutoSkillCandidate } from "./skillAutoCapture.js";
 import { McpHost } from "./mcpHost.js";
 import { registerBrowserTools } from "./browserTools.js";
+import { registerBrowserDataRuntime } from "./browserDataRuntime.js";
+import { instrumentBrowserActivity } from "./browserActivity.js";
 import { createCdpBrowserBackendFromEnv, type CdpBrowserBackend } from "./cdpBrowserBackend.js";
 import { registerTerminalTools } from "./terminalTools.js";
 import { registerPlanTools } from "./planTools.js";
 import { registerFileTools } from "./fileTools.js";
+import { closeTurn, createRunStores } from "./runStores.js";
+import { registerTraceTools } from "./traceTools.js";
+import { BackgroundTaskManager, registerBackgroundTerminalTools } from "./backgroundTasks.js";
 import { registerDocumentTools } from "./documentTools.js";
 import { registerPdfTools } from "./pdfTools.js";
 import { registerOfficeTools } from "./officeTools.js";
@@ -104,7 +110,6 @@ import { registerOfficeConvertTools } from "./officeConvert.js";
 import { registerSkillTools } from "./skillTools.js";
 import { createChatSubagentRunner, registerSubagentTools } from "./subagentTools.js";
 import { SubagentTaskStore } from "./subagentTaskStore.js";
-import { registerExtensionsDomain } from "./domains/extensions.js";
 import { createChromePopoverManager } from "./chromePopover.js";
 import { registerChromePopoverDomain } from "./domains/chromePopover.js";
 import { createAgentWindowManager, type AgentWindowManager } from "./agentWindow.js";
@@ -112,6 +117,10 @@ import { createE2eHooks } from "./e2eHooks.js";
 import { createMainWindowWindow } from "./mainWindowFactory.js";
 import { registerAgentWindowDomain } from "./domains/agentWindow.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
+import { createExtensionAgentHooks } from "./extensionAgentHooks.js";
+import { registerExtensionWiring } from "./extensionWiring.js";
+import { pickExtensionSource } from "./extensionPicker.js";
+import { EXTENSION_UI_SCHEME, makeExtensionProtocolHandler } from "./extensionProtocol.js";
 import { registerSkillsDomain } from "./domains/skills.js";
 import { registerMcpDomain } from "./domains/mcp.js";
 import { registerFsDomain } from "./domains/fs.js";
@@ -128,10 +137,9 @@ const bootTrace = createBootTrace();
 // 自定义协议必须声明为 standard + secure，相对路径资源与 fetch 才能按网页语义工作。
 // 必须在 app ready 之前调用（Electron 要求），因此放在模块顶层。
 protocol.registerSchemesAsPrivileged([
-  {
-    scheme: PROTOCOL,
-    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
-  },
+  { scheme: PROTOCOL, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+  // 扩展富 UI：与主界面不同 origin；只读扩展目录，CSP 在处理器里逐响应注入。
+  { scheme: EXTENSION_UI_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } },
 ]);
 
 // 项目隔离：userData 显式落到品牌目录（%APPDATA%\loopsoar），与其他 Electron 应用数据区完全分开。
@@ -277,8 +285,6 @@ function createMainWindow(): void {
   });
 }
 
-
-
 // Chromium 原生 UI（DevTools / 右键菜单 / 部分系统对话框）的语言跟随 Loopsoar 设置；
 // --lang 必须在 app ready 之前设置，运行时切换语言会在下次启动生效。
 try {
@@ -297,6 +303,10 @@ app.whenReady().then(async () => {
   bootTrace.mark("whenReady");
   try {
     const dirs = ensureWritableDataDirs(app);
+    const stores = createRunStores(dirs.dataDir);
+    // 后台任务：应用退出时统一杀进程树，避免留下孤儿构建/dev server。
+    const backgroundTasks = new BackgroundTaskManager();
+    app.on("will-quit", () => backgroundTasks.killAll());
   // 崩溃取证：原生 AV 进程直接退出，JS 抓不到；先把可捕获的进程/渲染器死亡与未处理异常写盘，
   // 用户下次复现时我们才有 renderer/child-process 的 exitCode/reason，而不是只有一张报错弹窗。
   const crashLogPath = path.join(dirs.dataDir, "crash.log");
@@ -336,7 +346,7 @@ app.whenReady().then(async () => {
   }
   bootTrace.mark("protocol+ui-dist");
 
-  const core = await createCoreServices({ dirs, bootTrace, pushToRenderer, safeStorage });
+  const core = await createCoreServices({ dirs, appVersion: app.getVersion(), bootTrace, pushToRenderer, safeStorage });
   const {
     platform,
     registry,
@@ -360,6 +370,8 @@ app.whenReady().then(async () => {
     agents,
     defaultAgent,
   } = core;
+  // 扩展富 UI（沙箱 iframe）：协议处理器只读扩展目录，CSP/realpath 在处理器内校验。
+  protocol.handle(EXTENSION_UI_SCHEME, makeExtensionProtocolHandler(extensions));
   let workspaceRoot = core.getWorkspaceRoot();
   let llmRef = buildLlmFromActive();
   const ruleStats = new RuleStatsStore(path.join(dirs.dataDir, "rules", "stats.json"));
@@ -436,6 +448,8 @@ app.whenReady().then(async () => {
   const toolEvidence = new ToolEvidence(memory);
   const autoSkillLastAt = new Map<string, number>(); // 自动技能候选：每会话 10 分钟最多一次，避免刷出低质量草稿。
   const AUTO_SKILL_COOLDOWN_MS = 10 * 60 * 1000;
+  // 扩展运行时在 chatService 之后装配；用 ref 让扩展事件钩子不必重排启动顺序。
+  let extensionRuntimeRef: ExtensionRuntime | undefined;
   const chatService = new ChatService({
     platform,
     registry,
@@ -492,9 +506,14 @@ app.whenReady().then(async () => {
     },
     // 记忆召回：按当前消息取相关条目，注入 volatile 段
     // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
-    onToolCall: (toolName: string, sessionId: string) => memory.recordToolUsage(toolName, sessionId),
+    ...createExtensionAgentHooks(() => extensionRuntimeRef),
+    onToolCall: (toolName: string, sessionId: string) => {
+      stores.traces.begin(sessionId, toolName);
+      memory.recordToolUsage(toolName, sessionId);
+    },
     // 工具失败证据：同一会话同一工具同一错误连续两次才写 lesson（首次是偶发）。
     onToolResult: (event) => {
+      stores.traces.observe(event);
       const workspaceId = sessions.get(event.sessionId)?.workspaceId ?? undefined;
       void toolEvidence
         .observe({ ...event, ...(workspaceId ? { workspaceId } : {}) })
@@ -511,6 +530,8 @@ app.whenReady().then(async () => {
     getSkillPrompt: (text: string) => skills.promptFor(text),
     // 自动候选：显式开启 + 每会话 10 分钟节流；只写默认禁用的草稿，不影响本轮结果
     onTurnComplete: ({ sessionId, userText, result }) => {
+      // 回合结束：关闭当前检查点组（快照保留），落一条 turn trace。
+      closeTurn(stores, sessionId, result.usage, result.status, providers.active());
       if (loadPreferences(dirs.configDir).skillAutoCandidate !== true) return;
       const key = sessionId || "default";
       const now = Date.now();
@@ -578,10 +599,9 @@ app.whenReady().then(async () => {
         repeatToolStopAt: prefs.agentRepeatToolStop,
       };
     },
-    // 模式 × 会话：plan=只读规划（仅放行只读工具）；build=默认 Agent 白名单。
-    // 再叠加会话级「浏览器控制」：关闭时剔除 BROWSER_AGENT_TOOLS（与 contracts 单源一致），
-    // 这份名单同时决定模型可见面与执行闸（services/chat.ts 只解析一次）。
-    getToolAllowlist: (mode?: "build" | "plan", sessionId?: string) => {
+    // 模式 × 会话：plan=只读；build=默认 Agent 白名单。再叠加会话级「浏览器控制」：
+    // 关闭时剔除 BROWSER_AGENT_TOOLS；这份名单同时决定模型可见面与执行闸（services 只解析一次）。
+    getToolAllowlist: (mode?: "build" | "plan", sessionId?: string, userText?: string) => {
       const base =
         mode === "plan"
           ? registry
@@ -593,14 +613,16 @@ app.whenReady().then(async () => {
       // 未知会话 / 读不到 → 关闭（fail-closed）：幽灵会话不该意外获得浏览器控制权。
       const browserControl = id ? sessions.get(id)?.browserControl === true : false;
       // 关闭时剔除浏览器工具；base 为 undefined 时由 resolveToolSurface 用注册表全集重构名单。
-      return resolveToolSurface({
+      const resolved = resolveToolSurface({
         base,
         allNames: registry.list().map((t) => t.name),
         exclude: browserControl ? [] : [...BROWSER_AGENT_TOOLS],
       });
+      // 技能声明了 allowed-tools 时再收窄（多个命中技能取并集；未声明不动）。
+      return skills.limitToolSurface(userText, resolved);
     },
-    // 权限确认 → 推送到渲染层弹窗（perm:request 事件）
     onPermissionRequest: (request) => pushToRenderer("perm:request", request),
+    onPermissionResolved: (requestId) => pushToRenderer("perm:resolved", { requestId }),
   });
   bootTrace.mark("chat-service");
 
@@ -612,11 +634,6 @@ app.whenReady().then(async () => {
     sessions.setWorkspaceId(initialSessionId, workspaces.activeId());
   }
   const tabSaveTimers = new Map<string, NodeJS.Timeout>();
-  /** 本轮首次动作触发任务化：等回合一结束就把任务身份过户给「从操作阶段分出的分支」。 */
-  const pendingTaskForks = new Set<string>();
-  /** 本回合开始前的消息数：任务分支必须从这里切，分支点在「浏览器操作之前」。 */
-  const turnStartCounts = new Map<string, number>();
-  const pendingTaskKeep = new Map<string, number>();
   /** 用户标签 + 任务快照统一落盘（旧 browser-user-tabs.json 仅作迁移读取）。 */
   const browserStates = new BrowserStateStore(path.join(dirs.dataDir, "browser-state.json"));
   // 旧版本可能把 task 标记写丢，但任务工作区快照还在：有 agentBound 页的会话必然曾是任务，
@@ -628,28 +645,6 @@ app.whenReady().then(async () => {
       sessions.setTask(taskSessionId, true);
     }
   }
-  type PendingFork = { sourceId: string; keep: number; forkId?: string };
-  const pendingForkFile = path.join(dirs.dataDir, "pending-task-forks.json");
-  const pendingForkRecords = new Map<string, PendingFork>();
-  try {
-    if (fs.existsSync(pendingForkFile)) {
-      const raw = JSON.parse(fs.readFileSync(pendingForkFile, "utf8")) as PendingFork[];
-      for (const item of Array.isArray(raw) ? raw : []) {
-        if (item && typeof item.sourceId === "string" && Number.isFinite(item.keep)) {
-          pendingForkRecords.set(item.sourceId, item);
-        }
-      }
-    }
-  } catch {
-    // 标记文件损坏：忽略
-  }
-  const persistPendingForks = (): void => {
-    try {
-      fs.writeFileSync(pendingForkFile, JSON.stringify([...pendingForkRecords.values()]), "utf8");
-    } catch {
-      // 恢复标记落盘失败不阻断运行
-    }
-  };
   const legacyUserTabsFile = path.join(dirs.dataDir, "browser-user-tabs.json");
   const cancelBrowserStateSave = (sessionId: string): void => {
     const timer = tabSaveTimers.get(sessionId);
@@ -679,6 +674,21 @@ app.whenReady().then(async () => {
       }, 400),
     );
   };
+  /**
+   * 任务分支状态机：把「首次动作 → 回合结束过户 → 崩溃恢复」收进一个所有者。
+   * 状态（待分支/分支点/落盘记录/回合起点）不再散落在启动闭包里。
+   */
+  const taskForks = new TaskForkCoordinator({
+    sessions,
+    browserStates,
+    file: path.join(dirs.dataDir, "pending-task-forks.json"),
+    browserHost: () => browserHost,
+    push: pushToRenderer,
+    cancelStateSave: cancelBrowserStateSave,
+    onSourceMoved: (from, to) => {
+      if (initialSessionId === from) initialSessionId = to;
+    },
+  });
   // 全局浏览器历史（跨标签/跨会话共享）：持久化 <dataDir>/browser-history.json；
   // 上限 500、按 URL 去重合并；每次成功访问即原子落盘（退出前无需额外 flush）。
   const browserHistory = new BrowserHistoryStore(path.join(dirs.dataDir, "browser-history.json"));
@@ -760,16 +770,7 @@ app.whenReady().then(async () => {
         browserHistory.updateFavicon(url, favicon);
       },
       // Agent 首次动手 → 会话升级为「浏览器任务」：列表专属标记，关页不退回普通会话。
-      onTaskCreated: (sessionId) => {
-        if (sessions.isTask(sessionId)) return;
-        // 动作期间先把当前会话临时当任务（折叠页立即出现）；回合结束后再把它过户给分支。
-        sessions.setTask(sessionId, true);
-        const keep = turnStartCounts.get(sessionId) ?? 0;
-        pendingTaskForks.add(sessionId);
-        pendingTaskKeep.set(sessionId, keep);
-        pendingForkRecords.set(sessionId, { sourceId: sessionId, keep });
-        persistPendingForks();
-      },
+      onTaskCreated: (sessionId) => taskForks.markBrowserAction(sessionId),
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
       // 网页视图几何（单源）：覆盖指针贴住网页区域；没有可见网页时传 null → 覆盖层隐藏。
@@ -791,36 +792,7 @@ app.whenReady().then(async () => {
     },
   );
   // 崩溃/中途退出恢复：首次动作后没来得及 fork 的任务，在启动时补完或清掉孤儿任务标记。
-  for (const [sourceId, record] of [...pendingForkRecords]) {
-    const source = sessions.get(sourceId);
-    if (!source) {
-      pendingForkRecords.delete(sourceId);
-      continue;
-    }
-    let fork = record.forkId ? sessions.get(record.forkId) : null;
-    if (!fork && source.messages.length > record.keep) {
-      fork = sessions.fork(sourceId, record.keep, undefined, { activate: false });
-      if (fork) {
-        record.forkId = fork.sessionId;
-        persistPendingForks();
-      }
-    }
-    if (fork) {
-      if (source.messages.length > record.keep) sessions.moveTail(sourceId, fork.sessionId, record.keep);
-      sessions.setTask(sourceId, false);
-      sessions.setTask(fork.sessionId, true);
-      const state = browserStates.get(sourceId) ?? sessions.getBrowserState(sourceId);
-      if (state) browserStates.set(fork.sessionId, state);
-      browserStates.delete(sourceId);
-      if (initialSessionId === sourceId) initialSessionId = fork.sessionId;
-    } else {
-      // 没有可搬的操作回合：不留任务身份，也不留只剩任务页的孤儿存档。
-      sessions.setTask(sourceId, false);
-      browserStates.delete(sourceId);
-    }
-    pendingForkRecords.delete(sourceId);
-    persistPendingForks();
-  }
+  taskForks.recover();
 
   // 出网守卫注入「Agent 标签」判定：Agent 任务标签默认不得访问回环地址（用户标签不受影响），
   // 与 web_fetch 的 allowLoopback:false 对齐；E2E/开发可用 LOOPSOAR_ALLOW_LOOPBACK=1 放开。
@@ -933,30 +905,11 @@ app.whenReady().then(async () => {
       return spec?.vision === true || spec?.inputModalities?.includes("image") === true;
     },
   });
-  // Agent 浏览器活动广播（会话隔离）：只在动作执行期间推 start/end，
-  // 渲染层据此显示呼吸灯、把「该会话的活动标签」切到可见；绝不切走用户所在会话。
-  for (const toolName of BROWSER_AGENT_TOOLS) {
-    const def = registry.get(toolName);
-    if (!def) continue;
-    const original = def.execute.bind(def);
-    registry.register(
-      {
-        ...def,
-        execute: async (ctx) => {
-          pushToRenderer("chrome:agentActivity", { sessionId: ctx.sessionId, tool: toolName, phase: "start" });
-          try {
-            return await original(ctx);
-          } finally {
-            pushToRenderer("chrome:agentActivity", { sessionId: ctx.sessionId, tool: toolName, phase: "end" });
-          }
-        },
-      },
-      { force: true },
-    );
-  }
   registerTerminalTools(registry, resolveSessionRoot);
+  registerBackgroundTerminalTools(registry, backgroundTasks, resolveSessionRoot);
   registerPlanTools(registry);
-  registerFileTools(registry, resolveSessionRoot);
+  registerFileTools(registry, resolveSessionRoot, stores.checkpoints);
+  registerTraceTools(registry, stores.traces);
   registerDocumentTools(registry);
   registerPdfTools(registry);
   registerOfficeTools(registry);
@@ -978,8 +931,9 @@ app.whenReady().then(async () => {
   });
   // 询问用户工具：挂起等待真人回答（弹窗）
   registerAskTools(registry, askBus);
-  // 新工具注册后必须再同步沙箱白名单（否则会被判「未知工具名」）
-  sandbox.syncKnownTools(registry.list().map((t) => t.name));
+  // 注意：sandbox.syncKnownTools 必须放在**全部**工具注册之后（见下方浏览器状态面），
+  // 否则后注册的工具会被沙箱判成「未知工具名」——这正是 browser_cookies / downloads /
+  // diagnostics / upload 曾经全部失效的根因。
   bootTrace.mark("tools-registered");
 
   /** 退出前全量落盘：标签防抖队列可能还没触发，必须同步刷一次。 */
@@ -999,15 +953,20 @@ app.whenReady().then(async () => {
       browserStates.set(meta.id, state);
     }
     const userState = browserHost?.snapshotSession(USER_TABS_SESSION);
-    if (userState) browserStates.set(USER_TABS_SESSION, userState); browserStates.flush();
+    if (userState) {
+      browserStates.set(USER_TABS_SESSION, userState);
+    }
+    browserStates.flush();
   };
-
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
   const downloads = new DownloadsBridge(
     () => loadPreferences(dirs.configDir).downloadDir ?? "",
     () => pushToRenderer("browser:downloads", { downloads: downloads.list() }),
   );
-
+  registerBrowserDataRuntime(registry, () => browserHost, downloads, resolveSessionRoot, (url: string) => session.fromPartition(SESSION_PARTITION).cookies.get({ url }));
+  instrumentBrowserActivity(registry, BROWSER_AGENT_TOOLS, pushToRenderer);
+  // 所有工具注册完毕后再同步一次：同步点必须晚于最后一个 register*，否则新工具在沙箱里是「未知工具」。
+  sandbox.syncKnownTools(registry.list().map((t) => t.name));
   registerRuntimeDomain(deps);
   registerWorkspaceDomain({
     ...deps,
@@ -1065,7 +1024,7 @@ app.whenReady().then(async () => {
      * 结束或用户停止后解锁。锁由壳层下发，因此后台会话、独立小窗、无窗口都成立。
      */
     onTurnStarted: (sessionId) => {
-      turnStartCounts.set(sessionId, sessions.get(sessionId)?.messages.length ?? 0);
+      taskForks.onTurnStarted(sessionId);
       // 呼吸灯也按「轮次」而不是单次工具调用：工具执行只有几百毫秒，用户根本看不到。
       if (!browserHost) return;
       // 没有开启浏览器控制的会话本来就没有 Agent 网页：锁了只会挡住用户自己开的页面。
@@ -1077,7 +1036,7 @@ app.whenReady().then(async () => {
       holdPointerForAgent(sessionId);
     },
     onTurnSettled: (sessionId) => {
-      turnStartCounts.delete(sessionId);
+      taskForks.onTurnSettledStart(sessionId);
       agentTurnSessions.delete(sessionId);
       void browserHost?.lockForSession(sessionId, false).catch(() => undefined);
       if (pointerHeldSession === sessionId) {
@@ -1086,46 +1045,8 @@ app.whenReady().then(async () => {
       }
       // 首次动作的任务化延迟到回合结束：这时 append 刚把本轮回复写进原会话，
       // 分支能完整带上「Agent 控制发生时的会话阶段」，原会话则恢复为普通讨论。
-      if (pendingTaskForks.delete(sessionId) && browserHost) {
-        const source = sessions.get(sessionId);
-        const keep = pendingTaskKeep.get(sessionId) ?? Math.max(0, (source?.messages.length ?? 0) - 2);
-        pendingTaskKeep.delete(sessionId);
-        turnStartCounts.delete(sessionId);
-        if (source && source.messages.length > keep) {
-          // 分支点在操作前：fork 只拿 keep 之前的历史；本轮用户消息+回复搬到分支。
-          const fork = sessions.fork(sessionId, keep, undefined, { activate: false });
-          if (fork) {
-            const record = pendingForkRecords.get(sessionId);
-            if (record) {
-              record.forkId = fork.sessionId;
-              persistPendingForks();
-            }
-            if (!sessions.moveTail(sessionId, fork.sessionId, keep)) {
-              sessions.remove(fork.sessionId);
-              sessions.setTask(sessionId, false);
-              pendingForkRecords.delete(sessionId);
-              persistPendingForks();
-              return;
-            }
-            sessions.setTask(sessionId, false);
-            sessions.setTask(fork.sessionId, true);
-            browserHost.reassignSession(sessionId, fork.sessionId);
-            const state = browserHost.snapshotSession(fork.sessionId);
-            if (state && state.tabs.length > 0) browserStates.set(fork.sessionId, state);
-            // 过户后旧会话可能还有防抖保存队列：先取消，避免 400ms 后把任务页又写回普通会话。
-            cancelBrowserStateSave?.(sessionId);
-            browserStates.delete(sessionId);
-            pendingForkRecords.delete(sessionId);
-            persistPendingForks();
-            pushToRenderer("chat:taskForked", { from: sessionId, to: fork.sessionId });
-          }
-        } else {
-          // 回合没落库（异常/退出）：不留「任务但没有分支」的孤儿状态。
-          sessions.setTask(sessionId, false);
-          pendingForkRecords.delete(sessionId);
-          persistPendingForks();
-        }
-      }
+      // 分支点、过户、落盘、状态搬运全部由 TaskForkCoordinator 负责（见 taskForks.ts）。
+      taskForks.settle(sessionId);
     },
     // 会话即浏览器"文件夹"：切会话 = 切左侧标签组；先由 host 保存旧会话状态，再恢复目标会话
     onSessionOpened: async (sessionId, requestedWorkspaceId) => {
@@ -1346,29 +1267,22 @@ app.whenReady().then(async () => {
     workerPath: resolveWorkerPath(__dirname),
     onUpdate: (id, status) => pushToRenderer("extensions:updated", { id, runtime: status }),
     onToolsChanged: () => sandbox.syncKnownTools(registry.list().map((t) => t.name)),
+    onViewMessage: (id, viewId, message) => pushToRenderer("extensions:viewMessage", { id, viewId, message }),
   });
+  extensionRuntimeRef = extensionRuntime;
   // 注：扩展子进程启动、MCP 自动连接、浏览器历史补记都在首帧后的 runDeferredBootTasks 里执行（见下）。
 
-  registerExtensionsDomain({
-    ...deps,
-    extensions,
-    extensionStatus: () => extensionRuntime.statuses(),
-    startExtension: (id) => extensionRuntime.start(id),
-    stopExtension: (id) => extensionRuntime.stop(id),
-    push: pushToRenderer,
-    openExtensionsDir: async () => {
-      const error = await openDirectoryNative(extensions.dirPath(), shell.openPath);
-      if (error) console.log(`[Loopsoar] 打开扩展目录失败：${error}`);
-      return error === "";
-    },
+  registerExtensionWiring({
+    deps, extensions, runtime: extensionRuntime, configDir: dirs.configDir,
+    push: pushToRenderer, openPath: (target) => shell.openPath(target),
+    pickSource: () => pickExtensionSource({ messageBox: (options) => dialog.showMessageBox(mainWindow ?? undefined!, options), openDialog: (options) => dialog.showOpenDialog(mainWindow ?? undefined!, options) }),
   });
   registerSkillsDomain({
     ...deps,
     skills,
     push: pushToRenderer,
     openSkillsDir: async () => {
-      const error = await openDirectoryNative(skills.dirPath(), shell.openPath);
-      if (error) console.log(`[Loopsoar] 打开技能目录失败：${error}`);
+      const error = await openDirectoryNative(skills.dirPath(), shell.openPath); if (error) console.log(`[Loopsoar] 打开技能目录失败：${error}`);
       return error === "";
     },
   });

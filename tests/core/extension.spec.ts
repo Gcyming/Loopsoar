@@ -66,7 +66,7 @@ describe("扩展清单与注册表", () => {
       ExtensionRegistry.parseManifest({
         id: "guide",
         name: "指南",
-        version: "1",
+        version: "1.0.0",
         contributes: { instructions: "先读 README，再动代码。" },
       }),
       "C:/ext/guide",
@@ -80,7 +80,7 @@ describe("扩展清单与注册表", () => {
       ExtensionManifestSchema.parse({
         id: "too-long",
         name: "长",
-        version: "1",
+        version: "1.0.0",
         contributes: { instructions: "x".repeat(4_001) },
       }),
     ).toThrow();
@@ -92,7 +92,7 @@ describe("扩展清单与注册表", () => {
       ExtensionRegistry.parseManifest({
         id: "panel",
         name: "面板扩展",
-        version: "1",
+        version: "1.0.0",
         contributes: {
           ui: [{ id: "status", title: "状态", items: [{ label: "区域", value: "本地" }] }],
           hooks: [{ event: "turn.start", prompt: "先检查工作区状态。" }],
@@ -109,7 +109,7 @@ describe("扩展清单与注册表", () => {
       ExtensionManifestSchema.parse({
         id: "bad-hook",
         name: "坏 hook",
-        version: "1",
+        version: "1.0.0",
         contributes: { hooks: [{ event: "turn.end", prompt: "x" }] },
       }),
     ).toThrow();

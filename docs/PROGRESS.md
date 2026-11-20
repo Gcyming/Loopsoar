@@ -2,7 +2,7 @@
 
 > 位置：`D:\tool\AI\real-project\Loopsoar\Parent file`（下文简称根目录）
 > 参考项目：`D:\pilot project`（slime，只读参考；不得写入、不复制其架构代码）
-> 分支：main；最近提交见 `git log --oneline -5`
+> 分支：master；最近提交见 `git log --oneline -5`
 
 ## 一、当前可用能力（已验收）
 
@@ -1315,4 +1315,7 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 规则解析收拢：core/rules/document.ts 统一 guard/health/checklist/commandGuard 的切行/key/极性，减少语义漂移。
 - 完整度复核：docs/research/memory-rules-completeness.md（记忆/规则对照 Claude/Cursor/Copilot/Windsurf/WorkBuddy/Cline）；memory-eval-vault 基线 recall@1 0.492 / recall@3 0.718（docs 语料）。
 - 调研：docs/research/rule-documents.md（规则文档形态/加载/自迭代机制）；设计：docs/规划/规则-记忆-工具-Loop协同.md（四层闭环、守卫编译、清单、路线图）。
-
+- 架构稳固性收尾（ADR-0147）：行数红线升级为「两档 + 棘轮」——默认档 1400，组合根登记并钉死当前行数、只降不升（缩小后不下调天花板也失败）；`browserTools.ts` 1495→55（拆 `browserTools/` 五模块）、`browserHost.ts` 1498→1132（`browserViewLayout.ts`）、`index.ts` 1500→1414（任务分支状态机 → `taskForks.ts`）。
+- 任务分支所有权：`TaskForkCoordinator` 独占「待分支/分支点/落盘记录/回合起点」四份状态，入口只有 onTurnStarted / markBrowserAction / settle / recover，7 条单测钉住四条不变量（身份唯一、分支点≤本轮起点、落盘可重放、孤儿清理）。
+- 稳健性测试补齐（此前完全缺失）：`tests/guards/fault-injection.spec.ts`（10）、`concurrency.spec.ts`（13）、`migration.spec.ts`（17）——磁盘损坏逐层降级、令牌有界与跨标签识别、偏好/权限/标签/插件清单的向后兼容与脏数据逐条净化。
+- 配置读取改为 total（任何磁盘状态都返回可用配置、绝不抛错）：设置页写坏 JSON 不再白屏；写盘走临时文件 + fsync + 原子改名，崩溃不留半截文件。

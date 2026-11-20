@@ -1,0 +1,380 @@
+{
+  "version": 1,
+  "baseUrl": "http://127.0.0.1:19445",
+  "tasks": [
+    {
+      "id": 1,
+      "name": "搜索关键词",
+      "start": "/search",
+      "goal": "在搜索框输入 loopsoar，点搜索按钮，确认结果出现",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_type", "args": { "target": "#q", "text": "loopsoar" } },
+        { "tool": "browser_click", "args": { "target": "#go" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["结果：loopsoar"], "historyIncludes": ["结果：loopsoar"] }
+    },
+    {
+      "id": 2,
+      "name": "点击结果第二条",
+      "start": "/search",
+      "goal": "搜索后点击第二条结果",
+      "plan": [
+        { "tool": "browser_type", "args": { "target": "#q", "text": "abc" } },
+        { "tool": "browser_click", "args": { "target": "#go" } },
+        { "tool": "browser_click", "args": { "target": "#r2" } },
+        { "tool": "browser_wait", "args": { "selector": "#back" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["详情 2"], "pageTitleIncludes": ["详情 2"] }
+    },
+    {
+      "id": 3,
+      "name": "ref 填写表单并提交",
+      "start": "/form",
+      "goal": "填写姓名与邮箱并提交",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_type", "args": { "target": "#name", "text": "张三" } },
+        { "tool": "browser_type", "args": { "target": "#email", "text": "z@example.com" } },
+        { "tool": "browser_click", "args": { "target": "#submit" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["提交成功：张三"] }
+    },
+    {
+      "id": 4,
+      "name": "坐标点击同一按钮",
+      "start": "/coords",
+      "goal": "用视口坐标点击坐标按钮",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "x": 160, "y": 120 } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["COORD_OK"], "historyIncludes": ["delivered_unverified"] }
+    },
+    {
+      "id": 5,
+      "name": "坐标点击空白",
+      "start": "/coords",
+      "goal": "点击页面左上角空白处",
+      "plan": [
+        { "tool": "browser_click", "args": { "x": 5, "y": 5 } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["NO_TARGET"], "pageTextExcludes": ["COORD_OK"] }
+    },
+    {
+      "id": 6,
+      "name": "敏感点击取消",
+      "start": "/pay",
+      "goal": "点击立即支付但取消确认",
+      "confirm": "deny",
+      "expectSensitiveAsk": true,
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "#pay" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludesAny": ["SENSITIVE_DENIED", "确认被拒绝", "用户拒绝"], "pageTextExcludes": ["支付已提交"] }
+    },
+    {
+      "id": 7,
+      "name": "下拉选择回读",
+      "start": "/select",
+      "goal": "把下拉框选为 L 并回读",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_select", "args": { "target": "#size", "values": ["L"] } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["state=L"], "historyIncludes": ["value=\"L\""] }
+    },
+    {
+      "id": 8,
+      "name": "勾选复选框",
+      "start": "/select",
+      "goal": "勾选同意复选框并读取状态",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "#agree" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["agree=true"], "historyIncludes": ["checked"] }
+    },
+    {
+      "id": 9,
+      "name": "上传工作区文件",
+      "start": "/upload",
+      "goal": "上传 upload.txt",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_upload", "args": { "target": "#file", "files": ["__FIXTURE_FILE__"] } },
+        { "tool": "browser_wait", "args": { "text": "已上传" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["已上传：upload.txt"] }
+    },
+    {
+      "id": 10,
+      "name": "上传越界路径",
+      "start": "/upload",
+      "goal": "尝试上传工作区外的文件",
+      "plan": [
+        { "tool": "browser_upload", "args": { "target": "#file", "files": ["__OUTSIDE_FILE__"] } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["UPLOAD_FAILED"], "pageTextExcludes": ["已上传"] }
+    },
+    {
+      "id": 11,
+      "name": "下载并等待完成",
+      "start": "/download",
+      "goal": "点击下载并等待完成",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "#dl" } },
+        { "tool": "browser_downloads", "args": { "action": "wait", "filename": "report.txt", "timeoutMs": 8000 } }
+      ],
+      "assert": { "historyIncludes": ["下载完成"] },
+      "envSkip": {
+        "errorIncludes": ["下载interrupted", "0 B"],
+        "reason": "本机 Electron 网络层拦截下载：隔离探针（普通 BrowserWindow，不经产品代码）同样在 0 B 处 interrupted；工具接线由 tests/shell/browserDataTools.spec.ts 覆盖"
+      }
+    },
+    {
+      "id": 12,
+      "name": "等待不存在的下载",
+      "start": "/download",
+      "goal": "等待一个不存在的下载",
+      "plan": [
+        { "tool": "browser_downloads", "args": { "action": "wait", "filename": "missing.txt", "timeoutMs": 1200 } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["TIMEOUT"] }
+    },
+    {
+      "id": 13,
+      "name": "Cookie 元数据",
+      "start": "/login",
+      "goal": "读取当前站点 Cookie 元数据",
+      "plan": [
+        { "tool": "browser_cookies", "args": {} },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["sid", "domain="], "historyExcludes": ["eval-session"] }
+    },
+    {
+      "id": 14,
+      "name": "Console 错误",
+      "start": "/console",
+      "goal": "读取页面控制台错误",
+      "plan": [
+        { "tool": "browser_wait", "args": { "ms": 400 } },
+        { "tool": "browser_diagnostics", "args": { "kind": "console", "level": "error", "limit": 20 } }
+      ],
+      "assert": { "historyIncludes": ["BOOM"] }
+    },
+    {
+      "id": 15,
+      "name": "网络 5xx",
+      "start": "/net",
+      "goal": "读取 4xx/5xx 网络请求",
+      "plan": [
+        { "tool": "browser_wait", "args": { "ms": 600 } },
+        { "tool": "browser_diagnostics", "args": { "kind": "network", "limit": 50 } }
+      ],
+      "assert": { "historyIncludes": ["500", "/api/500"] }
+    },
+    {
+      "id": 16,
+      "name": "大页面 skeleton",
+      "start": "/big",
+      "goal": "用 skeleton 视图看大页面地标",
+      "plan": [{ "tool": "browser_snapshot", "args": { "view": "skeleton" } }],
+      "assert": { "historyIncludes": ["skeleton 视图", "navigation", "main"] }
+    },
+    {
+      "id": 17,
+      "name": "重快照后旧 ref",
+      "start": "/form",
+      "goal": "连续两次快照后使用旧 ref 点击",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "e1" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["STALE_REF"], "pageTextExcludes": ["提交成功"] }
+    },
+    {
+      "id": 18,
+      "name": "导航后旧 ref",
+      "start": "/form",
+      "goal": "导航后用导航前的 ref 点击",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_navigate", "args": { "url": "__BASE__/search" } },
+        { "tool": "browser_click", "args": { "target": "e1" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["STALE_REF"] }
+    },
+    {
+      "id": 19,
+      "name": "点击后导航",
+      "start": "/nav",
+      "goal": "点击链接并确认发生导航",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "#to-detail" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["详情 1"], "historyIncludes": ["详情 1"] }
+    },
+    {
+      "id": 20,
+      "name": "点击后无导航",
+      "start": "/search",
+      "goal": "点击搜索按钮（页面内过滤，无导航）",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "#go" } }
+      ],
+      "assert": { "historyIncludes": ["delivered_unverified"], "historyExcludes": ["已生效"] }
+    },
+    {
+      "id": 21,
+      "name": "关闭遮挡弹窗",
+      "start": "/popup",
+      "goal": "关闭页面上的遮挡弹窗",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_dismiss_popup", "args": {} },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["已关闭遮挡弹窗"], "pageTextIncludes": ["正文可见"] }
+    },
+    {
+      "id": 22,
+      "name": "Enter 提交搜索",
+      "start": "/search",
+      "goal": "输入后按 Enter 提交",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_type", "args": { "target": "#q", "text": "enter-key" } },
+        { "tool": "browser_press_key", "args": { "key": "Enter", "target": "#q" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["结果：enter-key"] }
+    },
+    {
+      "id": 23,
+      "name": "滚动到底部加载",
+      "start": "/list",
+      "goal": "滚动到列表底部触发加载",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_scroll", "args": { "direction": "bottom" } },
+        { "tool": "browser_wait", "args": { "text": "ITEM-61" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["ITEM-61"] }
+    },
+    {
+      "id": 24,
+      "name": "悬停菜单点击子项",
+      "start": "/hover",
+      "goal": "悬停更多菜单并点击子项",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_hover", "args": { "target": "#menu" } },
+        { "tool": "browser_click", "args": { "target": "#sub" } },
+        { "tool": "browser_wait", "args": { "selector": "#back" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["详情 9"] }
+    },
+    {
+      "id": 25,
+      "name": "拖拽排序",
+      "start": "/drag",
+      "goal": "把 A 拖到 B 上完成排序",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_drag", "args": { "from": "#drag-source", "to": "#drop-target" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["ORDER:B,A"] }
+    },
+    {
+      "id": 26,
+      "name": "新标签并切回",
+      "start": "/tabs",
+      "goal": "新开标签加载详情 3，再列出两个标签",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_tabs", "args": { "action": "new", "url": "__BASE__/detail?n=3" } },
+        { "tool": "browser_tabs", "args": { "action": "new", "url": "__BASE__/detail?n=4" } },
+        { "tool": "browser_tabs", "args": { "action": "list" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludes": ["标签（2 个", "详情 4"] }
+    },
+    {
+      "id": 27,
+      "name": "后退前进",
+      "start": "/search",
+      "goal": "导航到详情后后退再前进",
+      "plan": [
+        { "tool": "browser_navigate", "args": { "url": "__BASE__/detail?n=1" } },
+        { "tool": "browser_back", "args": {} },
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_forward", "args": {} },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["详情 1"], "historyIncludes": ["详情 1"] }
+    },
+    {
+      "id": 28,
+      "name": "刷新保留登录态",
+      "start": "/login",
+      "goal": "刷新页面并确认登录态保留",
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_reload", "args": {} },
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_cookies", "args": {} }
+      ],
+      "assert": { "pageTextIncludes": ["已登录"], "historyIncludes": ["sid"] }
+    },
+    {
+      "id": 29,
+      "name": "私网地址拦截",
+      "start": "/",
+      "goal": "尝试打开私网地址",
+      "plan": [
+        { "tool": "browser_navigate", "args": { "url": "http://10.1.2.3/" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "historyIncludesAny": ["拒绝私网", "BLOCKED", "导航失败", "NAV_FAILED", "ERR_"] }
+    },
+    {
+      "id": 30,
+      "name": "中途停止不留下支付",
+      "start": "/pay",
+      "goal": "点击支付后立刻停止任务",
+      "confirm": "deny",
+      "stopAfterAsk": true,
+      "expectSensitiveAsk": true,
+      "plan": [
+        { "tool": "browser_snapshot", "args": {} },
+        { "tool": "browser_click", "args": { "target": "#pay" } },
+        { "tool": "browser_snapshot", "args": {} }
+      ],
+      "assert": { "pageTextExcludes": ["支付已提交"], "historyIncludesAny": ["SENSITIVE_DENIED", "确认被拒绝", "停止", "中止", "已取消"] }
+    }
+  ]
+}

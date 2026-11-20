@@ -28,6 +28,8 @@ interface RegistryOptions {
   confirmSensitive?: (args: { sessionId?: string; tool: string; label: string; reason: string }) => Promise<boolean>;
   /** 假的焦点探测结果（真实实现由 refs.ts 读 activeElement）。 */
   focusProbe?: { ok?: boolean; tag?: string; type?: string; role?: string; name?: string };
+  /** 假的坐标探测结果（真实实现由 elementFromPoint 读目标）。 */
+  pointProbe?: { ok: boolean; [key: string]: unknown };
 }
 
 function makeRegistry(
@@ -101,6 +103,9 @@ function makeRegistry(
       // 「只定位不点击」脚本：真实实现回目标中心坐标（getBoundingClientRect 的视口坐标）。
       if (script.includes("loopsoar:focus-probe")) return options.focusProbe ?? { ok: false };
       if (script.includes("loopsoar:target-point")) return { ok: true, x: 120, y: 90, width: 40, height: 20 };
+      if (script.includes("loopsoar:point-probe")) {
+        return options.pointProbe ?? { ok: true, x: 120, y: 90, width: 40, height: 20, tag: "button", role: "button", text: "提交", clickable: true };
+      }
       return scriptResult;
     },
   };
@@ -185,7 +190,7 @@ describe("浏览器工具集", () => {
     const result = await run(registry, "browser_snapshot", {}, "fmt-1");
     expect(result.ok).toBe(true);
     // 首行带 source（P2-4）：agent-tab=任务页，user-tab=用户全局标签
-    expect(result.content.split("\n")[0]).toMatch(/^\[快照 #1 \| https:\/\/example\.com\/ \| 示例页 \| source=(agent|user)-tab\]$/);
+    expect(result.content.split("\n")[0]).toMatch(/^\[快照 #1 \| complete=true \| view=full \| https:\/\/example\.com\/ \| 示例页 \| source=(agent|user)-tab\]$/);
     expect(result.content).toContain("正文内容 ABC");
     expect(result.content).toContain("可交互元素（共 5 个");
     expect(result.content).toContain('[#e1] navigation "主导航"');
@@ -214,9 +219,99 @@ describe("浏览器工具集", () => {
     const { registry } = makeRegistry(many);
     const result = await run(registry, "browser_snapshot", {}, "many-1");
     expect(result.content).toContain("共 85 个");
-    expect(result.content).toContain("已省略 5 个");
+    expect(result.content).toContain("本视图还有 5 个未显示");
     const elementLines = result.content.split("\n").filter((line) => line.startsWith("[#e"));
     expect(elementLines).toHaveLength(80);
+  });
+
+  it("browser_snapshot：skeleton 只保留地标/标题/按钮，并标记 view", async () => {
+    const { registry } = makeRegistry();
+    const result = await run(registry, "browser_snapshot", { view: "skeleton" }, "skeleton-1");
+    expect(result.content.split("\n")[0]).toContain("view=skeleton");
+    expect(result.content).toContain('[#e1] navigation "主导航"');
+    expect(result.content).toContain('[#e4] button "提交" (disabled)');
+    expect(result.content).toContain('[#e5] heading "欢迎"');
+    expect(result.content).not.toContain('[#e2] link "登录"');
+    expect(result.content).not.toContain('[#e3] textbox "搜索"');
+    expect(result.content).toContain("skeleton 视图隐藏了 2 个");
+  });
+
+  it("browser_snapshot：root 只渲染真实子树并缩进，depth 截断不谎报 complete", async () => {
+    const tree: RawBrowserElement[] = [
+      { tag: "main", role: "main", name: "容器", selector: "main", selectorWhy: "path" },
+      { tag: "button", role: "button", name: "子按钮", selector: "#a", selectorWhy: "id", parentIndex: 0 },
+      { tag: "button", role: "button", name: "孙按钮", selector: "#b", selectorWhy: "id", parentIndex: 1 },
+      { tag: "a", role: "link", name: "外部链接", selector: "#c", selectorWhy: "id", href: "/x" },
+    ];
+    const { registry } = makeRegistry(tree);
+    const rooted = await run(registry, "browser_snapshot", { root: "#e1" }, "root-1");
+    expect(rooted.ok).toBe(true);
+    expect(rooted.content.split("\n")[0]).toContain("root=#e1");
+    expect(rooted.content).toContain("子树 3 个（页面共 4 个）");
+    expect(rooted.content).toContain('[#e1] main "容器"');
+    expect(rooted.content).toContain('  [#e2] button "子按钮"');
+    expect(rooted.content).toContain('    [#e3] button "孙按钮"');
+    expect(rooted.content).not.toContain("#e4");
+    expect(rooted.content).toContain("complete=true");
+
+    const shallow = await run(registry, "browser_snapshot", { root: "e5", depth: 1 }, "root-2");
+    // 第二次快照 ref 从 e5 起（e5=main，e6=子按钮，e7=孙按钮，e8=链接）
+    expect(shallow.ok).toBe(true);
+    expect(shallow.content).toContain("complete=false");
+    expect(shallow.content).toContain("depth=1 截断了更深的后代");
+    expect(shallow.content).toContain('[#e5] main "容器"');
+    expect(shallow.content).toContain('[#e6] button "子按钮"');
+    expect(shallow.content).not.toContain("#e7");
+  });
+
+  it("browser_snapshot：root 非 ref 或不在快照里时返回可行动错误", async () => {
+    const { registry } = makeRegistry();
+    const bad = await run(registry, "browser_snapshot", { root: "div.card" }, "root-bad");
+    expect(bad.ok).toBe(false);
+    expect(bad.content).toContain("INVALID_ARGS");
+    const stale = await run(registry, "browser_snapshot", { root: "#e99" }, "root-stale");
+    expect(stale.ok).toBe(false);
+    expect(stale.content).toContain("STALE_REF");
+  });
+
+  it("browser_click：坐标点击先探测 elementFromPoint，再走真实/降级点击", async () => {
+    const { registry, executed } = makeRegistry();
+    const click = await run(registry, "browser_click", { x: 120, y: 90 }, "coord-1");
+    expect(click.ok).toBe(true);
+    expect(click.content).toContain("已点击 提交");
+    expect(click.content).toContain("delivered_unverified");
+    expect(executed.some((entry) => entry.script.includes("loopsoar:point-probe"))).toBe(true);
+    // 假宿主没有 agentClick → 应明确降级，并走坐标点击脚本，而不是对空白 ref 报错
+    expect(executed.some((entry) => entry.script.includes("loopsoar:point-click"))).toBe(true);
+    expect(click.content).toContain("已降级为脚本点击");
+  });
+
+  it("browser_click：坐标点击命中敏感文案 → 二次确认；拒绝时不派发点击", async () => {
+    const { registry, executed } = makeRegistry(PAGE, { ok: true }, {
+      confirmSensitive: async () => false,
+      pointProbe: { ok: true, x: 120, y: 90, width: 40, height: 20, tag: "button", role: "button", text: "立即支付", clickable: true },
+    });
+    const click = await run(registry, "browser_click", { x: 120, y: 90 }, "coord-sensitive");
+    expect(click.ok).toBe(false);
+    expect(click.content).toContain("SENSITIVE_DENIED");
+    expect(executed.some((entry) => entry.script.includes("loopsoar:point-click"))).toBe(false);
+  });
+
+  it("browser_click：坐标越界/空白/参数冲突返回可行动错误", async () => {
+    const blank = makeRegistry(PAGE, { ok: true }, {
+      pointProbe: { ok: false, code: "NO_TARGET", message: "坐标 (1,1) 没有可点击元素" },
+    });
+    const noTarget = await run(blank.registry, "browser_click", { x: 1, y: 1 }, "coord-blank");
+    expect(noTarget.ok).toBe(false);
+    expect(noTarget.content).toContain("[NO_TARGET]");
+
+    const { registry } = makeRegistry();
+    const missingY = await run(registry, "browser_click", { x: 10 }, "coord-bad");
+    expect(missingY.ok).toBe(false);
+    expect(missingY.content).toContain("[INVALID_ARGS]");
+    const both = await run(registry, "browser_click", { target: "e1", x: 10, y: 10 }, "coord-both");
+    expect(both.ok).toBe(false);
+    expect(both.content).toContain("[INVALID_ARGS]");
   });
 
   it("browser_click：ref 解析成注册表选择器（#eN → 句柄）", async () => {
@@ -235,6 +330,16 @@ describe("浏览器工具集", () => {
     expect(click.ok).toBe(false);
     expect(click.content).toContain("[STALE_REF]");
     expect(click.content).toContain("browser_snapshot");
+  });
+
+  it("browser_click：同标签重快照后旧 ref → STALE_REF（不会落到新元素）", async () => {
+    const { registry } = makeRegistry();
+    await run(registry, "browser_snapshot", {}, "restale-1");
+    const second = await run(registry, "browser_snapshot", {}, "restale-1");
+    expect(second.content).toContain("[#e6]");
+    const click = await run(registry, "browser_click", { target: "e1" }, "restale-1");
+    expect(click.ok).toBe(false);
+    expect(click.content).toContain("[STALE_REF]");
   });
 
   it("browser_click：注册表有 ref 但页面查不到 → ELEMENT_NOT_FOUND + 候选", async () => {

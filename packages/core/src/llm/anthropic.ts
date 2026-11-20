@@ -245,7 +245,14 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
             yield { kind: "tool_call", toolCall: { id: block.id ?? `call-${Date.now()}`, name: block.name ?? "", args: block.input ?? {} } };
         }
         const tokens = (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0);
-        if (tokens) yield { kind: "usage", tokens };
+        if (tokens) {
+          yield {
+            kind: "usage",
+            tokens,
+            inputTokens: data.usage?.input_tokens ?? 0,
+            outputTokens: data.usage?.output_tokens ?? 0,
+          };
+        }
         yield { kind: "done", ...(data.stop_reason ? { finishReason: anthropicFinishReason(data.stop_reason) } : {}) };
         return;
       }
@@ -381,7 +388,7 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
           yield* emitEvent(trailing);
         }
         const totalTokens = inputTokens + outputTokens;
-        if (totalTokens > 0) yield { kind: "usage", tokens: totalTokens };
+        if (totalTokens > 0) yield { kind: "usage", tokens: totalTokens, inputTokens, outputTokens };
         yield stopReason ? { kind: "done", finishReason: anthropicFinishReason(stopReason) } : { kind: "done" };
       } catch (err) {
         // 用户主动停止：把 AbortError 上抛（tool_loop 归一为 aborted），不伪装成「请求超时」错误块

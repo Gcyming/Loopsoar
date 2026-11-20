@@ -13,6 +13,12 @@ out/
 # 本地草稿/一次性脚本产物（不入库）
 .tmp/
 
+# 扩展签名私钥（绝不能入库）
+.loopsoar-keys/
+.loopsoar-market-keys/
+*.extension-key.pem
+*market-key.pem
+
 # E2E 临时数据目录
 .loopsoar-data*/
 .loopsoar-data-empty/

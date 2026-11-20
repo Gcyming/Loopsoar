@@ -39,9 +39,13 @@ export function registerSkillTools(registry: ToolRegistry, skills: SkillHost): v
       if (!skill) return { ok: false, content: `[错误] 技能不存在：${params.id}` };
       const limit = params.maxChars ?? MAX_BODY_CHARS;
       const body = skill.body.length > limit ? `${skill.body.slice(0, limit)}\n…（已截断，全文 ${skill.body.length} 字符）` : skill.body;
+      const allowed = skill.frontmatter.allowedTools?.length
+        ? `\n工具白名单（技能声明）：${skill.frontmatter.allowedTools.join(", ")}`
+        : "";
+      const dir = skill.path.replace(/[\\/][^\\/]+$/, "");
       return {
         ok: true,
-        content: `# ${skill.frontmatter.name}\n状态：${skill.enabled ? "启用" : "禁用"}\n描述：${skill.frontmatter.description}\n\n${body}`,
+        content: `# ${skill.frontmatter.name}\n状态：${skill.enabled ? "启用" : "禁用"}\n描述：${skill.frontmatter.description}${allowed}\n目录：${dir}\n\n${body}`,
       };
     },
   });
@@ -87,6 +91,29 @@ export function registerSkillTools(registry: ToolRegistry, skills: SkillHost): v
       } catch (err) {
         return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
       }
+    },
+  });
+
+  registry.register({
+    name: "skill_import",
+    description:
+      "从本机目录导入 Claude/Hermes 风格技能包（SKILL.md + scripts/references/assets）到技能库。只接受含 SKILL.md 的目录；不跟随符号链接；默认拒绝覆盖已有技能。写操作会触发权限确认。",
+    permissions: { read: true, write: true },
+    schema: z.object({
+      path: z.string().min(1).max(4000),
+      id: z.string().min(1).max(120).optional(),
+      overwrite: z.boolean().optional(),
+    }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = ctx.params as { path: string; id?: string; overwrite?: boolean };
+      const result = skills.importSkill(params.path, { id: params.id, overwrite: params.overwrite });
+      if (!result.ok) return { ok: false, content: `[错误] ${result.error ?? "导入失败"}` };
+      const skipped = result.skipped?.length ? `\n跳过（符号链接）：${result.skipped.join(", ")}` : "";
+      const warnings = result.warnings?.length ? `\n解析提示：${result.warnings.join(" / ")}` : "";
+      return {
+        ok: true,
+        content: `已导入技能：${result.id}\n目标：${result.target}\n文件：${result.files} 个 / ${result.bytes} 字节\n状态：已启用（用户显式安装）${warnings}${skipped}`,
+      };
     },
   });
 }

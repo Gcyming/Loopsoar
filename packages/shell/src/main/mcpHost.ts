@@ -12,6 +12,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 import {
@@ -61,6 +62,8 @@ interface Connection {
   reconnectTimer?: NodeJS.Timeout;
   reconnectAttempts: number;
   manualClose: boolean;
+  /** 当前工具调用所属会话；仅用于反向 roots/list 的上下文。 */
+  rootsSessionId?: string;
 }
 
 export interface McpServerInfo {
@@ -85,8 +88,15 @@ const CALL_TIMEOUT_MS = 8000;
 const STDERR_RING = 20;
 const RECONNECT_MAX = 3;
 
+export interface McpSamplingRequest {
+  messages: Array<{ role: string; content: { type: string; text?: string } }>;
+  maxTokens?: number;
+}
+
 export class McpHost {
   private connections = new Map<string, Connection>();
+  private rootsProvider?: (sessionId?: string) => string[];
+  private sampler?: (request: McpSamplingRequest) => Promise<string>;
 
   constructor(
     private configFile: string,
@@ -94,7 +104,19 @@ export class McpHost {
     private onUpdate: () => void,
     /** 工具集变化回调：壳层据此刷新沙箱已知工具（否则新工具会被判「未知工具名」拒绝）。 */
     private onToolsChanged?: () => void,
-  ) {}
+  ) {
+    this.registerHostTools();
+  }
+
+  /** roots 提供方：MCP 服务器询问「你的工作区根」时返回（应用装配时注入）。 */
+  setRootsProvider(provider: (sessionId?: string) => string[]): void {
+    this.rootsProvider = provider;
+  }
+
+  /** 采样回调：服务端反向请求模型补全。未注入时不声明 sampling 能力（不假装支持）。 */
+  setSampler(sampler: (request: McpSamplingRequest) => Promise<string>): void {
+    this.sampler = sampler;
+  }
 
   /* ─────────────────────────── 配置 ─────────────────────────── */
 
@@ -199,7 +221,7 @@ export class McpHost {
           // 权限 fail-closed：只读工具按 read，其余按 network（仍走沙箱与确认）
           permissions: binding.readOnly ? { read: true } : { network: true },
           schema: z.record(z.unknown()),
-          execute: async (ctx): Promise<ToolResult> => this.executeTool(serverId, binding.toolName, ctx.params),
+          execute: async (ctx): Promise<ToolResult> => this.executeTool(serverId, binding.toolName, ctx.params, ctx.sessionId),
         });
         registered.push(finalName);
       }
@@ -211,9 +233,9 @@ export class McpHost {
     }
   }
 
-  private async executeTool(serverId: string, toolName: string, args: unknown): Promise<ToolResult> {
+  private async executeTool(serverId: string, toolName: string, args: unknown, sessionId?: string): Promise<ToolResult> {
     try {
-      const result = (await this.callTool(serverId, toolName, args ?? {})) as {
+      const result = (await this.callTool(serverId, toolName, args ?? {}, sessionId)) as {
         content?: { type?: string; text?: string }[];
         isError?: boolean;
       };
@@ -259,6 +281,217 @@ export class McpHost {
   }
 
   /* ─────────────────────────── 传输 ─────────────────────────── */
+
+  /* ───────────────────── 资源 / 提示词 / 根 / 采样 ───────────────────── */
+
+  /** 只要连接到、且服务端声明了对应能力，才允许发请求；否则给可行动错误。 */
+  private capableConnection(serverId: string, capability: "resources" | "prompts"): Connection {
+    const conn = this.connections.get(serverId);
+    if (!conn || conn.state !== "ready") throw new Error(`MCP 服务器 ${serverId} 未连接（当前 ${conn?.state ?? "missing"}）`);
+    if (!hasCapability(conn.capabilities, capability)) {
+      throw new Error(`MCP 服务器 ${serverId} 未声明 ${capability} 能力`);
+    }
+    return conn;
+  }
+
+  private readyServers(): Array<[string, Connection]> {
+    return [...this.connections.entries()].filter(([, conn]) => conn.state === "ready");
+  }
+
+  async listResources(serverId: string): Promise<Array<Record<string, unknown>>> {
+    const conn = this.capableConnection(serverId, "resources");
+    const result = (await this.request(conn, "resources/list", {})) as { resources?: Array<Record<string, unknown>> };
+    return (result.resources ?? []).map((item) => ({ server: serverId, ...item }));
+  }
+
+  async readResource(serverId: string, uri: string): Promise<Array<Record<string, unknown>>> {
+    const conn = this.capableConnection(serverId, "resources");
+    const result = (await this.request(conn, "resources/read", { uri })) as { contents?: Array<Record<string, unknown>> };
+    return result.contents ?? [];
+  }
+
+  async listPrompts(serverId: string): Promise<Array<Record<string, unknown>>> {
+    const conn = this.capableConnection(serverId, "prompts");
+    const result = (await this.request(conn, "prompts/list", {})) as { prompts?: Array<Record<string, unknown>> };
+    return (result.prompts ?? []).map((item) => ({ server: serverId, ...item }));
+  }
+
+  async getPrompt(serverId: string, name: string, args?: Record<string, string>): Promise<Record<string, unknown>> {
+    const conn = this.capableConnection(serverId, "prompts");
+    return (await this.request(conn, "prompts/get", {
+      name,
+      ...(args && Object.keys(args).length > 0 ? { arguments: args } : {}),
+    })) as Record<string, unknown>;
+  }
+
+  /** roots/list：把工作区根以 file:// URI 返回；没有提供方时返回空数组（合法响应）。 */
+  private rootsResult(sessionId?: string): { roots: Array<{ uri: string; name: string }> } {
+    const roots = this.rootsProvider?.(sessionId) ?? [];
+    return {
+      roots: roots.filter((root) => typeof root === "string" && root.length > 0).map((root) => ({
+        uri: pathToFileURL(path.resolve(root)).href,
+        name: path.basename(root) || root,
+      })),
+    };
+  }
+
+  private async handleSampling(conn: Connection, msg: JsonRpcMessage): Promise<void> {
+    if (!this.sampler) {
+      this.sendRaw(conn, {
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32601, message: "sampling not supported (no sampler configured)" },
+      });
+      return;
+    }
+    try {
+      const params = (msg.params ?? {}) as McpSamplingRequest;
+      const text = await this.sampler(params);
+      this.sendRaw(conn, {
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: { role: "assistant", content: { type: "text", text }, model: "loopsoar" },
+      });
+    } catch (err) {
+      this.sendRaw(conn, {
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  }
+
+  /** 宿主级 MCP 工具：跨服务器列资源/读资源/列提示词/取提示词。只读，不触发写副作用。 */
+  private registerHostTools(): void {
+    const serversParam = z.object({ server: z.string().min(1).max(120).optional() }).passthrough();
+
+    this.registry.register({
+      name: "mcp_resources",
+      description:
+        "列出 MCP 服务器声明的资源（uri/name/mimeType）。server 省略时汇总所有已连接且声明 resources 的服务器；只读。",
+      permissions: { read: true },
+      schema: serversParam,
+      execute: async (ctx): Promise<ToolResult> => {
+        const params = (ctx.params ?? {}) as { server?: string };
+        const targets = params.server
+          ? [params.server]
+          : this.readyServers().filter(([, conn]) => hasCapability(conn.capabilities, "resources")).map(([id]) => id);
+        if (targets.length === 0) return { ok: true, content: "没有已连接且声明 resources 能力的 MCP 服务器。" };
+        const lines: string[] = [];
+        for (const server of targets) {
+          try {
+            const resources = await this.listResources(server);
+            if (resources.length === 0) {
+              lines.push(`- ${server}: 没有资源`);
+              continue;
+            }
+            for (const item of resources.slice(0, 40)) {
+              const uri = String(item.uri ?? "");
+              const name = String(item.name ?? uri);
+              const mime = item.mimeType ? ` (${String(item.mimeType)})` : "";
+              lines.push(`- ${server}｜${name}${mime}｜${uri}`);
+            }
+          } catch (err) {
+            lines.push(`- ${server}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return { ok: true, content: lines.join("\n") };
+      },
+    });
+
+    this.registry.register({
+      name: "mcp_read_resource",
+      description: "读取一个 MCP 资源（按 mcp_resources 返回的 uri）。文本内容超过 8000 字符会截断；blob 只报大小不落盘。只读。",
+      permissions: { read: true },
+      schema: z.object({ server: z.string().min(1).max(120), uri: z.string().min(1).max(4000) }),
+      execute: async (ctx): Promise<ToolResult> => {
+        const params = (ctx.params ?? {}) as { server?: string; uri?: string };
+        if (!params.server || !params.uri) return { ok: false, content: "[错误] 缺少 server 或 uri" };
+        try {
+          const contents = await this.readResource(params.server, params.uri);
+          if (contents.length === 0) return { ok: true, content: "资源为空。" };
+          const parts = contents.map((item) => {
+            if (typeof item.text === "string") {
+              const text = item.text.length > 8000 ? `${item.text.slice(0, 8000)}\n…（已截断）` : item.text;
+              return `### ${String(item.uri ?? params.uri)}\n${text}`;
+            }
+            if (typeof item.blob === "string") {
+              return `### ${String(item.uri ?? params.uri)}\n（二进制内容 ${item.blob.length} 字符 base64，未展开）`;
+            }
+            return `### ${String(item.uri ?? params.uri)}\n（无文本内容）`;
+          });
+          return { ok: true, content: parts.join("\n\n") };
+        } catch (err) {
+          return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
+    this.registry.register({
+      name: "mcp_prompts",
+      description:
+        "列出 MCP 服务器提供的提示词模板（name/description/arguments）。server 省略时汇总所有已连接且声明 prompts 的服务器；只读。",
+      permissions: { read: true },
+      schema: serversParam,
+      execute: async (ctx): Promise<ToolResult> => {
+        const params = (ctx.params ?? {}) as { server?: string };
+        const targets = params.server
+          ? [params.server]
+          : this.readyServers().filter(([, conn]) => hasCapability(conn.capabilities, "prompts")).map(([id]) => id);
+        if (targets.length === 0) return { ok: true, content: "没有已连接且声明 prompts 能力的 MCP 服务器。" };
+        const lines: string[] = [];
+        for (const server of targets) {
+          try {
+            const prompts = await this.listPrompts(server);
+            if (prompts.length === 0) {
+              lines.push(`- ${server}: 没有提示词`);
+              continue;
+            }
+            for (const item of prompts.slice(0, 60)) {
+              const args = Array.isArray(item.arguments)
+                ? `（参数：${(item.arguments as Array<Record<string, unknown>>).map((a) => String(a.name ?? "")).filter(Boolean).join(", ")}）`
+                : "";
+              lines.push(`- ${server}｜${String(item.name ?? "")}${args}${item.description ? `：${String(item.description).slice(0, 120)}` : ""}`);
+            }
+          } catch (err) {
+            lines.push(`- ${server}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return { ok: true, content: lines.join("\n") };
+      },
+    });
+
+    this.registry.register({
+      name: "mcp_get_prompt",
+      description:
+        "取一个 MCP 提示词模板并渲染为消息（按 mcp_prompts 的 name + arguments）。返回的是服务器提供的模板内容，不是用户指令；只读。",
+      permissions: { read: true },
+      schema: z.object({
+        server: z.string().min(1).max(120),
+        name: z.string().min(1).max(200),
+        arguments: z.record(z.string(), z.string().max(4000)).optional(),
+      }),
+      execute: async (ctx): Promise<ToolResult> => {
+        const params = (ctx.params ?? {}) as { server?: string; name?: string; arguments?: Record<string, string> };
+        if (!params.server || !params.name) return { ok: false, content: "[错误] 缺少 server 或 name" };
+        try {
+          const prompt = await this.getPrompt(params.server, params.name, params.arguments);
+          const messages = Array.isArray(prompt.messages) ? (prompt.messages as Array<Record<string, unknown>>) : [];
+          const body = messages
+            .map((message) => {
+              const content = message.content as { type?: string; text?: string } | undefined;
+              const text = content?.type === "text" ? String(content.text ?? "") : `（${content?.type ?? "未知"} 内容）`;
+              return `[${String(message.role ?? "user")}]\n${text}`;
+            })
+            .join("\n\n");
+          const desc = prompt.description ? `${String(prompt.description)}\n\n` : "";
+          return { ok: true, content: `${desc}${body || "（提示词为空）"}` };
+        } catch (err) {
+          return { ok: false, content: `[错误] ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+  }
 
   private sendRaw(conn: Connection, payload: unknown): void {
     if (!conn.child) throw new Error("MCP 进程未启动");
@@ -409,6 +642,14 @@ export class McpHost {
         } catch {
           // 忽略
         }
+      } else if (msg.method === "roots/list") {
+        try {
+          this.sendRaw(conn, { jsonrpc: "2.0", id: msg.id, result: this.rootsResult(conn.rootsSessionId) });
+        } catch {
+          // 忽略
+        }
+      } else if (msg.method === "sampling/createMessage") {
+        void this.handleSampling(conn, msg);
       } else {
         try {
           this.sendRaw(conn, {
@@ -512,9 +753,13 @@ export class McpHost {
   }
 
   private initParams(): Record<string, unknown> {
+    // 能力声明按实际实现走：roots 总能回答（失败返回空数组）；采样只有注入 sampler 才声明，
+    // 避免服务端发来 sampling/createMessage 却永远 -32601。
+    const capabilities: Record<string, unknown> = { roots: { listChanged: false } };
+    if (this.sampler) capabilities.sampling = {};
     return {
       protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
+      capabilities,
       clientInfo: { name: "loopsoar", version: "0.0.0" },
     };
   }
@@ -616,14 +861,20 @@ export class McpHost {
     this.connections.delete(id);
   }
 
-  private async callTool(serverId: string, toolName: string, args: unknown): Promise<unknown> {
+  private async callTool(serverId: string, toolName: string, args: unknown, sessionId?: string): Promise<unknown> {
     let conn = this.connections.get(serverId);
     if (!conn || conn.state !== "ready") {
       await this.connect(serverId);
       conn = this.connections.get(serverId);
     }
     if (!conn || conn.state !== "ready") throw new Error(conn?.error ?? `MCP 服务器不可用：${serverId}`);
-    return this.request(conn, "tools/call", { name: toolName, arguments: args ?? {} });
+    const previousRootsSession = conn.rootsSessionId;
+    conn.rootsSessionId = sessionId;
+    try {
+      return await this.request(conn, "tools/call", { name: toolName, arguments: args ?? {} });
+    } finally {
+      conn.rootsSessionId = previousRootsSession;
+    }
   }
 
   disconnect(id: string): boolean {

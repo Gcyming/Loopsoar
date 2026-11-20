@@ -231,7 +231,7 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
     }
   }, 25000);
 
-  it("未声明 main 的纯声明式扩展：启动返回明确错误", async () => {
+  it("未声明 main 的纯声明式扩展：启动为 ready（不 spawn worker）", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "loopsoar-ext-decl-"));
     roots.push(root);
     const dir = path.join(root, "extensions", "decl");
@@ -244,8 +244,9 @@ describe("扩展运行时（通过真实 worker 子进程）", () => {
     const { host, runtime } = makeRuntime(root);
     host.scan();
     const status = await runtime.start("decl");
-    expect(status.state).toBe("error");
-    expect(status.error).toContain("main");
+    expect(status.state).toBe("ready");
+    expect(status.declarative).toBe(true);
+    expect(status.tools).toEqual([]);
   }, 15000);
 });
 

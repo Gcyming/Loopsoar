@@ -463,6 +463,13 @@
       "hasRequest": false
     },
     {
+      "channel": "settings:traces",
+      "domain": "settings",
+      "method": "traces",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "settings:about",
       "domain": "settings",
       "method": "about",
@@ -757,6 +764,83 @@
       "hasRequest": false
     },
     {
+      "channel": "extensions:install",
+      "domain": "extensions",
+      "method": "install",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:rollback",
+      "domain": "extensions",
+      "method": "rollback",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:trustKey",
+      "domain": "extensions",
+      "method": "trustKey",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:untrustKey",
+      "domain": "extensions",
+      "method": "untrustKey",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:revokeKey",
+      "domain": "extensions",
+      "method": "revokeKey",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:setPolicy",
+      "domain": "extensions",
+      "method": "setPolicy",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:verify",
+      "domain": "extensions",
+      "method": "verify",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:catalog",
+      "domain": "extensions",
+      "method": "catalog",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:setRegistry",
+      "domain": "extensions",
+      "method": "setRegistry",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:installFromCatalog",
+      "domain": "extensions",
+      "method": "installFromCatalog",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "extensions:viewMessage",
+      "domain": "extensions",
+      "method": "viewMessage",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "skills:list",
       "domain": "skills",
       "method": "list",
@@ -790,6 +874,13 @@
       "method": "openDir",
       "sensitive": true,
       "hasRequest": false
+    },
+    {
+      "channel": "skills:import",
+      "domain": "skills",
+      "method": "import",
+      "sensitive": true,
+      "hasRequest": true
     },
     {
       "channel": "mcp:list",
@@ -1034,18 +1125,21 @@
     "chat:stream:heartbeat",
     "chat:steer:applied",
     "perm:request",
+    "perm:resolved",
     "browser:tabs",
     "chat:taskForked",
     "browser:downloads",
     "memory:updated",
     "rules:updated",
     "extensions:updated",
+    "extensions:viewMessage",
     "skills:updated",
     "mcp:updated",
     "terminal:data",
     "terminal:exit",
     "terminal:state",
     "ask:user",
+    "ask:resolved",
     "loop:fallback",
     "loop:changed",
     "chrome:popoverAction",

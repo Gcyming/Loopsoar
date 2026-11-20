@@ -9,6 +9,7 @@
     "./ipc": "./dist/gen/ipc.js",
     "./schemas": "./dist/src/schemas.js",
     "./extension": "./dist/src/extension.js",
+    "./extensionRegistry": "./dist/src/extensionRegistry.js",
     "./layout": "./dist/src/layout.js",
     "./navigation": "./dist/src/navigation.js",
     "./security-policy": "./dist/src/security-policy.js",

@@ -21,6 +21,11 @@ describe("AskBus", () => {
     expect(received).toBe(true);
     await expect(pending).resolves.toEqual({ cancelled: false, answer: "B" });
     expect(bus.size).toBe(0);
+    // 结算事件：程序化 ask:respond（自动化/E2E）也能让界面出队并撤掉遮罩
+    expect(pushed).toContainEqual({
+      event: "ask:resolved",
+      payload: { requestId: payload.requestId, reason: "answered" },
+    });
     // 重复回填不生效
     expect(bus.resolve(payload.requestId, { answer: "A" })).toBe(false);
   });
@@ -66,24 +71,29 @@ describe("AskBus", () => {
   });
 
   it("超时按取消结算，不伪造回答", async () => {
-    const bus = new AskBus({ push: () => {} });
+    const pushed: { event: string; payload: unknown }[] = [];
+    const bus = new AskBus({ push: (event, payload) => pushed.push({ event, payload }) });
     const pending = bus.request({ question: "还在吗？", timeoutMs: 60 });
     const answer = await pending;
     expect(answer.cancelled).toBe(true);
     expect(answer.answer).toContain("未在");
     expect(bus.size).toBe(0);
+    expect(pushed).toContainEqual({
+      event: "ask:resolved",
+      payload: { requestId: (pushed[0].payload as { requestId: string }).requestId, reason: "timeout" },
+    });
   });
 
   it("空回答 / 显式取消都按取消处理", async () => {
-    const pushed: unknown[] = [];
-    const bus = new AskBus({ push: (_e, payload) => pushed.push(payload) });
+    const pushed: { event: string; payload: unknown }[] = [];
+    const bus = new AskBus({ push: (event, payload) => pushed.push({ event, payload }) });
     const first = bus.request({ question: "q1" });
-    const firstId = (pushed[0] as { requestId: string }).requestId;
+    const firstId = (pushed.find((item) => item.event === "ask:user")!.payload as { requestId: string }).requestId;
     bus.resolve(firstId, { answer: "   " });
     await expect(first).resolves.toMatchObject({ cancelled: true });
 
     const second = bus.request({ question: "q2" });
-    const secondId = (pushed[1] as { requestId: string }).requestId;
+    const secondId = (pushed.filter((item) => item.event === "ask:user")[1].payload as { requestId: string }).requestId;
     bus.resolve(secondId, { cancelled: true });
     await expect(second).resolves.toMatchObject({ cancelled: true });
   });

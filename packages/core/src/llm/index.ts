@@ -49,7 +49,13 @@ export type LlmChunk =
       toolCall: { id: string; name: string; args: unknown };
       tokens?: number;
     }
-  | { kind: "usage"; tokens: number }
+  | {
+      kind: "usage";
+      tokens: number;
+      /** 上游返回的 prompt / completion 拆分（部分供应商只给 total）；用于成本估算。 */
+      inputTokens?: number;
+      outputTokens?: number;
+    }
   /**
    * 流结束。finishReason 透传上游结束原因（如 "stop"/"length"）：
    * "length" 表示被 max_tokens 截断，tool_loop 据此自动续写，避免长回复断在半句。

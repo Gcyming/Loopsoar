@@ -38,6 +38,20 @@ export function registerSkillsDomain(deps: SkillsDeps): void {
     return { ok };
   });
 
+  /**
+   * 资源包安装：把用户选中的目录整体复制进技能库（scripts/references/assets 一并带走）。
+   * 路径选择在渲染层用 dialog.pickPath 完成；这里只做校验/复制/重扫。
+   */
+  handleTrusted(deps, "skills:import", (payload) => {
+    const p = payload as { sourcePath: string; id?: string; overwrite?: boolean };
+    const result = deps.skills?.importSkill(p.sourcePath, { id: p.id, overwrite: p.overwrite }) ?? {
+      ok: false,
+      error: "技能宿主未初始化",
+    };
+    if (result.ok) deps.push?.("skills:updated", { action: "import", id: result.id });
+    return { ...result, skills: deps.skills?.list() ?? [] };
+  });
+
   handleTrusted(deps, "skills:openDir", async () => {
     const ok = (await deps.openSkillsDir?.()) ?? false;
     return { ok, dir: deps.skills?.dirPath() ?? "" };

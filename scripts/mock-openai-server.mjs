@@ -9,11 +9,24 @@
  *   MOCK_TOOL_ARGS       工具调用参数 JSON（默认 "{}"）
  *   MOCK_PLAN=1          在工具序列后追加一次 todo_write（用于演示时间线的任务规划卡）
  *   MOCK_REASONING=1     每轮先吐 reasoning（用于演示思考时间线）
+ *   MOCK_TASK_FILE      任务级评测：JSON 任务表；请求里的用户消息带 [[TASK:n]] 时按该任务的 plan 逐步回放
  */
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 
 const port = Number(process.argv[2] ?? 19500);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 任务表在启动时加载一次：评测是「同一进程跑多任务」，不能每个请求都读盘。 */
+let taskSet = null;
+if (process.env.MOCK_TASK_FILE) {
+  try {
+    taskSet = JSON.parse(readFileSync(process.env.MOCK_TASK_FILE, "utf8"));
+    console.log(`MOCK_TASKS_LOADED ${(taskSet.tasks ?? taskSet).length}`);
+  } catch (err) {
+    console.log(`MOCK_TASKS_ERROR ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 const REPLY_CHUNKS = [
   "你好！我是 Loopsoar（本地模拟模型）。",
@@ -81,6 +94,55 @@ const server = createServer(async (req, res) => {
     });
     console.log(`MOCK_PROBE_HIT=${hit ? 1 : 0} probe=${JSON.stringify(probe)}`);
   }
+  // 任务级评测：用户消息里的 [[TASK:n]] 决定回放哪条 plan；用已返回的 tool 消息数推进步骤。
+  // 这样 30 个任务可以共用一次 Electron 启动和一个 mock 服务，不必为每个任务重启应用。
+  if (taskSet) {
+    const lastUser = [...messages].reverse().find((msg) => msg.role === "user");
+    const userText =
+      typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? "");
+    const match = /\[\[TASK:(\d+)\]\]/.exec(userText);
+    const list = taskSet.tasks ?? taskSet;
+    const task = match ? list.find((item) => item.id === Number(match[1])) : null;
+    if (task) {
+      const used = messages.filter((msg) => msg.role === "tool").length;
+      const step = Array.isArray(task.plan) ? task.plan[used] : null;
+      if (step) {
+        sse(res, {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: `call_task${task.id}_${used + 1}`,
+                    type: "function",
+                    function: { name: step.tool, arguments: JSON.stringify(step.args ?? {}) },
+                  },
+                ],
+              },
+            },
+          ],
+        });
+        sse(res, { usage: { total_tokens: 32 } });
+        writeDone(res);
+        return;
+      }
+      // 回显最近工具结果：评测断言读的是会话历史，而工具结果本身不落盘；
+      // 真实模型会把关键结果写进答复，这里等价地回显，避免断言依赖内部实现。
+      const recentTools = messages
+        .filter((msg) => msg.role === "tool")
+        .slice(-4)
+        .map((msg) => (typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)))
+        .join("\n---\n")
+        .slice(-4000);
+      const reply = `[[任务完成]] ${task.name ?? ""}（${used} 步）\n\n${recentTools}`;
+      sse(res, { choices: [{ delta: { content: reply } }] });
+      sse(res, { usage: { total_tokens: 16 } });
+      writeDone(res);
+      return;
+    }
+  }
+
   const toolName = process.env.MOCK_TOOL_NAME;
   console.log(`MOCK_REQ roles=${messages.map((m) => m.role).join(",")} tool=${toolName ?? "-"}`);
   if (process.env.MOCK_LOG_HEADERS === "1") {

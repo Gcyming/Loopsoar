@@ -15,7 +15,10 @@ describe("buildUserLockScript", () => {
     expect(script).toContain(USER_LOCK_HOST_ATTR);
     expect(script).toContain("loopsoar-user-lock");
     expect(script).toContain("attachShadow({ mode: 'closed' })");
-    expect(script).toContain("position:fixed;inset:0;z-index:2147483647;pointer-events:auto;");
+    // 输入拦截靠 window capture，不靠遮罩抢命中：锁层 pointer-events:none，
+    // 否则 elementFromPoint 会命中遮罩、:hover 会被夺走（坐标点击/悬浮菜单失效）。
+    expect(script).toContain("position:fixed;inset:0;z-index:2147483647;pointer-events:none;");
+    expect(script).not.toContain("pointer-events:auto");
     // 拦截列表必须覆盖鼠标/滚轮/键盘/输入/拖拽
     for (const type of ["pointerdown", "pointerup", "pointermove", "click", "wheel", "contextmenu", "keydown", "keyup", "beforeinput", "dragstart"]) {
       expect(script, `缺少事件 ${type}`).toContain(type);

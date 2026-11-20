@@ -105,6 +105,17 @@ export interface ChatServiceOptions {
   getSkillPrompt?: (userText: string) => string;
   /** 扩展声明式指令（仅已启用扩展）；放 volatile 段，不提供工具/代码执行。 */
   getExtensionPrompt?: (sessionId?: string) => string;
+  /**
+   * 扩展代码级 turn.start 钩子：返回值 promptAppend 追加进 volatile 段。
+   * 失败/超时由壳层兜底（不阻断本轮），因为事件钩子不是安全边界。
+   */
+  onTurnStart?: (input: { sessionId: string; userText: string }) => Promise<{ promptAppend?: string } | void> | { promptAppend?: string } | void;
+  /** 扩展 turn.end 钩子（旁路，不影响聊天结果）。 */
+  onTurnEnd?: (input: { sessionId: string; userText: string; result: ChatStreamResult }) => void;
+  /** tool.before 钩子：在权限/沙箱/确认全部通过后、真正执行前调用；allow=false 否决本次调用。 */
+  beforeTool?: (input: { toolName: string; args: Record<string, unknown>; sessionId: string }) => Promise<{ allow: boolean; reason?: string } | void> | { allow: boolean; reason?: string } | void;
+  /** tool.after 钩子（旁路，不影响工具结果）。 */
+  afterTool?: (input: { toolName: string; args: Record<string, unknown>; sessionId: string; ok: boolean; error?: string }) => void;
   /** 流结束后的旁路回调（自动技能候选等）；不得阻塞/改变聊天结果。 */
   onTurnComplete?: (event: { sessionId: string; userText: string; result: ChatStreamResult }) => void;
   /** 权限策略（设置 · 权限）；每次工具调用前读取，保存后即时生效。 */
@@ -118,7 +129,7 @@ export interface ChatServiceOptions {
    * 为什么要 sessionId：会话级开关（如「浏览器控制」关闭）只能按会话收窄工具面；
    * 返回值同时用于模型可见面（registry.toolSchemas）与执行闸，undefined 才表示「全部可见」。
    */
-  getToolAllowlist?: (mode?: "build" | "plan", sessionId?: string) => string[] | undefined;
+  getToolAllowlist?: (mode?: "build" | "plan", sessionId?: string, userText?: string) => string[] | undefined;
   /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 6 万字符）。 */
   getContextWindow?: () => number | undefined;
   /** 当前模型最大输出（tokens）；作为请求 max_tokens 的上限，未配置则回退 4096。 */
@@ -141,6 +152,8 @@ export interface ChatServiceOptions {
   readImageAttachment?: (path: string) => { mime: string; base64: string } | null;
   /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
   onPermissionRequest?: (request: PermissionRequestEvent) => void;
+  /** 权限确认结算回调（弹窗可能由界面或自动化关闭，统一通知渲染层出队）。 */
+  onPermissionResolved?: (requestId: string) => void;
   agent?: ChatAgent;
   /** 权限确认超时（默认 300s，超时按拒绝）。 */
   permTimeoutMs?: number;
@@ -194,7 +207,15 @@ export interface ChatStreamResult {
   status: LoopRunStatus;
   reason: string;
   finalText: string;
-  usage: { rounds: number; toolCalls: number; totalTokens: number; wallClockMs: number };
+  usage: {
+    rounds: number;
+    toolCalls: number;
+    totalTokens: number;
+    wallClockMs: number;
+    /** 上游提供拆分时的 prompt / completion tokens（成本估算用）。 */
+    inputTokens?: number;
+    outputTokens?: number;
+  };
   chunks: ChunkBatch[];
   /** 声称核验发现（仅列出 exists=false 的可疑声称）。 */
   claims: ClaimFinding[];
@@ -215,7 +236,10 @@ export class PermRequestBus {
     }
   >();
 
-  constructor(private timeoutMs = 300_000) {}
+  constructor(
+    private timeoutMs = 300_000,
+    private onSettled?: (requestId: string) => void,
+  ) {}
 
   request(decision: { requestId: string; toolName: string; target?: string; reason?: string }): Promise<{
     choice: "allow-once" | "allow-session" | "deny";
@@ -225,6 +249,7 @@ export class PermRequestBus {
       const timer = setTimeout(() => {
         this.pending.delete(decision.requestId);
         resolve({ choice: "deny", customReason: `确认超时（${this.timeoutMs}ms），按拒绝结算` });
+        this.onSettled?.(decision.requestId);
       }, this.timeoutMs);
       this.pending.set(decision.requestId, { resolve, timer });
     });
@@ -237,14 +262,16 @@ export class PermRequestBus {
     clearTimeout(req.timer);
     this.pending.delete(requestId);
     req.resolve({ choice, customReason });
+    this.onSettled?.(requestId);
     return true;
   }
 
   /** 清理全部挂起请求（会话终止/应用退出）。 */
   clearAll(): void {
-    for (const [, req] of this.pending) {
+    for (const [requestId, req] of this.pending) {
       clearTimeout(req.timer);
       req.resolve({ choice: "deny", customReason: "会话终止，按拒绝结算" });
+      this.onSettled?.(requestId);
     }
     this.pending.clear();
   }
@@ -314,6 +341,10 @@ export class InternalToolExecutor {
       sensitiveAlwaysConfirm?: () => boolean;
       /** 规则守卫（按会话解析当前规则并编译）。 */
       guardToolCall?: ToolGuardHook;
+      /** 扩展 tool.before（安全闸之后、执行之前）。 */
+      beforeTool?: (input: { toolName: string; args: Record<string, unknown>; sessionId: string }) => Promise<{ allow: boolean; reason?: string } | void> | { allow: boolean; reason?: string } | void;
+      /** 扩展 tool.after（旁路）。 */
+      afterTool?: (input: { toolName: string; args: Record<string, unknown>; sessionId: string; ok: boolean; error?: string }) => void;
     },
   ) {}
 
@@ -425,12 +456,42 @@ export class InternalToolExecutor {
     if (!tool) {
       return { ok: false, content: `[错误] 未知工具 ${toolCall.name}（不在注册表）`, error: "unknown-tool" };
     }
+    const hookInput = {
+      toolName: toolCall.name,
+      args: (toolCall.args ?? {}) as Record<string, unknown>,
+      sessionId: this.opts.sessionId,
+    };
+    // 扩展 tool.before：位置在全部安全闸之后，扩展只能「否决」不能「放行」；
+    // 钩子异常按允许处理（否则一个坏扩展会让所有工具不可用）。
+    if (this.opts.beforeTool) {
+      try {
+        const verdict = await this.opts.beforeTool(hookInput);
+        if (verdict && verdict.allow === false) {
+          return {
+            ok: false,
+            content: `[错误] 扩展否决了工具调用：${verdict.reason ?? "未说明原因"}`,
+            error: "extension-veto",
+          };
+        }
+      } catch {
+        // fail-open：事件钩子不是安全边界
+      }
+    }
     const result = await tool.execute({
       agentId: this.opts.agentId,
       sessionId: this.opts.sessionId,
       platform: this.opts.platform as never,
       params: toolCall.args,
     });
+    try {
+      this.opts.afterTool?.({
+        ...hookInput,
+        ok: result.ok,
+        ...(result.error ? { error: result.error } : {}),
+      });
+    } catch {
+      // 旁路回调失败不影响工具结果
+    }
     return { ok: result.ok, content: result.content, error: result.error };
   }
 }
@@ -466,7 +527,9 @@ export class ChatService {
   private stableSegments = new Map<string, { key: string; stable: string }>();
 
   constructor(private opts: ChatServiceOptions = {}) {
-    this.permBus = new PermRequestBus(opts.permTimeoutMs ?? 300_000);
+    this.permBus = new PermRequestBus(opts.permTimeoutMs ?? 300_000, (requestId) =>
+      this.opts.onPermissionResolved?.(requestId),
+    );
   }
 
   /** 供 shell 的 perm:respond 调用。 */
@@ -605,7 +668,17 @@ export class ChatService {
     // 记忆召回 + 技能注入：都放 volatile 段（不进稳定前缀，避免破坏 KV 缓存）
     const memoryText = this.opts.getMemoryFor?.(input.message, sessionId) ?? "";
     const skillText = this.opts.getSkillPrompt?.(input.message) ?? "";
-    const extensionText = this.opts.getExtensionPrompt?.(sessionId) ?? "";
+    // 代码级 turn.start 钩子：返回值作为额外 volatile 提示（失败不阻断本轮）。
+    let turnHookText = "";
+    if (this.opts.onTurnStart) {
+      try {
+        const hook = await this.opts.onTurnStart({ sessionId, userText: input.message });
+        turnHookText = hook?.promptAppend?.trim() ? hook.promptAppend : "";
+      } catch {
+        // 扩展事件失败不影响聊天
+      }
+    }
+    const extensionText = [this.opts.getExtensionPrompt?.(sessionId) ?? "", turnHookText].filter((text) => text.trim()).join("\n\n");
     // 当前墙钟时间放 volatile 段（每轮刷新、不进 stable 前缀，不破坏 KV 缓存）
     const requestNow = Date.now();
     const volatileContent = [currentWallClockLine(requestNow), segments.volatile, memoryText, skillText, extensionText]
@@ -664,7 +737,7 @@ export class ChatService {
     // 工具面只解析一次：模型可见面（toolSchemas）与执行闸共用同一份名单，
     // 否则会出现「模型看不见却仍可被调用」或反之（审计 P0-1）。
     const resolvedAllowlist =
-      this.opts.getToolAllowlist?.(input.mode, sessionId) ?? this.opts.toolAllowlist;
+      this.opts.getToolAllowlist?.(input.mode, sessionId, userText) ?? this.opts.toolAllowlist;
     const executor = new InternalToolExecutor({
       registry,
       sandbox,
@@ -678,6 +751,8 @@ export class ChatService {
       resolveWorkspaceRoot: this.opts.resolveWorkspaceRoot,
       sensitiveAlwaysConfirm: this.opts.sensitiveAlwaysConfirm,
       guardToolCall: this.opts.guardToolCall,
+      beforeTool: this.opts.beforeTool,
+      afterTool: this.opts.afterTool,
     });
 
     let outcome: LoopRunStatus = "error";
@@ -842,6 +917,11 @@ export class ChatService {
     }
 
     const result: ChatStreamResult = { status: outcome, reason, finalText, usage, chunks, claims };
+    try {
+      this.opts.onTurnEnd?.({ sessionId, userText: input.message, result });
+    } catch {
+      // 扩展事件失败不影响本轮聊天
+    }
     // 旁路回调：自动技能候选等失败不能影响本轮聊天结果
     try {
       this.opts.onTurnComplete?.({ sessionId, userText: input.message, result });

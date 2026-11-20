@@ -11,6 +11,10 @@
  *   ④ 失败必须可行动（原则 13）：STALE_REF / ELEMENT_NOT_FOUND（带 top3 候选）/ 输入未生效 + 当前值。
  */
 import type { BrowserElementSnapshot } from "./types.js";
+import { USER_LOCK_HOST_ATTR, USER_LOCK_HOST_ID, TARGET_POINT_SCROLL_JS } from "./userLock.js";
+
+// 兼容旧导入（测试与 browserHost 仍从 refs 取锁脚本）。
+export { USER_LOCK_HOST_ATTR, buildUserLockScript, buildAgentDrivingScript } from "./userLock.js";
 
 /** 页面内最多为多少个元素计算句柄（防巨型页面卡死；显示层另有 80 条预算）。 */
 export const MAX_SNAPSHOT_ELEMENTS = 200;
@@ -18,8 +22,16 @@ export const MAX_SNAPSHOT_ELEMENTS = 200;
 /** browser_snapshot 文本里最多显示多少个元素（超出提示重新快照）。 */
 export const MAX_VISIBLE_ELEMENTS = 80;
 
-/** 页面脚本返回的原始元素：比对外类型多一个 matchText（精确文本句柄的判别串）。 */
-export type RawBrowserElement = Omit<BrowserElementSnapshot, "ref"> & { matchText?: string };
+/**
+ * 页面脚本返回的原始元素：比对外类型多两个内部字段——
+ * matchText（精确文本句柄的判别串）与 parentIndex（最近的可快照祖先在 picked 数组里的下标）。
+ * parentIndex 让 --root 子树下钻成为真实能力：父子关系由页面内同一次遍历算出，
+ * 不是事后猜选择器前缀。
+ */
+export type RawBrowserElement = Omit<BrowserElementSnapshot, "ref" | "parent"> & {
+  matchText?: string;
+  parentIndex?: number;
+};
 
 /**
  * 页面内快照脚本：只读 DOM，不写任何属性。
@@ -151,12 +163,26 @@ export const SNAPSHOT_SCRIPT = `/* loopsoar:snapshot */
     matched += 1;
     if (picked.length < MAX) picked.push(node);
   }
+  // 父子关系：只在「本次实际入选」的元素之间建立，避免为了树结构把祖先强行塞进快照。
+  // 祖先不在 picked 里就继续向上找，直到根；parentIndex=-1 表示顶层。
+  const pickedIndex = new Map();
+  for (let i = 0; i < picked.length; i += 1) pickedIndex.set(picked[i], i);
+  const parentIndexOf = (el) => {
+    let node = el.parentElement;
+    while (node && node.nodeType === 1) {
+      if (pickedIndex.has(node)) return pickedIndex.get(node);
+      node = node.parentElement;
+    }
+    return -1;
+  };
   const elements = picked.map((el) => {
     const tag = el.tagName.toLowerCase();
     const handle = selectorFor(el);
     const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : undefined;
     const role = roleOf(el);
     const item = { tag: tag, role: role, name: nameOf(el), selector: handle.selector, selectorWhy: handle.why };
+    const parentIndex = parentIndexOf(el);
+    if (parentIndex >= 0) item.parentIndex = parentIndex;
     if (handle.matchText) item.matchText = handle.matchText;
     if (type) item.type = type;
     // 值只在「输入类」元素上回传；密码框不回传（敏感数据默认不进模型上下文）
@@ -202,6 +228,8 @@ interface RefEntry {
 export class RefRegistry {
   private entries = new Map<string, RefEntry>();
   private generation = 0;
+  /** 标签内 ref 单调递增：重快照后旧 ref 不复用，避免旧 #e5 静默落到新元素。 */
+  private nextRef = 1;
 
   /** 快照代数：同一标签内单调递增（导航不清零）。 */
   get gen(): number {
@@ -212,14 +240,21 @@ export class RefRegistry {
     return this.entries.size;
   }
 
-  /** 用最新快照重建注册表（ref 按页面文档顺序重排 e1..eN）；返回面向模型的元素列表。 */
+  /** 用最新快照重建注册表（标签内 ref 单调递增，旧 ref 不再复用）；返回面向模型的元素列表。 */
   reset(raw: RawBrowserElement[]): BrowserElementSnapshot[] {
     this.entries.clear();
     this.generation += 1;
+    // 先一次性分配 ref，再回填 parent：父元素在文档顺序里必然先于子元素，
+    // 但用独立数组表达可以让「parentIndex → ref」不依赖遍历顺序的隐式假设。
+    const refs = raw.map(() => `e${this.nextRef++}`);
     const out: BrowserElementSnapshot[] = [];
     raw.forEach((item, index) => {
-      const ref = `e${index + 1}`;
-      // matchText 是内部判别条件：对外元素对象里剔除，避免污染快照契约
+      const ref = refs[index]!;
+      const parentRef =
+        typeof item.parentIndex === "number" && item.parentIndex >= 0 && item.parentIndex < index
+          ? refs[item.parentIndex]
+          : undefined;
+      // matchText / parentIndex 是内部判别条件：对外元素对象里剔除，避免污染快照契约
       const element: BrowserElementSnapshot = {
         ref,
         tag: item.tag,
@@ -227,6 +262,7 @@ export class RefRegistry {
         name: item.name,
         selector: item.selector,
         ...(item.selectorWhy ? { selectorWhy: item.selectorWhy } : {}),
+        ...(parentRef ? { parent: parentRef } : {}),
         ...(item.value !== undefined ? { value: item.value } : {}),
         ...(item.type ? { type: item.type } : {}),
         ...(item.href ? { href: item.href } : {}),
@@ -482,7 +518,7 @@ export function buildTargetPointScript(
   return `/* loopsoar:target-point */
 (async () => {
 ${locateJs(resolved)}
-${options.scrollIntoView === false ? "" : "  el.scrollIntoView({ block: 'center', behavior: 'instant' });\n  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));\n  let prev = null;\n  for (let i = 0; i < 3; i += 1) { const now = JSON.stringify(el.getBoundingClientRect()); if (now === prev) break; prev = now; await new Promise((r) => requestAnimationFrame(r)); }"}
+${options.scrollIntoView === false ? "" : TARGET_POINT_SCROLL_JS}
 
   const describe = (node) => {
     if (!node || node.nodeType !== 1) return null;
@@ -598,119 +634,7 @@ export async function performFocusCheck(
 }
 
 
-/**
- * 接管锁浮层的宿主属性：注入到页面 DOM 上时唯一可识别的标记
- * （closed shadow root 内部页面拿不到，宿主节点是唯一可检测/可清理的锚点）。
- */
-export const USER_LOCK_HOST_ATTR = "data-loopsoar-lock";
-
-/** 浮层宿主 id（固定值：解锁时即使 window 状态丢了也能按 id 清掉残留节点）。 */
-const USER_LOCK_HOST_ID = "loopsoar-user-lock";
-
-/** 浮层拦截的事件类型：覆盖鼠标/滚轮/键盘/输入/拖拽，全部在 capture 阶段抢先处理。 */
-const USER_LOCK_EVENTS = [
-  "pointerdown",
-  "pointerup",
-  "pointermove",
-  "click",
-  "wheel",
-  "contextmenu",
-  "keydown",
-  "keyup",
-  "beforeinput",
-  "dragstart",
-];
-
-/** 浮层文案的 HTML 转义（label 来自 i18n，仍按不可信输入处理：它最终进 innerHTML）。 */
-function escapeHtmlText(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/**
- * 页面内公共前导：解绑旧监听 + 删除旧宿主。
- * 为什么先清旧的：Agent 反复锁定/解锁、或页面把浮层节点搬走时，
- * 只有「先删再建」才能保证重复调用幂等（不会叠加多层遮罩、不会泄漏监听）。
- */
-function userLockPreambleJs(): string {
-  return `  const KEY = '__loopsoarUserLock';
-  const HOST_ID = ${JSON.stringify(USER_LOCK_HOST_ID)};
-  const ATTR = ${JSON.stringify(USER_LOCK_HOST_ATTR)};
-  const EVENTS = ${JSON.stringify(USER_LOCK_EVENTS)};
-  const doc = document;
-  const prev = window[KEY];
-  if (prev && typeof prev.handler === 'function') {
-    for (let i = 0; i < EVENTS.length; i += 1) {
-      try { window.removeEventListener(EVENTS[i], prev.handler, true); } catch (err) {}
-    }
-  }
-  try { delete window[KEY]; } catch (err) { window[KEY] = null; }
-  // 宿主节点可能因页面重渲染或异常中断残留：按 id 或属性都能找到并清掉。
-  const stale = doc.getElementById(HOST_ID) || doc.querySelector('[' + ATTR + ']');
-  if (stale && stale.parentNode) stale.parentNode.removeChild(stale);`;
-}
-
-/**
- * Agent 接管锁脚本（会话运行期间浮在当前网页上，阻止用户操作该页面）。
- *
- * 关键约束：只拦 **isTrusted === true** 且非 Agent 派发的真实用户事件
- * （window.__loopsoarAgentDriving 由 buildAgentDrivingScript 置位）。
- *   · 合成事件（el.click() / dispatchEvent）的 isTrusted 一定是 false：
- *     它们同样会经过捕获阶段，若无条件拦截，Agent 会把自己的动作一起锁死；
- *   · 监听挂在 window 的 capture 阶段：比页面自己的 document 监听更早，
- *     页面里注册的 handler 收不到事件（stopImmediatePropagation 连同一节点上的后续监听也停掉）。
- *
- * locked=false 时只做清理（解绑 + 删宿主），不建浮层：解锁必须能救回一个「锁坏了」的页面。
- */
-export function buildUserLockScript(locked: boolean, label: string): string {
-  if (!locked) {
-    return `(() => {
-${userLockPreambleJs()}
-  return { ok: true, locked: false, removed: Boolean(prev || stale) };
-})()`;
-  }
-  // 文案先转义再放进 innerHTML：closed shadow root 里没有其它注入面，转义后即可安全插入。
-  const safeLabel = escapeHtmlText(label);
-  return `(() => {
-${userLockPreambleJs()}
-  const host = doc.createElement('div');
-  host.id = HOST_ID;
-  host.setAttribute(ATTR, 'active');
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:auto;';
-  const root = typeof host.attachShadow === 'function' ? host.attachShadow({ mode: 'closed' }) : host;
-  // 只做「透明输入拦截层」：不再给整页压暗（用户要求：运行期用网页四周的呼吸灯表达，
-  // 而不是把页面变暗）。层本身不画任何背景，但保留 pointer-events 以吞掉真实点击。
-  const mask = doc.createElement('div');
-  mask.style.cssText = 'position:absolute;inset:0;background:transparent;pointer-events:auto;display:flex;align-items:flex-start;justify-content:center;';
-  // 提示文案：无边框无底色块，中心（文字处）最实、向四周均匀渐隐（用户指定的渲染样式）。
-  const hint = doc.createElement('div');
-  // 与全局提示统一：胶囊圆角 + 中灰微透 + 轻投影（用户 m02333：所有提示类浮窗写死这一套）。
-  hint.style.cssText = 'margin-top:44px;max-width:min(620px,88vw);padding:14px 30px;color:#f7f2e8;font:500 13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:center;background:rgba(64,68,76,.86);border-radius:999px;border:0;box-shadow:0 6px 22px rgba(0,0,0,.35);text-shadow:0 1px 2px rgba(0,0,0,.55);pointer-events:none;';
-  hint.innerHTML = ${JSON.stringify(safeLabel)};
-  mask.appendChild(hint);
-  root.appendChild(mask);
-  (doc.documentElement || doc.body || doc).appendChild(host);
-  const handler = (event) => {
-    if (!event || event.isTrusted !== true) return;
-    // Agent 正在派发真实输入（webContents.sendInputEvent）时放行：它同样 isTrusted=true，
-    // 但语义上是「Loopsoar 自己的鼠标」，不是用户在抢操作。标志由主进程在派发前置位。
-    if (window.__loopsoarAgentDriving === true) return;
-    try { event.preventDefault(); } catch (err) {}
-    try { event.stopImmediatePropagation(); } catch (err) {}
-  };
-  for (let i = 0; i < EVENTS.length; i += 1) {
-    // capture=true：抢在页面自身的监听之前把真实用户输入拦下。
-    window.addEventListener(EVENTS[i], handler, true);
-  }
-  // mask 也要记住：放行真实输入时它必须 pointer-events:none，否则点击打在遮罩上到不了页面。
-  window[KEY] = { host: host, mask: mask, handler: handler };
-  return { ok: true, locked: true };
-})()`;
-}
+/* 锁与输入放行已拆到 userLock.ts；这里保留 re-export 兼容旧导入。 */
 
 /** 把目标元素滚进视野（截图前定位用）。 */
 export function buildScrollIntoViewScript(resolved: ResolvedTarget): string {
@@ -1218,24 +1142,6 @@ export async function performTargetPoint(
     };
   }
   return failureOf(registry, resolved, target, page) as TargetPointResult;
-}
-
-/**
- * Agent 真实输入放行开关：页面接管锁只拦 isTrusted 事件，而 sendInputEvent 产生的正是
- * trusted 事件——必须在派发前置位，否则锁会把 Agent 自己的点击吞掉。
- * 同时把锁的宿主/遮罩设为 pointer-events:none，否则真实点击会打在遮罩上到不了页面。
- */
-export function buildAgentDrivingScript(on: boolean): string {
-  const pointerEvents = on ? "'none'" : "'auto'";
-  return `(() => {
-  window.__loopsoarAgentDriving = ${on ? "true" : "false"};
-  const lock = window.__loopsoarUserLock;
-  if (lock) {
-    if (lock.host) lock.host.style.pointerEvents = ${pointerEvents};
-    if (lock.mask) lock.mask.style.pointerEvents = ${pointerEvents};
-  }
-  return true;
-})()`;
 }
 
 /** 输入后回读（真实键盘路径用）：解析 target → 读取当前值；text= 与解析失败直接返回不可读。 */

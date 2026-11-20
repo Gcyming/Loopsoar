@@ -49,8 +49,8 @@ describe("ExtensionHost · 清单与入口守卫", () => {
     expect(host.list().map((item) => item.manifest.id)).toEqual(["good"]);
     const skipped = host.scan().skipped;
     const reasons = skipped.map((item) => item.reason).join("\n");
-    expect(reasons).toContain("main 入口必须是扩展目录内的相对路径");
-    expect(skipped.filter((item) => item.reason.includes("main 入口"))).toHaveLength(2);
+    expect(reasons).toContain("必须是扩展目录内的相对路径");
+    expect(skipped.filter((item) => item.reason.includes("必须是扩展目录内的相对路径"))).toHaveLength(2);
   });
 
   it("坏 JSON / 校验失败 / 重复 id：各自跳过并记录原因，不互相影响", () => {

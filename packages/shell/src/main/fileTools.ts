@@ -10,6 +10,7 @@ import path from "node:path";
 import { z } from "zod";
 import { sensitivePathReason } from "loopsoar-core/tools/classifier";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
+import type { CheckpointStore } from "./checkpointStore.js";
 
 const MAX_OLD_BYTES = 200_000;
 const DIFF_OPEN = "[__loops_diff__]";
@@ -43,7 +44,11 @@ function resolveInside(root: string, relative: string): { ok: true; target: stri
   return { ok: true, target, rel: path.relative(rootResolved, target) || path.basename(target) };
 }
 
-export function registerFileTools(registry: ToolRegistry, workspaceRoot: (sessionId?: string) => string): void {
+export function registerFileTools(
+  registry: ToolRegistry,
+  workspaceRoot: (sessionId?: string) => string,
+  checkpoints?: CheckpointStore,
+): void {
   registry.register({
     name: "file_write",
     description: "在工作区内新建/覆盖文件（自动建父目录）；返回改动摘要与可视化 diff 数据",
@@ -72,6 +77,9 @@ export function registerFileTools(registry: ToolRegistry, workspaceRoot: (sessio
           const raw = fs.readFileSync(resolved.target, "utf8");
           old = raw.length > MAX_OLD_BYTES ? raw.slice(0, MAX_OLD_BYTES) : raw;
         }
+        // 回合级快照：只记第一次写入前的旧内容，回滚 = 回到本回合开始前。
+        // 内容没变的覆盖不备份（capture 内部判定）。
+        checkpoints?.capture(ctx.sessionId ?? "default", resolved.target, resolved.rel, next);
         fs.mkdirSync(path.dirname(resolved.target), { recursive: true });
         fs.writeFileSync(resolved.target, next, "utf8");
         const stat = diffStat(old, next);
@@ -83,6 +91,51 @@ export function registerFileTools(registry: ToolRegistry, workspaceRoot: (sessio
       } catch (err) {
         return { ok: false, content: `[错误] 写入失败：${err instanceof Error ? err.message : String(err)}` };
       }
+    },
+  });
+
+  if (!checkpoints) return;
+
+  registry.register({
+    name: "checkpoint_list",
+    description:
+      "列出本会话最近的回合检查点（Agent 经 file_write 改过的文件快照）。回滚前先用它确认要退回哪一回合；只读，不改变文件。",
+    permissions: { read: true },
+    schema: z.object({ limit: z.number().int().min(1).max(20).optional() }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = (ctx.params ?? {}) as { limit?: number };
+      const list = checkpoints.list(ctx.sessionId ?? "default", params.limit ?? 10);
+      if (list.length === 0) return { ok: true, content: "本会话还没有可回滚的检查点。" };
+      const lines = list.map((item) => {
+        const when = new Date(item.createdAt).toISOString().replace("T", " ").slice(0, 19);
+        const files = item.files
+          .slice(0, 6)
+          .map((file) => `${file.rel}${file.existed ? "" : "（新建）"}`)
+          .join("、");
+        return `- ${item.id}｜${when}｜${item.label}｜${files}${item.files.length > 6 ? ` 等 ${item.files.length} 个` : ""}`;
+      });
+      return { ok: true, content: `检查点（${list.length} 个，最新在前）：\n${lines.join("\n")}` };
+    },
+  });
+
+  registry.register({
+    name: "checkpoint_restore",
+    description:
+      "把本会话的文件回滚到某个检查点之前（缺省最近一个）：恢复被覆盖文件、删除该回合新建的文件。需要用户确认；只覆盖 file_write 的改动，不覆盖 terminal_run 的副作用。",
+    permissions: { write: true },
+    schema: z.object({ id: z.string().trim().min(1).max(80).optional() }),
+    execute: async (ctx): Promise<ToolResult> => {
+      const params = (ctx.params ?? {}) as { id?: string };
+      const root = workspaceRoot(ctx.sessionId) || process.cwd();
+      const result = checkpoints.restore(ctx.sessionId ?? "default", root, params.id);
+      if (result.restored === 0 && result.deleted === 0) {
+        return { ok: false, content: `[错误] 回滚未生效：${result.errors.join("；") || "检查点为空"}` };
+      }
+      const parts = [`已回滚到 ${result.checkpointId}`];
+      if (result.restored) parts.push(`恢复 ${result.restored} 个文件`);
+      if (result.deleted) parts.push(`删除 ${result.deleted} 个本回合新建文件`);
+      if (result.errors.length) parts.push(`未完成：${result.errors.join("；")}`);
+      return { ok: true, content: parts.join("；") };
     },
   });
 }

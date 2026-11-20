@@ -20,7 +20,7 @@ export interface SubagentHistoryEntry {
 export interface SubagentTaskRecord {
   id: string;
   parentSessionId: string;
-  kind: "research" | "parallel" | "tree" | "child";
+  kind: "research" | "parallel" | "tree" | "child" | "work";
   goal: string;
   context?: string;
   /** 任务树中的父任务 id；根任务为空。 */
@@ -36,7 +36,7 @@ export interface SubagentTaskRecord {
 
 export interface NewSubagentTask {
   parentSessionId: string;
-  kind: "research" | "parallel" | "tree" | "child";
+  kind: "research" | "parallel" | "tree" | "child" | "work";
   goal: string;
   context?: string;
   parentTaskId?: string;

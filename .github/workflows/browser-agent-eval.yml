@@ -1,0 +1,104 @@
+name: browser-agent-eval
+
+# 浏览器 Agent 的任务级门禁：真实 Electron + 本地 mock 模型 + 本地页面夹具。
+# PR/push 只跑 10 个核心任务，控制反馈时长；30 个全量任务每天定时跑，也可手动触发。
+# 脚本对每个任务的 stream_not_done 重试一次（首轮 90s，重试 30s）；真实 stream_error 不重试。
+# 同一 Electron 进程内跑全部任务已稳定；确认结算事件会清理遮罩层，定位脚本对隐藏标签有超时兜底。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "core = 10 个核心任务；full = 30 个全量任务"
+        required: true
+        default: core
+        type: choice
+        options:
+          - core
+          - full
+  pull_request:
+    paths:
+      - "packages/shell/src/browserAdapter/**"
+      - "packages/shell/src/main/browser*"
+      - "packages/shell/src/main/electronBrowser.ts"
+      - "packages/shell/src/main/askBus.ts"
+      - "packages/services/src/chat.ts"
+      - "packages/contracts/src/events.ts"
+      - "packages/contracts/gen/ipc.ts"
+      - "packages/ui/src/useChatStreamEvents.ts"
+      - "scripts/browser-agent-*.mjs"
+      - "scripts/browser-agent-tasks.json"
+      - "scripts/mock-openai-server.mjs"
+      - ".github/workflows/browser-agent-eval.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/shell/src/browserAdapter/**"
+      - "packages/shell/src/main/browser*"
+      - "packages/shell/src/main/askBus.ts"
+      - "packages/services/src/chat.ts"
+      - "packages/contracts/src/events.ts"
+      - "packages/contracts/gen/ipc.ts"
+      - "packages/ui/src/useChatStreamEvents.ts"
+      - "scripts/browser-agent-*.mjs"
+      - "scripts/browser-agent-tasks.json"
+      - ".github/workflows/browser-agent-eval.yml"
+  schedule:
+    # 每天 02:00 Asia/Shanghai 跑全量；不阻塞 PR。
+    - cron: "0 18 * * *"
+
+concurrency:
+  group: browser-agent-eval-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Electron 在无显示环境需要 xvfb 与一组 Chromium 运行库
+      - name: Install Electron runtime libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 libatk-bridge2.0-0 libdrm2
+
+      - name: Run browser agent eval (10 core tasks)
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'full')
+        timeout-minutes: 20
+        env:
+          LOOPSOAR_ELECTRON_ARGS: "--no-sandbox"
+          BROWSER_EVAL_TASK_TIMEOUT_MS: "90000"
+        run: xvfb-run -a node scripts/browser-agent-eval.mjs --core
+
+      - name: Run browser agent eval (30 full tasks)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full')
+        timeout-minutes: 30
+        env:
+          LOOPSOAR_ELECTRON_ARGS: "--no-sandbox"
+          BROWSER_EVAL_TASK_TIMEOUT_MS: "90000"
+        run: xvfb-run -a node scripts/browser-agent-eval.mjs --all
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-agent-eval-report-${{ github.event_name }}
+          path: |
+            e2e-evidence/browser-agent-eval/report.md
+            e2e-evidence/browser-agent-eval/report.json
+            e2e-evidence/browser-agent-eval/window.png
+          if-no-files-found: warn

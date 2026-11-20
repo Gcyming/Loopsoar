@@ -71,6 +71,19 @@ export class AskBus {
     return this.pending.size;
   }
 
+  /**
+   * 通知渲染层「该 ask 已结算」：回答可能来自界面，也可能来自自动化/另一个窗口。
+   * 仅靠界面点击出队时，程序化 ask:respond 会让弹窗和遮罩层永久残留，原生网页视图
+   * 一直处于隐藏状态；结算事件让所有入口共用同一条清理路径。
+   */
+  private emitResolved(requestId: string, reason: "answered" | "timeout" | "cancelled"): void {
+    try {
+      this.opts.push("ask:resolved", { requestId, reason });
+    } catch {
+      // 窗口已销毁：结算以 Promise 为准，事件只是 UI 清理提示
+    }
+  }
+
   /** 发起一次询问：推送 ask:user 并挂起，直到 ask:respond / 超时。 */
   request(input: AskUserRequestInput): Promise<AskUserAnswer> {
     const question = String(input.question ?? "").trim();
@@ -89,6 +102,7 @@ export class AskBus {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         resolve({ cancelled: true, answer: `（用户未在 ${Math.round(timeoutMs / 1000)} 秒内回答，按取消处理）` });
+        this.emitResolved(requestId, "timeout");
       }, timeoutMs);
       this.pending.set(requestId, { resolve, timer });
       // 推送失败（窗口已销毁等）也不能让工具永远挂起：直接按取消结算。
@@ -125,14 +139,16 @@ export class AskBus {
         ? { cancelled: true, answer: text || undefined }
         : { cancelled: false, answer: text },
     );
+    this.emitResolved(requestId, "answered");
     return true;
   }
 
   /** 会话终止 / 应用退出：全部按取消结算，避免工具挂死。 */
   clearAll(reason = "会话终止，按取消处理"): void {
-    for (const [, pending] of this.pending) {
+    for (const [requestId, pending] of this.pending) {
       clearTimeout(pending.timer);
       pending.resolve({ cancelled: true, answer: reason });
+      this.emitResolved(requestId, "cancelled");
     }
     this.pending.clear();
   }
