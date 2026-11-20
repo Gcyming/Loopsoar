@@ -76,6 +76,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             xvfb libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 libatk-bridge2.0-0 libdrm2
 
+      # workspace 包通过 dist 暴露 exports；干净 checkout 必须先构建，否则 UI 的 tsc 找不到
+      # loopsoar-contracts/layout 等入口。本地机器常常已有 dist，容易掩盖这个 CI 缺口。
+      - name: Build workspaces
+        run: pnpm build
+
       - name: Run browser agent eval (10 core tasks)
         if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'full')
         timeout-minutes: 20
