@@ -1,0 +1,68 @@
+# Loopsoar Windows 内测包（阶段 1）构建配置。
+#
+# 产物：release/dist/Loopsoar-Setup-<version>.exe（NSIS 安装包）
+#       release/dist/Loopsoar-<version>-win-x64.zip（免安装 zip）
+#       release/dist/SHA256SUMS.txt
+#
+# 关键取舍：
+#   · appDir 指向 scripts/package.mjs 生成的 release/app（只含运行需要的文件），
+#     避免把 monorepo 源码、测试、node_modules 全部塞进安装包；
+#   · 主进程已经是 esbuild 单文件 bundle（含 workspace 与 pdfjs），运行时只剩 electron 外部依赖；
+#   · worker 脚本必须 asarUnpack：子进程无法执行 asar 内的文件；
+#   · better-sqlite3 / sqlite-vec 是可选原生依赖（默认 flat 向量后端），不随包发布，
+#     缺失时 memoryService 自动降级（见 sqliteVectorBackend.ts），不在安装包内编译原生模块；
+#   · 内测包不做代码签名（Windows 会提示未知发布者，发布说明里写明）。
+appId: com.loopsoar.app
+productName: Loopsoar
+copyright: Copyright © 2026 Loopsoar
+# 注意：electronDist 由 scripts/package.mjs 在运行时解析并注入
+# （pnpm 的 electron 包会按 peer 拆成多个副本，只有其中一个真正带 dist；
+#  写死 node_modules/electron/dist 会随 install 变化而失效）。
+# 本机到 GitHub 会被重置，@electron/get 的下载路径不可用，必须用本地发行目录。
+directories:
+  app: release/app
+  output: release/dist
+  buildResources: release/build
+files:
+  - "**/*"
+asar: true
+asarUnpack:
+  - dist/extensionWorker.mjs
+  - dist/scriptLoopWorker.mjs
+  # pdf.js 的 fake worker 用动态 import(file://) 加载；解包成真实文件最稳
+  - dist/pdf.worker.mjs
+extraResources:
+  - from: packages/shell/resources/icon.ico
+    to: icons/icon.ico
+  - from: packages/shell/resources/icon.png
+    to: icons/icon.png
+  - from: release/extra/pdfjs
+    to: pdfjs
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  icon: packages/shell/resources/icon.ico
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  requestedExecutionLevel: asInvoker
+nsis:
+  artifactName: ${productName}-Setup-${version}.${ext}
+  oneClick: false
+  # 按用户安装（%LOCALAPPDATA%\Programs），不需要管理员权限：
+  # 关掉 UAC 提升后，构建期「运行安装器提取卸载程序」这一步才能在普通权限下完成。
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Loopsoar
+  uninstallDisplayName: Loopsoar ${version}
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  installerLanguages:
+    - zh_CN
+  language: "2052"

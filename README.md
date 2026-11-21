@@ -38,7 +38,27 @@ pnpm typecheck
 
 # 测试（vitest workspace：packages/* + tests）
 pnpm test
+
+# Windows 内测包（NSIS 安装包 + zip + SHA256SUMS）
+pnpm package:win
+# 只组装运行目录（release/app），不调用 electron-builder
+pnpm package:stage
 ```
+
+## 打包（Windows 内测包）
+
+- 产物目录：`release/dist/`（已 gitignore）
+  - `Loopsoar-Setup-<version>.exe` — NSIS 安装包（按用户安装，可选目录）
+  - `Loopsoar-<version>-win-x64.zip` — 免安装版
+  - `SHA256SUMS.txt`、`RELEASE-NOTES-<version>.md`
+- 配置：`electron-builder.yml`；构建脚本：`scripts/package.mjs`
+- 版本单一产地：`packages/shell/src/shared/brand.ts` 的 `APP_VERSION`，根与 shell 的
+  `package.json` 必须同步（`tests/shell/appVersion.spec.ts` 守门）。
+- 构建中间产物放在系统临时目录：安装器构建期会执行一次安装器来生成卸载程序，
+  仓库目录若带继承性 DENY ACL（受限沙箱/安全软件）会让 NSIS 报 "Error writing temporary file"。
+- 上游补丁：`patches/app-builder-lib@26.18.0.patch`（说明见文件内注释）。
+- 不随包发布：`better-sqlite3` / `sqlite-vec`（默认 flat 向量后端，缺失自动降级）。
+- 内测包不签名、不自动更新；相关门禁见 `docs/发布阶段.md`。
 
 ---
 

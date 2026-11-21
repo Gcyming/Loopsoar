@@ -1319,3 +1319,13 @@ E2E hooks：`LOOPSOAR_E2E_OPEN`（settings&section=… / chat / model-menu）、
 - 任务分支所有权：`TaskForkCoordinator` 独占「待分支/分支点/落盘记录/回合起点」四份状态，入口只有 onTurnStarted / markBrowserAction / settle / recover，7 条单测钉住四条不变量（身份唯一、分支点≤本轮起点、落盘可重放、孤儿清理）。
 - 稳健性测试补齐（此前完全缺失）：`tests/guards/fault-injection.spec.ts`（10）、`concurrency.spec.ts`（13）、`migration.spec.ts`（17）——磁盘损坏逐层降级、令牌有界与跨标签识别、偏好/权限/标签/插件清单的向后兼容与脏数据逐条净化。
 - 配置读取改为 total（任何磁盘状态都返回可用配置、绝不抛错）：设置页写坏 JSON 不再白屏；写盘走临时文件 + fsync + 原子改名，崩溃不留半截文件。
+
+### 发布准备与 v0.0.1 内测包（2026-11-21）
+
+- 打包链路：electron-builder 26.18.0 + `electron-builder.yml` + `scripts/package.mjs`；产物 NSIS 安装包 / zip / SHA256SUMS / 发布说明。
+- 修掉的发布阻断：打包态 UI 目录契约不一致（安装后白屏占位页）；PDF worker 未随包（安装版 PDF 读取必失败）；E2E 钩子随包可被环境变量触发任意 JS；默认工作区 = 安装目录；`app.exit()` 不触发 will-quit 导致后台任务不清理；`pnpm-workspace.yaml` 的 allowBuilds 占位值让 install 必失败；pnp 的 electron peer 副本无 dist 时测试触发二进制下载挂死。
+- 新增：崩溃日志元信息与轮转（`crashLog.ts`）、日志脱敏（`logRedaction.ts`）、主进程日志文件（`mainLog.ts`）、升级前自动备份（`dataBackup.ts`）、退出确认（`quitGuard.ts`）、打包态路径工具（`packagedPaths.ts`）。
+- 合规：`LICENSE`（内测专有）、`PRIVACY.md`、`THIRD_PARTY_NOTICES.md`（生成脚本）、`docs/releases/RELEASE-NOTES-0.0.1.md`、`BETA-NOTICE.md`。
+- 上游补丁：`patches/app-builder-lib@26.18.0.patch`（@electron/get 缓存枚举缺失、Windows exec 环境变量被清空）。
+- 验证：typecheck / gen-check / 全量 2181 用例全绿；安装→启动（首启引导页截图）→单实例→关闭无残留→卸载删程序留数据。未覆盖 Win10、中文/空格安装路径、干净虚拟机。
+
