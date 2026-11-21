@@ -74,8 +74,8 @@
    覆盖安装不会删除数据，更新前也会自动备份。
 3. **可选向量后端随包但默认不启用**：better-sqlite3 / sqlite-vec 已随包（安装目录 resources 内），
    默认仍是 flat 后端；设置 → 通用 →「记忆向量后端」可切换为 SQLite-vec（重启后生效，失败自动回退 flat）。
-4. **干净机器验收范围**：本版在 Windows 11 x64、非管理员账户、中文安装路径完成验证；
-   Windows 10 x64 与「安装路径含空格」尚未实机验证，若有问题请反馈。
+4. **干净机器验收范围**：本版在 Windows 11 x64、非管理员账户、中文安装路径、含空格安装路径完成验证；
+   Windows 10 x64 尚未实机验证，若有问题请反馈。
 5. **代码签名 / 更新包签名校验 / 灰度**按发布计划留到 0.1.0 前的阶段 3。
 6. 测试期间若出现启动失败，请提供 %APPDATA%\loopsoar\crash.log 的最后若干行。
 
@@ -111,5 +111,5 @@
 见发布目录的 `SHA256SUMS.txt`（打包脚本会把本次构建的校验值自动追加到这里）。
 
 PowerShell 校验：`Get-FileHash .\Loopsoar-Setup-0.0.1.exe -Algorithm SHA256`。
-安装包约 124 MB，zip 约 156 MB（Electron 运行时占主要体积）。
+安装包约 125 MB，zip 约 157 MB（Electron 运行时占主要体积）。
 

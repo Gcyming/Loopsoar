@@ -42,13 +42,14 @@ describe("ensureSingleInstance", () => {
     expect(fs.existsSync(path.join(dir, "instance.lock"))).toBe(false);
   });
 
-  it("PID 锁被存活进程持有 → 第二个实例退出", () => {
+  it("PID 锁被存活进程持有 → 第二个实例退出（先申请 Chromium 锁以转交 URL）", () => {
     fs.writeFileSync(path.join(dir, "instance.lock"), String(process.pid));
-    const app = fakeApp(true);
+    const app = fakeApp(false);
     const logs: string[] = [];
     expect(
       ensureSingleInstance(app as never, () => undefined, { dataDir: dir, log: (m) => logs.push(m), exit: () => undefined }),
     ).toBe(false);
+    expect(app.requestSingleInstanceLock).toHaveBeenCalled();
     expect(app.quit).toHaveBeenCalled();
     expect(logs.join("\n")).toContain("已有实例在运行");
   });

@@ -14,6 +14,45 @@ import path from "node:path";
 import { SKIP_NAMES } from "./dataBackup.js";
 
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+/** 诊断包最多附带 10 个崩溃文件，避免 Crashpad 目录异常时无限遍历/复制。 */
+const MAX_CRASH_DUMP_FILES = 10;
+
+/**
+ * Crashpad 的转储不在目录根部：Electron 的 crashDumps 指向 `<dataDir>\\Crashpad`，
+ * 真正的 `.dmp` 通常在 `reports/`（附件在 `attachments/`）。只读顶层会永远拿不到 minidump，
+ * 所以这里递归扫描若干层，并限制文件数与遍历目录数（崩溃目录可能被外部服务写入）。
+ */
+async function collectCrashDumpFiles(
+  root: string,
+  limit = MAX_CRASH_DUMP_FILES,
+): Promise<Array<{ file: string; relative: string }>> {
+  const found: Array<{ file: string; relative: string }> = [];
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+  let visitedDirs = 0;
+  while (stack.length > 0 && found.length < limit && visitedDirs < 200) {
+    const { dir, depth } = stack.pop() as { dir: string; depth: number };
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    visitedDirs += 1;
+    for (const entry of entries) {
+      if (found.length >= limit) break;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < 4) stack.push({ dir: full, depth: depth + 1 });
+        continue;
+      }
+      if (!entry.isFile() || !/\.(dmp|meta)$/i.test(entry.name)) continue;
+      const relative = path.relative(root, full);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+      found.push({ file: full, relative });
+    }
+  }
+  return found;
+}
 
 export interface ExportResult {
   /** 导出目录绝对路径。 */
@@ -160,8 +199,10 @@ export async function exportDiagnostics(options: {
     included.push("diagnostics.json");
     if (options.crashDumpsDir) {
       try {
-        const dumps = (await fsp.readdir(options.crashDumpsDir)).filter((name) => /\.(dmp|meta)$/i.test(name));
-        for (const name of dumps.slice(0, 10)) await copyIfExists(path.join(options.crashDumpsDir, name), path.join("crashdumps", name));
+        const dumps = await collectCrashDumpFiles(options.crashDumpsDir);
+        for (const dump of dumps) {
+          await copyIfExists(dump.file, path.join("crashdumps", dump.relative));
+        }
       } catch {
         stats.skipped.push("crashDumps");
       }

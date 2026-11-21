@@ -16,8 +16,9 @@ publish:
 #     避免把 monorepo 源码、测试、node_modules 全部塞进安装包；
 #   · 主进程已经是 esbuild 单文件 bundle（含 workspace 与 pdfjs），运行时只剩 electron 外部依赖；
 #   · worker 脚本必须 asarUnpack：子进程无法执行 asar 内的文件；
-#   · better-sqlite3（N-API 预编译）/ sqlite-vec（SQLite 扩展 DLL）随包 asarUnpack；
-#     默认仍是 flat 后端，设置 → 通用 →「记忆向量后端」可切换，加载失败自动降级；
+#   · better-sqlite3（N-API 预编译）/ sqlite-vec（SQLite 扩展 DLL）随包放到
+#     resources/native/node_modules（extraResources，asar 外），默认 flat 后端，
+#     设置 → 通用 →「记忆向量后端」可切换，加载失败自动降级；
 #   · 内测包不做代码签名（Windows 会提示未知发布者，发布说明里写明）。
 appId: com.loopsoar.app
 productName: Loopsoar
@@ -38,10 +39,6 @@ asarUnpack:
   - dist/scriptLoopWorker.mjs
   # pdf.js 的 fake worker 用动态 import(file://) 加载；解包成真实文件最稳
   - dist/pdf.worker.mjs
-  # 原生模块：.node 与 SQLite 扩展 DLL 都必须是真实文件
-  - node_modules/better-sqlite3/**
-  - node_modules/sqlite-vec/**
-  - node_modules/sqlite-vec-windows-x64/**
 extraResources:
   # 安装器与「关于」页可访问的法律文档（安装器另有 license 页）
   - from: LICENSE

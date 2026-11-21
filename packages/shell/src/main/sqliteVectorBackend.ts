@@ -352,8 +352,8 @@ export function createSqliteVecBackend(options: SqliteVecBackendOptions): Vector
     try {
       const loadable = typeof sqliteVec.getLoadablePath === "function" ? sqliteVec.getLoadablePath() : null;
       if (loadable && typeof db.loadExtension === "function") {
-        // 安装包里 vec0.dll 位于 app.asar 内：SQLite 不认识 asar 虚拟路径，
-        // 必须换成 app.asar.unpacked 下的真实文件（打包脚本已 asarUnpack）。
+        // 打包态扩展位于 resources/native（asar 外）；若第三方改动把扩展放进 asar，
+        // 这里兜底把虚拟路径换到 app.asar.unpacked 的真实文件。
         db.loadExtension(toUnpackedPath(loadable));
       } else {
         sqliteVec.load(db);

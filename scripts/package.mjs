@@ -79,7 +79,8 @@ function resolvePackageDir(name) {
  *   · better-sqlite3 v13 使用 N-API 预编译（prebuilds/win32-x64.node），跨 Node/Electron ABI 直接可用，
  *     不需要按 Electron ABI 重编译；
  *   · sqlite-vec 是 SQLite 扩展 DLL（vec0.dll），不是 Node addon，同样没有 ABI 问题。
- * 两者都放进 node_modules 并由 electron-builder asarUnpack（SQLite 读不了 asar 虚拟路径）。
+ * 两者都放进 node_modules，并根据 electron-builder.yml 的 extraResources 配置
+ * 复制到 resources/native/node_modules（SQLite 读不了 asar 虚拟路径）。
  */
 function stageNativeModules() {
   const nativeRoot = path.join(APP_DIR, "node_modules");

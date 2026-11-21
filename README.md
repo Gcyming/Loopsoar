@@ -57,8 +57,9 @@ pnpm package:stage
 - 构建中间产物放在系统临时目录：安装器构建期会执行一次安装器来生成卸载程序，
   仓库目录若带继承性 DENY ACL（受限沙箱/安全软件）会让 NSIS 报 "Error writing temporary file"。
 - 上游补丁：`patches/app-builder-lib@26.18.0.patch`（说明见文件内注释）。
-- 随包原生模块：`better-sqlite3`（N-API 预编译）与 `sqlite-vec`（`vec0.dll`），由 `asarUnpack` 解包；
-  默认仍是 flat 向量后端，设置里选择后才加载，失败自动降级。
+- 随包原生模块：`better-sqlite3`（N-API 预编译）与 `sqlite-vec`（`vec0.dll`），由 `extraResources`
+  放到 `resources/native/node_modules`（asar 外）；默认仍是 flat 向量后端，设置里选择后才加载，
+  失败自动降级。
 - 进程树守护：`packages/shell/resources/jobGuard.exe`（源码 `packages/shell/tools/jobGuard.cs`，
   构建时用系统 `csc.exe` 编译）；强杀主进程后由 Windows Job Object 回收子进程。
 - 自动更新：`electron-updater` + `latest.yml`（`publish` 配 GitHub Releases）；打包态延迟检查，

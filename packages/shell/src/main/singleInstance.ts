@@ -84,6 +84,18 @@ export function ensureSingleInstance(
   options: SingleInstanceOptions,
 ): boolean {
   const log = options.log ?? ((message: string) => console.warn(message));
+  // 必须先向 Chromium 申请单实例锁，再做 PID 锁判断：
+  //   · 真正的第二个实例只有在调用 requestSingleInstanceLock() 后，主实例才会收到
+  //     second-instance 事件（浏览器默认入口的 http URL 就在这个 argv 里）；
+  //   · 先因 PID 锁退出会把 URL 丢掉，表现为「点链接时 Loopsoar 已开着，但没有新标签」。
+  //   · 锁失败（拒绝访问等）时仍继续，交给下面的 PID 锁兜底，避免应用打不开。
+  let chromiumLock = false;
+  try {
+    chromiumLock = app.requestSingleInstanceLock();
+  } catch {
+    chromiumLock = false;
+  }
+
   const lockFile = path.join(options.dataDir, "instance.lock");
   const pidLock = acquirePidLock(lockFile, log);
   if (pidLock.kind === "locked") {
@@ -109,12 +121,6 @@ export function ensureSingleInstance(
     app.on("will-quit", release);
   }
 
-  let chromiumLock = false;
-  try {
-    chromiumLock = app.requestSingleInstanceLock();
-  } catch {
-    chromiumLock = false;
-  }
   if (chromiumLock) {
     // 第二实例可能是被系统默认浏览器启动的：argv 里带着 http(s) URL，必须转交给主实例。
     app.on("second-instance", (_event, argv) => onSecond(argv));

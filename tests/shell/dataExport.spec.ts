@@ -64,8 +64,9 @@ describe("exportDiagnostics", () => {
     write("logs/audit-20261121.jsonl", "{}");
     write("logs/audit-20261120.jsonl", "{}");
     const dumps = path.join(root, "Crashpad");
-    fs.mkdirSync(dumps, { recursive: true });
+    fs.mkdirSync(path.join(dumps, "reports"), { recursive: true });
     fs.writeFileSync(path.join(dumps, "abc.dmp"), "dump");
+    fs.writeFileSync(path.join(dumps, "reports", "def.dmp"), "nested-dump");
     const target = path.join(root, "out2");
     fs.mkdirSync(target, { recursive: true });
     const result = await exportDiagnostics({
@@ -85,6 +86,7 @@ describe("exportDiagnostics", () => {
     expect(fs.existsSync(path.join(result.path, "audit-20261121.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(result.path, "audit-20261120.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(result.path, "crashdumps/abc.dmp"))).toBe(true);
+    expect(fs.existsSync(path.join(result.path, "crashdumps/reports/def.dmp"))).toBe(true);
     const diag = JSON.parse(fs.readFileSync(path.join(result.path, "diagnostics.json"), "utf8")) as {
       versions: { app: string };
     };

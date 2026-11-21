@@ -37,7 +37,13 @@ if (!existsSync(DIST)) {
   process.exit(2);
 }
 
-const assets = readdirSync(DIST).filter((name) => /\.(exe|zip|yml|txt)$/i.test(name) && !/^Uninstall/i.test(name));
+const assets = readdirSync(DIST).filter(
+  (name) =>
+    /\.(exe|zip|blockmap|yml|txt)$/i.test(name) &&
+    !/^Uninstall/i.test(name) &&
+    // 构建调试元数据含本机路径，只用于排查，不作为 Release 资产上传。
+    name !== "builder-debug.yml",
+);
 const body = notesPath && existsSync(path.resolve(ROOT, notesPath)) ? readFileSync(path.resolve(ROOT, notesPath), "utf8") : "";
 console.log("仓库：", repo, "tag：", tag, "产物：", assets.join(", "));
 if (dryRun) {
