@@ -24,6 +24,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   downloadDir: "",
   workspaceRoot: "",
   memoryStorePath: "",
+  memoryVectorBackend: "flat",
   memoryAutoCapture: true,
   skillAutoCandidate: false,
   sidebarWidth: 360,
@@ -65,6 +66,7 @@ export function mergePreferences(raw: unknown): Preferences {
     downloadDir: parsed.data.downloadDir ?? "",
     workspaceRoot: parsed.data.workspaceRoot ?? "",
     memoryStorePath: parsed.data.memoryStorePath ?? "",
+    memoryVectorBackend: parsed.data.memoryVectorBackend ?? "flat",
     // 旧默认 40 在长任务里频繁触发轮次闸；未显式改过的用户迁移到 80。
     agentMaxRounds: parsed.data.agentMaxRounds === undefined || parsed.data.agentMaxRounds === 40 ? 80 : parsed.data.agentMaxRounds,
     agentMaxToolCalls: parsed.data.agentMaxToolCalls ?? 100,

@@ -1,5 +1,17 @@
 # Loopsoar 开发进度（2026-10-31 存档）
 
+## 2026-11-21 发布阶段补齐（第二轮）
+
+- 原生模块随包：better-sqlite3（N-API 预编译）+ sqlite-vec（vec0.dll），整体 asarUnpack，Electron 45 实测可用。
+- 进程树守护：新增 jobGuard.exe（Windows Job Object KILL_ON_JOB_CLOSE），强杀主进程后子进程被内核回收。
+- API Key 存储：OS 密钥库可用时只保留 OS 密文，清理历史 AES 双写与 .secret.key。
+- 设置 → 关于：打开数据目录、导出数据备份、导出诊断包、许可协议、隐私说明、检查更新。
+- 崩溃：本地 crashReporter minidump（默认不上传），诊断包归档。
+- 自动更新：electron-updater + latest.yml，延迟检查、用户确认、Agent 运行中禁止安装；本地 feed 实测检查/下载。
+- 发布工具：scripts/github-release.mjs（GitHub Release + 资产上传）、verify-signature.ps1、e2e-packaged.mjs、e2e-update.mjs、drill-build-version.mjs。
+- 实测：安装到中文路径、含空格数据目录、单实例、终端、强杀回收、0.0.1→0.0.2→0.0.1 升级回滚、损坏包拒绝。
+- 环境限制：代码签名证书、Windows 10、安装路径含空格、真实干净虚拟机、GitHub token（待用户发布）。
+
 > 位置：`D:\tool\AI\real-project\Loopsoar\Parent file`（下文简称根目录）
 > 参考项目：`D:\pilot project`（slime，只读参考；不得写入、不复制其架构代码）
 > 分支：master；最近提交见 `git log --oneline -5`

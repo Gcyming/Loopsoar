@@ -4,7 +4,7 @@
  * 口径：
  *   · 只列随安装包分发的组件：Electron 运行时、打进主进程 bundle 的库、UI bundle 里的 React；
  *   · 开发依赖（vite/typescript/vitest/electron-builder…）不随包分发，不列入；
- *   · 可选原生模块（better-sqlite3 / sqlite-vec）不随包发布，单列说明；
+ *   · 随包的原生模块（better-sqlite3 N-API / sqlite-vec 扩展 DLL）按实际分发列入；
  *   · 许可证正文直接从 node_modules 的 LICENSE 文件读取，避免手抄出错。
  *
  * 用法：node scripts/third-party-notices.mjs [--check]
@@ -22,11 +22,13 @@ const SHIPPED = [
   ["scheduler", "React 调度器（react-dom 依赖）"],
   ["zod", "主进程/契约的运行时校验"],
   ["pdfjs-dist", "PDF 文本抽取（打进主进程 bundle）"],
-];
-
-const OPTIONAL = [
-  ["better-sqlite3", "可选 SQLite 驱动（默认不启用，安装包不含）"],
-  ["sqlite-vec", "可选向量索引扩展（默认不启用，安装包不含）"],
+  ["electron-updater", "自动更新（打进主进程 bundle；仅打包态启用）"],
+  ["builder-util-runtime", "自动更新运行时（electron-updater 依赖）"],
+  ["js-yaml", "更新元数据解析（builder-util-runtime 依赖）"],
+  ["semver", "版本比较（electron-updater 依赖）"],
+  ["better-sqlite3", "随包 SQLite 驱动（N-API 预编译；sqlite-vec 后端选用）"],
+  ["sqlite-vec", "随包向量索引扩展加载器（sqlite-vec 后端选用）"],
+  ["sqlite-vec-windows-x64", "随包 vec0.dll（Windows x64 SQLite 扩展）"],
 ];
 
 function findPackageDir(name) {
@@ -88,9 +90,6 @@ function build() {
   lines.push("Loopsoar 自身按内测许可分发（见 LICENSE）。以下组件的版权归各自作者所有，使用条件以各许可证为准。", "");
   lines.push("## 随安装包分发的组件", "");
   SHIPPED.forEach((entry, i) => lines.push(section(entry, i + 1)));
-  lines.push("## 可选组件（默认不随包分发）", "");
-  lines.push("以下原生模块只在用户自行安装时才可能被加载；安装包不含它们，缺失时记忆检索自动使用内置 flat 后端。", "");
-  OPTIONAL.forEach((entry, i) => lines.push(section(entry, SHIPPED.length + i + 1)));
   lines.push("## Electron 运行时附带的组件", "");
   lines.push("Electron 自身包含 Chromium、Node.js、V8 及其它开源组件，完整列表见安装目录下的 LICENSES.chromium.html（electron-builder 会随包复制）。", "");
   return lines.join("\n");

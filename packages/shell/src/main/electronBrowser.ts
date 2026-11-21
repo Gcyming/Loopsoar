@@ -366,6 +366,9 @@ export class BrowserDevToolsPanel {
     const y = Math.max(0, height - panelHeight);
     try {
       view.setBounds({ x: 0, y, width, height: panelHeight });
+      // 浏览器标签视图在布局/切页时会重新 addChildView 抢到最上层，
+      // 这里每次同步几何都把自己的视图提到最上，避免调试面板被网页盖住。
+      win.contentView.addChildView(view);
       if (this.visible) view.setVisible(true);
     } catch {
       // 视图已销毁

@@ -60,6 +60,8 @@ export const EVENTS = [
   "ui:compose",
   /** 主进程 → UI：打开设置指定分区（托盘菜单「打开定时任务」）。 */
   "ui:openSettings",
+  /** 自动更新状态变化（idle/checking/available/downloading/downloaded/error/disabled）。 */
+  "update:state",
 ] as const;
 
 /** Type for event names (string literal union). */

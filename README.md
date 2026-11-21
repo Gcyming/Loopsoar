@@ -57,8 +57,24 @@ pnpm package:stage
 - 构建中间产物放在系统临时目录：安装器构建期会执行一次安装器来生成卸载程序，
   仓库目录若带继承性 DENY ACL（受限沙箱/安全软件）会让 NSIS 报 "Error writing temporary file"。
 - 上游补丁：`patches/app-builder-lib@26.18.0.patch`（说明见文件内注释）。
-- 不随包发布：`better-sqlite3` / `sqlite-vec`（默认 flat 向量后端，缺失自动降级）。
-- 内测包不签名、不自动更新；相关门禁见 `docs/发布阶段.md`。
+- 随包原生模块：`better-sqlite3`（N-API 预编译）与 `sqlite-vec`（`vec0.dll`），由 `asarUnpack` 解包；
+  默认仍是 flat 向量后端，设置里选择后才加载，失败自动降级。
+- 进程树守护：`packages/shell/resources/jobGuard.exe`（源码 `packages/shell/tools/jobGuard.cs`，
+  构建时用系统 `csc.exe` 编译）；强杀主进程后由 Windows Job Object 回收子进程。
+- 自动更新：`electron-updater` + `latest.yml`（`publish` 配 GitHub Releases）；打包态延迟检查，
+  下载/安装需用户确认。未签名构建不启用签名校验，正式启用见 `docs/发布阶段.md` §6。
+- 内测包不签名；发布前跑 `docs/releases/UPGRADE-DRILL.md` 的升级/回滚演练。
+
+## 安装与升级
+
+- 内测用户：从 GitHub Releases 下载 `Loopsoar-Setup-<version>.exe`，核对 `SHA256SUMS.txt` 后再安装。
+- **覆盖安装**（推荐）：直接运行新版本安装包，用户数据目录保留，启动时若版本变化会自动备份到
+  `<数据目录>\backups\pre-<旧版本>-<时间戳>`。
+- **卸载重装**：卸载只删除程序目录，默认保留 `%APPDATA%\loopsoar`（或 `LOOPSOAR_DATA_DIR`）；
+  需要彻底清理时手动删除数据目录。
+- **回滚**：安装旧版本安装包即可；数据兼容性由启动迁移与自动备份兜底（演练见 `docs/releases/UPGRADE-DRILL.md`）。
+- 发布（维护者）：`node scripts/github-release.mjs --tag v<version> --notes docs/releases/RELEASE-NOTES-<version>.md`
+  （需要 `GH_TOKEN`；会创建 GitHub Release 并上传 exe/zip/blockmap/latest.yml/SHA256SUMS）。
 
 ---
 

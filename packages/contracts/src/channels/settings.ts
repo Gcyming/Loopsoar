@@ -121,6 +121,30 @@ export const settingsChannels: Record<string, ChannelBinding> = {
     request: null,
     sensitive: true,
   },
+  "settings:openDataDir": {
+    domain: "settings",
+    method: "openDataDir",
+    request: null,
+    sensitive: true,
+  },
+  "settings:openDoc": {
+    domain: "settings",
+    method: "openDoc",
+    request: z.object({ doc: z.enum(["license", "privacy"]) }),
+    sensitive: false,
+  },
+  "settings:exportBackup": {
+    domain: "settings",
+    method: "exportBackup",
+    request: z.object({ targetDir: z.string().min(1).max(4096).optional() }).optional(),
+    sensitive: true,
+  },
+  "settings:exportDiagnostics": {
+    domain: "settings",
+    method: "exportDiagnostics",
+    request: z.object({ targetDir: z.string().min(1).max(4096).optional() }).optional(),
+    sensitive: true,
+  },
   "settings:setApiKey": {
     domain: "settings",
     method: "setApiKey",

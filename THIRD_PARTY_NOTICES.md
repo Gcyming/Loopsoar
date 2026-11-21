@@ -371,13 +371,143 @@ Apache License
 
 </details>
 
-## 可选组件（默认不随包分发）
+### 7. electron-updater 6.6.0
 
-以下原生模块只在用户自行安装时才可能被加载；安装包不含它们，缺失时记忆检索自动使用内置 flat 后端。
+- 用途：自动更新（打进主进程 bundle；仅打包态启用）
+- 许可证：MIT
+- 项目主页：https://github.com/electron-userland/electron-builder
 
-### 7. better-sqlite3 13.0.3
+<details>
+<summary>许可证正文</summary>
 
-- 用途：可选 SQLite 驱动（默认不启用，安装包不含）
+```text
+The MIT License (MIT)
+
+Copyright (c) 2015 Loopline Systems
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+</details>
+
+### 8. builder-util-runtime 9.3.1
+
+- 用途：自动更新运行时（electron-updater 依赖）
+- 许可证：MIT
+- 项目主页：https://github.com/electron-userland/electron-builder
+
+<details>
+<summary>许可证正文</summary>
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2015 Loopline Systems
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+</details>
+
+### 9. js-yaml 4.3.2
+
+- 用途：更新元数据解析（builder-util-runtime 依赖）
+- 许可证：MIT
+- 项目主页：—
+
+<details>
+<summary>许可证正文</summary>
+
+```text
+(The MIT License)
+
+Copyright (C) 2011-2015 by Vitaly Puzrin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+</details>
+
+### 10. semver 5.5.0
+
+- 用途：版本比较（electron-updater 依赖）
+- 许可证：ISC
+- 项目主页：—
+
+<details>
+<summary>许可证正文</summary>
+
+```text
+The ISC License
+
+Copyright (c) Isaac Z. Schlueter and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+</details>
+
+### 11. better-sqlite3 13.0.3
+
+- 用途：随包 SQLite 驱动（N-API 预编译；sqlite-vec 后端选用）
 - 许可证：MIT
 - 项目主页：http://github.com/WiseLibs/better-sqlite3
 
@@ -410,9 +540,17 @@ SOFTWARE.
 
 </details>
 
-### 8. sqlite-vec 0.1.9
+### 12. sqlite-vec 0.1.9
 
-- 用途：可选向量索引扩展（默认不启用，安装包不含）
+- 用途：随包向量索引扩展加载器（sqlite-vec 后端选用）
+- 许可证：MIT OR Apache
+- 项目主页：https://github.com/asg017/sqlite-vec
+
+> 该包未随附许可证文件。
+
+### 13. sqlite-vec-windows-x64 0.1.9
+
+- 用途：随包 vec0.dll（Windows x64 SQLite 扩展）
 - 许可证：MIT OR Apache
 - 项目主页：https://github.com/asg017/sqlite-vec
 

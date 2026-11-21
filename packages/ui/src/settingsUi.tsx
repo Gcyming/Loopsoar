@@ -240,12 +240,13 @@ export function Area({ v, rows, on, wide, full, ph }: { v: string; rows: number;
     />
   );
 }
-export function Btn({ label, onClick, primary, small }: { label: string; onClick: () => void; primary?: boolean; small?: boolean }) {
+export function Btn({ label, onClick, primary, small, disabled }: { label: string; onClick: () => void; primary?: boolean; small?: boolean; disabled?: boolean }) {
   return (
     <button
       type="button"
       className={primary ? "btn-primary" : "btn-ghost"}
-      style={{ ...(primary ? S.primary : S.ghost), ...(small ? S.small : {}), whiteSpace: "nowrap", flexShrink: 0 }}
+      style={{ ...(primary ? S.primary : S.ghost), ...(small ? S.small : {}), whiteSpace: "nowrap", flexShrink: 0, opacity: disabled ? 0.5 : 1 }}
+      disabled={disabled}
       onClick={onClick}
     >
       {label}

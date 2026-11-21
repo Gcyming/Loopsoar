@@ -129,6 +129,8 @@ describe("守卫：分层依赖（contracts ← core ← services ← shell ← 
           file.rel === "src/main/appContextMenu.ts" ||
           file.rel === "src/main/browserPageContextMenu.ts" ||
           file.rel === "src/main/singleInstance.ts" ||
+          // 自动更新：必须直接访问 electron-updater / BrowserWindow（惰性使用）
+          file.rel === "src/main/autoUpdate.ts" ||
           file.rel === "src/main/desktopNotify.ts" ||
           // 浮层管理器：为「工具栏浮层浮在原生网页之上」而创建 Electron 子窗口（惰性 require）
           file.rel === "src/main/chromePopover.ts" ||

@@ -99,6 +99,15 @@ export function pointerScreenArea(
   };
 }
 
+/** 主窗口内容区 + 网页视图矩形 → 覆盖层屏幕区域；窗口已销毁/无视图返回 null。 */
+export function pointerAreaForWindow(
+  window: { getContentBounds(): { x: number; y: number }; isDestroyed(): boolean } | null,
+  viewRect: { x: number; y: number; width: number; height: number } | null,
+): { x: number; y: number; width: number; height: number } | null {
+  if (!window || window.isDestroyed()) return null;
+  return pointerScreenArea(window.getContentBounds(), viewRect);
+}
+
 export function buildPointerHtml(): string {
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;

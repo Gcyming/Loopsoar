@@ -1,5 +1,12 @@
 # Loopsoar Windows 内测包（阶段 1）构建配置。
 #
+# 自动更新源（GitHub Releases）：构建时生成 app-update.yml 与 latest.yml。
+# 本地联调可用 LOOPSOAR_UPDATE_URL 覆盖为 generic 源（见 autoUpdate.ts）。
+publish:
+  provider: github
+  owner: Gcyming
+  repo: Loopsoar
+#
 # 产物：release/dist/Loopsoar-Setup-<version>.exe（NSIS 安装包）
 #       release/dist/Loopsoar-<version>-win-x64.zip（免安装 zip）
 #       release/dist/SHA256SUMS.txt
@@ -9,8 +16,8 @@
 #     避免把 monorepo 源码、测试、node_modules 全部塞进安装包；
 #   · 主进程已经是 esbuild 单文件 bundle（含 workspace 与 pdfjs），运行时只剩 electron 外部依赖；
 #   · worker 脚本必须 asarUnpack：子进程无法执行 asar 内的文件；
-#   · better-sqlite3 / sqlite-vec 是可选原生依赖（默认 flat 向量后端），不随包发布，
-#     缺失时 memoryService 自动降级（见 sqliteVectorBackend.ts），不在安装包内编译原生模块；
+#   · better-sqlite3（N-API 预编译）/ sqlite-vec（SQLite 扩展 DLL）随包 asarUnpack；
+#     默认仍是 flat 后端，设置 → 通用 →「记忆向量后端」可切换，加载失败自动降级；
 #   · 内测包不做代码签名（Windows 会提示未知发布者，发布说明里写明）。
 appId: com.loopsoar.app
 productName: Loopsoar
@@ -31,7 +38,25 @@ asarUnpack:
   - dist/scriptLoopWorker.mjs
   # pdf.js 的 fake worker 用动态 import(file://) 加载；解包成真实文件最稳
   - dist/pdf.worker.mjs
+  # 原生模块：.node 与 SQLite 扩展 DLL 都必须是真实文件
+  - node_modules/better-sqlite3/**
+  - node_modules/sqlite-vec/**
+  - node_modules/sqlite-vec-windows-x64/**
 extraResources:
+  # 安装器与「关于」页可访问的法律文档（安装器另有 license 页）
+  - from: LICENSE
+    to: docs/LICENSE
+  - from: PRIVACY.md
+    to: docs/PRIVACY.md
+  - from: THIRD_PARTY_NOTICES.md
+    to: docs/THIRD_PARTY_NOTICES.md
+  # 原生模块放 asar 外、由 sqliteVectorBackend 从 resources/native/node_modules 解析：
+  # app 的 package.json 没有 dependencies，electron-builder 默认会把 appDir/node_modules 剪掉。
+  - from: release/app/node_modules
+    to: native/node_modules
+  # 进程树守护（Job Object）：必须 asar 外的真实 exe，随包放到 resources/
+  - from: packages/shell/resources/jobGuard.exe
+    to: jobGuard.exe
   - from: packages/shell/resources/icon.ico
     to: icons/icon.ico
   - from: packages/shell/resources/icon.png
@@ -39,6 +64,9 @@ extraResources:
   - from: release/extra/pdfjs
     to: pdfjs
 win:
+  # 代码签名：有证书时设置 CSC_LINK / CSC_KEY_PASSWORD（或 Azure Trusted Signing），
+  # electron-builder 26 会自动使用 SHA-256 + RFC3161 时间戳并写入 publisherName；
+  # 内测包默认不签名，0.1.0 对外发布必须有签名（见 docs/发布阶段.md §6.1）。
   target:
     - target: nsis
       arch:
@@ -49,7 +77,14 @@ win:
   icon: packages/shell/resources/icon.ico
   artifactName: ${productName}-${version}-win-${arch}.${ext}
   requestedExecutionLevel: asInvoker
+protocols:
+  - name: Loopsoar
+    schemes:
+      - loopsoar
 nsis:
+  # 安装器展示许可协议：release/build/license.txt 由 scripts/package.mjs 从 LICENSE 转成
+  # UTF-16LE + BOM（UTF-8 无 BOM 会被 NSIS 按 ANSI 读成乱码）
+  license: license.txt
   artifactName: ${productName}-Setup-${version}.${ext}
   oneClick: false
   # 按用户安装（%LOCALAPPDATA%\Programs），不需要管理员权限：
@@ -57,12 +92,17 @@ nsis:
   perMachine: false
   allowElevation: false
   allowToChangeInstallationDirectory: true
-  createDesktopShortcut: true
+  # 桌面快捷方式由 packaging/installer.nsh 的「安装选项」页决定（二值选项无法表达让用户选）。
+  createDesktopShortcut: false
   createStartMenuShortcut: true
   shortcutName: Loopsoar
   uninstallDisplayName: Loopsoar ${version}
   deleteAppDataOnUninstall: false
   runAfterFinish: true
+  include: installer.nsh
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  installerHeaderIcon: icon.ico
   installerLanguages:
     - zh_CN
   language: "2052"

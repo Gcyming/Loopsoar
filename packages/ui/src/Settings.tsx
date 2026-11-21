@@ -20,6 +20,7 @@ import TerminalDiagnosticsSection from "./TerminalDiagnosticsSection.js";
 import SkillsSection from "./SkillsSection.js";
 import TraceSection from "./TraceSection.js";
 import MemorySettingsSection from "./MemorySettingsSection.js";
+import AboutToolsSection from "./AboutToolsSection.js";
 import { setLanguage, useT } from "./i18n.js";
 import type {
   AboutInfo, DiagnosticsInfo, LocationsInfo, LoopInfo,
@@ -156,6 +157,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, [editingProviderId]);
   const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
+
   /** Agent-Loop：仅由「Loop 工作台」使用；通用设置不再暴露第二套 loop 控件。 */
   const [loopInfo, setLoopInfo] = useState<LoopListResult | null>(null);
   const [loopBusy, setLoopBusy] = useState(false);
@@ -468,6 +470,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             />
           </Field>
           <Field l={tr("settings.general.memoryAuto")} h={tr("settings.general.memoryAutoHint")}><Toggle v={prefs.memoryAutoCapture} on={(x) => setPrefs({ ...prefs, memoryAutoCapture: x })} /></Field>
+          <Field l={tr("settings.general.memoryBackend")} h={tr("settings.general.memoryBackendHint")}><Seg v={prefs.memoryVectorBackend ?? "flat"} opts={[["flat", "Flat"], ["sqlite-vec", "SQLite-vec"]]} on={(x) => setPrefs({ ...prefs, memoryVectorBackend: x as "flat" | "sqlite-vec" })} /></Field>
           <Field l={tr("settings.general.skillAuto")} h={tr("settings.general.skillAutoHint")}><Toggle v={prefs.skillAutoCandidate ?? false} on={(x) => setPrefs({ ...prefs, skillAutoCandidate: x })} /></Field>
           <div style={S.note}>{tr("settings.general.note")}</div>
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
@@ -1285,6 +1288,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               <SaveBtn onClick={() => { onClose(); onOpenOnboarding(); }} label={tr("settings.about.onboarding")} />
             </div>
           ) : null}
+          <AboutToolsSection api={api} version={about.version} />
         </div>) : <div style={S.muted}>{tr("settings.readFailed")}</div>;
 
       default:

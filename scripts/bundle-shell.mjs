@@ -17,6 +17,12 @@ const result = await build({
   target: "node22",
   outfile: "packages/shell/dist/main.bundle.mjs",
   external: ["electron"],
+  // electron-updater / builder-util-runtime 是 CJS，内部有动态 require("events") 之类；
+  // ESM bundle 里没有 require，esbuild 的 __require 会直接抛 "Dynamic require ... is not supported"。
+  // 用 createRequire 在 bundle 顶部补出真正的 require，__require 检测到后就会走它。
+  banner: {
+    js: 'import { createRequire as __loopsoarCreateRequire } from "node:module"; const require = __loopsoarCreateRequire(import.meta.url);',
+  },
   sourcemap: false,
   logLevel: "info",
   metafile: true,

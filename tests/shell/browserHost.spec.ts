@@ -133,6 +133,19 @@ describe("BrowserHost（多标签）", () => {
     expect(host.listTabs("default").length).toBe(1);
   });
 
+  it("调试按钮：不带 sessionId 时回落到用户可见标签", async () => {
+    const { host } = makeHost(undefined, {
+      openDevToolsPanel: () => true,
+      isDevToolsPanelOpen: () => false,
+    });
+    host.showUserTabs();
+    const tab = await host.newTabInVisibleSession("https://example.com");
+    expect(tab.ok).toBe(true);
+    const opened = host.toggleDevTools();
+    expect(opened.ok).toBe(true);
+    expect(opened.open).toBe(true);
+  });
+
   it("后台会话首次动作不抢前台视图（只建 Agent 标签，不切 visibleSession）", async () => {
     const { host } = makeHost();
     await host.navigate("https://foreground.example");

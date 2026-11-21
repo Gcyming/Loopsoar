@@ -12,7 +12,10 @@
  *   · **不做类型级依赖**：better-sqlite3/sqlite-vec 无 @types，用 createRequire + 结构化最小类型，
  *     保证 tsconfig/typecheck 不需要原生包安装也能过（CI/打包机都能编译）。
  */
+import fs from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
+import { toUnpackedPath } from "./packagedPaths.js";
 import { FlatVectorIndex } from "loopsoar-core/memory";
 
 /** 向量后端种类（写入 vectorStats，供诊断/基准报告）。 */
@@ -123,12 +126,16 @@ interface SqliteDatabaseLike {
   prepare(sql: string): SqliteStatementLike;
   exec(sql: string): void;
   close(): void;
+  /** better-sqlite3 的扩展加载（sqlite-vec 的 vec0.dll 走这里）。 */
+  loadExtension?(path: string): void;
 }
 
 type SqliteDatabaseCtor = new (path: string, options?: Record<string, unknown>) => SqliteDatabaseLike;
 
 interface SqliteVecModuleLike {
   load(db: unknown): void;
+  /** 返回平台扩展文件路径（打包态在 asar 内，需要换成 unpacked）。 */
+  getLoadablePath?(): string;
 }
 
 /** 依赖加载器：默认 createRequire("better-sqlite3"/"sqlite-vec")；测试可注入假模块。 */
@@ -137,7 +144,19 @@ export type NativeModuleLoader = (name: string) => unknown;
 function defaultModuleLoader(): NativeModuleLoader {
   return (name: string) => {
     // 延迟到创建后端时才 require：这样「未选择 sqlite-vec / 未安装原生包」时应用启动零开销。
+    // 打包态原生模块放在 resources/native/node_modules（extraResources），不在 asar 内；
+    // 从该目录的 package.json 建立 require 基准，sqlite-vec 的平台包也能按名字解析。
+    const nativeRoot = process.resourcesPath ? path.join(process.resourcesPath, "native", "node_modules") : "";
     const requireFn = createRequire(import.meta.url);
+    // 打包态优先按绝对目录加载：resources/native/node_modules/<name>。
+    // （从 node_modules 目录里的 package.json 建立基准时 Node 不会把该目录当作模块根，
+    //   所以这里直接 require 包目录；sqlite-vec 内部再按名字找平台包，同目录即可解析。）
+    if (nativeRoot) {
+      const target = path.join(nativeRoot, name);
+      if (fs.existsSync(path.join(target, "package.json"))) {
+        return requireFn(target) as unknown;
+      }
+    }
     return requireFn(name) as unknown;
   };
 }
@@ -331,7 +350,14 @@ export function createSqliteVecBackend(options: SqliteVecBackendOptions): Vector
     if (!sqliteVec || typeof sqliteVec.load !== "function") return null;
     const db = new databaseCtor(options.databasePath ?? ":memory:");
     try {
-      sqliteVec.load(db);
+      const loadable = typeof sqliteVec.getLoadablePath === "function" ? sqliteVec.getLoadablePath() : null;
+      if (loadable && typeof db.loadExtension === "function") {
+        // 安装包里 vec0.dll 位于 app.asar 内：SQLite 不认识 asar 虚拟路径，
+        // 必须换成 app.asar.unpacked 下的真实文件（打包脚本已 asarUnpack）。
+        db.loadExtension(toUnpackedPath(loadable));
+      } else {
+        sqliteVec.load(db);
+      }
       db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(embedding float[${dimension}])`);
       db.exec(
         "CREATE TABLE IF NOT EXISTS vec_payload (rowid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, embedding BLOB NOT NULL)",
@@ -345,10 +371,14 @@ export function createSqliteVecBackend(options: SqliteVecBackendOptions): Vector
       return null;
     }
     return new SqliteVecBackend(dimension, db);
-  } catch {
+  } catch (err) {
+    lastNativeError = err instanceof Error ? err.message : String(err);
     return null;
   }
 }
+
+/** 最近一次原生后端创建失败原因：仅用于 vectorStats 的降级说明。 */
+let lastNativeError: string | null = null;
 
 /** 后端创建结果（MemoryService 内部使用；note 用于 vectorStats 暴露降级原因）。 */
 export interface VectorBackendResolution {
@@ -381,7 +411,7 @@ export function resolveVectorBackend(opts: {
         requested,
         note: backend
           ? `sqlite-vec 后端维度不符（${backend.dimension} ≠ ${opts.dimension}），已降级 flat`
-          : "sqlite-vec 不可用（原生模块缺失或 Electron ABI 不匹配），已降级 flat",
+          : `sqlite-vec 不可用（${lastNativeError ?? "原生模块缺失或 Electron ABI 不匹配"}），已降级 flat`,
       };
     } catch (err) {
       return {

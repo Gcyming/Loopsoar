@@ -1,6 +1,6 @@
 // Loopsoar 主进程入口：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
 import { randomUUID } from "node:crypto";
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from "electron";
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,10 +15,9 @@ import { createAnthropicClient, createOpenAiClient, inferApiFormat, type LlmClie
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv } from "loopsoar-core/provider";
 import { loadPreferences, loadPermissions } from "./domains/settings.js";
-import { resolveDataDir } from "./dataDir.js";
 import { APP_ID, APP_NAME, APP_VERSION, PROTOCOL } from "../shared/brand.js";
 import { type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
-import { createBootTrace, ensureLoopsoarDirs, installUiProtocol } from "./boot.js";
+import { createBootTrace, ensureLoopsoarDirs } from "./boot.js";
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createCoreServices } from "./coreServices.js";
 import { TaskForkCoordinator } from "./taskForks.js";
@@ -39,7 +38,7 @@ import { registerAgentsDomain } from "./domains/agents.js";
 import { flushActivePartials, hasActiveStreams, registerChatDomain } from "./domains/chat.js";
 import { registerToastDomain } from "./domains/toast.js";
 import { createToastWindow } from "./toastWindow.js";
-import { createAgentPointerWindow, pointerScreenArea, type AgentPointerController } from "./agentPointerWindow.js";
+import { createAgentPointerWindow, pointerAreaForWindow, type AgentPointerController } from "./agentPointerWindow.js";
 import { registerCompactDomain } from "./domains/compact.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
@@ -127,7 +126,12 @@ import { redactDeep } from "./logRedaction.js";
 import { runUpgradeBackupSafe } from "./dataBackup.js";
 import { installMainLogIfPackaged } from "./mainLog.js";
 import { createCrashLog } from "./crashLog.js";
-import { installQuitGuard, quitConfirmOptions } from "./quitGuard.js";
+import { createQuitConfirm, installQuitGuard } from "./quitGuard.js";
+import { startJobGuardForApp } from "./jobGuardRuntime.js";
+import { applyChromiumSwitches } from "./chromiumSwitches.js";
+import { installAutoUpdateForApp } from "./domains/update.js";
+import { configureUserData, installCrashReporter, installUiProtocolFromApp } from "./bootWiring.js";
+import type { AutoUpdateHandle } from "./autoUpdate.js";
 import { createShutdownHandler } from "./shutdown.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -135,23 +139,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** 启动链路计时：LOOPSOAR_BOOT_TRACE=1 时打印各阶段耗时（默认关闭，无开销）。 */
 const bootTrace = createBootTrace();
 
-// 自定义协议必须声明为 standard + secure，相对路径资源与 fetch 才能按网页语义工作。
-// 必须在 app ready 之前调用（Electron 要求），因此放在模块顶层。
+// 自定义协议必须 standard + secure 且只能在 app ready 前注册，因此放在模块顶层。
 protocol.registerSchemesAsPrivileged([
   { scheme: PROTOCOL, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   // 扩展富 UI：与主界面不同 origin；只读扩展目录，CSP 在处理器里逐响应注入。
   { scheme: EXTENSION_UI_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } },
 ]);
 
-// 项目隔离：userData 显式落到品牌目录（%APPDATA%\loopsoar），与其他 Electron 应用数据区完全分开。
-// LOOPSOAR_DATA_DIR 可覆盖（受限/只读环境下用可写目录，如 CI 或沙箱会话）。
-// 覆盖值必须归一为绝对路径：Electron 的 app.setPath 只接受绝对路径，
-// 脚本里传相对目录（如 LOOPSOAR_DATA_DIR=.loopsoar-data）会在启动时报 “Path must be absolute”。
-app.setName(APP_NAME);
-// Windows 任务栏/通知身份必须与品牌 appId 一致：缺省会落到 electron.exe 的默认身份，
-// 任务栏显示 Electron 默认图标，还可能被合并进别的 Electron 开发应用分组（用户报障：图标错位）。
+// 项目隔离：userData 显式落到品牌目录（%APPDATA%\loopsoar）；LOOPSOAR_DATA_DIR 可覆盖，
+// 覆盖值必须归一为绝对路径（app.setPath 只接受绝对路径，相对值会启动即报错）。
+const dataDir = configureUserData(app, APP_NAME, process.env.LOOPSOAR_DATA_DIR);
+// Windows 任务栏/通知身份必须与品牌 appId 一致，否则显示 Electron 默认图标且可能错误分组。
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
-app.setPath("userData", resolveDataDir(process.env.LOOPSOAR_DATA_DIR, app.getPath("appData")));
+installCrashReporter(crashReporter, APP_NAME, app.isPackaged);
 // 模块顶层工作到此结束（import 图求值 + 协议声明 + userData 落位）；@Xms 即「进程启动→JS 入口就绪」。
 bootTrace.mark("module-eval");
 
@@ -198,11 +198,10 @@ let deferredBootTasks: (() => void) | null = null;
 let agentWindow: AgentWindowManager | null = null;
 /** Agent 虚拟指针覆盖窗口（应用级；主窗口 closed 时销毁）。 */
 let agentPointer: AgentPointerController | null = null;
-/** 当前把虚拟光标置为常驻的会话（并发会话时只由开启它的那一轮释放）。 */
+/** 虚拟光标常驻的会话（并发会话时只由开启它的那一轮释放）。 */
 let pointerHeldSession: string | null = null;
-/** 正在跑 Agent 轮次、且开启浏览器控制的会话：页面加载完成时据此把光标补成常驻。 */
+/** 正在跑 Agent 轮次且开启浏览器控制的会话（页面加载完成时据此补常驻光标）。 */
 const agentTurnSessions = new Set<string>();
-
 /** Agent 在这个会话动手：只要该会话的网页正显示，就把覆盖层光标切成常驻。 */
 function holdPointerForAgent(sessionId: string): void {
   if (!agentPointer || !browserHost?.isSessionVisible(sessionId)) return;
@@ -213,33 +212,26 @@ function holdPointerForAgent(sessionId: string): void {
 let lastViewRect: { x: number; y: number; width: number; height: number } | null = null;
 
 /** 把覆盖指针贴到网页视图上（几何换算见 pointerScreenArea）。 */
-function syncPointerArea(): void {
-  if (!agentPointer) return;
-  const content = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getContentBounds() : null;
-  agentPointer.setArea(pointerScreenArea(content, lastViewRect));
-}
+const syncPointerArea = (): void => {
+  agentPointer?.setArea(pointerAreaForWindow(mainWindow, lastViewRect));
+};
 const schedulePointerAreaSync = createDebouncedRunner(syncPointerArea, 16);
 
 /** 退出清理：MCP/扩展/终端/标签落盘/审计收尾；先 preventDefault，清理完再 app.exit（幂等）。 */
 let shutdownHandler: (() => Promise<void>) | null = null;
+/** 自动更新句柄：退出守卫需要知道「是否正在安装更新」。 */
+let updaterRef: AutoUpdateHandle | null = null;
 installQuitGuard({
   registerBeforeQuit: (listener) => app.on("before-quit", listener),
   hasActiveStreams,
-  isAutomated: () => Object.keys(process.env).some((key) => key.startsWith("LOOPSOAR_E2E")),
-  confirmQuit: () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-    const options = quitConfirmOptions();
-    const choice =
-      mainWindow && !mainWindow.isDestroyed()
-        ? dialog.showMessageBoxSync(mainWindow, options)
-        : dialog.showMessageBoxSync(options);
-    return choice === 1;
-  },
+  confirmQuit: createQuitConfirm({
+    getWindow: () => mainWindow,
+    showMessageBox: (window, options) =>
+      window ? dialog.showMessageBoxSync(window as BrowserWindow, options) : dialog.showMessageBoxSync(options),
+  }),
   shutdown: () => shutdownHandler?.() ?? Promise.resolve(),
   exit: (code) => app.exit(code),
+  isUpdating: () => updaterRef?.isInstalling() ?? false,
 });
 
 
@@ -274,20 +266,15 @@ function createMainWindow(): void {
   });
 }
 
-// Chromium 原生 UI 语言跟随设置；--lang 必须在 app ready 之前设置，运行时切换下次启动生效。
-try {
-  const preDirs = ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged });
-  const language = loadPreferences(preDirs.configDir).language;
-  app.commandLine.appendSwitch("lang", language);
-  // Windows 原生遮挡检测会把「被其它窗口盖住」的网页标记为 hidden，Chromium 随即丢弃注入的
-  // 输入事件（Agent 点击/按键会静默失效）。浏览器自动化要求网页在后台仍可交互，关掉该特性。
-  // 只影响本应用的页面可见性判定，不改变用户看到的窗口行为。
-  app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
-} catch (err) {
-  console.warn("[Loopsoar] 设置 Chromium 语言失败", err instanceof Error ? err.message : String(err));
-}
+applyChromiumSwitches({
+  target: app.commandLine,
+  language: () => loadPreferences(ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged }).configDir).language,
+  warn: (message, err) => console.warn(message, err instanceof Error ? err.message : String(err)),
+});
 
-ensureSingleInstance(app, (argv) => { browserLinks.acceptArgs(argv); mainWindow?.show(); mainWindow?.focus(); });
+ensureSingleInstance(app, (argv) => { browserLinks.acceptArgs(argv); mainWindow?.show(); mainWindow?.focus(); }, { dataDir });
+// 进程树守护：主进程被强杀/崩溃时，由 Job Object 内核级回收终端/MCP/扩展/后台任务。
+startJobGuardForApp({ moduleDir: __dirname, resourcesPath: process.resourcesPath, cwd: process.cwd() });
 // macOS 的默认浏览器入口走 open-url；Windows/Linux 走 argv + second-instance。
 app.on("open-url", (event, url) => { event.preventDefault(); browserLinks.acceptUrl(url); });
 
@@ -334,16 +321,17 @@ app.whenReady().then(async () => {
   bootTrace.mark("data-dirs");
 
   // 协议：服务真实 UI 产物；产物缺失时降级为可读提示页（不白屏）
-  const uiDist = resolveUiDistDir(uiDistCandidates(__dirname, process.cwd(), process.resourcesPath));
-  installUiProtocol({
-    protocol: PROTOCOL,
-    distDir: uiDist,
+  installUiProtocolFromApp({
+    protocolScheme: PROTOCOL,
+    moduleDir: __dirname,
+    cwd: process.cwd(),
+    resourcesPath: process.resourcesPath,
     handle: (scheme, handler) => protocol.handle(scheme, handler),
     warn: (message) => console.warn(message),
   });
   bootTrace.mark("protocol+ui-dist");
 
-  const core = await createCoreServices({ dirs, appVersion: APP_VERSION, bootTrace, pushToRenderer, safeStorage });
+  const core = await createCoreServices({ dirs, appVersion: APP_VERSION, bootTrace, pushToRenderer, safeStorage, isPackaged: app.isPackaged });
   const {
     platform,
     registry,
@@ -397,11 +385,16 @@ app.whenReady().then(async () => {
       tools: registry.list().length,
       agents: agents.list().length,
       memoryEntries: memory.stats().total,
+      memoryVector: memory.vectorStats(),
+      crashDumps: app.getPath("crashDumps"),
       secretStorageMode: secrets.storageMode(),
     }),
     // 供应商增删改/切换 → 重建 LLM（立即可对话）
     providers,
     secrets,
+    // 数据导出/诊断包的入口：打开数据目录、附带 Crashpad minidump。
+    openPath: (target: string) => openDirectoryNative(target, (p) => shell.openPath(p)),
+    crashDumpsDir: app.getPath("crashDumps"),
     onProvidersChanged: () => {
       llmRef = buildLlmFromActive();
     },
@@ -501,8 +494,7 @@ app.whenReady().then(async () => {
       }
       return null;
     },
-    // 记忆召回：按当前消息取相关条目，注入 volatile 段
-    // 记忆按会话所属工作区召回（D1）：未绑定工作区的会话归 default，绝不跨区注入。
+    // 记忆召回：按会话所属工作区取相关条目注入 volatile 段（未绑定归 default，绝不跨区）。
     ...createExtensionAgentHooks(() => extensionRuntimeRef),
     onToolCall: (toolName: string, sessionId: string) => {
       stores.traces.begin(sessionId, toolName);
@@ -596,8 +588,7 @@ app.whenReady().then(async () => {
         repeatToolStopAt: prefs.agentRepeatToolStop,
       };
     },
-    // 模式 × 会话：plan=只读；build=默认 Agent 白名单。再叠加会话级「浏览器控制」：
-    // 关闭时剔除 BROWSER_AGENT_TOOLS；这份名单同时决定模型可见面与执行闸（services 只解析一次）。
+    // 模式 × 会话：plan=只读、build=默认白名单；再叠加会话级浏览器控制（剔除 BROWSER_AGENT_TOOLS）。
     getToolAllowlist: (mode?: "build" | "plan", sessionId?: string, userText?: string) => {
       const base =
         mode === "plan"
@@ -623,8 +614,7 @@ app.whenReady().then(async () => {
   });
   bootTrace.mark("chat-service");
 
-  // 浏览器宿主：会话级标签组；WebContentsView 懒创建 + 布局对齐（electron 细节封装在 electronBrowser.ts）
-  // 初始会话 = 最近一次使用的会话（重启后左右两侧一起恢复）；没有会话时建一个，保证"文件夹"存在。
+  // 浏览器宿主：会话级标签组，WebContentsView 懒创建 + 布局对齐；初始会话取最近一次使用。
   let initialSessionId = sessions.currentId() ?? sessions.newSession().sessionId;
   // 启动即把当前会话补绑活动工作区（旧会话/首启会话都落进"文件夹"）
   if (!sessions.get(initialSessionId)?.workspaceId && workspaces.activeId()) {
@@ -1351,6 +1341,13 @@ app.whenReady().then(async () => {
     // app.exit() 不触发 will-quit：后台任务必须在这里杀，否则留孤儿进程。
     killBackgroundTasks: () => backgroundTasks.killAll(),
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
+  });
+
+  // 自动更新：打包态启用；延迟检查，下载/安装都需用户确认（见 autoUpdate.ts）。
+  updaterRef = installAutoUpdateForApp({
+    deps, version: APP_VERSION, isPackaged: app.isPackaged, platform: process.platform,
+    push: pushToRenderer, hasActiveStreams, getShutdown: () => shutdownHandler,
+    feedUrl: process.env.LOOPSOAR_UPDATE_URL,
   });
 
   bootTrace.mark("ipc-domains");

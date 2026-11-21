@@ -500,13 +500,23 @@ export class BrowserHost {
     return entry.adapter.executeJs(code);
   }
 
-  /** 指定标签（缺省=该会话语种的活动标签）。 */
+  /** 指定标签（缺省=该会话语种的活动标签；用户可见标签优先）。 */
   private resolveTab(tabId?: string, sessionId?: string): [string, TabEntry] | null {
-    const group = this.group(sessionId);
-    const id = tabId ?? group.activeId;
-    if (!id) return null;
-    const entry = group.tabs.get(id);
-    return entry ? [id, entry] : null;
+    const resolveIn = (sid: string): [string, TabEntry] | null => {
+      const group = this.ensureGroup(sid);
+      const id = tabId ?? group.activeId;
+      if (!id) return null;
+      const entry = group.tabs.get(id);
+      return entry ? [id, entry] : null;
+    };
+    if (sessionId) return resolveIn(sessionId);
+    // 状态栏「调试」/F12 不带 sessionId：先找当前会话，再找用户可见标签（__user_tabs__），
+    // 最后找当前实际显示的会话；否则按钮会报「无标签页」。
+    return (
+      resolveIn(this.activeSession) ??
+      resolveIn(USER_TABS_SESSION) ??
+      (this.visibleSession !== this.activeSession ? resolveIn(this.visibleSession) : null)
+    );
   }
 
   /** 后退 / 前进 / 刷新：基于本地历史栈（应用内导航）。 */

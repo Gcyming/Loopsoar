@@ -74,9 +74,12 @@ describe("守卫：项目隔离（不与被测/旧项目串扰）", () => {
 
   it("shell 把 userData 显式落到品牌目录（%APPDATA%\\loopsoar）", () => {
     const idx = readFileSync(path.join(ROOT, "packages/shell/src/main/index.ts"), "utf8");
-    expect(idx).toContain('setPath("userData"');
+    // userData 落位抽到 bootWiring（入口行数天花板），入口必须调用该装配函数。
+    expect(idx).toContain("configureUserData(app, APP_NAME");
+    const boot = readFileSync(path.join(ROOT, "packages/shell/src/main/bootWiring.ts"), "utf8");
+    expect(boot).toContain('setPath("userData"');
     // 目录归一化抽到无 Electron 依赖的 dataDir.ts（相对 LOOPSOAR_DATA_DIR 也能启动）
-    expect(idx).toContain("resolveDataDir");
+    expect(boot).toContain("resolveDataDir");
     const dataDir = readFileSync(path.join(ROOT, "packages/shell/src/main/dataDir.ts"), "utf8");
     expect(dataDir).toContain("DATA_DIR_NAME");
     expect(dataDir).toContain("path.resolve");

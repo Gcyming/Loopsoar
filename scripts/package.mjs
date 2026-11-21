@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -18,8 +19,10 @@ import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const APP_DIR = path.join(ROOT, "release/app");
-/** 最终交付目录（仓库内，随版本归档）。 */
-const OUT_DIR = path.join(ROOT, "release/dist");
+/** 最终交付目录（默认仓库内 release/dist；升级演练/预发布可用 LOOPSOAR_OUT_DIR 覆盖）。 */
+const OUT_DIR = process.env.LOOPSOAR_OUT_DIR
+  ? path.resolve(process.env.LOOPSOAR_OUT_DIR)
+  : path.join(ROOT, "release/dist");
 /**
  * 构建中间目录放在系统临时目录：
  *   · 安装器构建期会「运行一次安装器」来生成卸载程序；工作区目录若带继承性 DENY ACL
@@ -56,10 +59,47 @@ function copyInto(from, to) {
 
 /** 用 require.resolve 定位依赖，避免把 pnpm store 的哈希目录名写死（升级即失效）。 */
 function resolvePackageDir(name) {
-  // 依赖声明在 packages/shell（pdfjs 等），从那里解析；
-  // 根 package.json 只声明 devDependencies。
+  // 依赖声明在 packages/shell（pdfjs / 原生模块），从那里解析；根 package.json 只有 devDependencies。
   const require = createRequire(path.join(ROOT, "packages/shell/package.json"));
-  return path.dirname(require.resolve(`${name}/package.json`));
+  try {
+    return path.dirname(require.resolve(`${name}/package.json`));
+  } catch {
+    // 有些包（如 sqlite-vec）的 exports 不暴露 package.json：从入口文件向上找包根。
+  }
+  let dir = path.dirname(require.resolve(name));
+  while (dir !== path.dirname(dir)) {
+    if (existsSync(path.join(dir, "package.json"))) return dir;
+    dir = path.dirname(dir);
+  }
+  throw new Error(`无法定位包目录：${name}`);
+}
+
+/**
+ * 可选原生模块（记忆的 sqlite-vec 后端）：
+ *   · better-sqlite3 v13 使用 N-API 预编译（prebuilds/win32-x64.node），跨 Node/Electron ABI 直接可用，
+ *     不需要按 Electron ABI 重编译；
+ *   · sqlite-vec 是 SQLite 扩展 DLL（vec0.dll），不是 Node addon，同样没有 ABI 问题。
+ * 两者都放进 node_modules 并由 electron-builder asarUnpack（SQLite 读不了 asar 虚拟路径）。
+ */
+function stageNativeModules() {
+  const nativeRoot = path.join(APP_DIR, "node_modules");
+  const bs3 = resolvePackageDir("better-sqlite3");
+  copyInto(path.join(bs3, "package.json"), path.join(nativeRoot, "better-sqlite3/package.json"));
+  copyInto(path.join(bs3, "lib"), path.join(nativeRoot, "better-sqlite3/lib"));
+  copyInto(
+    path.join(bs3, "prebuilds", process.platform === "win32" ? "win32-x64.node" : "linux-x64.node"),
+    path.join(nativeRoot, "better-sqlite3/prebuilds", process.platform === "win32" ? "win32-x64.node" : "linux-x64.node"),
+  );
+  const vecDir = resolvePackageDir("sqlite-vec");
+  for (const file of ["package.json", "index.cjs", "index.mjs"]) {
+    copyInto(path.join(vecDir, file), path.join(nativeRoot, "sqlite-vec", file));
+  }
+  // 平台包在 pnpm 里是 sqlite-vec 的同级依赖：.pnpm/sqlite-vec@x/node_modules/sqlite-vec-windows-x64
+  const platformDir = path.join(path.dirname(vecDir), `sqlite-vec-${process.platform === "win32" ? "windows" : "linux"}-x64`);
+  for (const file of ["package.json", process.platform === "win32" ? "vec0.dll" : "vec0.so"]) {
+    copyInto(path.join(platformDir, file), path.join(nativeRoot, `sqlite-vec-${process.platform === "win32" ? "windows" : "linux"}-x64`, file));
+  }
+  console.log("原生模块已暂存：better-sqlite3 / sqlite-vec");
 }
 
 function stageApp() {
@@ -76,6 +116,7 @@ function stageApp() {
   copyInto(path.join(ROOT, "packages/shell/src/preload/browser.cjs"), path.join(APP_DIR, "src/preload/browser.cjs"));
   // 渲染层产物：放 dist/ui，与 uiProtocol 的「bundle 同目录」契约一致
   copyInto(path.join(ROOT, "packages/ui/dist"), path.join(APP_DIR, "dist/ui"));
+  stageNativeModules();
   // pdf.js fake worker：主进程 bundle 内联了 pdf.mjs，worker 必须作为独立文件存在
   const pdfjsDir = resolvePackageDir("pdfjs-dist");
   copyInto(path.join(pdfjsDir, "legacy/build/pdf.worker.mjs"), path.join(APP_DIR, "dist/pdf.worker.mjs"));
@@ -151,12 +192,28 @@ async function packageWin() {
 }
 
 /** 把构建目录里的交付件搬到 release/dist（只保留安装包、zip 与校验文件）。 */
+/**
+ * NSIS 许可页对中文很挑剔：UTF-8 无 BOM 会被按 ANSI 读取，安装器里全是乱码。
+ * NSIS 3 的 Unicode 安装器识别 UTF-16LE BOM，这里统一转成 UTF-16LE + BOM 再交给 builder。
+ */
+function writeNsisAssets() {
+  const source = readFileSync(path.join(ROOT, "LICENSE"), "utf8").replace(/\r?\n/g, "\r\n");
+  // buildResources 是 release/build（见 electron-builder.yml），license/include 相对它解析。
+  const buildDir = path.join(ROOT, "release", "build");
+  mkdirSync(buildDir, { recursive: true });
+  writeFileSync(path.join(buildDir, "license.txt"), Buffer.from("\uFEFF" + source, "utf16le"));
+  // 自定义安装选项页（桌面快捷方式/开机自启/卸载删数据）随包编译。
+  copyFileSync(path.join(ROOT, "packaging", "installer.nsh"), path.join(buildDir, "installer.nsh"));
+  copyFileSync(path.join(ROOT, "packages", "shell", "resources", "icon.ico"), path.join(buildDir, "icon.ico"));
+  console.log("NSIS 资源：license.txt（UTF-16LE）/ installer.nsh / icon.ico");
+}
+
 function collectArtifacts() {
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });
   if (!existsSync(BUILD_DIR)) return;
   for (const name of readdirSync(BUILD_DIR)) {
-    if (!/\.(exe|zip|blockmap)$/i.test(name)) continue;
+    if (!/\.(exe|zip|blockmap|yml)$/i.test(name)) continue;
     if (/^Uninstall/i.test(name)) continue;
     copyFileSync(path.join(BUILD_DIR, name), path.join(OUT_DIR, name));
   }
@@ -184,22 +241,33 @@ function writeSums() {
 
 function copyReleaseNotes() {
   const notes = path.join(ROOT, `docs/releases/RELEASE-NOTES-${pkg.version}.md`);
-  if (existsSync(notes)) {
-    copyFileSync(notes, path.join(OUT_DIR, `RELEASE-NOTES-${pkg.version}.md`));
-    console.log(`发布说明：${notes}`);
-  } else {
+  const target = path.join(OUT_DIR, `RELEASE-NOTES-${pkg.version}.md`);
+  if (!existsSync(notes)) {
     console.warn(`未找到发布说明：${notes}`);
+    return;
+  }
+  copyFileSync(notes, target);
+  console.log(`发布说明：${notes}`);
+  // 发布说明副本追加本次构建校验值：源码里不写死哈希，避免每次构建都要手改文档。
+  const sumsFile = path.join(OUT_DIR, "SHA256SUMS.txt");
+  if (existsSync(sumsFile)) {
+    appendFileSync(
+      target,
+      `\n## 本次构建校验值（SHA-256）\n\n\`\`\`text\n${readFileSync(sumsFile, "utf8").trim()}\n\`\`\`\n`,
+    );
   }
 }
 
 console.log(`Loopsoar ${pkg.version} → Windows x64 内测包`);
 await buildArtifacts();
+await run(process.execPath, [path.join(ROOT, "scripts/build-job-guard.mjs")]);
 stageApp();
 console.log(`运行目录就绪：${APP_DIR}`);
 if (process.argv.includes("--stage-only")) {
   console.log("仅组装运行目录（--stage-only），跳过 electron-builder");
   process.exit(0);
 }
+writeNsisAssets();
 await packageWin();
 collectArtifacts();
 writeSums();

@@ -64,6 +64,7 @@ import { handleTrusted, type TrustedIpcDeps } from "../trustedIpc.js";
 import type { ProviderStore } from "../providerStore.js";
 import type { SecretStore } from "../secretStore.js";
 import { TraceStore } from "../traceStore.js";
+import { exportDataBackup, exportDiagnostics } from "../dataExport.js";
 
 export interface SettingsDeps extends TrustedIpcDeps {
   platform: LoopsoarPlatform;
@@ -87,12 +88,16 @@ export interface SettingsDeps extends TrustedIpcDeps {
   onPreferencesSaved?: (prefs: Preferences) => void;
   /** 原生文件/目录选择器（由 index 注入 dialog；不 import electron）。 */
   pickPath?: (kind: "file" | "directory", title?: string) => Promise<string | null>;
+  /** 在系统文件管理器中打开目录（由 index 注入；返回空串表示成功）。 */
+  openPath?: (target: string) => Promise<string>;
   /** 多供应商配置（providers.json）；未注入时回退旧单配置文件。 */
   providers?: ProviderStore;
   /** 供应商增删改/切换活跃后回调（装配层重建 LLM 客户端）。 */
   onProvidersChanged?: () => void;
   /** 加密密钥库（API Key 输入与隔离存储；永不回传明文）。 */
   secrets?: SecretStore;
+  /** Electron crashDumps 目录（诊断包附带 minidump；缺省则不附）。 */
+  crashDumpsDir?: string;
 }
 
 export interface SettingsPaths {
@@ -976,7 +981,8 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   });
 
   // ── 诊断 / 关于 ──
-  handleTrusted(deps, "settings:diagnostics", () => {
+  /** 诊断快照（设置页与诊断包共用同一份数据，避免两处口径漂移）。 */
+  const diagnosticsSnapshot = (): Record<string, unknown> => {
     const prefs = loadPreferences(deps.configDir);
     return {
       paths: {
@@ -1002,6 +1008,71 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
         ...(deps.diagnosticsExtra?.() ?? {}),
       },
     };
+  };
+  handleTrusted(deps, "settings:diagnostics", () => diagnosticsSnapshot());
+
+  /** 在资源管理器/访达中打开数据目录。 */
+  handleTrusted(deps, "settings:openDataDir", async () => {
+    if (!deps.openPath) return { ok: false, error: "当前环境不支持打开目录" };
+    const error = await deps.openPath(deps.dataDir);
+    return error ? { ok: false, error } : { ok: true };
+  });
+
+  /**
+   * 打开随包的法律文档（安装器里也有一份）：打包态在 resources/docs，
+   * 开发态回退仓库根目录。缺文件时返回可读错误，不抛。
+   */
+  handleTrusted(deps, "settings:openDoc", async (payload) => {
+    if (!deps.openPath) return { ok: false, error: "当前环境不支持打开文档" };
+    const { doc } = payload as { doc: "license" | "privacy" };
+    const file = doc === "license" ? "LICENSE" : "PRIVACY.md";
+    const candidates = [
+      path.join(process.resourcesPath ?? "", "docs", file),
+      path.join(process.cwd(), file),
+      path.join(process.cwd(), "..", file),
+    ];
+    const found = candidates.find((candidate) => {
+      try {
+        return fs.existsSync(candidate);
+      } catch {
+        return false;
+      }
+    });
+    if (!found) return { ok: false, error: `未找到 ${file}` };
+    const error = await deps.openPath(found);
+    return error ? { ok: false, error } : { ok: true, path: found };
+  });
+
+  /** 选择目标目录后复制用户数据（失败返回可读错误，不抛给渲染层）。 */
+  const resolveTarget = async (payload: unknown, title: string): Promise<string | null> => {
+    const p = (payload ?? {}) as { targetDir?: string };
+    if (p.targetDir?.trim()) return path.resolve(p.targetDir.trim());
+    if (!deps.pickPath) return null;
+    return deps.pickPath("directory", title);
+  };
+
+  handleTrusted(deps, "settings:exportBackup", async (payload) => {
+    const target = await resolveTarget(payload, "选择数据备份保存位置");
+    if (!target) return { canceled: true };
+    const result = await exportDataBackup({
+      dataDir: deps.dataDir,
+      targetDir: target,
+      version: deps.appVersion,
+    });
+    return { canceled: false, ...result };
+  });
+
+  handleTrusted(deps, "settings:exportDiagnostics", async (payload) => {
+    const target = await resolveTarget(payload, "选择诊断包保存位置");
+    if (!target) return { canceled: true };
+    const result = await exportDiagnostics({
+      dataDir: deps.dataDir,
+      targetDir: target,
+      version: deps.appVersion,
+      diagnostics: diagnosticsSnapshot(),
+      crashDumpsDir: deps.crashDumpsDir,
+    });
+    return { canceled: false, ...result };
   });
 
   /**

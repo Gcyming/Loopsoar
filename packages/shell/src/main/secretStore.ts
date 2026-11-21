@@ -113,9 +113,38 @@ export class SecretStore {
     this.mode = "degraded";
   }
 
-  /** 启用降级备用后端（总是双写；主后端不可解时回落）。 */
+  /**
+   * 启用降级备用后端（双写；主后端不可解时回落）。
+   * 注意：这是「OS 密钥库不可用/历史 degraded 文件」时的兼容路径；
+   * OS 密钥库可用时装配层不会再调用它（见 purgeFallback）。
+   */
   setFallbackBackend(keyFile: string): void {
     this.fallback = createDegradedBackend(keyFile);
+  }
+
+  /**
+   * 清理历史版本写入的降级备份密文，并删除 AES 密钥文件。
+   * 只在 OS 密钥库可用且当前文件是 os 模式时调用：满足「API Key 只存操作系统凭据存储」，
+   * 同时避免留下一份可被同机读取的 AES 备份。返回清理条数。
+   */
+  purgeFallback(runtimeKeyFile: string): { purged: number } {
+    if (this.mode !== "os") return { purged: 0 };
+    const data = this.read();
+    let purged = 0;
+    for (const item of Object.values(data.items) as StoredSecret[]) {
+      if (item.cipherFallback) {
+        delete item.cipherFallback;
+        purged += 1;
+      }
+    }
+    if (purged > 0) this.write(data);
+    try {
+      fs.rmSync(runtimeKeyFile, { force: true });
+    } catch {
+      // 文件不存在/被占用：下次启动再试
+    }
+    this.fallback = null;
+    return { purged };
   }
 
   /** 已落盘文件记录的加密模式（不存在/损坏返回 null）；装配层据此选择与历史数据兼容的后端。 */

@@ -10,14 +10,16 @@ export interface QuitGuardDeps {
   registerBeforeQuit(listener: (event: { preventDefault(): void }) => void): void;
   /** 是否有正在生成的回合（有则先弹确认）。 */
   hasActiveStreams(): boolean;
-  /** 自动化环境（E2E）不弹窗；返回 true 时直接退出。 */
-  isAutomated(): boolean;
+  /** 自动化环境（E2E）不弹窗；默认按 LOOPSOAR_E2E* 环境变量判断。 */
+  isAutomated?(): boolean;
   /** 显示确认框：true = 仍然退出，false = 取消。 */
   confirmQuit(): boolean;
   /** 退出清理（幂等）。 */
   shutdown(): Promise<void>;
   /** 立即退出（app.exit）。 */
   exit(code: number): void;
+  /** 更新安装中：退出流程由 electron-updater 接管，不再 preventDefault。 */
+  isUpdating?: () => boolean;
 }
 
 /** 退出确认框的文案与按钮（默认「取消」，避免误触丢回合）。 */
@@ -43,11 +45,36 @@ export function quitConfirmOptions(): {
   };
 }
 
+/**
+ * 退出确认框：先让窗口可见，再问「取消 / 仍然退出」。
+ * 返回值 = 是否继续退出（默认按钮是取消，避免误触丢回合）。
+ */
+export function createQuitConfirm(options: {
+  getWindow: () => { isDestroyed(): boolean; show(): void; focus(): void } | null;
+  /** 调用方注入 dialog.showMessageBoxSync（保持本模块不 import electron）。 */
+  showMessageBox: (window: unknown, options: ReturnType<typeof quitConfirmOptions>) => number;
+}): () => boolean {
+  return () => {
+    const window = options.getWindow();
+    if (window && !window.isDestroyed()) {
+      window.show();
+      window.focus();
+    }
+    const choice = options.showMessageBox(window && !window.isDestroyed() ? window : null, quitConfirmOptions());
+    return choice === 1;
+  };
+}
+
 export function installQuitGuard(deps: QuitGuardDeps): void {
   let quitting = false;
   deps.registerBeforeQuit((event) => {
+    // 更新安装器已经启动：必须让 Electron 正常退出，否则安装步骤会被 app.exit 打断。
+    if (deps.isUpdating?.()) return;
     if (quitting) return;
-    if (!deps.isAutomated() && deps.hasActiveStreams()) {
+    const automated = deps.isAutomated
+      ? deps.isAutomated()
+      : Object.keys(process.env).some((key) => key.startsWith("LOOPSOAR_E2E"));
+    if (!automated && deps.hasActiveStreams()) {
       event.preventDefault();
       if (!deps.confirmQuit()) return;
     }

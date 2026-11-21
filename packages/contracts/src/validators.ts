@@ -502,6 +502,8 @@ export const PreferencesSchema = z.object({
   workspaceRoot: z.string().max(1024).optional(),
   /** 记忆库文件路径（空 = 默认数据目录下 memory/memory.json）。 */
   memoryStorePath: z.string().max(1024).optional(),
+  /** 记忆向量后端：flat（默认，纯 JS）或 sqlite-vec（随包原生模块，失败自动降级）。 */
+  memoryVectorBackend: z.enum(["flat", "sqlite-vec"]).optional(),
   /** 会话结束时自动从对话抽取记忆。 */
   memoryAutoCapture: z.boolean(),
   /** 任务成功后自动生成低置信度技能候选（默认关闭；候选默认禁用，需人工启用）。 */

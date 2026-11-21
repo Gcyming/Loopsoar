@@ -4,6 +4,30 @@ import type { ChannelBinding } from "../validators.js";
 
 /** 通道 system 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
 export const systemChannels: Record<string, ChannelBinding> = {
+  "update:status": {
+    domain: "update",
+    method: "status",
+    request: null,
+    sensitive: false,
+  },
+  "update:check": {
+    domain: "update",
+    method: "check",
+    request: null,
+    sensitive: false,
+  },
+  "update:download": {
+    domain: "update",
+    method: "download",
+    request: null,
+    sensitive: false,
+  },
+  "update:install": {
+    domain: "update",
+    method: "install",
+    request: null,
+    sensitive: true,
+  },
   "boot:status": {
     domain: "runtime",
     method: "status",

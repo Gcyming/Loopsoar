@@ -48,6 +48,8 @@ export interface CoreServiceInput {
    * 直接拿 process.cwd() 会让文件工具/终端/截图往安装目录写。
    */
   defaultWorkspaceRoot?: string;
+  /** 打包态：默认工作区落到 <dataDir>/workspace，绝不用安装目录/启动 cwd。 */
+  isPackaged?: boolean;
   safeStorage: {
     isEncryptionAvailable(): boolean;
     encryptString(plain: string): Buffer;
@@ -57,7 +59,10 @@ export interface CoreServiceInput {
 
 export async function createCoreServices(input: CoreServiceInput) {
   const { dirs, bootTrace, pushToRenderer, safeStorage } = input;
-  const fallbackWorkspaceRoot = input.defaultWorkspaceRoot?.trim() || process.cwd();
+  // 打包态默认工作区 = <dataDir>/workspace；开发态保持 cwd（monorepo 根）。
+  const packagedRoot = input.isPackaged && input.dirs?.dataDir ? path.join(input.dirs.dataDir, "workspace") : undefined;
+  const fallbackWorkspaceRoot = input.defaultWorkspaceRoot?.trim() || packagedRoot || process.cwd();
+  if (input.defaultWorkspaceRoot?.trim() || packagedRoot) fs.mkdirSync(fallbackWorkspaceRoot, { recursive: true });
   // 装配：platform / 工具注册表 / 沙箱 / Provider 配置 → ChatService（真 LLM 闭环）
   const platform = createNodePlatform();
   const registry = new ToolRegistry();
@@ -77,12 +82,19 @@ export async function createCoreServices(input: CoreServiceInput) {
     encrypt: (plain: string) => safeStorage.encryptString(plain),
     decrypt: (buf: Buffer) => safeStorage.decryptString(buf),
   });
-  // 降级备用后端：总是启用并与 OS 密文双写 —— 无论下次启动 safeStorage 是否可用都能解密
-  // （此前单后端方案在「os 写入 → 下次不可用」或反方向切换时会读不出，表现为重启后要重填密钥）。
-  secrets.setFallbackBackend(path.join(dirs.configDir, ".secret.key"));
+  // 密钥存储策略（发布阶段 §4.4）：OS 密钥库可用时**只存 OS 密文**；
+  // 只有安全存储不可用、或历史文件本身就是 degraded 模式时，才使用 AES 降级后端
+  //（否则旧密钥读不出来），并在设置页/诊断里明确标注。
+  const secretsKeyFile = path.join(dirs.configDir, ".secret.key");
   const secretFileMode = secrets.fileMode();
   if (!safeStorage.isEncryptionAvailable() || secretFileMode === "degraded") {
-    secrets.useDegradedBackend(path.join(dirs.configDir, ".secret.key"));
+    secrets.useDegradedBackend(secretsKeyFile);
+  } else {
+    // 清理旧版本双写留下的 AES 备份（含 .secret.key），避免「OS 保管」名不副实。
+    const purged = secrets.purgeFallback(secretsKeyFile);
+    if (purged.purged > 0) {
+      console.log(`[Loopsoar] 已清理 ${purged.purged} 条历史降级密钥备份（只保留系统密钥库）`);
+    }
   }
   /**
    * 供应商去重合并时迁移密钥（2026-11-10 用户报障「切换 Key 不生效/上游说无订阅」根因）：
@@ -216,7 +228,12 @@ export async function createCoreServices(input: CoreServiceInput) {
 
   // 记忆库（路径可在设置里改）+ 会话持久化
   const memoryFile = initialPrefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
-  const memory = new MemoryService({ platform, filePath: memoryFile });
+  const memory = new MemoryService({
+    platform,
+    filePath: memoryFile,
+    // 用户显式选择 sqlite-vec 时才加载原生模块；加载/建表失败会自动降级 flat 并记录 note。
+    vectorBackend: initialPrefs.memoryVectorBackend ?? "flat",
+  });
   // 可选 LLM 重排：只在显式搜索且模型可用时触发；失败/超时自动回退 ranker（fail-open）。
   memory.setReranker(createMemoryReranker(() => buildLlmFromActive()));
   // 记忆加载不阻塞首次出窗：load() 在重建向量索引时会探测本地 embedding（最坏 embedTimeout=3000ms，

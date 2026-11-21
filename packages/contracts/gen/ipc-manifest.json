@@ -526,6 +526,62 @@
       "hasRequest": false
     },
     {
+      "channel": "settings:openDataDir",
+      "domain": "settings",
+      "method": "openDataDir",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:openDoc",
+      "domain": "settings",
+      "method": "openDoc",
+      "sensitive": false,
+      "hasRequest": true
+    },
+    {
+      "channel": "update:status",
+      "domain": "update",
+      "method": "status",
+      "sensitive": false,
+      "hasRequest": false
+    },
+    {
+      "channel": "update:check",
+      "domain": "update",
+      "method": "check",
+      "sensitive": false,
+      "hasRequest": false
+    },
+    {
+      "channel": "update:download",
+      "domain": "update",
+      "method": "download",
+      "sensitive": false,
+      "hasRequest": false
+    },
+    {
+      "channel": "update:install",
+      "domain": "update",
+      "method": "install",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "settings:exportBackup",
+      "domain": "settings",
+      "method": "exportBackup",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "settings:exportDiagnostics",
+      "domain": "settings",
+      "method": "exportDiagnostics",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:back",
       "domain": "browser",
       "method": "back",
@@ -1253,6 +1309,7 @@
     "chat:compacted",
     "schedule:updated",
     "ui:compose",
-    "ui:openSettings"
+    "ui:openSettings",
+    "update:state"
   ]
 }

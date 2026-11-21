@@ -10,6 +10,7 @@ import { registerAgentsDomain } from "../../packages/shell/src/main/domains/agen
 import { registerChatDomain } from "../../packages/shell/src/main/domains/chat.ts";
 import { registerBrowserDomain } from "../../packages/shell/src/main/domains/browserAdapter.ts";
 import { registerSettingsDomain } from "../../packages/shell/src/main/domains/settings.ts";
+import { registerUpdateDomain } from "../../packages/shell/src/main/domains/update.ts";
 import { registerRuleLearningDomain } from "../../packages/shell/src/main/domains/ruleLearning.ts";
 import { RuleCandidateStore } from "../../packages/shell/src/main/ruleCandidates.ts";
 import { AgentRegistry, BUILTIN_AGENT } from "../../packages/core/src/agent.ts";
@@ -148,6 +149,17 @@ function assemble(): void {
     workspaceRoot: "C:/tmp/loopsoar-workspace-test",
     env: {},
     appVersion: "0.0.0-test",
+  });
+  registerUpdateDomain({
+    ...deps,
+    updater: {
+      status: () => ({ state: "disabled" }),
+      check: async () => ({ state: "disabled" }),
+      download: async () => ({ state: "disabled" }),
+      install: async () => ({ ok: false, error: "disabled" }),
+      isInstalling: () => false,
+      scheduleStartupCheck: () => undefined,
+    },
   });
   registerRuleLearningDomain({
     ...deps,

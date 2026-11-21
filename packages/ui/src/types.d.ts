@@ -286,6 +286,25 @@ export interface TraceReportView {
   pricingNote: string;
 }
 
+/** 自动更新状态（与主进程 autoUpdate.ts 的 UpdateSnapshot 对齐）。 */
+export interface UpdateInfoView {
+  state: "disabled" | "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "installing" | "error";
+  version?: string;
+  percent?: number;
+  error?: string;
+  checkedAt?: string;
+}
+
+/** 数据导出（设置 → 关于）返回；canceled 表示用户取消选择目录。 */
+export interface ExportResultView {
+  canceled: boolean;
+  path?: string;
+  files?: number;
+  bytes?: number;
+  skipped?: string[];
+  error?: string;
+}
+
 export interface AboutInfo {
   name: string;
   version: string;
@@ -990,6 +1009,13 @@ export interface LoopsoarAPI {
   runtime: LoopsoarDomain & {
     status(): Promise<BootStatus>;
   };
+  /** 自动更新（仅打包态 Windows 生效；开发态返回 disabled）。 */
+  update: LoopsoarDomain & {
+    status(): Promise<UpdateInfoView>;
+    check(): Promise<UpdateInfoView>;
+    download(): Promise<UpdateInfoView>;
+    install(): Promise<{ ok: boolean; error?: string }>;
+  };
   /** 应用级提示：主进程透明子窗口（永远压在原生网页之上）。 */
   ui: LoopsoarDomain & {
     toast(payload: { text: string; sticky?: boolean }): Promise<{ ok: boolean }>;
@@ -1186,6 +1212,10 @@ export interface LoopsoarAPI {
     diagnostics(): Promise<DiagnosticsInfo>;
     traces(payload: { sessionId: string; limit?: number }): Promise<TraceReportView>;
     about(): Promise<AboutInfo>;
+    openDataDir(): Promise<{ ok: boolean; error?: string }>;
+    openDoc(payload: { doc: "license" | "privacy" }): Promise<{ ok: boolean; path?: string; error?: string }>;
+    exportBackup(payload?: { targetDir?: string }): Promise<ExportResultView>;
+    exportDiagnostics(payload?: { targetDir?: string }): Promise<ExportResultView & { included?: string[] }>;
   };
   rules: LoopsoarDomain & {
     candidates(payload?: { workspaceId?: string }): Promise<{
