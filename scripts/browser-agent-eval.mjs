@@ -182,6 +182,15 @@ writeFileSync(path.join(ROOT, "e2e-fixtures", "browser-agent", "upload.txt"), "l
 const outsideDir = tmpdir();
 mkdirSync(outsideDir, { recursive: true });
 const outsideFile = path.join(outsideDir, "loopsoar-eval-outside.txt");
+// 防回归：任务 10 的前提是「文件在工作区外」。CI runner 上 TMPDIR/TEMP 可能为空，
+// 一旦 fallback 到 ROOT/.tmp，这个夹具就落进工作区，越界上传会变成合法上传，
+// 表现为任务 10 假失败（见 2026-11-20 的 10 次失败运行）。这里直接断言，配置错就快速报错。
+const outsideRel = path.relative(ROOT, outsideFile);
+// Windows 上跨盘符时 path.relative 返回绝对路径，不能用「不以 .. 开头」判内；
+// 内 = 相对路径且不以 .. 开头。
+if (!outsideRel.startsWith("..") && !path.isAbsolute(outsideRel)) {
+  throw new Error(`上传越界夹具不在工作区外：${outsideFile}（请检查 tmpdir() 与 ROOT）`);
+}
 writeFileSync(outsideFile, "outside workspace\n", "utf8");
 for (const task of tasks) {
   task.plan = task.plan.map((step) => ({
