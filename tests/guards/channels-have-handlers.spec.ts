@@ -36,6 +36,9 @@ import type { ChromePopoverManager } from "../../packages/shell/src/main/chromeP
 import { SessionStore } from "../../packages/shell/src/main/sessionStore.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
 import { getHandlerRegistry, handleTrusted, type TrustedIpcDeps } from "../../packages/shell/src/main/trustedIpc.ts";
+import { createScheduledTaskRuntime } from "../../packages/shell/src/main/scheduledTaskRuntime.ts";
+import os from "node:os";
+import path from "node:path";
 import type { LoopsoarPlatform } from "../../packages/core/src/platform/types.ts";
 
 function fakeDeps(): TrustedIpcDeps {
@@ -97,6 +100,12 @@ function assemble(): void {
   });
   registerAgentsDomain({ ...deps, agents: fakeAgentRegistry() });
   registerChatDomain({ ...deps, chatService: fakeChatService(), push: () => {} });
+  // 定时任务运行时会自行注册 schedule:* 四个受信通道；用临时目录避免污染真实数据。
+  createScheduledTaskRuntime({
+    dataDir: path.join(os.tmpdir(), "loopsoar-guard-schedules"),
+    chatDeps: { ...deps, chatService: fakeChatService(), push: () => {} } as never,
+    push: () => {},
+  });
   registerBrowserDomain(deps);
   registerTerminalDomain(deps, fakeTerminalManager());
   registerAskDomain(deps, new AskBus({ push: () => {} }));

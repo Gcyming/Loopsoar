@@ -19,6 +19,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   language: "zh-CN",
   animations: "full",
   restoreSession: true,
+  closeBehavior: "quit" as const,
   searchEngine: "bing",
   downloadDir: "",
   workspaceRoot: "",
@@ -76,6 +77,7 @@ export function mergePreferences(raw: unknown): Preferences {
     theme: parsed.data.theme ?? "soft",
     sidebarMode: parsed.data.sidebarMode ?? "docked",
     browserOpenLayout: parsed.data.browserOpenLayout ?? "docked",
+    closeBehavior: parsed.data.closeBehavior ?? "quit",
   };
 }
 

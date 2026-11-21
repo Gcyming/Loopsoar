@@ -20,6 +20,7 @@ import { useModelPicker } from "./useModelPicker.js";
 import { useBrowserPopoverOverlay, isNativePageVisible } from "./useBrowserPopoverOverlay.js";
 import { useWorkspaces } from "./useWorkspaces.js";
 import { useBrowserTabs, type CreateFreshSession } from "./useBrowserTabs.js";
+import { useSettingsEntry } from "./useSettingsEntry.js";
 import { useBottomDock } from "./useBottomDock.js";
 const Settings = React.lazy(() => import("./Settings.js"));
 const ChromePage = React.lazy(() => import("./ChromePage.js"));
@@ -253,6 +254,8 @@ export default function App(): React.JSX.Element {
     newTab,
     selectTab,
     closeTab,
+    tabAction,
+    openTabMenu,
     closeAgentWorkspace,
     goBack,
     goForward,
@@ -405,13 +408,7 @@ export default function App(): React.JSX.Element {
   // E2E/演示：恢复会话后把最后一条时间线滚到可视区（只做一次）
   useE2eRestoredScroll(messages.length, busy);
 
-  const openSettings = useCallback((section?: string): void => {
-    // 进入设置属于「切换界面」：任何展开中的列表/浮层（含 Composer 权限菜单）先收起，
-    // 否则会压在新界面上（用户 m02115 截图：设置页上还浮着「本会话工具权限」）。
-    dismissAllPopovers();
-    setSettingsSection(section ?? "general");
-    setSettingsOpen(true);
-  }, []);
+  const openSettings = useSettingsEntry({ api, setSection: setSettingsSection, setOpen: setSettingsOpen, setInput });
 
   const {
     modelMenuOpen,
@@ -461,7 +458,6 @@ export default function App(): React.JSX.Element {
   // （分组规则在 agentWorkspace.ts，纯函数可单测；这里只负责渲染与副作用）。
   const { user: userTabs, bound: boundTabs } = useMemo(() => splitAgentTabs(tabs), [tabs]);
   // 工作区里最后一个网页也没了（Agent 关页/会话切走）：折叠面板不该悬空留着。
-
 
   const activeTabIdRef = React.useRef<string | null>(null);
   activeTabIdRef.current = activeTabId;
@@ -861,6 +857,7 @@ export default function App(): React.JSX.Element {
     navigate,
     selectTab,
     closeTab,
+    tabAction,
     bindWorkspaceToCurrentSession,
     addWorkspaceForChat,
     changeSidebarMode,
@@ -1018,13 +1015,13 @@ export default function App(): React.JSX.Element {
         onOpenTask={openAgentTask}
         onSelectTab={selectTab}
         onCloseTab={closeTab}
+        onTabAction={tabAction}
+        onOpenTabMenu={openTabMenu}
         onNewTab={newTab}
       />
 
       {/* 工作区：左侧「网页列」（导航工具条 + 圆角页框），右侧会话栏。
-          浏览器工具条只在网页列上方，不横跨到会话区；会话栏从标题栏下方起满高，
-          顶部就是自己的功能按钮区。原生 WebContentsView 几何不变
-          （x=inset、y=titlebar+topbar+inset、宽度让出侧栏与 splitter）。 */}
+          浏览器工具条只在网页列上方；原生 WebContentsView 几何不变。 */}
       <div style={styles.workRow}>
         {miniWindow ? null : (
           <div

@@ -7,6 +7,8 @@ import { BrowserWindow } from "electron";
 import { createDebouncedRunner, type BrowserHost } from "./browserHost.js";
 import type { AgentWindowManager } from "./agentWindow.js";
 import type { E2eHooks } from "./e2eHooks.js";
+import { installTrayCloseBehavior } from "./trayRuntime.js";
+import { attachAppContextMenu } from "./appContextMenu.js";
 
 export interface MainWindowDeps {
   appName: string;
@@ -24,6 +26,10 @@ export interface MainWindowDeps {
   cancelPointerAreaSync(): void;
   onClosed(): void;
   e2eHooks: E2eHooks;
+  /** 关闭窗口策略（读最新偏好；缺省 quit，保持旧行为）。 */
+  getCloseBehavior?: () => "tray" | "quit";
+  /** 托盘菜单「打开定时任务」：由入口切到设置页的 schedules 分区。 */
+  onOpenSchedules?: () => void;
 }
 
 export function createMainWindowWindow(deps: MainWindowDeps): BrowserWindow {
@@ -53,6 +59,14 @@ export function createMainWindowWindow(deps: MainWindowDeps): BrowserWindow {
       ],
     },
   });
+  installTrayCloseBehavior({
+    window: win,
+    iconPath: deps.iconPath,
+    getCloseBehavior: deps.getCloseBehavior ?? (() => "quit"),
+    onOpenSchedules: deps.onOpenSchedules ?? (() => win.show()),
+    appName: deps.appName,
+  });
+  attachAppContextMenu(win);
   win.once("ready-to-show", () => {
     win?.show();
     deps.bootTrace.mark("window-ready-to-show");

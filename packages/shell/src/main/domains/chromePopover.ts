@@ -26,6 +26,8 @@ export interface ChromePopoverOpenPayload {
   /** 锚点矩形：相对主窗口内容区的 CSS px。 */
   anchor: PopoverRect;
   lang?: "zh-CN" | "en-US";
+  /** tabmenu 专用：被右键的标签 id。 */
+  tabId?: string;
 }
 
 export interface ChromePopoverDomainDeps extends TrustedIpcDeps {
@@ -100,7 +102,8 @@ export function registerChromePopoverDomain(
       return { ok: false, error: "浮层锚点参数无效" };
     }
     const lang = input.lang === "zh-CN" || input.lang === "en-US" ? input.lang : undefined;
-    return manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang });
+    const tabId = typeof input.tabId === "string" && input.tabId.length > 0 ? input.tabId : undefined;
+    return manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang, tabId });
   });
 
   handleTrusted(withMainSenderGuard(deps), "ui:togglePopover", (payload) => {
@@ -116,7 +119,8 @@ export function registerChromePopoverDomain(
       return { ok: false, error: "浮层锚点参数无效", open: false };
     }
     const lang = input.lang === "zh-CN" || input.lang === "en-US" ? input.lang : undefined;
-    const result = manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang });
+    const tabId = typeof input.tabId === "string" && input.tabId.length > 0 ? input.tabId : undefined;
+    const result = manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang, tabId });
     return { ...result, open: result.ok };
   });
 

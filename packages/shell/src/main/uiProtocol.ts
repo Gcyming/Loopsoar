@@ -29,15 +29,23 @@ export function contentTypeFor(filePath: string): string {
   return MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
-/** 候选 UI 产物目录（src 运行 / dist 运行 / bundle 运行 / cwd 运行都能命中）。 */
-export function uiDistCandidates(moduleDir: string, cwd: string): string[] {
-  return [
+/**
+ * 候选 UI 产物目录（src 运行 / dist 运行 / bundle 运行 / 打包运行 / cwd 运行都能命中）。
+ * 打包后按「主进程 bundle 与 ui/ 同目录」布置（dist/ui），因此第一条是最短路径；
+ * resourcesPath 只在安装包形态下存在，作为 extraResources 兜底。
+ */
+export function uiDistCandidates(moduleDir: string, cwd: string, resourcesPath?: string): string[] {
+  const candidates = [
+    path.resolve(moduleDir, "ui"), // 打包：app.asar/dist/ui
+    path.resolve(moduleDir, "../ui"), // 打包：app.asar/ui（旧布局）
     path.resolve(moduleDir, "../../ui/dist"), // dist/ 或 src/main/ 运行
     path.resolve(moduleDir, "../../../ui/dist"), // src/main 运行
     path.resolve(moduleDir, "../../../../ui/dist"),
     path.resolve(cwd, "packages/ui/dist"),
     path.resolve(cwd, "../packages/ui/dist"),
   ];
+  if (resourcesPath) candidates.push(path.join(resourcesPath, "ui"));
+  return candidates;
 }
 
 /** 找到第一个含 index.html 的候选目录；都没有 → null（由调用方决定降级）。 */

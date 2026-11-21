@@ -29,6 +29,10 @@ export interface WebContentsLike {
   on(event: string, cb: (...args: unknown[]) => void): void;
   /** 静音（关闭标签时先静音，保证被移除的页面立即停止出声；旧 Electron/测试可不实现）。 */
   setAudioMuted?(muted: boolean): void;
+  /** 当前是否在出声（Electron isCurrentlyAudible；测试可不实现）。 */
+  isCurrentlyAudible?(): boolean;
+  /** 当前静音状态（Electron isAudioMuted；测试可不实现）。 */
+  isAudioMuted?(): boolean;
   /** 关闭并销毁 WebContents（Electron 30+ 支持；不实现时退回仅 detach）。 */
   close?(): void;
   /** 开发者工具（WebContentsView 支持 detach 模式；测试假实现可不提供）。 */
@@ -61,6 +65,8 @@ export interface WebContentsAdapterOptions {
   onLoadEnd?: () => void;
   /** 页面加载失败（did-fail-load；-3 ERR_ABORTED 由后端过滤，不回调）。 */
   onLoadFailure?: (failure: BrowserLoadFailure) => void;
+  /** 语音/媒体状态变化（Electron audio-state-changed / media-started-playing / media-paused）。 */
+  onAudioState?: (audible: boolean) => void;
 }
 
 // 快照脚本与 ref 解析统一在 refs.ts：本文件不再给 DOM 打标记（
@@ -128,6 +134,15 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
       if (code === -3 || !isMainFrame) return;
       opts.onLoadFailure?.({ code, description, url, isMainFrame });
     });
+  }
+  if (opts.onAudioState) {
+    const reportAudio = (): void => {
+      const audible = wc.isCurrentlyAudible?.() === true;
+      opts.onAudioState?.(audible);
+    };
+    wc.on("audio-state-changed", reportAudio);
+    wc.on("media-started-playing", () => opts.onAudioState?.(true));
+    wc.on("media-paused", reportAudio);
   }
   // 页面缩放快捷键（Ctrl + =/-/0）：WebContentsView 有独立焦点，主窗口快捷键捕获不到，
   // 必须在每个标签自己的 webContents 上监听。

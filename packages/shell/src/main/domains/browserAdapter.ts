@@ -40,9 +40,11 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
 
   handleTrusted(deps, "browser:newTab", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    const p = (payload ?? {}) as { url?: string };
+    const p = (payload ?? {}) as { url?: string; afterTabId?: string };
     // 用户点「+」永远开在全局用户标签里：即使当前正在看任务工作区，也不该把空白页塞进任务组。
-    const result = await deps.browser.newTab(p.url, USER_TABS_SESSION);
+    const result = await deps.browser.newTab(p.url, USER_TABS_SESSION, "user", {
+      ...(p.afterTabId ? { afterTabId: p.afterTabId, forceNew: true } : {}),
+    });
     deps.browser.showUserTabs();
     return result;
   });
@@ -50,6 +52,33 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:closeTab", async (payload) => {
     if (!deps.browser) return { closed: false };
     return { closed: await deps.browser.closeTab((payload as { tabId: string }).tabId, deps.browser.visibleSessionId()) };
+  });
+
+  handleTrusted(deps, "browser:closeTabs", async (payload) => {
+    if (!deps.browser) return { closed: 0 };
+    return { closed: await deps.browser.closeTabs((payload as { tabIds: string[] }).tabIds, deps.browser.visibleSessionId()) };
+  });
+
+  handleTrusted(deps, "browser:duplicateTab", async (payload) => {
+    if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
+    return deps.browser.duplicateTab((payload as { tabId: string }).tabId, deps.browser.visibleSessionId());
+  });
+
+  handleTrusted(deps, "browser:setTabMuted", async (payload) => {
+    if (!deps.browser) return { ok: false };
+    const p = payload as { tabId: string; muted: boolean };
+    return { ok: await deps.browser.setTabMuted(p.tabId, p.muted, deps.browser.visibleSessionId()) };
+  });
+
+  handleTrusted(deps, "browser:setTabPinned", async (payload) => {
+    if (!deps.browser) return { ok: false };
+    const p = payload as { tabId: string; pinned: boolean };
+    return { ok: await deps.browser.setTabPinned(p.tabId, p.pinned, deps.browser.visibleSessionId()) };
+  });
+
+  handleTrusted(deps, "browser:reopenClosedTab", async () => {
+    if (!deps.browser) return { ok: false };
+    return deps.browser.reopenClosedTab(deps.browser.visibleSessionId());
   });
 
   handleTrusted(deps, "browser:closeSessionTabs", async (payload) => {

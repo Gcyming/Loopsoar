@@ -141,6 +141,41 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:closeTabs",
+      "domain": "browser",
+      "method": "closeTabs",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:duplicateTab",
+      "domain": "browser",
+      "method": "duplicateTab",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:setTabMuted",
+      "domain": "browser",
+      "method": "setTabMuted",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:setTabPinned",
+      "domain": "browser",
+      "method": "setTabPinned",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "browser:reopenClosedTab",
+      "domain": "browser",
+      "method": "reopenClosedTab",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
       "channel": "browser:endTask",
       "domain": "browser",
       "method": "endTask",
@@ -1107,6 +1142,34 @@
       "hasRequest": true
     },
     {
+      "channel": "schedule:list",
+      "domain": "schedule",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "schedule:save",
+      "domain": "schedule",
+      "method": "save",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "schedule:delete",
+      "domain": "schedule",
+      "method": "delete",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "schedule:run",
+      "domain": "schedule",
+      "method": "run",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "bookmarks:list",
       "domain": "bookmarks",
       "method": "list",
@@ -1187,6 +1250,9 @@
     "chrome:agentWindowIconMode",
     "chrome:agentWindowTransition",
     "chrome:applyLayout",
-    "chat:compacted"
+    "chat:compacted",
+    "schedule:updated",
+    "ui:compose",
+    "ui:openSettings"
   ]
 }

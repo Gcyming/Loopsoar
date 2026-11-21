@@ -23,6 +23,12 @@ export interface ShutdownDeps {
   stopExtensions: () => void | Promise<void>;
   /** 关闭所有持久终端会话（同步，避免退出流程再多一个等待点）。 */
   closeTerminals: () => void;
+  /**
+   * 杀掉后台任务进程树（构建/dev server 等）。
+   * 为什么必须放这里：退出流程最后走 app.exit(0)，它不会触发 will-quit，
+   * 只挂在 will-quit 的清理永远不会执行。
+   */
+  killBackgroundTasks?: () => void;
   /** 把审计队列刷盘。 */
   flushAudit: () => Promise<void>;
   /** 整体超时（默认 3000ms）。 */
@@ -86,6 +92,7 @@ async function runShutdown(deps: ShutdownDeps): Promise<void> {
     ["shutdownMcp", deps.shutdownMcp],
     ["stopExtensions", deps.stopExtensions],
     ["closeTerminals", deps.closeTerminals],
+    ["killBackgroundTasks", deps.killBackgroundTasks ?? (() => undefined)],
     ["flushAudit", deps.flushAudit],
   ];
 

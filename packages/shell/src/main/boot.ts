@@ -88,6 +88,24 @@ export function makeUiProtocolHandler(
   };
 }
 
+/**
+ * 注册 UI 协议：有产物 → 服务真实文件；没有 → 可读占位页。
+ * 抽成函数只为让入口少一段分支（协议注册必须在 app ready 之后，由调用方保证）。
+ */
+export function installUiProtocol(options: {
+  protocol: string;
+  distDir: string | null;
+  handle: (scheme: string, handler: (req: ProtocolRequestLike) => Promise<Response>) => void;
+  warn: (message: string) => void;
+}): void {
+  if (options.distDir) {
+    options.handle(options.protocol, makeUiProtocolHandler(options.distDir));
+    return;
+  }
+  options.warn("[Loopsoar] 未找到 ui/dist（先运行 pnpm --filter loopsoar-ui build），使用占位页");
+  options.handle(options.protocol, makePlaceholderProtocolHandler());
+}
+
 /** 兜底处理器：ui/dist 缺失时给出可读提示页（不白屏、不崩溃）。 */
 export function makePlaceholderProtocolHandler(): (
   req: ProtocolRequestLike,

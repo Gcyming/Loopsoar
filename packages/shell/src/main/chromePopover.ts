@@ -35,9 +35,17 @@ export interface PopoverSize {
 }
 
 /** 浮层种类（与契约 PopoverKindSchema 保持一致）。 */
-export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace";
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace" | "tabmenu";
 
-export const CHROME_POPOVER_KINDS: readonly ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces", "workspace"];
+export const CHROME_POPOVER_KINDS: readonly ChromePopoverKind[] = [
+  "more",
+  "bookmarks",
+  "history",
+  "downloads",
+  "workspaces",
+  "workspace",
+  "tabmenu",
+];
 
 /** 浮层与锚点之间的默认间距。 */
 export const DEFAULT_POPOVER_GAP = 6;
@@ -57,6 +65,8 @@ export const DEFAULT_POPOVER_SIZES: Record<ChromePopoverKind, PopoverSize> = {
   workspaces: { width: 230, height: 300 },
   // Agent 工作区（折叠标签组）：列出该会话里 Agent 打开/操作过的网页，点一项切过去。
   workspace: { width: 320, height: 380 },
+  // 标签页右键菜单：最长项要放得下「重新打开关闭的标签页 + Ctrl+Shift+T」。
+  tabmenu: { width: 300, height: 380 },
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -223,6 +233,8 @@ export interface ChromePopoverOpenInput {
   kind: ChromePopoverKind;
   anchor: PopoverRect;
   lang?: string;
+  /** 仅 tabmenu 使用：被右键的标签 id（写入浮层 URL，由 PopoverApp 读取）。 */
+  tabId?: string;
 }
 
 /** 浮层内动作（由主进程转发给主窗口渲染层执行）。 */
@@ -240,7 +252,7 @@ export interface ChromePopoverManagerDeps {
   /** 主窗口（parent）；返回 null 时 open 失败而不是崩。 */
   getMainWindow: () => PopoverMainWindowLike | null;
   /** 浮层要加载的 URL（含 ?popover=<kind>&lang=；开发/生产 URL 差异由装配层决定）。 */
-  loadUrlFor: (kind: ChromePopoverKind, lang?: string) => string;
+  loadUrlFor: (kind: ChromePopoverKind, lang?: string, params?: { tabId?: string }) => string;
   /** preload 路径（与主窗口同一个 CJS preload）。 */
   preloadPath: string;
   /** preload additionalArguments（必须带上 --loopsoar-bindings/--loopsoar-events，否则浮层拿不到 api）。 */
@@ -491,7 +503,7 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
       attachMainListeners(main);
 
       try {
-        const loading = win.loadURL(deps.loadUrlFor(input.kind, input.lang));
+        const loading = win.loadURL(deps.loadUrlFor(input.kind, input.lang, input.tabId ? { tabId: input.tabId } : undefined));
         if (loading && typeof (loading as Promise<void>).catch === "function") {
           void (loading as Promise<void>).catch(() => {
             if (popover === win) close();

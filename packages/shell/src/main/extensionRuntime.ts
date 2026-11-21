@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { z } from "zod";
+import { firstExisting, withUnpackedCandidates } from "./packagedPaths.js";
 import {
   extensionToolRegistryName,
   parseWorkerLine,
@@ -638,10 +639,11 @@ export function extensionSpawnArgs(item: InstalledExtension, workerPath: string)
 }
 
 export function resolveWorkerPath(baseDir: string): string {
-  const candidates = [
+  const candidates = withUnpackedCandidates([
     path.join(baseDir, "extensionWorker.mjs"),
     path.join(baseDir, "../src/main/extensionWorker.mjs"),
     path.join(baseDir, "../../src/main/extensionWorker.mjs"),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+    path.join(process.resourcesPath ?? baseDir, "app.asar.unpacked/dist/extensionWorker.mjs"),
+  ]);
+  return firstExisting(candidates, candidates[0]);
 }

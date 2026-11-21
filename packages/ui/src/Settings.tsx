@@ -12,6 +12,7 @@ import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCo
 import { Icon } from "./Icon.js";
 import AppearanceSettingsSection from "./AppearanceSettingsSection.js";
 import { LoopStudioSection } from "./LoopStudioSection.js";
+import { SchedulesSection } from "./SchedulesSection.js";
 import RulesSettingsSection from "./RulesSettingsSection.js";
 import BrowserExtensionsSection from "./BrowserExtensionsSection.js";
 import ExtensionsSection from "./ExtensionsSection.js";
@@ -44,6 +45,7 @@ type SectionId =
   | "providers"
   | "rules"
   | "loop"
+  | "schedules"
   | "skills"
   | "memory"
   | "extensions"
@@ -63,6 +65,7 @@ const SECTIONS: { id: SectionId; icon: string; group: "basic" | "capability" | "
   { id: "providers", group: "capability", icon: "cloud-upload" },
   { id: "rules", group: "capability", icon: "file" },
   { id: "loop", group: "capability", icon: "agent" },
+  { id: "schedules", group: "capability", icon: "clock" },
   { id: "skills", group: "capability", icon: "bulb" },
   { id: "memory", group: "capability", icon: "notes" },
   { id: "extensions", group: "capability", icon: "extension-feature" },
@@ -349,6 +352,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           />
         );
 
+      case "schedules":
+        return <SchedulesSection api={api} onError={bad} />;
+
       case "searchengine":
         return prefs ? (
           <div>
@@ -423,6 +429,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             <Toggle v={prefs.adBlockEnabled ?? true} on={(x) => setPrefs({ ...prefs, adBlockEnabled: x })} />
           </Field>
           <Field l={tr("settings.general.restoreSession")}><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
+          <Field l={tr("settings.general.closeBehavior")} h={tr("settings.general.closeBehaviorHint")}>
+            <Seg
+              v={prefs.closeBehavior ?? "quit"}
+              opts={[
+                ["quit", tr("settings.general.closeQuit")],
+                ["tray", tr("settings.general.closeTray")],
+              ]}
+              on={(x) => setPrefs({ ...prefs, closeBehavior: x as "quit" | "tray" })}
+            />
+          </Field>
           <Field l={tr("settings.general.maxRounds")} h={tr("settings.general.maxRoundsHint")}>
             <In
               v={String(prefs.agentMaxRounds ?? 80)}

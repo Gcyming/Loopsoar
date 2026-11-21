@@ -72,6 +72,11 @@ interface TabEntry {
   favicon?: string;
   /** 由 Agent 打开或导航过（UI 据此折叠进「Agent 工作区」标签组；用户导航不撤销）。 */
   agentBound: boolean;
+  /** 页面是否在出声 / 是否被静音（音频事件同步；只影响展示与静音按钮）。 */
+  audible?: boolean;
+  muted?: boolean;
+  /** 固定标签（持久化；固定标签排在最左侧）。 */
+  pinned?: boolean;
   /** 接管锁脚本已推送到当前文档：导航/加载开始时会重置（用于去重与失败重试）。 */
   lockPushed: boolean;
 }
@@ -87,6 +92,8 @@ export class BrowserHost {
   private groups = new Map<string, SessionGroup>();
   /** 控制台/网络旁路观测：不参与标签生命周期，只保留最近 N 条。 */
   private observability = new BrowserObservability();
+  /** 最近关闭的标签（Chrome 式「重新打开关闭的标签页」；只保存在内存，退出后清空）。 */
+  private closedTabs: { url: string; title: string; sessionId: string; agentBound?: boolean; pinned?: boolean }[] = [];
   private activeSession: string;
   /** 当前显示的标签组：默认用户全局标签；进入任务会话时指向该会话的 Agent 工作区。 */
   private visibleSession: string;
@@ -232,6 +239,16 @@ export class BrowserHost {
         if (!entry.title || entry.title === "新标签页") entry.title = this.hostnameOf(failure.url);
         this.emitTabs(sessionId);
       },
+      onAudioState: (audible: boolean): void => {
+        const entry = entryRef ?? this.group(sessionId).tabs.get(id);
+        // 事件可能晚于视图销毁（关标签时会先静音、再移除 WebContentsView），
+        // 此时 view.webContents 已不存在；直接读取会让主进程抛未捕获异常并退出。
+        const wc = view.webContents as { isAudioMuted?: () => boolean } | undefined;
+        if (!entry || entry.audible === audible) return;
+        entry.audible = audible;
+        entry.muted = wc?.isAudioMuted?.() ?? entry.muted ?? false;
+        this.emitTabs(sessionId);
+      },
     });
     const entry: TabEntry = {
       view,
@@ -244,6 +261,9 @@ export class BrowserHost {
       loading: false,
       loadFailure: null,
       agentBound: false,
+      audible: view.webContents.isCurrentlyAudible?.() === true,
+      muted: view.webContents.isAudioMuted?.() === true,
+      pinned: false,
       lockPushed: false,
     };
     entryRef = entry;
@@ -672,10 +692,11 @@ export class BrowserHost {
     rawUrl?: string,
     sessionId?: string,
     origin: "agent" | "user" = "user",
+    options: { afterTabId?: string; forceNew?: boolean; pinned?: boolean } = {},
   ): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
     const sid = sessionId ?? this.activeSession;
     const group = this.group(sid);
-    if (rawUrl) {
+    if (rawUrl && !options.forceNew) {
       const normalized = normalizeNavigateUrl(rawUrl);
       if (normalized.ok) {
         for (const [id, tab] of group.tabs) {
@@ -691,11 +712,102 @@ export class BrowserHost {
     const entry = this.createTab(sid);
     const id = group.activeId!;
     if (origin === "agent") entry.agentBound = true;
+    if (options.pinned) entry.pinned = true;
+    if (options.afterTabId && group.tabs.has(options.afterTabId) && !entry.pinned) {
+      this.moveTabAfter(sid, id, options.afterTabId);
+    } else {
+      this.applyTabOrder(group);
+    }
     this.emitTabs(sid);
     if (!rawUrl) return { tabId: id, ok: true };
     const outcome = await this.navigate(rawUrl, id, sid, origin);
     if (!outcome.ok) return { tabId: id, ok: false, error: outcome.error };
     return { tabId: id, ok: true, url: outcome.url };
+  }
+
+  /** 新标签插到指定标签右侧（Chrome「在右侧新建标签页」）；固定标签永远在最左。 */
+  private moveTabAfter(sessionId: string, tabId: string, afterTabId: string): void {
+    const group = this.group(sessionId);
+    const entry = group.tabs.get(tabId);
+    if (!entry) return;
+    const entries = [...group.tabs.entries()];
+    const without = entries.filter(([id]) => id !== tabId);
+    const anchor = without.findIndex(([id]) => id === afterTabId);
+    if (anchor < 0) return;
+    without.splice(anchor + 1, 0, [tabId, entry]);
+    group.tabs.clear();
+    for (const [id, value] of without) group.tabs.set(id, value);
+  }
+
+  /** 固定标签必须排在普通标签之前；Map 保持插入顺序，重排即可持久化视觉顺序。 */
+  private applyTabOrder(group: SessionGroup): void {
+    const entries = [...group.tabs.entries()];
+    entries.sort((a, b) => Number(b[1].pinned === true) - Number(a[1].pinned === true));
+    group.tabs.clear();
+    for (const [id, entry] of entries) group.tabs.set(id, entry);
+  }
+
+  /** 当前标签页是否在出声；没有活动标签返回 false。 */
+  isTabAudible(tabId?: string, sessionId?: string): boolean {
+    return this.resolveTab(tabId, sessionId)?.[1].audible === true;
+  }
+
+  async setTabMuted(tabId: string, muted: boolean, sessionId?: string): Promise<boolean> {
+    const entry = this.resolveTab(tabId, sessionId)?.[1];
+    if (!entry) return false;
+    entry.view.webContents.setAudioMuted?.(muted);
+    entry.muted = muted;
+    this.emitTabs(sessionId ?? this.activeSession);
+    return true;
+  }
+
+  async setTabPinned(tabId: string, pinned: boolean, sessionId?: string): Promise<boolean> {
+    const sid = sessionId ?? this.activeSession;
+    const group = this.group(sid);
+    const entry = group.tabs.get(tabId);
+    if (!entry) return false;
+    entry.pinned = pinned;
+    this.applyTabOrder(group);
+    this.emitTabs(sid);
+    return true;
+  }
+
+  /** 复制标签：同 URL 强制开新页（普通 newTab 会复用同 URL 标签）。 */
+  async duplicateTab(tabId: string, sessionId?: string): Promise<{ ok: boolean; tabId?: string; error?: string }> {
+    const resolved = this.resolveTab(tabId, sessionId);
+    if (!resolved) return { ok: false, error: "标签不存在" };
+    const [id, entry] = resolved;
+    const sid = sessionId ?? this.activeSession;
+    const result = await this.newTab(entry.url || undefined, sid, entry.agentBound ? "agent" : "user", {
+      afterTabId: id,
+      forceNew: true,
+    });
+    return result.ok ? { ok: true, tabId: result.tabId } : { ok: false, error: result.error };
+  }
+
+  /** 批量关闭（关闭其他/右侧）：一次遍历，避免 UI 连续 20 次 IPC。 */
+  async closeTabs(tabIds: string[], sessionId?: string): Promise<number> {
+    let closed = 0;
+    for (const id of tabIds) {
+      if (await this.closeTab(id, sessionId)) closed += 1;
+    }
+    return closed;
+  }
+
+  /** 重新打开最近关闭的标签（最多 20 条；只在当前可见会话/原会话仍存在时重开）。 */
+  async reopenClosedTab(sessionId?: string): Promise<{ ok: boolean; tabId?: string }> {
+    const last = this.closedTabs.pop();
+    if (!last) return { ok: false };
+    const targetSession = this.groups.has(last.sessionId) ? last.sessionId : sessionId ?? this.currentSessionForTabs();
+    const result = await this.newTab(last.url, targetSession, last.agentBound ? "agent" : "user", {
+      forceNew: true,
+      pinned: last.pinned,
+    });
+    return result.ok ? { ok: true, tabId: result.tabId } : { ok: false };
+  }
+
+  private currentSessionForTabs(): string {
+    return this.visibleSession && this.visibleSession !== USER_TABS_SESSION ? this.visibleSession : this.activeSession;
   }
 
   /**
@@ -741,6 +853,19 @@ export class BrowserHost {
     const group = this.group(sessionId);
     const entry = group.tabs.get(tabId);
     if (!entry) return false;
+    const sid = sessionId ?? this.activeSession;
+    if (entry.url) {
+      this.closedTabs.push({
+        url: entry.url,
+        title: entry.title,
+        sessionId: sid,
+        ...(entry.agentBound ? { agentBound: true } : {}),
+        ...(entry.pinned ? { pinned: true } : {}),
+      });
+      if (this.closedTabs.length > 20) this.closedTabs.shift();
+    }
+    // 关闭前先静音：视图销毁/分离的瞬间，页面仍可能继续播放声音。
+    entry.view.webContents.setAudioMuted?.(true);
     group.tabs.delete(tabId);
     try {
       await entry.adapter.close();
@@ -750,7 +875,6 @@ export class BrowserHost {
     if (group.activeId === tabId) {
       group.activeId = group.tabs.keys().next().value ?? null;
     }
-    const sid = sessionId ?? this.activeSession;
     // 关页即释放该标签的接管锁重试计数，否则 Map 随标签数单调增长（closeSessionTabs 才按会话清）。
     this.lockAttempts.delete(`${sid}::${tabId}`);
     this.emitTabs(sid);
@@ -911,6 +1035,7 @@ export class BrowserHost {
         history: entry.history.slice(),
         index: entry.index,
         ...(entry.agentBound ? { agentBound: true } : {}),
+        ...(entry.pinned ? { pinned: true } : {}),
       });
     }
     return { tabs, activeIndex };
@@ -1058,6 +1183,7 @@ export class BrowserHost {
       entry.title = tab.title ?? this.hostnameOf(tab.url);
       // 折叠标签页的归属必须跟着页面一起恢复：否则重启后 Agent 工作区凭空消失。
       entry.agentBound = tab.agentBound === true;
+      entry.pinned = tab.pinned === true;
       entry.history = Array.isArray(tab.history) && tab.history.length > 0 ? tab.history.slice() : [tab.url];
       entry.index =
         typeof tab.index === "number" ? Math.max(0, Math.min(tab.index, entry.history.length - 1)) : entry.history.length - 1;
@@ -1080,6 +1206,7 @@ export class BrowserHost {
     }
     const active = ids[Math.max(0, Math.min(safe.activeIndex, ids.length - 1))];
     if (active) group.activeId = active;
+    this.applyTabOrder(group);
   }
 
   /** 删除会话时销毁它的全部标签（页面/内存），不影响其它会话。 */

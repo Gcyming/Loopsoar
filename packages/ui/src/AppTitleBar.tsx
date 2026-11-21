@@ -2,6 +2,7 @@ import * as React from "react";
 import TitleBar from "./TitleBar.js";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.js";
 import BrowserTabs from "./BrowserTabs.js";
+import type { TabMenuAction } from "./BrowserTabs.js";
 import { dismissAllPopovers } from "./popover.js";
 import type { TabState, WorkspaceRecord } from "./types.js";
 
@@ -20,6 +21,8 @@ export interface AppTitleBarProps {
   onOpenTask: (sessionId: string) => void;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
+  onTabAction: (action: TabMenuAction, tabId: string) => void;
+  onOpenTabMenu: (tabId: string, anchor: { x: number; y: number; width: number; height: number }) => void;
   onNewTab: () => void;
 }
 
@@ -42,6 +45,8 @@ export default function AppTitleBar({
   onOpenTask,
   onSelectTab,
   onCloseTab,
+  onTabAction,
+  onOpenTabMenu,
   onNewTab,
 }: AppTitleBarProps) {
   return (
@@ -69,6 +74,8 @@ export default function AppTitleBar({
                 onOpenTask={onOpenTask}
                 onSelectTab={onSelectTab}
                 onCloseTab={onCloseTab}
+                onTabAction={onTabAction}
+                onOpenTabMenu={onOpenTabMenu}
                 onNewTab={onNewTab}
               />
             ),

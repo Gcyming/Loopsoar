@@ -27,11 +27,16 @@ function allowAllPolicy(): Permissions {
   };
 }
 
+/** 全 confirm 策略：模拟用户把各类工具都设为「每次询问」。 */
+function confirmAllPolicy(): Permissions {
+  return { ...allowAllPolicy(), read: "confirm", write: "confirm", terminal: "confirm", network: "confirm", browser: "confirm" };
+}
+
 /** 全 allow 沙箱（真实沙箱语义由 core/sandbox 单测覆盖），并记录会话白名单写入。 */
-function allowSandbox(): { sandbox: SandboxManager; approved: string[] } {
+function allowSandbox(action: "allow" | "confirm" = "allow"): { sandbox: SandboxManager; approved: string[] } {
   const approved: string[] = [];
   const sandbox = {
-    checkPermission: () => ({ action: "allow" as const, level: 4, reason: "test allow" }),
+    checkPermission: () => ({ action, level: 4, reason: "test allow" }),
     approveToolForSession: (_agentId: string, toolName: string) => {
       approved.push(toolName);
     },
@@ -75,19 +80,22 @@ interface Harness {
   requests: PermissionRequestEvent[];
 }
 
-function makeExecutor(opts: { sensitiveAlwaysConfirm?: () => boolean } = {}): Harness {
+function makeExecutor(
+  opts: { sensitiveAlwaysConfirm?: () => boolean; autoConfirm?: boolean; confirm?: boolean } = {},
+): Harness {
   const registry = makeRegistry();
-  const { sandbox, approved } = allowSandbox();
+  const { sandbox, approved } = allowSandbox(opts.confirm ? "confirm" : "allow");
   const permBus = new PermRequestBus(80); // 极短超时：若测试漏 resolve，快速 deny 而不是挂 300s
   const requests: PermissionRequestEvent[] = [];
   const executor = new InternalToolExecutor({
     registry,
     sandbox,
-    permissionPolicy: allowAllPolicy,
+    permissionPolicy: opts.confirm ? confirmAllPolicy : allowAllPolicy,
     permBus,
     agentId: "test-agent",
     sessionId: "s1",
     sensitiveAlwaysConfirm: opts.sensitiveAlwaysConfirm,
+    ...(opts.autoConfirm ? { autoConfirm: true } : {}),
     onPermissionRequest: (request) => {
       requests.push(request);
     },
@@ -177,6 +185,24 @@ describe("敏感步骤写死确认", () => {
     const result = await h.executor.invoke({ id: "c8", name: "file_read", args: { path: "支付说明.md" } });
     expect(result.ok).toBe(true);
     expect(h.requests).toHaveLength(0);
+  });
+
+  it("autoConfirm：普通工具确认直接放行，不挂起、不弹窗（定时任务无人值守）", async () => {
+    const h = makeExecutor({ autoConfirm: true, confirm: true });
+    const result = await h.executor.invoke({ id: "c9", name: "browser_click", args: { target: "#search-submit" } });
+    expect(result.ok).toBe(true);
+    expect(h.requests).toHaveLength(0);
+    expect(h.permBus.size).toBe(0);
+  });
+
+  it("autoConfirm：敏感步骤直接拒绝，绝不自动执行（登录/支付）", async () => {
+    const h = makeExecutor({ autoConfirm: true });
+    const result = await h.executor.invoke({ id: "c10", name: "browser_click", args: { target: "登录" } });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("scheduled-sensitive-blocked");
+    expect(result.content).toContain("定时任务不会自动执行敏感步骤");
+    expect(h.requests).toHaveLength(0);
+    expect(h.permBus.size).toBe(0);
   });
 });
 

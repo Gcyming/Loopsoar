@@ -81,6 +81,12 @@ export interface TabState {
   favicon?: string;
   /** 由 Agent 打开或导航过：UI 把它折叠进「Agent 工作区」标签组。 */
   agentBound: boolean;
+  /** 页面当前是否在出声（Electron isCurrentlyAudible；用于标签栏喇叭按钮）。 */
+  audible?: boolean;
+  /** 标签是否已被用户静音。 */
+  muted?: boolean;
+  /** 固定标签（Chrome 语义：固定在最左侧；关闭其他标签时保留）。 */
+  pinned?: boolean;
 }
 
 /** 一次成功访问（供壳层追加「全局历史」；与标签内部后退/前进栈无关）。 */

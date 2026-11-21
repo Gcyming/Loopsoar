@@ -187,6 +187,11 @@ export interface ChatInput {
   mode?: "build" | "plan";
   /** 推理等级（模型声明支持时透传给厂商）。 */
   reasoningEffort?: string;
+  /**
+   * 后台自主会话（定时任务）：普通工具确认直接放行；敏感步骤（登录/支付/不可撤销）
+   * 仍然拒绝，而不是无人应答地挂起。只能由壳层内部注入，不来自 IPC。
+   */
+  autonomous?: boolean;
   /** 会话历史（持久化消息）；缺省则退化为单轮。 */
   getHistory?: (sessionId: string) => { role: "user" | "assistant"; content: string; ts?: number }[];
   /** 内部取消信号（子代理超时等）；不来自 IPC，避免渲染层注入。 */
@@ -341,6 +346,8 @@ export class InternalToolExecutor {
       resolveWorkspaceRoot?: (sessionId?: string) => string | undefined;
       /** 敏感步骤写死确认开关（默认 true；仅调试/兼容旧行为可关）。 */
       sensitiveAlwaysConfirm?: () => boolean;
+      /** 后台自主会话：普通确认自动放行，敏感步骤直接拒绝（避免无人应答挂起）。 */
+      autoConfirm?: boolean;
       /** 规则守卫（按会话解析当前规则并编译）。 */
       guardToolCall?: ToolGuardHook;
       /** 扩展 tool.before（安全闸之后、执行之前）。 */
@@ -430,7 +437,17 @@ export class InternalToolExecutor {
     }
     // 需要确认的三种来源：①敏感步骤写死确认（策略 allow 也要问）②沙箱 confirm（策略非 allow 时）③策略 confirm
     const needsConfirm = forceSensitiveConfirm || (decision.action === "confirm" && policyDecision !== "allow");
-    if (needsConfirm) {
+    if (needsConfirm && this.opts.autoConfirm) {
+      // 定时任务无人值守：敏感步骤（登录/支付/不可撤销）绝不自动执行；
+      // 普通确认（写文件、终端等）视为用户创建任务时的预授权，直接放行。
+      if (forceSensitiveConfirm) {
+        return {
+          ok: false,
+          content: `[错误] 定时任务不会自动执行敏感步骤：${sensitive.reason ?? "需要人工确认"}`,
+          error: "scheduled-sensitive-blocked",
+        };
+      }
+    } else if (needsConfirm) {
       const requestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const reason = forceSensitiveConfirm ? sensitive.reason : undefined;
       // 推送到渲染层弹窗（用户点允许/拒绝 → perm:respond → resolvePermission）
@@ -784,6 +801,7 @@ export class ChatService {
       guardToolCall: this.opts.guardToolCall,
       beforeTool: this.opts.beforeTool,
       afterTool: this.opts.afterTool,
+      autoConfirm: input.autonomous === true,
     });
 
     let outcome: LoopRunStatus = "error";

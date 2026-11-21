@@ -13,6 +13,9 @@ interface TabEntryLike {
   loadFailure?: unknown;
   favicon?: string;
   agentBound?: boolean;
+  audible?: boolean;
+  muted?: boolean;
+  pinned?: boolean;
 }
 
 export function toTabStates(group: { tabs: Map<string, TabEntryLike>; activeId?: string | null }): TabState[] {
@@ -27,6 +30,9 @@ export function toTabStates(group: { tabs: Map<string, TabEntryLike>; activeId?:
     loadFailure: entry.loadFailure,
     favicon: entry.favicon,
     agentBound: entry.agentBound,
+    audible: entry.audible === true,
+    muted: entry.muted === true,
+    pinned: entry.pinned === true,
   })) as TabState[];
 }
 

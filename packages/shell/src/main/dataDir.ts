@@ -27,11 +27,16 @@ export interface AppPathLike {
  * 解析可写数据根：优先显式覆盖 → 品牌 userData → 工作区本地目录 → 临时目录。
  * 为什么做降级链：受限会话/只读盘上 %APPDATA% 可能不可写，宁可换目录也不能启动即挂。
  */
-export function ensureWritableDataDirs(app: AppPathLike): ReturnType<typeof ensureLoopsoarDirs> {
+export function ensureWritableDataDirs(
+  app: AppPathLike,
+  options: { allowCwdFallback?: boolean } = {},
+): ReturnType<typeof ensureLoopsoarDirs> {
   const candidates = [
     process.env.LOOPSOAR_DATA_DIR,
     app.getPath("userData"),
-    path.join(process.cwd(), ".loopsoar-data"),
+    // 打包态不允许落到 cwd：快捷方式的 cwd 是安装目录，会把用户数据写进程序目录
+    // （卸载时一起被删，或被只读 ACL 拒绝后启动失败）。
+    ...(options.allowCwdFallback === false ? [] : [path.join(process.cwd(), ".loopsoar-data")]),
     path.join(os.tmpdir(), `loopsoar-${process.pid}`),
   ].filter((c): c is string => typeof c === "string" && c.length > 0);
 

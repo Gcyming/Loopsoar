@@ -1,8 +1,4 @@
-/**
- * Loopsoar 主进程入口。
- * 允许 import electron 的文件只有两个：本文件与 main/electronBrowser.ts（薄适配层）。
- * 职责：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
- */
+// Loopsoar 主进程入口：协议注册 → 数据目录 → 域装配（受信 IPC）→ 窗口创建 → 浏览器宿主挂载。
 import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from "electron";
 import fs from "node:fs";
@@ -22,12 +18,7 @@ import { loadPreferences, loadPermissions } from "./domains/settings.js";
 import { resolveDataDir } from "./dataDir.js";
 import { APP_ID, APP_NAME, APP_VERSION, PROTOCOL } from "../shared/brand.js";
 import { type AuditEntry, type TrustedIpcDeps } from "./trustedIpc.js";
-import {
-  createBootTrace,
-  ensureLoopsoarDirs,
-  makePlaceholderProtocolHandler,
-  makeUiProtocolHandler,
-} from "./boot.js";
+import { createBootTrace, ensureLoopsoarDirs, installUiProtocol } from "./boot.js";
 import { resolveUiDistDir, uiDistCandidates } from "./uiProtocol.js";
 import { createCoreServices } from "./coreServices.js";
 import { TaskForkCoordinator } from "./taskForks.js";
@@ -45,10 +36,10 @@ import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
-import { flushActivePartials, registerChatDomain } from "./domains/chat.js";
+import { flushActivePartials, hasActiveStreams, registerChatDomain } from "./domains/chat.js";
 import { registerToastDomain } from "./domains/toast.js";
 import { createToastWindow } from "./toastWindow.js";
-import { createAgentPointerWindow, type AgentPointerController } from "./agentPointerWindow.js";
+import { createAgentPointerWindow, pointerScreenArea, type AgentPointerController } from "./agentPointerWindow.js";
 import { registerCompactDomain } from "./domains/compact.js";
 import { registerBrowserDomain } from "./domains/browserAdapter.js";
 import { registerWindowDomain } from "./domains/window.js";
@@ -67,6 +58,11 @@ import { registerSearchTools } from "./searchTools.js";
 import { readImageDataUrl } from "./imageRead.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
+import { createScheduledTaskRuntime } from "./scheduledTaskRuntime.js";
+import { showDesktopNotification } from "./desktopNotify.js";
+import { ensureSingleInstance } from "./singleInstance.js";
+import { createBrowserExternalLinks } from "./browserExternalLinks.js";
+import { createRendererPusher } from "./rendererBus.js";
 import { AskBus } from "./askBus.js";
 import { setAgentTabPredicate } from "./browserRequestGuard.js";
 import { registerAskDomain } from "./domains/ask.js";
@@ -127,6 +123,11 @@ import { registerFsDomain } from "./domains/fs.js";
 import { registerTerminalDomain } from "./domains/terminal.js";
 import { TerminalSessionManager } from "./terminalSession.js";
 import { AuditFileLogger } from "./auditFile.js";
+import { redactDeep } from "./logRedaction.js";
+import { runUpgradeBackupSafe } from "./dataBackup.js";
+import { installMainLogIfPackaged } from "./mainLog.js";
+import { createCrashLog } from "./crashLog.js";
+import { installQuitGuard, quitConfirmOptions } from "./quitGuard.js";
 import { createShutdownHandler } from "./shutdown.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -177,20 +178,14 @@ function buildBindings(): { channel: string; domain: string; method: string }[] 
   }));
 }
 
-function pushToRenderer(event: string, payload: unknown): void {
-  const chatty = /^(chat:|terminal:|ask:|perm:|loop:)/.test(event);
-  for (const w of BrowserWindow.getAllWindows()) {
-    // 只发给加载了 React 渲染层的窗口（pointer/toast 是 data: 页、icon 是静态页）。
-    const url = w.webContents.getURL();
-    if (!url.includes("/index.html")) continue;
-    // 工具栏浮层只要 chrome:* 状态，跳过高频流。
-    if (chatty && url.includes("popover=")) continue;
-    void w.webContents.send(`loopsoar:${event}`, payload);
-  }
-}
-
+const pushToRenderer = createRendererPusher(() => BrowserWindow.getAllWindows());
 let mainWindow: BrowserWindow | null = null;
 let browserHost: BrowserHost | null = null;
+const browserLinks = createBrowserExternalLinks({
+  appName: APP_NAME, executablePath: process.env.APPIMAGE ?? process.execPath, appPath: app.isPackaged ? null : process.argv.find((arg) => /main(?:\.bundle)?\.mjs$|main[\\/]index\.js$/.test(arg)) ?? null,
+  packaged: app.isPackaged, initialArgv: process.argv, userTabsSession: USER_TABS_SESSION,
+  getBrowserHost: () => browserHost, getMainWindow: () => mainWindow, ensureWindow: () => { if (!mainWindow) createMainWindow(); return mainWindow; },
+});
 /** 远端 CDP 浏览器后端（仅显式设置 LOOPSOAR_BROWSER_CDP_ENDPOINT 时存在；不接管原生标签 UI）。 */
 let remoteBrowserBackend: CdpBrowserBackend | null = null;
 /** 浏览器扩展宿主（浏览器 preload 的「商店安装」IPC 需要模块级访问）。 */
@@ -217,41 +212,34 @@ function holdPointerForAgent(sessionId: string): void {
 /** 网页视图矩形（主窗口内容坐标）；null = 当前没有可见网页。几何由 BrowserHost.applyLayout 单源推送。 */
 let lastViewRect: { x: number; y: number; width: number; height: number } | null = null;
 
-/**
- * 把覆盖指针贴到网页视图上：屏幕坐标 = 主窗口内容区原点 + 视图矩形。
- * 单源：矩形与原生 WebContentsView 是同一份 bounds，这里只做平移，绝不另算一套几何。
- */
+/** 把覆盖指针贴到网页视图上（几何换算见 pointerScreenArea）。 */
 function syncPointerArea(): void {
   if (!agentPointer) return;
-  if (!lastViewRect || !mainWindow || mainWindow.isDestroyed()) {
-    agentPointer.setArea(null);
-    return;
-  }
-  const content = mainWindow.getContentBounds();
-  agentPointer.setArea({
-    x: content.x + lastViewRect.x,
-    y: content.y + lastViewRect.y,
-    width: lastViewRect.width,
-    height: lastViewRect.height,
-  });
+  const content = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getContentBounds() : null;
+  agentPointer.setArea(pointerScreenArea(content, lastViewRect));
 }
 const schedulePointerAreaSync = createDebouncedRunner(syncPointerArea, 16);
 
-/**
- * 退出清理：MCP/扩展子进程、终端会话、标签落盘、审计 flush 必须收尾。
- * 用 preventDefault 先拦住默认退出，清理完成后再 app.exit（幂等，避免退出循环）。
- */
+/** 退出清理：MCP/扩展/终端/标签落盘/审计收尾；先 preventDefault，清理完再 app.exit（幂等）。 */
 let shutdownHandler: (() => Promise<void>) | null = null;
-let quitting = false;
-app.on("before-quit", (event) => {
-  if (!shutdownHandler || quitting) return;
-  quitting = true;
-  event.preventDefault();
-  void shutdownHandler()
-    .catch(() => undefined)
-    .finally(() => {
-      app.exit(0);
-    });
+installQuitGuard({
+  registerBeforeQuit: (listener) => app.on("before-quit", listener),
+  hasActiveStreams,
+  isAutomated: () => Object.keys(process.env).some((key) => key.startsWith("LOOPSOAR_E2E")),
+  confirmQuit: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    const options = quitConfirmOptions();
+    const choice =
+      mainWindow && !mainWindow.isDestroyed()
+        ? dialog.showMessageBoxSync(mainWindow, options)
+        : dialog.showMessageBoxSync(options);
+    return choice === 1;
+  },
+  shutdown: () => shutdownHandler?.() ?? Promise.resolve(),
+  exit: (code) => app.exit(code),
 });
 
 
@@ -282,13 +270,13 @@ function createMainWindow(): void {
       mainWindow = null;
     },
     e2eHooks,
+    getCloseBehavior: () => loadPreferences(ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged }).configDir).closeBehavior ?? "quit", onOpenSchedules: () => { pushToRenderer("ui:openSettings", { section: "schedules" }); mainWindow?.show(); mainWindow?.focus(); },
   });
 }
 
-// Chromium 原生 UI（DevTools / 右键菜单 / 部分系统对话框）的语言跟随 Loopsoar 设置；
-// --lang 必须在 app ready 之前设置，运行时切换语言会在下次启动生效。
+// Chromium 原生 UI 语言跟随设置；--lang 必须在 app ready 之前设置，运行时切换下次启动生效。
 try {
-  const preDirs = ensureWritableDataDirs(app);
+  const preDirs = ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged });
   const language = loadPreferences(preDirs.configDir).language;
   app.commandLine.appendSwitch("lang", language);
   // Windows 原生遮挡检测会把「被其它窗口盖住」的网页标记为 hidden，Chromium 随即丢弃注入的
@@ -299,24 +287,33 @@ try {
   console.warn("[Loopsoar] 设置 Chromium 语言失败", err instanceof Error ? err.message : String(err));
 }
 
+ensureSingleInstance(app, (argv) => { browserLinks.acceptArgs(argv); mainWindow?.show(); mainWindow?.focus(); });
+// macOS 的默认浏览器入口走 open-url；Windows/Linux 走 argv + second-instance。
+app.on("open-url", (event, url) => { event.preventDefault(); browserLinks.acceptUrl(url); });
+
 app.whenReady().then(async () => {
   bootTrace.mark("whenReady");
   try {
-    const dirs = ensureWritableDataDirs(app);
+    const dirs = ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged });
+    // 安装包没有控制台：把 error/warn 同时写 <dataDir>/logs/main.log（5MB 轮转）。
+    installMainLogIfPackaged(dirs.dataDir, app.isPackaged);
+    // 升级前自动备份：版本号变化才执行；失败只记录，不阻断启动。
+    runUpgradeBackupSafe(dirs.dataDir, APP_VERSION);
     const stores = createRunStores(dirs.dataDir);
     // 后台任务：应用退出时统一杀进程树，避免留下孤儿构建/dev server。
     const backgroundTasks = new BackgroundTaskManager();
     app.on("will-quit", () => backgroundTasks.killAll());
-  // 崩溃取证：原生 AV 进程直接退出，JS 抓不到；先把可捕获的进程/渲染器死亡与未处理异常写盘，
-  // 用户下次复现时我们才有 renderer/child-process 的 exitCode/reason，而不是只有一张报错弹窗。
-  const crashLogPath = path.join(dirs.dataDir, "crash.log");
+  // 崩溃取证：原生 AV 进程直接退出，JS 抓不到；先把可捕获的进程/渲染器死亡与未处理异常写盘。
+  const crashLog = createCrashLog({
+    dataDir: dirs.dataDir,
+    version: APP_VERSION,
+    versions: process.versions,
+    platform: process.platform,
+    arch: process.arch,
+  });
   const writeCrashLog = (kind: string, detail: unknown): void => {
-    try {
-      fs.appendFileSync(crashLogPath, `${new Date().toISOString()} ${kind} ${JSON.stringify(detail)}\n`);
-    } catch {
-      // 日志写不进去不阻断启动
-    }
-    console.error("[Loopsoar]", kind, detail);
+    crashLog.write(kind, detail);
+    console.error("[Loopsoar]", kind, redactDeep(detail));
   };
   process.on("uncaughtException", (err) => writeCrashLog("uncaughtException", { message: err.message, stack: err.stack }));
   process.on("unhandledRejection", (reason) => writeCrashLog("unhandledRejection", reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason));
@@ -337,13 +334,13 @@ app.whenReady().then(async () => {
   bootTrace.mark("data-dirs");
 
   // 协议：服务真实 UI 产物；产物缺失时降级为可读提示页（不白屏）
-  const uiDist = resolveUiDistDir(uiDistCandidates(__dirname, process.cwd()));
-  if (uiDist) {
-    protocol.handle(PROTOCOL, makeUiProtocolHandler(uiDist));
-  } else {
-    console.warn("[Loopsoar] 未找到 ui/dist（先运行 pnpm --filter loopsoar-ui build），使用占位页");
-    protocol.handle(PROTOCOL, makePlaceholderProtocolHandler());
-  }
+  const uiDist = resolveUiDistDir(uiDistCandidates(__dirname, process.cwd(), process.resourcesPath));
+  installUiProtocol({
+    protocol: PROTOCOL,
+    distDir: uiDist,
+    handle: (scheme, handler) => protocol.handle(scheme, handler),
+    warn: (message) => console.warn(message),
+  });
   bootTrace.mark("protocol+ui-dist");
 
   const core = await createCoreServices({ dirs, appVersion: APP_VERSION, bootTrace, pushToRenderer, safeStorage });
@@ -702,8 +699,8 @@ app.whenReady().then(async () => {
   // 浏览器工具栏浮层：独立子窗口渲染（天然浮在原生网页视图之上，不再需要隐藏网页）
   const chromePopover = createChromePopoverManager({
     getMainWindow: () => mainWindow,
-    loadUrlFor: (kind, lang) =>
-      `${PROTOCOL}://app/index.html?popover=${kind}${lang ? `&lang=${encodeURIComponent(lang)}` : ""}`,
+    loadUrlFor: (kind, lang, params) =>
+      `${PROTOCOL}://app/index.html?popover=${kind}${lang ? `&lang=${encodeURIComponent(lang)}` : ""}${params?.tabId ? `&tabId=${encodeURIComponent(params.tabId)}` : ""}`,
     preloadPath: preloadPath(),
     // 浮层关闭（Esc/失焦/hover 离开/切 kind）→ 通知渲染层同步状态，支持「已展开时点击一次即收起」
     onClosed: () => pushToRenderer("chrome:popoverClosed", {}),
@@ -996,7 +993,7 @@ app.whenReady().then(async () => {
     review: (messages) => reviewSessionRules(buildLlmFromActive() ?? llmRef, messages),
     push: pushToRenderer,
   });
-  registerChatDomain({
+  const chatDeps = registerChatDomain({
     ...deps,
     chatService,
     push: pushToRenderer,
@@ -1129,6 +1126,7 @@ app.whenReady().then(async () => {
       pushToRenderer("browser:tabs", { tabs: browserHost.listTabs(), visibleSession: browserHost.visibleSessionId() });
     },
   });
+  createScheduledTaskRuntime({ dataDir: dirs.dataDir, chatDeps, push: pushToRenderer, notify: showDesktopNotification }).start();
   registerMemoryDomain({
     ...deps,
     memory,
@@ -1350,6 +1348,8 @@ app.whenReady().then(async () => {
       agentWindow?.dispose();
       void remoteBrowserBackend?.close();
     },
+    // app.exit() 不触发 will-quit：后台任务必须在这里杀，否则留孤儿进程。
+    killBackgroundTasks: () => backgroundTasks.killAll(),
     flushAudit: () => (auditFile ? auditFile.flush() : Promise.resolve()),
   });
 
@@ -1396,6 +1396,7 @@ app.whenReady().then(async () => {
   // 窗口创建后立刻重排一次，让恢复出来的原生网页视图补挂并设置 bounds/可见性。
   // 幂等：已挂上的视图不会重复挂载；没有标签页时只是一次空布局。
   browserHost?.syncBounds();
+  browserLinks.drain();
   bootTrace.mark("window-sync-bounds");
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

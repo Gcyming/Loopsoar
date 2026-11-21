@@ -35,6 +35,9 @@ const SEARCH_PARAMS = typeof location !== "undefined" ? new URLSearchParams(loca
 const LANG_PARAM = SEARCH_PARAMS.get("lang");
 if (LANG_PARAM === "zh-CN" || LANG_PARAM === "en-US") setLanguage(LANG_PARAM);
 
+/** tabmenu：主进程把被右键的标签 id 写进 URL（浮层是独立文档，不能读主窗口 state）。 */
+const TAB_MENU_TARGET = SEARCH_PARAMS.get("tabId");
+
 /**
  * 浮层窗口透明背景（CSS 里 html[data-popover] 兜底，这里同步打标避免首帧白底闪烁）。
  *
@@ -52,7 +55,7 @@ const BOOKMARK_PREVIEW = 8;
 const HISTORY_PREVIEW = 8;
 const DOWNLOAD_PREVIEW = 5;
 
-const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces", "workspace"];
+const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces", "workspace", "tabmenu"];
 
 function isPopoverKind(value: unknown): value is ChromePopoverKind {
   return typeof value === "string" && POPOVER_KINDS.includes(value as ChromePopoverKind);
@@ -96,6 +99,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   const [downloads, setDownloads] = React.useState<DownloadItem[] | null>(null);
   const [workspaces, setWorkspaces] = React.useState<WorkspaceRecord[] | null>(null);
   const [workspaceTabs, setWorkspaceTabs] = React.useState<TabState[] | null>(null);
+  const [tabMenuTabs, setTabMenuTabs] = React.useState<TabState[] | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
 
@@ -129,6 +133,10 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
           // 浮层窗口与主窗口同进程、同一套 preload：listTabs 返回的就是「当前会话」的标签。
           const result = await api?.browser.listTabs();
           if (alive) setWorkspaceTabs(result?.tabs ?? []);
+        } else if (kind === "tabmenu") {
+          // 标签右键菜单独立渲染：不隐藏网页、不截图，所以不会造成页面冻结/闪烁。
+          const result = await api?.browser.listTabs();
+          if (alive) setTabMenuTabs(result?.tabs ?? []);
         } else if (kind === "workspaces") {
           const result = await api?.workspace.list();
           if (alive) {
@@ -488,10 +496,105 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
     );
   };
 
+  const renderTabMenu = (): React.ReactElement => {
+    const tabs = tabMenuTabs;
+    const tab = tabs?.find((item) => item.id === TAB_MENU_TARGET);
+    if (!tabs) return <div className="chrome-pop-empty">{tr("browser.loading")}</div>;
+    if (!tab) return <div className="chrome-pop-error">{tr("browser.tabMenuUnavailable")}</div>;
+    const index = tabs.findIndex((item) => item.id === tab.id);
+    const hasOthers = tabs.some((item) => item.id !== tab.id && item.pinned !== true);
+    const hasRight = index >= 0 && tabs.slice(index + 1).some((item) => item.pinned !== true);
+    const run = (tabAction: string, payload: Record<string, unknown> = {}): void => {
+      void dispatch("tabAction", { tabAction, tabId: tab.id, ...payload });
+    };
+    return (
+      <div className="chrome-pop-menu" role="menu" aria-label={tr("browser.tabsAria")}>
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => run("new-right")}>
+          <Icon name="plus" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuNewRight")}</span>
+        </button>
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => run("reload")}>
+          <Icon name="refresh" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuReload")}</span>
+          <span className="chrome-pop-shortcut">Ctrl+R</span>
+        </button>
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => run("duplicate")}>
+          <Icon name="copy" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuDuplicate")}</span>
+          <span className="chrome-pop-shortcut">Ctrl+Shift+K</span>
+        </button>
+        <div className="chrome-pop-sep" />
+        <button
+          type="button"
+          role="menuitem"
+          className="chrome-pop-item"
+          onClick={() => run(tab.muted ? "unmute" : "mute")}
+        >
+          <Icon name={tab.muted ? "volume-2" : "volume-x"} size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tab.muted ? tr("browser.tabMenuUnmute") : tr("browser.tabMenuMute")}</span>
+          <span className="chrome-pop-shortcut">Ctrl+M</span>
+        </button>
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => run(tab.pinned ? "unpin" : "pin")}>
+          <Icon name="pin" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tab.pinned ? tr("browser.tabMenuUnpin") : tr("browser.tabMenuPin")}</span>
+        </button>
+        <div className="chrome-pop-sep" />
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => run("close")}>
+          <Icon name="close" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuClose")}</span>
+          <span className="chrome-pop-shortcut">Ctrl+W</span>
+        </button>
+        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => run("reopen")}>
+          <Icon name="history" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuReopen")}</span>
+          <span className="chrome-pop-shortcut">Ctrl+Shift+T</span>
+        </button>
+        <div className="chrome-pop-sep" />
+        <button
+          type="button"
+          role="menuitem"
+          className="chrome-pop-item"
+          disabled={!hasOthers}
+          onClick={() => run("close-others")}
+        >
+          <span className="chrome-pop-icon" aria-hidden="true" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuCloseOthers")}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="chrome-pop-item"
+          disabled={!hasRight}
+          onClick={() => run("close-right")}
+        >
+          <span className="chrome-pop-icon" aria-hidden="true" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuCloseRight")}</span>
+        </button>
+        <div className="chrome-pop-sep" />
+        <button type="button" role="menuitem" className="chrome-pop-item" disabled={!tab.url} onClick={() => run("copy-url")}>
+          <Icon name="link" size={16} className="chrome-pop-icon" />
+          <span className="chrome-pop-label">{tr("browser.tabMenuCopyUrl")}</span>
+        </button>
+      </div>
+    );
+  };
+
   return (
-    <div ref={rootRef} className="chrome-pop-shell" tabIndex={-1}>
+    <div
+      ref={rootRef}
+      className="chrome-pop-shell"
+      tabIndex={-1}
+      onKeyDown={onListKeyDown}
+      onPointerDown={(event) => {
+        // 300×380 的透明窗口比菜单卡片略大：点在卡片外的透明区域也应视为「点列表外」。
+        if (event.target !== event.currentTarget) return;
+        void api?.ui?.closePopover().catch(() => undefined);
+      }}
+    >
       <div className={`chrome-pop-card chrome-pop-${kind}`} role="presentation">
-        {kind === "workspace"
+        {kind === "tabmenu"
+          ? renderTabMenu()
+          : kind === "workspace"
           ? renderWorkspaceTabs()
           : kind === "more"
             ? renderMore()

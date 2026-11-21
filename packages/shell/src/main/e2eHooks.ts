@@ -31,7 +31,22 @@ export interface E2eHooks {
   scheduleE2EConfirmShot(win: BrowserWindow): void;
 }
 
+/** 打包态的空实现：安装包里不安装任何 E2E 钩子（环境变量不能成为执行入口）。 */
+const NOOP_E2E_HOOKS: E2eHooks = {
+  scheduleE2EScreenshot: () => undefined,
+  scheduleE2EDemoChat: () => undefined,
+  scheduleE2ESidebarRailHover: () => undefined,
+  scheduleE2ERailHover: () => undefined,
+  scheduleE2ELiveTool: () => undefined,
+  scheduleE2EPlanDemo: () => undefined,
+  scheduleE2ESteerDemo: () => undefined,
+  scheduleE2ESearchDemo: () => undefined,
+  scheduleE2EConfirmShot: () => undefined,
+};
+
 export function createE2eHooks(ctx: E2eHooksContext): E2eHooks {
+  // 安全门：E2E 钩子能执行任意 JS / 截图 / 改窗口，只允许在开发态启用。
+  if (app.isPackaged) return NOOP_E2E_HOOKS;
 /** E2E/验收截图钩子：设置 LOOPSOAR_E2E_SHOT=<path> 时，加载完成后（可选先导航）截图并退出。 */
 function scheduleE2EScreenshot(win: BrowserWindow): void {
   const shotPath = process.env.LOOPSOAR_E2E_SHOT;

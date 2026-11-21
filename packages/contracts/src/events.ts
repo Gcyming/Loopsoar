@@ -54,6 +54,12 @@ export const EVENTS = [
    */
   "chrome:applyLayout",
   "chat:compacted",
+  /** 定时任务列表/运行记录发生变化（UI 刷新面板；payload 为空即可）。 */
+  "schedule:updated",
+  /** 主进程 → UI 输入框：把选中文本/页面操作变成可编辑提示（不自动发送）。 */
+  "ui:compose",
+  /** 主进程 → UI：打开设置指定分区（托盘菜单「打开定时任务」）。 */
+  "ui:openSettings",
 ] as const;
 
 /** Type for event names (string literal union). */

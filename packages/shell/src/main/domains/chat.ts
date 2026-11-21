@@ -102,10 +102,28 @@ export function flushActivePartials(save: (sessionId: string, text: string) => v
   activePartials.clear();
 }
 
+/** 是否有会话正在生成（退出确认用：运行中退出会丢当前回合）。 */
+export function hasActiveStreams(): boolean {
+  return activeStreams.size > 0;
+}
+
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
 export function startStream(
   deps: ChatDeps,
-  payload: { message: string; sessionId?: string; mode?: "build" | "plan"; reasoningEffort?: string },
+  payload: {
+    message: string;
+    sessionId?: string;
+    mode?: "build" | "plan";
+    reasoningEffort?: string;
+    /** 定时任务等无人值守会话：普通工具确认自动放行，敏感步骤拒绝。 */
+    autonomous?: boolean;
+  },
+  hooks?: {
+    /** 本轮正常结束（会话已落库）；定时任务据此记运行结果。 */
+    onDone?: (result: { sessionId: string; finalText: string }) => void;
+    /** 本轮异常中断（已尽力保存部分正文）。 */
+    onError?: (result: { sessionId: string; error: string }) => void;
+  },
 ): { accepted: boolean; sessionId: string } {
   // 会话解析：显式 > 当前会话 > 新建会话（多会话列表）
   let sessionId = payload.sessionId ?? deps.sessions?.currentId() ?? null;
@@ -123,7 +141,7 @@ export function startStream(
   deps.onTurnStarted?.(sessionId);
 
   void deps.chatService
-    .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort }, (item) => {
+    .stream({ message: payload.message, sessionId, mode: payload.mode, reasoningEffort: payload.reasoningEffort, autonomous: payload.autonomous }, (item) => {
       const type = String(item.meta?.type ?? "chunk");
       if (type === "chunk") {
         assistantText += item.content;
@@ -166,6 +184,12 @@ export function startStream(
       stagedTimelines.delete(sessionId);
       if (stagedTimeline && stagedTimeline.length > 0) {
         deps.sessions?.attachTimeline(sessionId, stagedTimeline);
+      }
+      // 先通知调用方「本轮已落库」，再做记忆汇总等后台工作：定时任务不应等记忆抽取。
+      try {
+        hooks?.onDone?.({ sessionId, finalText });
+      } catch (hookErr) {
+        console.warn("[Loopsoar] onDone 回调失败（已忽略）：", hookErr);
       }
       // 记忆自动汇总：抽取候选 → 五门治理 → 落盘（失败不阻断对话）
       if (deps.memory && (deps.shouldAutoCapture?.() ?? true) && finalText.trim()) {
@@ -222,11 +246,16 @@ export function startStream(
         }
       }
       deps.push("chat:stream:error", { sessionId, content: cleaned, message: cleaned });
+      try {
+        hooks?.onError?.({ sessionId, error: cleaned });
+      } catch (hookErr) {
+        console.warn("[Loopsoar] onError 回调失败（已忽略）：", hookErr);
+      }
     });
   return { accepted: true, sessionId };
 }
 
-export function registerChatDomain(deps: ChatDeps): void {
+export function registerChatDomain(deps: ChatDeps): ChatDeps {
   handleTrusted(deps, "chat:stream", (payload) =>
     startStream(deps, payload as { message: string; sessionId?: string; mode?: "build" | "plan" }),
   );
@@ -376,4 +405,5 @@ export function registerChatDomain(deps: ChatDeps): void {
     if (removed) await deps.onSessionDeleted?.(p.sessionId, deps.sessions?.currentId() ?? null);
     return { removed, sessions: deps.sessions?.list() ?? [], currentId: deps.sessions?.currentId() ?? null };
   });
+  return deps;
 }

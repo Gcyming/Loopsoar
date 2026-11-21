@@ -12,6 +12,8 @@ export default defineWorkspace([
       name: "loopsoar-tests",
       environment: "node",
       include: ["tests/**/*.spec.ts"],
+      // 防止间接 import electron 时触发二进制下载（见文件内说明）。
+      setupFiles: ["tests/setup/electron-env.ts"],
       server: { deps: { inline: [/^loopsoar-/] } },
     },
   },

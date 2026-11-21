@@ -11,6 +11,7 @@ import { browserChannels } from "./browser.js";
 import { settingsChannels } from "./settings.js";
 import { memoryChannels } from "./memory.js";
 import { extensionsChannels } from "./extensions.js";
+import { scheduleChannels } from "./schedule.js";
 import { systemChannels } from "./system.js";
 
 /** 域文件合并表（顺序不重要，最终按 CHANNEL_ORDER 重排）。 */
@@ -21,6 +22,7 @@ const grouped: Record<string, ChannelBinding> = {
   ...settingsChannels,
   ...memoryChannels,
   ...extensionsChannels,
+  ...scheduleChannels,
   ...systemChannels,
 };
 
@@ -46,6 +48,11 @@ const CHANNEL_ORDER = [
   "browser:snapshot",
   "browser:newTab",
   "browser:closeTab",
+  "browser:closeTabs",
+  "browser:duplicateTab",
+  "browser:setTabMuted",
+  "browser:setTabPinned",
+  "browser:reopenClosedTab",
   "browser:endTask",
   "browser:closeSessionTabs",
   "browser:selectTab",
@@ -184,6 +191,10 @@ const CHANNEL_ORDER = [
   "loop:get",
   "loop:save",
   "loop:delete",
+  "schedule:list",
+  "schedule:save",
+  "schedule:delete",
+  "schedule:run",
   "bookmarks:list",
   "bookmarks:add",
   "bookmarks:remove",

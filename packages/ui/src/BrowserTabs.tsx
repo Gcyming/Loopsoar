@@ -18,6 +18,20 @@ import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
 import type { TabState } from "./types.js";
 
+export type TabMenuAction =
+  | "new-right"
+  | "reload"
+  | "duplicate"
+  | "mute"
+  | "unmute"
+  | "pin"
+  | "unpin"
+  | "close"
+  | "reopen"
+  | "close-others"
+  | "close-right"
+  | "copy-url";
+
 export interface BrowserTabsProps {
   /** 普通标签（用户自己的标签；Agent 绑定标签已由调用方分到 boundTabs）。 */
   tabs: TabState[];
@@ -30,6 +44,10 @@ export interface BrowserTabsProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
+  /** 标签右键菜单动作统一交给 App：组件不直接碰 IPC，保持纯展示。 */
+  onTabAction: (action: TabMenuAction, tabId: string) => void;
+  /** 右键标签：交给 App 打开独立浮层窗口（浮在原生网页之上，不隐藏/不重绘网页）。 */
+  onOpenTabMenu: (tabId: string, anchor: { x: number; y: number; width: number; height: number }) => void;
   /** 跨会话任务条：所有带 Agent 工作区的会话。 */
   agentTasks: { sessionId: string; tabs: TabState[] }[];
   /** 当前会话（当前任务的 chip 由 boundTabs 那条渲染，避免重复）。 */
@@ -45,15 +63,29 @@ export default function BrowserTabs({
   onSelectTab,
   onCloseTab,
   onNewTab,
+  onTabAction,
+  onOpenTabMenu,
   agentTasks,
   currentSessionId,
   onOpenTask,
 }: BrowserTabsProps): React.ReactElement {
   const tr = useT();
   const boundTabIds = new Set(boundTabs.map((tab) => tab.id));
+
+  const openMenu = (event: React.MouseEvent, tabId: string): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    onOpenTabMenu(tabId, {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: 300,
+      height: Math.max(1, Math.round(rect.height)),
+    });
+  };
   return (
-    // wrap 才是绝对定位面板的包含块：strip 自己 overflow:hidden（标签超宽裁切），
-    // 面板必须挂在 strip 之外，否则会被一起裁掉。
+    // strip 的 overflow:hidden 负责标签超宽裁切；右键菜单已改由独立浮层窗口渲染，
+    // 不再需要为了露出 DOM 菜单而隐藏网页视图。
     <div style={styles.wrap}>
       <div style={styles.strip} role="tablist" aria-label={tr("browser.tabsAria")}>
         {agentTasks
@@ -116,13 +148,25 @@ export default function BrowserTabs({
             style={styles.tab}
             title={tab.url || tab.title}
             onClick={() => onSelectTab(tab.id)}
+            onContextMenu={(event) => openMenu(event, tab.id)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 onSelectTab(tab.id);
               }
+              if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                event.preventDefault();
+                const rect = event.currentTarget.getBoundingClientRect();
+                onOpenTabMenu(tab.id, {
+                  x: Math.round(rect.left),
+                  y: Math.round(rect.top),
+                  width: 300,
+                  height: Math.max(1, Math.round(rect.height)),
+                });
+              }
             }}
           >
+            {tab.pinned ? <Icon name="pin" size={11} style={styles.tabPinned} /> : null}
             {tab.url ? (
               tab.favicon ? (
                 <img src={tab.favicon} alt="" width={14} height={14} style={styles.tabFavicon} />
@@ -133,6 +177,23 @@ export default function BrowserTabs({
               <Icon name="globe" size={12} style={styles.tabFaviconFallback} />
             )}
             <span style={styles.tabTitle}>{tab.url ? tab.title : tr("browser.startNewTabTitle")}</span>
+            {tab.audible || tab.muted ? (
+              <button
+                type="button"
+                className="icon-btn tab-audio"
+                title={tab.muted ? tr("browser.tabAudioUnmute") : tr("browser.tabAudioMute")}
+                aria-label={tab.muted ? tr("browser.tabAudioUnmute") : tr("browser.tabAudioMute")}
+                aria-pressed={tab.muted === true}
+                style={styles.tabAudio}
+                data-tab-audio={tab.muted ? "muted" : "audible"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onTabAction(tab.muted ? "unmute" : "mute", tab.id);
+                }}
+              >
+                <Icon name={tab.muted ? "volume-x" : "volume-2"} size={16} />
+              </button>
+            ) : null}
             <button
               type="button"
               className="icon-btn tab-close"
@@ -196,7 +257,6 @@ const styles: Record<string, React.CSSProperties> = {
     userSelect: "none",
     transition: MOTION.hover,
   },
-  chipOpen: { background: BRAND.ochreSoft, color: BRAND.linen },
   chipIcon: { flex: "none", color: BRAND.ochreHover },
   chipLabel: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 },
   chipCount: { flex: "none", color: BRAND.linenFaint, fontSize: 11 },
@@ -220,11 +280,8 @@ const styles: Record<string, React.CSSProperties> = {
   tabLetter: { flex: "none", width: 16, height: 16, borderRadius: 3, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.06)", color: BRAND.linenMuted, fontSize: 10, fontWeight: 700 },
   tabFaviconFallback: { flex: "none", color: BRAND.linenFaint },
   tabTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "1 1 auto" },
+  tabPinned: { flex: "none", color: BRAND.linenFaint, transform: "rotate(45deg)" },
+  tabAudio: { width: 20, height: 20, flex: "none", color: BRAND.linenMuted },
   tabClose: { width: 18, height: 18, flex: "none" },
   tabAdd: { width: 26, height: 26, flex: "none", marginBottom: 2, marginLeft: 2 },
-
-  panelItemActive: { background: BRAND.ochreSoft },
-  panelTitle: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  panelCheck: { flex: "none", color: BRAND.ochreHover },
-  panelEmpty: { padding: "10px 9px", color: BRAND.linenFaint, fontSize: 12 },
 };

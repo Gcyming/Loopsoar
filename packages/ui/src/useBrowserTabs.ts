@@ -5,11 +5,13 @@
  * 浏览器动作。会话创建仍由 App 编排：这里只通过 ref 调 `createFreshSessionAndTab`，
  * 避免把「标签页 = 会话」的产品规则复制进浏览器状态层。
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MutableRefObject } from "react";
 import { resolveOmniboxInput } from "loopsoar-contracts/omnibox";
 import { dismissAllPopovers } from "./popover.js";
+import { getLanguage } from "./i18n.js";
 import type { LoopsoarAPI, Preferences, TabState } from "./types.js";
+import type { TabMenuAction } from "./BrowserTabs.js";
 
 export type CreateFreshSession = (options?: { newBlankTab?: boolean }) => Promise<void>;
 
@@ -131,6 +133,126 @@ export function useBrowserTabs({
     [api, applyTabSnapshot, createFreshSessionRef, currentSessionRef, tabs],
   );
 
+  /** 标签右键菜单动作：统一走主进程，然后刷新一次标签快照。 */
+  const tabAction = useCallback(
+    (action: TabMenuAction, tabId: string): void => {
+      if (!api) return;
+      const tab = tabs.find((item) => item.id === tabId);
+      if (!tab && action !== "reopen") return;
+      const refresh = (): void => {
+        void api.browser.listTabs().then((r) => applyTabSnapshot(r.tabs)).catch(() => undefined);
+      };
+      const run = (promise: Promise<unknown>): void => {
+        void promise.then(refresh).catch((err: unknown) => {
+          setNotice(`标签操作失败：${err instanceof Error ? err.message : String(err)}`);
+        });
+      };
+      switch (action) {
+        case "new-right":
+          run(api.browser.newTab({ afterTabId: tabId }));
+          return;
+        case "reload":
+          run(api.browser.reload({ tabId }));
+          return;
+        case "duplicate":
+          run(api.browser.duplicateTab({ tabId }));
+          return;
+        case "mute":
+        case "unmute":
+          run(api.browser.setTabMuted({ tabId, muted: action === "mute" }));
+          return;
+        case "pin":
+        case "unpin":
+          run(api.browser.setTabPinned({ tabId, pinned: action === "pin" }));
+          return;
+        case "close":
+          closeTab(tabId);
+          return;
+        case "reopen":
+          run(api.browser.reopenClosedTab());
+          return;
+        case "close-others": {
+          const ids = tabs.filter((item) => item.id !== tabId && item.pinned !== true).map((item) => item.id);
+          if (ids.length > 0) run(api.browser.closeTabs({ tabIds: ids }));
+          return;
+        }
+        case "close-right": {
+          const index = tabs.findIndex((item) => item.id === tabId);
+          if (index < 0) return;
+          const ids = tabs.slice(index + 1).filter((item) => item.pinned !== true).map((item) => item.id);
+          if (ids.length > 0) run(api.browser.closeTabs({ tabIds: ids }));
+          return;
+        }
+        case "copy-url":
+          if (tab?.url) {
+            void navigator.clipboard?.writeText(tab.url).then(
+              () => setNotice("已复制页面地址"),
+              () => setNotice("复制失败：剪贴板不可用"),
+            );
+          }
+          return;
+        default:
+          return;
+      }
+    },
+    [api, applyTabSnapshot, closeTab, setNotice, tabs],
+  );
+
+  /** 与标签右键菜单文案一致的快捷键：菜单里展示了就必须真的能用。 */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod || event.altKey) return;
+      const key = event.key.toLowerCase();
+      const active = tabs.find((tab) => tab.active);
+      if (event.shiftKey) {
+        if (key === "t") {
+          event.preventDefault();
+          tabAction("reopen", active?.id ?? "");
+        } else if (key === "k" && active) {
+          event.preventDefault();
+          tabAction("duplicate", active.id);
+        }
+        return;
+      }
+      if (key === "t") {
+        event.preventDefault();
+        newTab();
+        return;
+      }
+      if (!active) return;
+      if (key === "r") {
+        event.preventDefault();
+        tabAction("reload", active.id);
+      } else if (key === "m") {
+        event.preventDefault();
+        tabAction(active.muted ? "unmute" : "mute", active.id);
+      } else if (key === "w") {
+        event.preventDefault();
+        tabAction("close", active.id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [newTab, tabAction, tabs]);
+
+  /**
+   * 标签右键菜单：用主进程的独立浮层窗口（chromePopover）渲染。
+   * 不能再用主窗口 DOM——WebContentsView 永远盖在 DOM 上；也不能靠隐藏网页来露菜单，
+   * 那会让网页停止渲染并闪烁。独立窗口天然在网页之上，页面继续正常渲染。
+   */
+  const openTabMenu = useCallback(
+    (tabId: string, anchor: { x: number; y: number; width: number; height: number }): void => {
+      if (!api) return;
+      void api.ui
+        .openPopover({ kind: "tabmenu", anchor, tabId, lang: getLanguage() })
+        .catch((err: unknown) => {
+          setNotice(`打开标签菜单失败：${err instanceof Error ? err.message : String(err)}`);
+        });
+    },
+    [api, setNotice],
+  );
+
   /** 关闭整个 Agent 工作区：关闭全部绑定页（任务会话本身保留，页面关闭不等于会话结束）。 */
   const closeAgentWorkspace = useCallback((): void => {
     if (!api) return;
@@ -223,6 +345,8 @@ export function useBrowserTabs({
     newTab,
     selectTab,
     closeTab,
+    tabAction,
+    openTabMenu,
     closeAgentWorkspace,
     goBack,
     goForward,

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAppIconPath } from "./appIcon.js";
+import { withUnpackedCandidates } from "./packagedPaths.js";
 
 // bundle 为 ESM，模块作用域没有 __dirname；从 import.meta.url 还原（src 运行同样适用）。
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -20,10 +21,11 @@ export function iconPath(): string | undefined {
 
 /** preload 路径按运行形态探测（bundle/dist 运行与 src 运行目录深度不同）。 */
 export function preloadPath(): string {
-  const candidates = [
+  // 打包态 preload 也可能被解包（app.asar.unpacked）：两种形态都探测，避免静默回退到不存在的路径。
+  const candidates = withUnpackedCandidates([
     path.join(moduleDir, "../src/preload/index.cjs"), // bundle/dist 运行
     path.join(moduleDir, "../../src/preload/index.cjs"), // src/main 运行
-  ];
+  ]);
   const found = candidates.find((p) => fs.existsSync(p));
   if (!found) console.error("PRELOAD_NOT_FOUND candidates=", candidates);
   return found ?? candidates[0];

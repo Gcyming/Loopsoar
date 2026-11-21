@@ -20,6 +20,7 @@ import {
   createBrowserRequestPolicy,
   shouldBlockAgentLoopback,
 } from "./browserRequestGuard.js";
+import { attachPageContextMenu } from "./browserPageContextMenu.js";
 
 export interface ElectronBrowserHostOptions {
   initialSessionId?: string;
@@ -246,6 +247,17 @@ export class BrowserDevToolsPanel {
     const win = this.options.getWindow();
     if (!win || win.isDestroyed()) return false;
     try {
+      // 右键「检查元素」在旧路径里会直接走 webContents.inspectElement，把 Chromium
+      // 默认 DevTools 停靠到侧边；那套 DevTools 会盖住底部状态栏，并使「调试」按钮
+      // 无法再接管（底部面板认为 devtools 未开，侧边面板却已经存在）。统一先关掉
+      // 任何已打开的 DevTools，再把它挂到应用自己的底部面板上。
+      if (inspected.isDevToolsOpened()) {
+        try {
+          inspected.closeDevTools();
+        } catch {
+          // 已关闭 / 正在关闭
+        }
+      }
       const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
       win.contentView.addChildView(view);
       this.view = view;
@@ -263,6 +275,24 @@ export class BrowserDevToolsPanel {
       this.destroyView();
       return false;
     }
+  }
+
+  /**
+   * 右键「检查元素」：先让应用底部面板接管 DevTools，再定位到点击坐标对应的节点。
+   * 必须等前端 WebContents 完成 setDevToolsWebContents/openDevTools 后再调用
+   * inspectElement；否则 Electron 会另开默认侧栏 DevTools。
+   */
+  inspect(inspected: Electron.WebContents, x: number, y: number): boolean {
+    if (!this.open(inspected)) return false;
+    setTimeout(() => {
+      if (inspected.isDestroyed()) return;
+      try {
+        inspected.inspectElement(Math.max(0, Math.round(x)), Math.max(0, Math.round(y)));
+      } catch {
+        // DevTools 可能刚被用户关闭
+      }
+    }, 120);
+    return true;
   }
 
   private onInspectedClosed = (): void => {
@@ -523,12 +553,40 @@ export function createElectronBrowserHost(
             // 用户标签/普通页面开的页保持用户语义，不因为落在某个会话组就被标成任务页。
             const fromAgent =
               typeof view.webContents.id === "number" && hostRef.isAgentWebContents(view.webContents.id);
-            void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user");
+            void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user", { forceNew: true });
             return;
           }
           openInNewTab(url);
         }),
       );
+      // 网页原生右键菜单：DOM 浮层覆盖不到 WebContentsView，必须由主进程 Menu 接管。
+      attachPageContextMenu({
+        webContents: view.webContents,
+        getWindow,
+        onNewTab: (url) => {
+          if (!hostRef) return;
+          // 右键「在右侧新建标签页」要沿用发起页的归属：Agent 页开出的仍是 Agent 页，
+          // 否则任务工作区里右键会漏出一个用户标签。
+          const fromAgent = hostRef.isAgentWebContents(view.webContents.id);
+          void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user", { forceNew: true });
+        },
+        onAskAgent: (text) => {
+          const win = getWindow();
+          if (!win || win.isDestroyed()) return;
+          win.show();
+          win.focus();
+          win.webContents.send("loopsoar:ui:compose", { text });
+        },
+        // 页面内「检查元素」必须走应用底部面板：直接 wc.inspectElement 会让 Chromium
+        // 默认 DevTools 停靠在网页侧边，盖住状态栏并让底部「调试」按钮失效。
+        onInspectElement: (x, y) => {
+          if (options.devToolsPanel) {
+            options.devToolsPanel.inspect(view.webContents, x, y);
+          } else {
+            view.webContents.inspectElement(x, y);
+          }
+        },
+      });
       // 点网页区域 = 点到「列表外」：通知主窗口收起按钮展开的浮层（DOM 收不到原生视图的点击）
       if (options.onViewFocused) {
         view.webContents.on("focus", () => options.onViewFocused?.());

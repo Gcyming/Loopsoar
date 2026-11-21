@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BookmarkAddSchema, BookmarkRemoveSchema, BrowserBottomInsetSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
+import { BookmarkAddSchema, BookmarkRemoveSchema, BrowserBottomInsetSchema, BrowserCloseTabsSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabMuteSchema, BrowserTabPinSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 browser 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -32,6 +32,36 @@ export const browserChannels: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "closeTab",
     request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:closeTabs": {
+    domain: "browser",
+    method: "closeTabs",
+    request: BrowserCloseTabsSchema,
+    sensitive: true,
+  },
+  "browser:duplicateTab": {
+    domain: "browser",
+    method: "duplicateTab",
+    request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:setTabMuted": {
+    domain: "browser",
+    method: "setTabMuted",
+    request: BrowserTabMuteSchema,
+    sensitive: true,
+  },
+  "browser:setTabPinned": {
+    domain: "browser",
+    method: "setTabPinned",
+    request: BrowserTabPinSchema,
+    sensitive: true,
+  },
+  "browser:reopenClosedTab": {
+    domain: "browser",
+    method: "reopenClosedTab",
+    request: null,
     sensitive: true,
   },
   "browser:endTask": {

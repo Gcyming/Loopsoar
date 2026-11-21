@@ -5,6 +5,7 @@
 // 不再手写第二份 interface —— 契约新增字段而 UI 类型不更新时，设置页读不到该字段，
 // 而壳层 zod safeParse 会 strip 未知键、静默落回默认值，这类漂移必须由编译期消灭。
 import type { EventName, Permissions as PermissionsData, PreferencesData } from "loopsoar-contracts/schemas";
+import type { ScheduleInput, ScheduleListResult, ScheduleRunResult, ScheduleSaveResult, ScheduledTask } from "./scheduleTypes.js";
 
 export interface LoopsoarDomain {
   [method: string]: (...args: unknown[]) => Promise<unknown>;
@@ -309,6 +310,11 @@ export interface TabState {
   favicon?: string;
   /** Agent 打开或导航过：UI 把它折叠进「Agent 工作区」而不是普通标签条。 */
   agentBound?: boolean;
+  /** 页面是否在出声 / 是否被静音（主进程音频事件同步）。 */
+  audible?: boolean;
+  muted?: boolean;
+  /** 固定标签：排在最左侧，关闭其他标签时保留。 */
+  pinned?: boolean;
   /** 最近一次主框架加载失败（已过滤 ERR_ABORTED）。 */
   loadFailure?: {
     code: number;
@@ -823,7 +829,7 @@ export interface SavePageResult {
 export type LoopsoarEvent = EventName;
 
 /** 浏览器工具栏浮层种类（与契约 PopoverKindSchema 对齐）。 */
-export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace";
+export type ChromePopoverKind = "more" | "bookmarks" | "history" | "downloads" | "workspaces" | "workspace" | "tabmenu";
 
 /** 浏览器管理整页种类（更多菜单「查看更多」/设置打开）。 */
 export type ChromePageKind = "history" | "downloads" | "bookmarks" | "settings";
@@ -893,9 +899,9 @@ export interface LoopsoarAPI {
   };
   /** 浏览器工具栏浮层（独立子窗口渲染）。 */
   ui: LoopsoarDomain & {
-    openPopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US" }): Promise<{ ok: boolean; error?: string }>;
+    openPopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US"; tabId?: string }): Promise<{ ok: boolean; error?: string }>;
     /** 原子开关：已打开 → 关闭（open:false），否则打开（open:true）。 */
-    togglePopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US" }): Promise<{ ok: boolean; open: boolean; error?: string }>;
+    togglePopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US"; tabId?: string }): Promise<{ ok: boolean; open: boolean; error?: string }>;
     closePopover(): Promise<{ ok: boolean }>;
     popoverAction(payload: { action: string; payload?: unknown }): Promise<{ ok: boolean }>;
     /** 打开 Agent 会话栏独立窗口（真·窗口化；可拖动/缩放/最小化）。 */
@@ -988,10 +994,22 @@ export interface LoopsoarAPI {
   ui: LoopsoarDomain & {
     toast(payload: { text: string; sticky?: boolean }): Promise<{ ok: boolean }>;
   };
+  /** 定时任务（主进程调度；关闭窗口到托盘后仍会触发）。 */
+  schedule: LoopsoarDomain & {
+    list(): Promise<ScheduleListResult>;
+    save(payload: ScheduleInput): Promise<ScheduleSaveResult>;
+    delete(payload: { id: string }): Promise<{ ok: boolean }>;
+    run(payload: { id: string }): Promise<ScheduleRunResult>;
+  };
   browser: LoopsoarDomain & {
     navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; tabId?: string; error?: string }>;
-    newTab(payload?: { url?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
+    newTab(payload?: { url?: string; afterTabId?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
     closeTab(payload: { tabId: string }): Promise<{ closed: boolean }>;
+    closeTabs(payload: { tabIds: string[] }): Promise<{ closed: number }>;
+    duplicateTab(payload: { tabId: string }): Promise<{ ok: boolean; tabId?: string; error?: string }>;
+    setTabMuted(payload: { tabId: string; muted: boolean }): Promise<{ ok: boolean }>;
+    setTabPinned(payload: { tabId: string; pinned: boolean }): Promise<{ ok: boolean }>;
+    reopenClosedTab(): Promise<{ ok: boolean; tabId?: string }>;
     /** 删除会话时关闭该会话名下的全部网页（工作区 > 会话 > 网页；删会话才关网页，关网页不删会话）。 */
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;

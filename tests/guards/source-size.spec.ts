@@ -38,9 +38,9 @@ interface CompositionRoot {
  */
 const COMPOSITION_ROOTS: Record<string, CompositionRoot> = {
   "packages/shell/src/main/index.ts": {
-    ceiling: 1414,
+    ceiling: 1415,
     reason:
-      "Electron 主进程组合根：协议注册、核心服务装配、浏览器栈、IPC 域、窗口生命周期必须按顺序发生，拆开会让启动顺序隐式化。本轮已把任务分支状态机（taskForks.ts）移出。",
+      "Electron 主进程组合根：协议注册、核心服务装配、浏览器栈、IPC 域、窗口生命周期必须按顺序发生，拆开会让启动顺序隐式化。已把任务分支状态机（taskForks.ts）、崩溃取证（crashLog.ts）、退出守卫（quitGuard.ts）、指针几何（pointerScreenArea）移出。",
     target:
       "下一步拆「浏览器栈装配」（BrowserExtensionHost/popover/agentWindow/devToolsPanel）与「工具目录」（register*Tools）两块。",
   },
@@ -51,7 +51,7 @@ const COMPOSITION_ROOTS: Record<string, CompositionRoot> = {
       "下一步把 vault 索引层（loadIndex/persistIndex/readVaultIndexed/reconcile*）抽成 MemoryVaultIndex，门面只保留事实读写与召回。",
   },
   "packages/ui/src/App.tsx": {
-    ceiling: 1468,
+    ceiling: 1465,
     reason:
       "UI 组合根：一个交互式单组件，已把 20+ 个子面板拆到独立文件；剩余部分是同一份会话状态上的分布布局，跨文件会引入大量透传。",
     target: "下一步把 body JSX 抽成 AppBody 并显式声明 props（约 -400 行），届时本条目应下调到 ~1070。",

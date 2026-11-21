@@ -11,6 +11,7 @@
  */
 export * from "./validators.js";
 export * from "./loopStages.js";
+export * from "./scheduledTasks.js";
 export { CHANNEL_BINDINGS } from "./channels/index.js";
 export { EVENTS, type EventName } from "./events.js";
 

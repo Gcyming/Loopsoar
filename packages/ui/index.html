@@ -2975,6 +2975,16 @@
       margin: 4px 6px;
       background: var(--ls-border);
     }
+    /* 标签页右键菜单的快捷键列：固定右对齐，不挤压标签文字。 */
+    .chrome-pop-shortcut {
+      margin-left: auto;
+      flex: none;
+      padding-left: 10px;
+      color: var(--ls-text-faint);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
     .chrome-pop-empty,
     .chrome-pop-error {
       padding: 10px 12px;
@@ -3175,6 +3185,11 @@
       html[data-animations="off"] .agent-sidebar .agent-sidebar-fade,
       html[data-animations="off"] .terminal-panel {
         transition: none !important;
+      }
+
+      /* 标签页音频状态：静音时压暗喇叭图标（菜单本身由独立浮层窗口渲染）。 */
+      .tab-audio[data-tab-audio="muted"] {
+        color: var(--ls-text-faint, #6f6a63);
       }
 </style>
   </head>

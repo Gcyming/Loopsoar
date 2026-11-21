@@ -104,8 +104,13 @@ export const BrowserNavigateSchema = z.object({
   sessionId: z.string().min(1).max(128).optional(),
   origin: z.enum(["user", "agent"]).optional(),
 });
-export const BrowserNewTabSchema = z.object({ url: z.string().optional() });
+export const BrowserNewTabSchema = z.object({ url: z.string().optional(), afterTabId: z.string().min(1).max(160).optional() });
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
+/** 标签静音/固定：动作只影响当前标签，不做页面导航。 */
+export const BrowserTabMuteSchema = z.object({ tabId: z.string().min(1), muted: z.boolean() });
+export const BrowserTabPinSchema = z.object({ tabId: z.string().min(1), pinned: z.boolean() });
+/** 关闭其他/右侧：一次批量关闭；上限防止渲染层误传整张表。 */
+export const BrowserCloseTabsSchema = z.object({ tabIds: z.array(z.string().min(1)).min(1).max(50) });
 /** 删除会话时一并关闭该会话名下的全部网页（工作区 > 会话 > 网页）。 */
 export const BrowserSessionIdSchema = z.object({ sessionId: z.string().min(1).max(128) });
 export const BrowserCornerColorSchema = z.object({ color: z.string().regex(/^#[0-9a-fA-F]{6}$/) });
@@ -372,8 +377,8 @@ export const ChatResumeSchema = z.object({
 
 /* ───────────────────────── 浏览器工具栏浮层（独立窗口渲染） ───────────────────────── */
 
-/** 浮层种类：更多菜单 / 收藏夹 / 历史记录 / 下载。 */
-export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads", "workspaces", "workspace"]);
+/** 浮层种类：更多菜单 / 收藏夹 / 历史记录 / 下载 / 标签页右键菜单。 */
+export const PopoverKindSchema = z.enum(["more", "bookmarks", "history", "downloads", "workspaces", "workspace", "tabmenu"]);
 
 /** 锚点矩形（相对主窗口内容区的 CSS px；主进程换算为屏幕坐标并做边缘翻转/夹取）。 */
 export const PopoverAnchorSchema = z.object({
@@ -388,6 +393,8 @@ export const OpenChromePopoverSchema = z.object({
   anchor: PopoverAnchorSchema,
   /** 界面语言（浮层独立窗口直接按该语言渲染，避免再等偏好异步加载）。 */
   lang: z.enum(["zh-CN", "en-US"]).optional(),
+  /** tabmenu 专用：被右键的标签 id。 */
+  tabId: z.string().min(1).max(64).optional(),
 });
 
 /** 浮层内动作：由主进程转发给主窗口渲染层执行（openPage/navigate/savePage/openSettings…）。 */
@@ -486,6 +493,8 @@ export const PreferencesSchema = z.object({
   animations: z.enum(["full", "reduced", "off"]),
   /** 启动时恢复上次会话（当前为占位开关，会话持久化接入后生效）。 */
   restoreSession: z.boolean(),
+  /** 关闭主窗口时的行为：tray=最小化到系统托盘并继续运行定时任务；quit=直接退出（默认）。 */
+  closeBehavior: z.enum(["tray", "quit"]).optional(),
   searchEngine: z.enum(["bing", "google", "baidu"]),
   /** 下载目录（空 = 用户下载文件夹）。 */
   downloadDir: z.string().max(1024).optional(),

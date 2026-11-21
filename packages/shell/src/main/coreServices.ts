@@ -42,6 +42,12 @@ export interface CoreServiceInput {
   appVersion?: string;
   bootTrace: { mark(label: string): void };
   pushToRenderer: (event: string, payload: unknown) => void;
+  /**
+   * 默认工作区根（用户未在设置里选过工作区时生效）。
+   * 打包态必须传入 userData 下的目录：安装目录快捷方式的 cwd 是程序目录，
+   * 直接拿 process.cwd() 会让文件工具/终端/截图往安装目录写。
+   */
+  defaultWorkspaceRoot?: string;
   safeStorage: {
     isEncryptionAvailable(): boolean;
     encryptString(plain: string): Buffer;
@@ -51,16 +57,17 @@ export interface CoreServiceInput {
 
 export async function createCoreServices(input: CoreServiceInput) {
   const { dirs, bootTrace, pushToRenderer, safeStorage } = input;
+  const fallbackWorkspaceRoot = input.defaultWorkspaceRoot?.trim() || process.cwd();
   // 装配：platform / 工具注册表 / 沙箱 / Provider 配置 → ChatService（真 LLM 闭环）
   const platform = createNodePlatform();
   const registry = new ToolRegistry();
   registerBuiltinMinimal(registry, platform);
-  const sandbox = new SandboxManager({ workspaceRoot: process.cwd(), paths: nodePathPort });
+  const sandbox = new SandboxManager({ workspaceRoot: fallbackWorkspaceRoot, paths: nodePathPort });
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
 
   // 偏好（工作区根 / 记忆库位置 / 自动记忆开关）→ 决定后续装配
   const initialPrefs = loadPreferences(dirs.configDir);
-  let workspaceRoot = initialPrefs.workspaceRoot?.trim() || process.cwd();
+  let workspaceRoot = initialPrefs.workspaceRoot?.trim() || fallbackWorkspaceRoot;
   sandbox.setWorkspaceRoot(workspaceRoot);
 
   // 加密密钥库：OS 密钥库优先；不可用时降级 AES（.secret.key 0600）。
@@ -243,7 +250,7 @@ export async function createCoreServices(input: CoreServiceInput) {
   // 工作区：挂载项目文件夹。旧偏好里的 workspaceRoot 作为默认工作区，兼容升级用户。
   const workspaces = new WorkspaceStore(
     path.join(dirs.dataDir, "workspaces.json"),
-    initialPrefs.workspaceRoot?.trim() || process.cwd(),
+    initialPrefs.workspaceRoot?.trim() || fallbackWorkspaceRoot,
   );
   const worktreesRoot = path.join(dirs.dataDir, "worktrees");
   // 书签（浏览器功能面 MVP）：独立 JSON 存储，单实例（多实例会互相覆盖）

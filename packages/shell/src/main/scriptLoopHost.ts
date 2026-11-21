@@ -20,6 +20,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
+import { firstExisting, withUnpackedCandidates } from "./packagedPaths.js";
 import type { EventSink, LoopEventType } from "loopsoar-core/events";
 import type { LlmClient, LlmMessage, LlmRequest } from "loopsoar-core/llm";
 import type { PauseGate, ToolExecutor, ToolLoopOutcome } from "loopsoar-core/tool_loop";
@@ -196,13 +197,14 @@ export function buildScriptWorkerEnv(
 /** 解析 worker 脚本路径（源码态 src/main、打包态 dist/main 都能找到）。 */
 export function resolveScriptWorkerPath(baseDir?: string): string {
   const dir = baseDir ?? path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
+  const candidates = withUnpackedCandidates([
     path.join(dir, SCRIPT_WORKER_FILE),
     path.join(dir, "../src/main", SCRIPT_WORKER_FILE),
     path.join(dir, "../../src/main", SCRIPT_WORKER_FILE),
+    path.join(process.resourcesPath ?? dir, "app.asar.unpacked/dist", SCRIPT_WORKER_FILE),
     path.join(process.cwd(), "packages", "shell", "src", "main", SCRIPT_WORKER_FILE),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+  ]);
+  return firstExisting(candidates, candidates[0]);
 }
 
 /** 默认 spawn：独立进程 + 最小 env + 不经 shell（脚本路径不参与命令行解析）。 */

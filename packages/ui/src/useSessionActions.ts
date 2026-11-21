@@ -13,6 +13,7 @@ import { restoreMessages, type ChatMessage, type SessionStreamMeta } from "./cha
 import type { PendingSteer } from "./steerQueue.js";
 import { dismissAllPopovers } from "./popover.js";
 import { getLanguage, t } from "./i18n.js";
+import type { TabMenuAction } from "./BrowserTabs.js";
 
 /** 最小可变 ref 形状（只要求 current 可读写）。 */
 interface MutableRef<T> {
@@ -54,6 +55,7 @@ export interface UseSessionActionsOptions {
   navigate: (url?: string) => void;
   selectTab: (tabId: string) => void;
   closeTab: (tabId: string) => void;
+  tabAction: (action: TabMenuAction, tabId: string) => void;
   bindWorkspaceToCurrentSession: (workspaceId: string) => void;
   addWorkspaceForChat: () => void;
   changeSidebarMode: (next: SidebarModeAction) => void;
@@ -118,6 +120,7 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
     navigate,
     selectTab,
     closeTab,
+    tabAction,
     bindWorkspaceToCurrentSession,
     addWorkspaceForChat,
     changeSidebarMode,
@@ -175,12 +178,19 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
   React.useEffect(() => {
     if (!api) return;
     // 用户点原生网页面板（WebContentsView，DOM 收不到 pointerdown）也算「点列表外」→ 收起所有浮层。
-    return api.on("chrome:dismissPopovers", () => dismissAllPopovers());
+    return api.on("chrome:dismissPopovers", () => {
+      dismissAllPopovers();
+      void api.ui?.closePopover().catch(() => undefined);
+    });
   }, [api]);
   React.useEffect(() => {
     if (!api) return;
     return api.on("chrome:popoverAction", (payload) => {
-      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string; tabId?: string } };
+      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string; tabId?: string; tabAction?: string } };
+      if (p?.action === "tabAction" && p.payload?.tabId && p.payload?.tabAction) {
+        tabAction(p.payload.tabAction as TabMenuAction, p.payload.tabId);
+        return;
+      }
       if (p?.action === "openPage" && p.payload?.kind) {
         dismissAllPopovers();
         setChromePage(p.payload.kind);
@@ -210,7 +220,7 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
         return;
       }
     });
-  }, [api, navigate, bindWorkspaceToCurrentSession, addWorkspaceForChat]);
+  }, [api, navigate, bindWorkspaceToCurrentSession, addWorkspaceForChat, tabAction]);
 
   const refreshSessions = useCallback((): void => {
     if (!api) return;

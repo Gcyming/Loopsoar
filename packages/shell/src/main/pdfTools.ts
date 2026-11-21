@@ -9,6 +9,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { toUnpackedPath } from "./packagedPaths.js";
 import { z } from "zod";
 import type { ToolRegistry, ToolResult } from "loopsoar-core/tools/registry";
 
@@ -19,12 +21,22 @@ const requireFromHere = createRequire(import.meta.url);
 
 /** pdfjs 的 standard_fonts 资源目录；打包/测试路径不同，解析失败时退回 undefined（只影响字体警告）。 */
 function pdfResourceDir(name: string): string | undefined {
+  const candidates: string[] = [];
   try {
     const pkg = requireFromHere.resolve("pdfjs-dist/package.json");
-    return `${path.join(path.dirname(pkg), name).replace(/\\/g, "/")}/`;
+    candidates.push(path.join(path.dirname(pkg), name));
   } catch {
-    return undefined;
+    // 打包态没有 pdfjs-dist 包（已打进主 bundle）：继续试 extraResources
   }
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, "pdfjs", name));
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return `${candidate.replace(/\\/g, "/")}/`;
+    } catch {
+      // 权限/裁剪安装包：跳过
+    }
+  }
+  return undefined;
 }
 
 export interface PdfTextResult {
@@ -78,6 +90,16 @@ function pageLines(items: ReadonlyArray<unknown>): string[] {
  */
 export async function extractPdfText(buffer: Buffer, maxPages = MAX_PAGES): Promise<PdfTextResult> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  // 打包后 pdf.js 被打进 main.bundle.mjs，默认 workerSrc "./pdf.worker.mjs" 会相对
+  // bundle 所在目录解析；安装包里该文件由 scripts/package.mjs 拷到 dist/。
+  // 显式指定绝对 file:// 路径，fake worker 才能 import 成功（否则 PDF 读取整体失败）。
+  const workerFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "pdf.worker.mjs");
+  // 优先用 asarUnpack 出来的真实文件：Node 的 ESM 动态 import 读 asar 内文件有平台差异，
+  // 解包副本是普通磁盘文件，最稳；开发态没有 unpacked 目录时退回 bundle 同目录。
+  const unpackedWorker = toUnpackedPath(workerFile);
+  const resolvedWorker = fs.existsSync(unpackedWorker) ? unpackedWorker : fs.existsSync(workerFile) ? workerFile : null;
+  const workerOptions = (pdfjs as { GlobalWorkerOptions?: { workerSrc?: string } }).GlobalWorkerOptions;
+  if (workerOptions && resolvedWorker) workerOptions.workerSrc = pathToFileURL(resolvedWorker).href;
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
     useSystemFonts: false,

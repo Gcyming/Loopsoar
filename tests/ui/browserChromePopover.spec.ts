@@ -41,6 +41,26 @@ describe("工具栏浮层：悬停延迟 + 点击收起不闪烁", () => {
   });
 });
 
+describe("标签页右键菜单（独立浮层，不隐藏网页）", () => {
+  it("右键只请求 tabmenu 浮层，主窗口不再挂 DOM 菜单/不再触发网页让位", () => {
+    const tabs = read("packages/ui/src/BrowserTabs.tsx");
+    const hook = read("packages/ui/src/useBrowserTabs.ts");
+    expect(tabs).toContain("onOpenTabMenu");
+    expect(tabs).not.toContain("data-popover");
+    expect(tabs).not.toContain("tab-context-menu");
+    expect(hook).toContain('kind: "tabmenu"');
+    expect(hook).toContain("tabId");
+  });
+
+  it("页面检查元素统一进入应用底部 DevTools 面板，不另开侧栏", () => {
+    const browser = read("packages/shell/src/main/electronBrowser.ts");
+    const menu = read("packages/shell/src/main/browserPageContextMenu.ts");
+    expect(browser).toContain("setDevToolsWebContents(view.webContents)");
+    expect(browser).toMatch(/onInspectElement:[\s\S]{0,180}devToolsPanel\.inspect\(/);
+    expect(menu).toContain("if (options.onInspectElement) options.onInspectElement");
+  });
+});
+
 describe("点击列表外区域收起（含原生网页区域）", () => {
   it("点原生网页视图获得焦点 → 主进程通知渲染层 dismissAllPopovers", () => {
     const browser = read("packages/shell/src/main/electronBrowser.ts");
@@ -51,7 +71,9 @@ describe("点击列表外区域收起（含原生网页区域）", () => {
     expect(index).toContain("chromePopover.close()");
     expect(index).toContain('pushToRenderer("chrome:dismissPopovers"');
     const app = read("packages/ui/src/useSessionActions.ts");
-    expect(app).toContain('api.on("chrome:dismissPopovers", () => dismissAllPopovers())');
+    expect(app).toContain('api.on("chrome:dismissPopovers"');
+    expect(app).toMatch(/chrome:dismissPopovers[\s\S]{0,220}dismissAllPopovers\(\)/);
+    expect(app).toMatch(/chrome:dismissPopovers[\s\S]{0,260}closePopover\(\)/);
   });
 
   it("所有内联浮层走 usePopover（点击外部 / Esc / 互斥）", () => {
