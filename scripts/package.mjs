@@ -198,7 +198,17 @@ async function packageWin() {
  * NSIS 3 的 Unicode 安装器识别 UTF-16LE BOM，这里统一转成 UTF-16LE + BOM 再交给 builder。
  */
 function writeNsisAssets() {
-  const source = readFileSync(path.join(ROOT, "LICENSE"), "utf8").replace(/\r?\n/g, "\r\n");
+  const licenseSource = readFileSync(path.join(ROOT, "LICENSE"), "utf8");
+  // 安装器标题带上实际软件版本；协议版本仍单独标注，避免把「协议 1.1」误读成应用版本。
+  const source = licenseSource
+    .replace(
+      "Loopsoar 内测许可协议（Proprietary Beta License）",
+      `Loopsoar ${pkg.version} 内测许可协议（Proprietary Beta License）`,
+    )
+    .replace(/\r?\n/g, "\r\n");
+  if (!source.includes(`Loopsoar ${pkg.version} 内测许可协议（Proprietary Beta License）`)) {
+    throw new Error("安装器许可页版本注入失败：LICENSE 标题未匹配");
+  }
   // buildResources 是 release/build（见 electron-builder.yml），license/include 相对它解析。
   const buildDir = path.join(ROOT, "release", "build");
   mkdirSync(buildDir, { recursive: true });
