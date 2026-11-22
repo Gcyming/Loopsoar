@@ -16,12 +16,15 @@
 "use strict";
 
 let ipcRenderer = null;
+let webUtils = null;
 try {
   // sandbox preload 允许 require('electron')；Node 单测里拿到的是 electron 可执行路径字符串。
   const electron = require("electron");
   ipcRenderer = typeof electron === "object" && electron ? electron.ipcRenderer : null;
+  webUtils = typeof electron === "object" && electron ? electron.webUtils : null;
 } catch {
   ipcRenderer = null;
+  webUtils = null;
 }
 
 const CHROME_HOSTS = new Set(["chromewebstore.google.com", "chrome.google.com"]);
@@ -101,6 +104,68 @@ function toast(text, kind) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { isWebStoreUrl, extractStoreId, isInstallButtonText, hostOf };
 }
+
+/* ───────── 本地 Office/PDF 拖入：网页视图没有主窗口 preload 的兜底 ───────── */
+
+const OFFICE_EXTENSIONS = /\.(pdf|doc|docx|docm|dot|dotx|dotm|rtf|odt|ott|xls|xlsx|xlsm|xlsb|xlt|xltx|xltm|csv|ods|ots|ppt|pptx|pptm|pps|ppsx|ppsm|pot|potx|potm|odp|otp)$/i;
+
+function officeFilePath(file) {
+  if (!file) return "";
+  try {
+    if (webUtils && typeof webUtils.getPathForFile === "function") {
+      const path = webUtils.getPathForFile(file);
+      if (path) return String(path);
+    }
+  } catch {
+    // 旧 Electron/非真实文件对象：回退 file.path
+  }
+  return typeof file.path === "string" ? file.path : "";
+}
+
+function officeFileFromDrop(event) {
+  try {
+    const files = Array.from((event && event.dataTransfer && event.dataTransfer.files) || []);
+    return files.find((file) => OFFICE_EXTENSIONS.test(String(file && file.name ? file.name : officeFilePath(file)))) || null;
+  } catch {
+    return null;
+  }
+}
+
+function installOfficeDropHandler() {
+  if (!ipcRenderer || typeof window === "undefined" || window.top !== window) return;
+  window.addEventListener(
+    "dragover",
+    (event) => {
+      if (!officeFileFromDrop(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    true,
+  );
+  window.addEventListener(
+    "drop",
+    (event) => {
+      const file = officeFileFromDrop(event);
+      if (!file) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const path = officeFilePath(file);
+      if (!path) {
+        toast("无法读取拖入文件的本地路径", false);
+        return;
+      }
+      ipcRenderer
+        .invoke("loopsoar-browser:local-file-drop", { path })
+        .then((result) => {
+          if (!result || !result.ok) toast(`打开文档失败：${(result && result.error) || "未知错误"}`, false);
+        })
+        .catch((err) => toast(`打开文档失败：${err instanceof Error ? err.message : String(err)}`, false));
+    },
+    true,
+  );
+}
+
+if (ipcRenderer) installOfficeDropHandler();
 
 if (ipcRenderer && typeof location !== "undefined" && isWebStoreUrl(location.href)) {
   document.addEventListener(

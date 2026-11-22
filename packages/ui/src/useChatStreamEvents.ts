@@ -177,9 +177,15 @@ export function useBootstrapData(options: BootstrapDataOptions): void {
         .catch(() => {});
     };
     window.addEventListener("resize", syncMaximized);
+    // 主进程的一次性提示（例如文档转换失败）：与聊天提示共用同一条 notice 通道。
+    const offNotice = api.on("ui:notice", (payload) => {
+      const message = (payload as { message?: unknown } | null)?.message;
+      if (typeof message === "string" && message.trim()) setNotice(message.trim().slice(0, 300));
+    });
 
     return () => {
       window.removeEventListener("resize", syncMaximized);
+      offNotice();
     };
     // options 内的设置器/ref 引用稳定，效果等价于拆分前的 [api] 依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -538,8 +544,8 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         setBusy(false);
         // 错误/中断原因已经在会话消息里完整展示（红字/中断标记），这里不再重复弹底部提示挡住内容
         // （用户：「会话内都有说明了，这个提示也挡信息了」）。
+        // 正常完成也不弹「完成」：消息本身已经落定，额外提示只会打断阅读。
         if (wasStopping) setNotice("已停止");
-        else if (!info.interrupted) setNotice(info.statusText);
       }),
       api.on("chat:stream:error", (payload) => {
         const p = payload as { content?: string; message?: string; sessionId?: string };

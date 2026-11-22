@@ -20,6 +20,7 @@ import { registerExtensionsDomain } from "../../packages/shell/src/main/domains/
 import { registerSkillsDomain } from "../../packages/shell/src/main/domains/skills.ts";
 import { registerMcpDomain } from "../../packages/shell/src/main/domains/mcp.ts";
 import { registerFsDomain } from "../../packages/shell/src/main/domains/fs.ts";
+import { registerDocumentsDomain } from "../../packages/shell/src/main/domains/documents.ts";
 import { registerTerminalDomain } from "../../packages/shell/src/main/domains/terminal.ts";
 import type { TerminalSessionManager } from "../../packages/shell/src/main/terminalSession.ts";
 import { registerAskDomain } from "../../packages/shell/src/main/domains/ask.ts";
@@ -210,6 +211,7 @@ function assemble(): void {
     openSkillsDir: async () => true,
   });
   registerFsDomain(deps);
+  registerDocumentsDomain({ ...deps, openDocument: async () => ({ ok: true }) });
   registerMcpDomain({
     ...deps,
     mcp: {

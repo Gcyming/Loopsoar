@@ -387,8 +387,16 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   },
   "settings.providers.noMatchingModels": { zh: "没有匹配的模型 ID", en: "No matching model IDs" },
   "settings.providers.col.modelId": { zh: "模型 ID", en: "Model ID" },
-  "settings.providers.col.contextK": { zh: "上下文K", en: "Context K" },
-  "settings.providers.col.outputK": { zh: "输出K", en: "Output K" },
+  "settings.providers.col.context": { zh: "上下文（tokens）", en: "Context (tokens)" },
+  "settings.providers.col.output": { zh: "输出（tokens）", en: "Output (tokens)" },
+  "settings.providers.tokenUnitHint": {
+    zh: "直接填实际 token 数，例如 128000 或 1048576，不是 K；上限 10,000,000。",
+    en: "Enter the actual token count (e.g. 128000 or 1048576), not K; max 10,000,000.",
+  },
+  "settings.providers.tokenLimitError": {
+    zh: "模型「{model}」的{field}为 {value}，超过允许的 {max} tokens。请填实际 token 数（不是 K）。",
+    en: "Model “{model}” has {field} = {value}, above the allowed {max} tokens. Enter the actual token count, not K.",
+  },
   "settings.providers.col.vision": { zh: "图片", en: "Vision" },
   "settings.providers.col.thinking": { zh: "推理", en: "Reasoning" },
   "settings.providers.col.efforts": { zh: "推理等级", en: "Effort levels" },

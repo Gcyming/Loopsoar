@@ -12,9 +12,10 @@ const streamEvents = fs.readFileSync(path.join(ROOT, "packages/ui/src/useChatStr
 const settings = fs.readFileSync(path.join(ROOT, "packages/ui/src/Settings.tsx"), "utf8");
 
 describe("流式错误不再弹底部提示", () => {
-  it("done 为 interrupted（error/stopped 等）时不重复 setNotice(statusText)", () => {
-    expect(streamEvents).toContain("else if (!info.interrupted) setNotice(info.statusText)");
+  it("正常完成不再弹「完成」，中断/错误也不重复弹底部提示", () => {
+    expect(streamEvents).not.toContain("setNotice(info.statusText)");
     expect(streamEvents).not.toContain('setNotice(wasStopping ? "已停止" : info.statusText)');
+    expect(streamEvents).toContain('if (wasStopping) setNotice("已停止")');
   });
 
   it("chat:stream:error 不再弹「回复失败」", () => {

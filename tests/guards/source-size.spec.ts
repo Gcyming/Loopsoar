@@ -38,7 +38,7 @@ interface CompositionRoot {
  */
 const COMPOSITION_ROOTS: Record<string, CompositionRoot> = {
   "packages/shell/src/main/index.ts": {
-    ceiling: 1412,
+    ceiling: 1411,
     reason:
       "Electron 主进程组合根：协议注册、核心服务装配、浏览器栈、IPC 域、窗口生命周期必须按顺序发生，拆开会让启动顺序隐式化。已把任务分支状态机（taskForks.ts）、崩溃取证（crashLog.ts）、退出守卫（quitGuard.ts）、指针几何（pointerScreenArea）、Chromium 启动开关（chromiumSwitches.ts）、进程树守护接线（jobGuardRuntime.ts）移出。",
     target:

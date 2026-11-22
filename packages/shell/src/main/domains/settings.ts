@@ -539,11 +539,13 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   };
   const keyStatus = (providerId: string) => {
     const stored = deps.secrets?.has(providerId) ?? false;
-    const resolved = resolveKey(providerId);
+    // 列表只需要「有没有 key / 来源 / 掩码」，不要为每个供应商解密完整密钥：
+    // 旧实现走 resolveKey → secrets.get（DPAPI 解密 + 读文件），供应商多时列表会明显变慢。
+    const envKey = resolveApiKeyFromEnv(deps.env);
     return {
-      hasKey: resolved.key.length > 0,
+      hasKey: stored || Boolean(envKey),
       keyHint: stored ? (deps.secrets?.hint(providerId) ?? null) : null,
-      keySource: resolved.source,
+      keySource: stored ? "stored" : envKey ? "env" : null,
       storageMode: deps.secrets?.storageMode() ?? "unavailable",
     };
   };

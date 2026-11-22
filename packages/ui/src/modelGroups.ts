@@ -6,6 +6,9 @@
  * 提供商内模型开关（拨片）控制"是否出现在菜单"；没有「默认模型」概念，点哪个用哪个；活动供应商置顶。
  */
 import type { ProviderItem, ProviderModel } from "./types.js";
+import { PROVIDER_MODEL_TOKEN_LIMIT } from "loopsoar-contracts/providerLimits";
+
+export { PROVIDER_MODEL_TOKEN_LIMIT };
 
 export interface ModelChoice {
   id: string;
@@ -20,6 +23,49 @@ export interface ModelChoice {
 /** 模型能力信息的固定取值顺序（展示/输入归一都按这个顺序，便于稳定断言）。 */
 export const INPUT_MODALITIES = ["text", "image", "audio", "video"] as const;
 export type InputModality = (typeof INPUT_MODALITIES)[number];
+
+/**
+ * 供应商模型 token 上限（上下文 / 最大输出共用）由 contracts 单一产地导出。
+ *
+ * 这里编辑的是**实际 token 数**，不是 K；1,048,576 这类二进制百万值必须原样保留，
+ * 不能再经过 Math.round(x / 1000) * 1000 的换算。
+ */
+export interface ProviderTokenLimitIssue {
+  index: number;
+  id: string;
+  field: "contextWindow" | "maxOutput";
+  value: number;
+  max: number;
+}
+
+/** 表格输入框 → 实际 token 数；空串表示未填写，非法数字不进入状态。 */
+export function parseProviderTokenInput(raw: string): number | undefined {
+  const text = raw.trim();
+  if (!text) return undefined;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * 保存前的本地校验：找出第一个超出 schema 上限的 token 字段。
+ * 这样用户能收到「模型 X 的输出上限是 Y，超过 Z」的可操作提示，而不是裸 IPC too_big。
+ */
+export function findProviderTokenLimitIssue(models: readonly ProviderModel[]): ProviderTokenLimitIssue | null {
+  for (const [index, model] of models.entries()) {
+    const checks: Array<{ field: "contextWindow" | "maxOutput"; value: number | undefined }> = [
+      { field: "contextWindow", value: model.contextWindow },
+      { field: "maxOutput", value: model.maxOutput },
+    ];
+    for (const { field, value } of checks) {
+      if (value === undefined) continue;
+      if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > PROVIDER_MODEL_TOKEN_LIMIT) {
+        return { index, id: model.id, field, value, max: PROVIDER_MODEL_TOKEN_LIMIT };
+      }
+    }
+  }
+  return null;
+}
+
 
 /**
  * 归一化模态输入：兼容逗号（中英文）/空格分隔、大小写、重复值，过滤非法值。

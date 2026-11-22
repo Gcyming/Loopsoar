@@ -54,7 +54,7 @@ export function findSoffice(): string | null {
   return null;
 }
 
-function runSoffice(command: string, args: string[], timeoutMs: number): Promise<void> {
+export function runSoffice(command: string, args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";

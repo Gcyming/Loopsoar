@@ -10,6 +10,12 @@ export const workspaceChannels: Record<string, ChannelBinding> = {
     request: ReadImageSchema,
     sensitive: true,
   },
+  "documents:open": {
+    domain: "documents",
+    method: "open",
+    request: z.object({ path: z.string().min(1).max(2048) }),
+    sensitive: true,
+  },
   "fs:saveImage": {
     domain: "fs",
     method: "saveImage",

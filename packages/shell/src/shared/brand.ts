@@ -5,7 +5,7 @@
 export const APP_NAME = "Loopsoar";
 export const APP_ID = "com.loopsoar.app";
 /** 程序版本单一产地：内测阶段使用 0.0.x；发布到 0.1.0 前均不算公开稳定版。 */
-export const APP_VERSION = "0.0.1";
+export const APP_VERSION = "0.0.2";
 export const DATA_DIR_NAME = "loopsoar";
 export const PROTOCOL = "loopsoar";
 export const SESSION_PARTITION = "persist:loopsoar-browser";

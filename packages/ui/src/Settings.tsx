@@ -8,7 +8,7 @@ import {
   HEADER_TEMPLATE_VARIABLES,
 } from "loopsoar-contracts/headerTemplate";
 import { formatHeaderLines, localized, parseHeaderLines } from "./settingsModel.js";
-import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
+import { formatModalities, mergeFetchedProviderModels, modalitiesToInput, openCodePlanLabel, parseModalitiesInput, parseProviderTokenInput, PROVIDER_MODEL_TOKEN_LIMIT, findProviderTokenLimitIssue, triStateToValue, valueToTriState, type ProviderCapabilityMeta } from "./modelGroups.js";
 import { Icon } from "./Icon.js";
 import AppearanceSettingsSection from "./AppearanceSettingsSection.js";
 import { LoopStudioSection } from "./LoopStudioSection.js";
@@ -627,6 +627,18 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
         const commit = async (): Promise<void> => {
           try {
             const models = pModels.filter((m) => m.id.trim());
+            const tokenIssue = findProviderTokenLimitIssue(models);
+            if (tokenIssue) {
+              const field = tr(tokenIssue.field === "maxOutput" ? "settings.providers.col.output" : "settings.providers.col.context");
+              throw new Error(
+                tr("settings.providers.tokenLimitError", {
+                  model: tokenIssue.id || `#${tokenIssue.index + 1}`,
+                  field,
+                  value: Number.isFinite(tokenIssue.value) ? tokenIssue.value.toLocaleString("en-US") : "NaN",
+                  max: tokenIssue.max.toLocaleString("en-US"),
+                }),
+              );
+            }
             // 没有"默认模型"概念：provider.model 只是"当前选用/最近使用"的模型（聊天 chip 可随时切换），
             // 保存时保留它；新增供应商还没有选择时取清单第一个作为初始值。
             const currentModel = pForm.model.trim() || models[0]?.id || "";
@@ -902,6 +914,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                       {tr("settings.providers.modelSummary", { total: pModels.length, on: shownCount })}
                     </span>
                   </div>
+                  <div style={{ ...S.modelToolHint, marginBottom: 8 }}>
+                    {tr("settings.providers.tokenUnitHint")}
+                  </div>
                   <div style={S.modelAddRow}>
                     <input
                       style={S.modelSearch}
@@ -923,8 +938,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                           <tr>
                             <th style={S.th}>{tr("settings.providers.col.enable")}</th>
                             <th style={S.th}>{tr("settings.providers.col.modelId")}</th>
-                            <th style={S.thNarrow}>{tr("settings.providers.col.contextK")}</th>
-                            <th style={S.thNarrow}>{tr("settings.providers.col.outputK")}</th>
+                            <th style={S.thNarrow}>{tr("settings.providers.col.context")}</th>
+                            <th style={S.thNarrow}>{tr("settings.providers.col.output")}</th>
                             <th style={S.thTiny}>{tr("settings.providers.col.vision")}</th>
                             <th style={S.thTiny}>{tr("settings.providers.col.thinking")}</th>
                             <th style={S.th}>{tr("settings.providers.col.efforts")}</th>
@@ -952,17 +967,31 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                               <td style={S.td}>
                                 <input
                                   style={S.tblInput}
-                                  value={m.contextWindow ? String(Math.round(m.contextWindow / 1000)) : ""}
+                                  type="number"
+                                  min={0}
+                                  max={PROVIDER_MODEL_TOKEN_LIMIT}
+                                  step={1}
+                                  inputMode="numeric"
+                                  aria-label={tr("settings.providers.col.context")}
+                                  title={tr("settings.providers.tokenUnitHint")}
+                                  value={m.contextWindow === undefined ? "" : String(m.contextWindow)}
                                   placeholder="—"
-                                  onChange={(e) => updateModel(idx, { contextWindow: e.target.value ? Number(e.target.value) * 1000 : undefined })}
+                                  onChange={(e) => updateModel(idx, { contextWindow: parseProviderTokenInput(e.target.value) })}
                                 />
                               </td>
                               <td style={S.td}>
                                 <input
                                   style={S.tblInput}
-                                  value={m.maxOutput ? String(Math.round(m.maxOutput / 1000)) : ""}
+                                  type="number"
+                                  min={0}
+                                  max={PROVIDER_MODEL_TOKEN_LIMIT}
+                                  step={1}
+                                  inputMode="numeric"
+                                  aria-label={tr("settings.providers.col.output")}
+                                  title={tr("settings.providers.tokenUnitHint")}
+                                  value={m.maxOutput === undefined ? "" : String(m.maxOutput)}
                                   placeholder="—"
-                                  onChange={(e) => updateModel(idx, { maxOutput: e.target.value ? Number(e.target.value) * 1000 : undefined })}
+                                  onChange={(e) => updateModel(idx, { maxOutput: parseProviderTokenInput(e.target.value) })}
                                 />
                               </td>
                               <td style={S.tdCenter}>

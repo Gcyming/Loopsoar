@@ -61,9 +61,14 @@ extraResources:
   - from: release/extra/pdfjs
     to: pdfjs
 win:
-  # 代码签名：有证书时设置 CSC_LINK / CSC_KEY_PASSWORD（或 Azure Trusted Signing），
-  # electron-builder 26 会自动使用 SHA-256 + RFC3161 时间戳并写入 publisherName；
-  # 内测包默认不签名，0.1.0 对外发布必须有签名（见 docs/发布阶段.md §6.1）。
+  # 代码签名在打包阶段由 electron-builder 完成，不在应用内或安装后补签：
+  # - PFX（仅当 CA 仍提供可导出文件）：WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD
+  # - EV/硬件令牌：win.signtoolOptions.certificateSubjectName（Windows 构建机插令牌）
+  # - 云 HSM/CA API：win.signtoolOptions.sign 自定义签名的钩子
+  # - Azure Artifact Signing（原 Trusted Signing）：win.azureSignOptions + AZURE_* 环境变量
+  # 2023-06 起新 OV/EV 私钥必须在硬件或云 HSM，不能默认导出 .pfx；不要把 CSC_LINK 当作唯一方案。
+  # 具体路线、资格和验证命令见 docs/releases/代码签名准备-v0.0.8.md。
+  # 内测包可不签名；对外发布必须签名。
   target:
     - target: nsis
       arch:

@@ -173,7 +173,9 @@ async function packageWin() {
     ELECTRON_MIRROR: process.env.ELECTRON_MIRROR ?? "https://npmmirror.com/mirrors/electron/",
     ELECTRON_BUILDER_BINARIES_MIRROR:
       process.env.ELECTRON_BUILDER_BINARIES_MIRROR ?? "https://npmmirror.com/mirrors/electron-builder-binaries/",
-    CSC_IDENTITY_AUTO_DISCOVERY: "false",
+    // 默认关闭自动发现，避免在开发机误用无关证书。
+    // EV/令牌构建可显式设 CSC_IDENTITY_AUTO_DISCOVERY=true；PFX/Azure 不受影响。
+    CSC_IDENTITY_AUTO_DISCOVERY: process.env.CSC_IDENTITY_AUTO_DISCOVERY ?? "false",
   };
   await run(
     process.execPath,

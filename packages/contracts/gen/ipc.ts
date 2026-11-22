@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   "chat:renameSession": { domain: "chat", method: "renameSession", sensitive: true, hasRequest: true },
   "chat:forkSession": { domain: "chat", method: "forkSession", sensitive: true, hasRequest: true },
   "fs:readImage": { domain: "fs", method: "readImage", sensitive: true, hasRequest: true },
+  "documents:open": { domain: "documents", method: "open", sensitive: true, hasRequest: true },
   "fs:saveImage": { domain: "fs", method: "saveImage", sensitive: true, hasRequest: true },
   "chat:saveTimeline": { domain: "chat", method: "saveTimeline", sensitive: true, hasRequest: true },
   "chat:stop": { domain: "chat", method: "stop", sensitive: true, hasRequest: true },
@@ -247,5 +248,6 @@ export const EVENT_NAMES = [
   "schedule:updated",
   "ui:compose",
   "ui:openSettings",
+  "ui:notice",
   "update:state",
 ] as const;

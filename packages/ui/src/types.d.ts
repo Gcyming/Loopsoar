@@ -1329,6 +1329,15 @@ export interface LoopsoarAPI {
       error?: string;
     }>;
   };
+  documents: LoopsoarDomain & {
+    /** 用应用内标签页打开本地 Office/PDF 文件（Office 先由本机 LibreOffice 转 PDF）。 */
+    open(payload: { path: string }): Promise<{
+      ok: boolean;
+      tabId?: string;
+      title?: string;
+      error?: string;
+    }>;
+  };
   extensions: LoopsoarDomain & {
     list(): Promise<{
       extensions: InstalledExtension[];

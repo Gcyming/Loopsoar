@@ -8,6 +8,7 @@
     ".": "./dist/src/index.js",
     "./ipc": "./dist/gen/ipc.js",
     "./schemas": "./dist/src/schemas.js",
+    "./providerLimits": "./dist/src/providerLimits.js",
     "./extension": "./dist/src/extension.js",
     "./extensionRegistry": "./dist/src/extensionRegistry.js",
     "./layout": "./dist/src/layout.js",

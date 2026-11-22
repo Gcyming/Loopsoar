@@ -20,17 +20,31 @@ export function useModelPicker({ api, provider, setProvider, setNotice, openSett
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelGroups, setModelGroups] = useState<ModelGroup[] | null>(null);
   const loadingRef = useRef(false);
+  const reloadQueuedRef = useRef(false);
 
   const loadGroups = useCallback((): void => {
-    if (!api || loadingRef.current) return;
-    loadingRef.current = true;
-    void api.settings
-      .listProviders()
-      .then((result) => setModelGroups(buildModelGroups(result.items, result.activeId)))
-      .catch(() => setModelGroups([]))
-      .finally(() => {
-        loadingRef.current = false;
-      });
+    if (!api) return;
+    // 并发刷新只保留一次尾部请求：供应商保存事件/窗口聚焦/打开菜单可能同时触发，
+    // 旧实现会在 loadingRef 为 true 时直接丢弃后到的刷新，列表就停在旧配置上。
+    const run = (): void => {
+      if (loadingRef.current) {
+        reloadQueuedRef.current = true;
+        return;
+      }
+      loadingRef.current = true;
+      void api.settings
+        .listProviders()
+        .then((result) => setModelGroups(buildModelGroups(result.items, result.activeId)))
+        .catch(() => setModelGroups([]))
+        .finally(() => {
+          loadingRef.current = false;
+          if (reloadQueuedRef.current) {
+            reloadQueuedRef.current = false;
+            run();
+          }
+        });
+    };
+    run();
   }, [api]);
 
   // 新标签页 Vibecoding 的模型胶囊要立刻能展开：启动后预载一次跨供应商模型清单（离线、只读本地）。
@@ -38,6 +52,24 @@ export function useModelPicker({ api, provider, setProvider, setNotice, openSett
     if (!api || modelGroups !== null) return;
     loadGroups();
   }, [api, loadGroups, modelGroups]);
+
+  // 供应商保存后主动刷新模型清单；窗口重新聚焦时做一次懒刷新。
+  // 不再在打开菜单时清空旧列表：先展示已有模型，后台拿到最新清单再替换，避免每次打开都闪加载态。
+  useEffect(() => {
+    if (!api || typeof window === "undefined") return;
+    const refresh = (): void => loadGroups();
+    const onVisibility = (): void => {
+      if (document.visibilityState === "visible") loadGroups();
+    };
+    window.addEventListener("loopsoar:providers-changed", refresh);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("loopsoar:providers-changed", refresh);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [api, loadGroups]);
 
   const openModelMenu = useCallback((): void => {
     if (!api || !provider?.configured) {
@@ -49,7 +81,7 @@ export function useModelPicker({ api, provider, setProvider, setNotice, openSett
       return;
     }
     setModelMenuOpen(true);
-    setModelGroups(null); // 打开时拉最新清单，避免设置页改过后仍显示旧模型
+    // 打开时后台刷新最新清单；保留旧清单做 stale-while-revalidate，避免「点了先空白再加载」。
     loadGroups();
   }, [api, loadGroups, modelMenuOpen, openSettings, provider]);
 

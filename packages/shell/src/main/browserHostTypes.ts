@@ -21,6 +21,15 @@ export interface BrowserHostDeps {
   /** sessionId 用于给页面的 window.open/target=_blank 找到正确归属（后台会话不能落到用户标签）。 */
   createView: (sessionId?: string) => HostView;
   /**
+   * 用户把 Office 文档拖进某个网页视图：宿主在 file:// 导航发生前截获并交给壳层预览。
+   * 没有这个回调时保持浏览器默认行为（测试/旧装配不受影响）。
+   */
+  onLocalFileDrop?: (file: string, sessionId: string) => void;
+  /** 请求守卫发现网页 tab 的 file:// 导航：返回 true 表示壳层已接管并应取消原导航。 */
+  onLocalFileRequest?: (webContentsId: number, url: string) => boolean;
+  /** 本地预览标签登记：请求守卫只放行这些 webContents 的 file:// PDF。 */
+  onLocalPreview?: (webContentsId: number, url: string, active: boolean) => void;
+  /**
    * 把原生视图挂到主窗口（contentView.addChildView）。
    * 返回 false 表示窗口还没就绪（典型场景：启动恢复时窗口尚未创建）→ 宿主在下一次 applyLayout
    * 重试挂载；返回 true/void 都视为已挂上（void 兼容既有实现）。

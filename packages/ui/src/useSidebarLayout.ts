@@ -168,6 +168,11 @@ export function useSidebarLayout(options: SidebarLayoutOptions): SidebarLayout {
       return;
     }
     nativeSidebarWidthRef.current = target;
+    // 拖拽期间原生网页视图被 overlay 隐藏，逐帧同步 setBounds 没有视觉收益，
+    // 反而会以 60 次/秒的频率压主进程布局；拖拽结束的 onUp 会一次性落位。
+    if (sidebarDraggingRef.current) {
+      return;
+    }
     if (!animate) {
       void api.browser.setSidebarWidth({ width: target, animate: false }).catch(() => {});
       return;

@@ -9,6 +9,7 @@ import type { AgentWindowManager } from "./agentWindow.js";
 import type { E2eHooks } from "./e2eHooks.js";
 import { installTrayCloseBehavior } from "./trayRuntime.js";
 import { attachAppContextMenu } from "./appContextMenu.js";
+import { attachRendererRecovery } from "./rendererRecovery.js";
 
 export interface MainWindowDeps {
   appName: string;
@@ -30,6 +31,8 @@ export interface MainWindowDeps {
   getCloseBehavior?: () => "tray" | "quit";
   /** 托盘菜单「打开定时任务」：由入口切到设置页的 schedules 分区。 */
   onOpenSchedules?: () => void;
+  /** 渲染进程崩溃/恢复取证（主进程入口写入 crash.log）。 */
+  onRendererEvent?: (kind: string, detail?: unknown) => void;
 }
 
 export function createMainWindowWindow(deps: MainWindowDeps): BrowserWindow {
@@ -67,6 +70,13 @@ export function createMainWindowWindow(deps: MainWindowDeps): BrowserWindow {
     appName: deps.appName,
   });
   attachAppContextMenu(win);
+  // 主窗口是唯一承载 UI 的 renderer：它退出后不能只写日志留一个黑壳窗口。
+  // 自愈会在原窗口内 reload；Agent 回合/主进程不重建，避免打断后台任务。
+  attachRendererRecovery({
+    window: win as unknown as import("./rendererRecovery.js").RendererRecoveryWindow,
+    onEvent: deps.onRendererEvent ?? ((kind, detail) => console.error("[Loopsoar] renderer", kind, detail)),
+    isQuitting: () => win.isDestroyed(),
+  });
   win.once("ready-to-show", () => {
     win?.show();
     deps.bootTrace.mark("window-ready-to-show");

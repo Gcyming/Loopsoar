@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { LoopStagesSchema } from "./loopStages.js";
+import { PROVIDER_MODEL_TOKEN_LIMIT } from "./providerLimits.js";
+
+export { PROVIDER_MODEL_TOKEN_LIMIT };
 
 /**
  * Named Zod schemas for each channel request payload.
@@ -134,8 +137,8 @@ export const BrowserDownloadActionSchema = z.object({
 export const ProviderModelSchema = z.object({
   id: z.string().min(1).max(200),
   selected: z.boolean().optional(),
-  contextWindow: z.number().int().min(0).max(10_000_000).optional(),
-  maxOutput: z.number().int().min(0).max(1_000_000).optional(),
+  contextWindow: z.number().int().min(0).max(PROVIDER_MODEL_TOKEN_LIMIT).optional(),
+  maxOutput: z.number().int().min(0).max(PROVIDER_MODEL_TOKEN_LIMIT).optional(),
   vision: z.boolean().optional(),
   thinking: z.boolean().optional(),
   thinkingEfforts: z.array(z.string().max(30)).max(10).optional(),

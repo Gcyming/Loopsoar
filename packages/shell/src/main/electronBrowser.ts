@@ -21,6 +21,7 @@ import {
   shouldBlockAgentLoopback,
 } from "./browserRequestGuard.js";
 import { attachPageContextMenu } from "./browserPageContextMenu.js";
+import { officeFileFromUrl } from "./officePreview.js";
 
 export interface ElectronBrowserHostOptions {
   initialSessionId?: string;
@@ -31,6 +32,8 @@ export interface ElectronBrowserHostOptions {
   allowLoopback?: boolean;
   /** 广告/追踪拦截开关（读偏好 adBlockEnabled；缺省 true，即未注入也默认开启）。 */
   isAdBlockEnabled?: () => boolean;
+  /** 请求守卫发现网页里的 file:// 导航：返回 true 表示已接管并取消原导航。 */
+  onLocalFileRequest?: (webContentsId: number, url: string) => boolean;
   /** 成功访问 → 全局历史（跨标签/跨会话共享；由 index.ts 接到 BrowserHistoryStore）。 */
   onVisited?: (visit: BrowserVisit) => void;
   /** 页面标题迟到 → 刷新全局历史里同 URL 条目的标题（不新增访问）。 */
@@ -41,6 +44,10 @@ export interface ElectronBrowserHostOptions {
   onTaskCreated?: (sessionId: string) => void;
   /** Agent 正在该会话动手（克隆页已可见）：壳层把虚拟光标切成常驻。 */
   onAgentActing?: (sessionId: string) => void;
+  /** 网页视图里拖入 Office 文档：壳层在 file:// 导航前接管。 */
+  onLocalFileDrop?: (file: string, sessionId: string) => void;
+  /** 本地文档预览页登记：请求守卫只放行这些 webContents 的 file:// PDF。 */
+  onLocalPreview?: (webContentsId: number, url: string, active: boolean) => void;
   /** 切会话时网页收起/展开：UI 据此显示空白页或网页。 */
   /** 网页视图几何（主窗口内容坐标）变化：Agent 覆盖指针据此贴住网页区域（null = 无可见网页）。 */
   onViewLayout?: (rect: BrowserViewBounds | null) => void;
@@ -99,6 +106,9 @@ export function createWindowOpenHandler(
  * 且没有任何 API 能单独移除——所以必须在进程内只装一次。
  */
 let browserRequestGuardInstalled = false;
+/** 已登记的应用内文档预览页（webContentsId）与 URL：只放行这些 file:// 请求。 */
+const localPreviewWebContents = new Set<number>();
+const localPreviewUrls = new Set<string>();
 
 /**
  * 给浏览器 session 装一次出网守卫（两阶段：同步 URL 策略 → 异步 DNS 校验）。
@@ -130,6 +140,25 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
         // 请求可能已随标签销毁而结束，忽略
       }
     };
+    // 应用内文档预览：只放行我们自己登记过的 webContents 加载其 PDF/加载页。
+    // data: 仅用于同一预览标签的转换占位页；其它网页仍不能借 data: 绕过策略。
+    if (String(details.url).startsWith("file://") || String(details.url).startsWith("data:")) {
+      const preview =
+        localPreviewUrls.has(details.url) &&
+        localPreviewWebContents.has(Number((details as { webContentsId?: number }).webContentsId ?? -1));
+      if (preview) {
+        done({});
+        return;
+      }
+      // Chromium 对网页里拖入的 file:// 可能直接拦在渲染层，完全不给 will-navigate；
+      // 在请求守卫这一层再兜底一次，接管成功后取消原始本地导航。
+      const webContentsId = Number((details as { webContentsId?: number }).webContentsId ?? -1);
+      const handled = options.onLocalFileRequest?.(webContentsId, details.url) === true;
+      if (handled) {
+        done({ cancel: true });
+        return;
+      }
+    }
     void check(details.url)
       .then((decision) => {
         // Agent 标签不得用浏览器绕过 SSRF 策略访问本机/回环服务（web_fetch 侧写死 allowLoopback:false）。
@@ -518,6 +547,18 @@ export function createElectronBrowserHost(
     onFaviconChanged: options.onFaviconChanged,
     onTaskCreated: options.onTaskCreated,
     onAgentActing: options.onAgentActing,
+    onLocalFileDrop: options.onLocalFileDrop,
+    onLocalFileRequest: (webContentsId, url) => hostRef?.handleLocalFileRequest(webContentsId, url) ?? false,
+    onLocalPreview: (webContentsId, url, active) => {
+      if (active) {
+        localPreviewWebContents.add(webContentsId);
+        localPreviewUrls.add(url);
+      } else {
+        localPreviewWebContents.delete(webContentsId);
+        localPreviewUrls.delete(url);
+      }
+      options.onLocalPreview?.(webContentsId, url, active);
+    },
     onCornerColor: applyCornerColor,
     onViewLayout: (rect) => {
       options.onViewLayout?.(rect);
@@ -665,8 +706,16 @@ export class DownloadsBridge {
   constructor(
     private getDownloadDir: () => string,
     private onChange: () => void,
+    private onLocalFile?: (file: string) => boolean,
   ) {
-    session.fromPartition(SESSION_PARTITION).on("will-download", (_event, item) => {
+    session.fromPartition(SESSION_PARTITION).on("will-download", (event, item) => {
+      // 拖入的 Office 文档在 Chromium 里有时走“下载”而不是导航：此时不能弹系统 Save As，
+      // 交给壳层转 PDF 预览；普通 http(s) 下载完全不受影响。
+      const localFile = officeFileFromUrl(item.getURL());
+      if (localFile && this.onLocalFile?.(localFile)) {
+        event.preventDefault();
+        return;
+      }
       this.register(item);
     });
   }

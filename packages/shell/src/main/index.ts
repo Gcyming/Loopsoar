@@ -102,6 +102,7 @@ import { registerDocumentTools } from "./documentTools.js";
 import { registerPdfTools } from "./pdfTools.js";
 import { registerOfficeTools } from "./officeTools.js";
 import { registerOfficeConvertTools } from "./officeConvert.js";
+import { createDocumentRuntime } from "./documentRuntime.js";
 import { registerSkillTools } from "./skillTools.js";
 import { createChatSubagentRunner, registerSubagentTools } from "./subagentTools.js";
 import { SubagentTaskStore } from "./subagentTaskStore.js";
@@ -727,10 +728,8 @@ app.whenReady().then(async () => {
     },
   });
   agentWindow = agentWindowManager;
-  devToolsPanel = new BrowserDevToolsPanel({
-    getWindow: () => mainWindow,
-    onOpenChange: (open) => pushToRenderer("chrome:devToolsPanel", { open }),
-  });
+  devToolsPanel = new BrowserDevToolsPanel({ getWindow: () => mainWindow, onOpenChange: (open) => pushToRenderer("chrome:devToolsPanel", { open }) });
+  const documents = createDocumentRuntime({ getHost: () => browserHost, dataDir: dirs.dataDir, notify: (message) => pushToRenderer("ui:notice", { message }) });
   browserHost = createElectronBrowserHost(
     () => mainWindow,
     (url) => {
@@ -760,6 +759,8 @@ app.whenReady().then(async () => {
       onTaskCreated: (sessionId) => taskForks.markBrowserAction(sessionId),
       // 首次动作克隆出可见页面：光标从这一刻起常驻，直到本轮结束。
       onAgentActing: (sessionId) => holdPointerForAgent(sessionId),
+      // 网页里拖入 Office 文档：file:// 导航前接管，转 PDF 后用预览标签打开。
+      onLocalFileDrop: documents.onDrop,
       // 网页视图几何（单源）：覆盖指针贴住网页区域；没有可见网页时传 null → 覆盖层隐藏。
       onViewLayout: (rect) => {
         lastViewRect = rect;
@@ -946,10 +947,7 @@ app.whenReady().then(async () => {
     browserStates.flush();
   };
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
-  const downloads = new DownloadsBridge(
-    () => loadPreferences(dirs.configDir).downloadDir ?? "",
-    () => pushToRenderer("browser:downloads", { downloads: downloads.list() }),
-  );
+  const downloads = new DownloadsBridge(() => loadPreferences(dirs.configDir).downloadDir ?? "", () => pushToRenderer("browser:downloads", { downloads: downloads.list() }), documents.handleDownload);
   registerBrowserDataRuntime(registry, () => browserHost, downloads, resolveSessionRoot, (url: string) => session.fromPartition(SESSION_PARTITION).cookies.get({ url }));
   instrumentBrowserActivity(registry, BROWSER_AGENT_TOOLS, pushToRenderer);
   // 所有工具注册完毕后再同步一次：同步点必须晚于最后一个 register*，否则新工具在沙箱里是「未知工具」。
@@ -1276,6 +1274,7 @@ app.whenReady().then(async () => {
   });
   // 图片域：读取（附件缩略图）+ 剪贴板图片落盘（写 <dataDir>/pasted-images/）
   registerFsDomain({ ...deps, dataDir: dirs.dataDir });
+  documents.register(deps);
   registerMcpDomain({
     ...deps,
     mcp,

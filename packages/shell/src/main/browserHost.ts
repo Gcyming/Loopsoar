@@ -9,13 +9,14 @@
  *  ② 浮层打开时隐藏原生视图；
  *  ③ 几何来自 contracts/layout（含分隔条宽度让位）。
  */
-import {
-  computeBrowserViewBounds,
+import { computeBrowserViewBounds,
   LAYOUT,
   type BrowserViewBounds,
   type WindowSize,
 } from "loopsoar-contracts/layout";
 import { normalizeNavigateUrl } from "loopsoar-contracts/navigation";
+import { pathToFileURL } from "node:url";
+import { officeDocumentTitle, officeFileFromUrl } from "./officePreview.js";
 import {
   createWebContentsViewAdapter,
   type WebContentsViewLike,
@@ -77,6 +78,8 @@ interface TabEntry {
   muted?: boolean;
   /** 固定标签（持久化；固定标签排在最左侧）。 */
   pinned?: boolean;
+  /** 本地文档预览：file:// PDF；不写入浏览器持久化状态，避免重启恢复时被 URL 策略拒绝。 */
+  localPreview?: boolean;
   /** 接管锁脚本已推送到当前文档：导航/加载开始时会重置（用于去重与失败重试）。 */
   lockPushed: boolean;
 }
@@ -106,6 +109,8 @@ export class BrowserHost {
   private userLocks = new Map<string, { locked: boolean; label: string }>();
   /** `${sessionId}::${tabId}` → 当前文档的注入尝试次数（导航/加载开始清零）。 */
   private lockAttempts = new Map<string, number>();
+  /** 同一 webContents+file URL 的 file:// 导航可能同时触发 will-navigate 与请求守卫，短时间去重。 */
+  private localDropHandled = new Map<string, number>();
 
   constructor(private deps: BrowserHostDeps) {
     this.layout = new BrowserViewLayout({
@@ -204,6 +209,8 @@ export class BrowserHost {
       onTitle: (title: string): void => {
         const entry = this.group(sessionId).tabs.get(id);
         if (!entry) return;
+        // 本地文档预览的标题由文档名决定，不能被 PDF 查看器内部的 document.title（文件哈希）覆盖。
+        if (entry.localPreview) return;
         const next = title.trim().slice(0, 80) || this.hostnameOf(entry.url);
         if (next === entry.title) return;
         entry.title = next;
@@ -267,6 +274,22 @@ export class BrowserHost {
       lockPushed: false,
     };
     entryRef = entry;
+    // 网页里直接拖入 Office 文件时，Chromium 会尝试导航到 file:// 并触发下载/白页。
+    // 在导航发生前截获：交给壳层转 PDF 后用应用内标签页展示。
+    if (this.deps.onLocalFileDrop) {
+      view.webContents.on("will-navigate", (...args) => {
+        const event = args[0] as { preventDefault?: () => void } | undefined;
+        const url = String(args[1] ?? "");
+        const file = officeFileFromUrl(url);
+        if (!file) return;
+        // 本地 PDF 预览标签自身的初始 loadURL 不是用户拖拽：避免自己拦截自己。
+        // 不能再用 entry.url === url 判断：did-start-navigation 可能已先把 entry.url
+        // 更新成 file://，导致 will-navigate 里误判为「自身导航」而漏掉拖拽。
+        if (entry.localPreview) return;
+        event?.preventDefault?.();
+        this.handleLocalFileRequest(Number(view.webContents.id ?? -1), url);
+      });
+    }
     const group = this.group(sessionId);
     group.tabs.set(id, entry);
     // 新标签必须立即成为该会话的活动标签
@@ -695,6 +718,112 @@ export class BrowserHost {
   }
 
   /**
+   * 本地文档预览：新建标签页直接加载 file:// PDF（Chromium 内置 PDF 查看器）。
+   *
+   * 不走 navigate() 的 http(s) 白名单：这里只允许主进程已经转换/校验过的本地 PDF；
+   * 预览页标记 localPreview，不写入浏览器恢复状态，避免重启时 file:// 被策略拒绝。
+   */
+  async openLocalPreview(
+    file: string,
+    sessionId?: string,
+    title?: string,
+    options: { tabId?: string } = {},
+  ): Promise<{
+    ok: boolean;
+    tabId?: string;
+    url?: string;
+    error?: string;
+  }> {
+    const sid = (sessionId ?? this.visibleSession).trim() || this.visibleSession;
+    const group = this.group(sid);
+    let entry: TabEntry;
+    let id: string;
+    if (options.tabId) {
+      const existing = group.tabs.get(options.tabId);
+      if (!existing) return { ok: false, error: "预览标签已关闭" };
+      entry = existing;
+      id = options.tabId;
+      if (entry.localPreview) this.deps.onLocalPreview?.(Number(entry.view.webContents.id ?? -1), entry.url, false);
+      group.activeId = id;
+    } else {
+      entry = this.createTab(sid);
+      id = group.activeId!;
+    }
+    // 文档转换期间先给一个 data: 加载页（同一标签随后替换为 PDF），避免用户以为应用卡死。
+    const url = file.startsWith("data:") ? file : pathToFileURL(file).href;
+    const previewTitle = officeDocumentTitle(title || file);
+    entry.localPreview = true;
+    entry.url = url;
+    entry.title = previewTitle;
+    entry.history = [url];
+    entry.index = 0;
+    entry.navigating = true;
+    this.deps.onLocalPreview?.(Number(entry.view.webContents.id ?? -1), url, true);
+    this.emitTabs(sid);
+    try {
+      await entry.view.webContents.loadURL(url);
+      entry.url = entry.view.webContents.getURL() || url;
+      entry.title = previewTitle;
+      entry.loading = false;
+      entry.loadFailure = null;
+      this.emitTabs(sid);
+      return { ok: true, tabId: id, url: entry.url };
+    } catch (err) {
+      entry.loading = false;
+      entry.loadFailure = {
+        code: 0,
+        description: err instanceof Error ? err.message : String(err),
+        url,
+        isMainFrame: true,
+      };
+      this.emitTabs(sid);
+      return { ok: false, tabId: id, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      entry.navigating = false;
+    }
+  }
+
+  /**
+   * 请求守卫/导航拦截的统一入口：找到发起 file:// 的浏览器标签，交给壳层打开预览。
+   * will-navigate 与 webRequest.onBeforeRequest 都可能命中，用 2 秒窗口去重，避免开两个标签。
+   * 返回 true 表示已接管（调用方应取消原始本地导航）。
+   */
+  handleLocalFileRequest(webContentsId: number, rawUrl: string): boolean {
+    const file = officeFileFromUrl(rawUrl);
+    return file ? this.handleLocalFilePath(webContentsId, file) : false;
+  }
+
+  /** 浏览器页 preload 直接送来的本地路径：校验扩展名/归属后打开预览。 */
+  handleLocalFilePath(webContentsId: number, file: string): boolean {
+    let normalized: string | null = null;
+    try {
+      normalized = officeFileFromUrl(pathToFileURL(file).href);
+    } catch {
+      return false;
+    }
+    if (!normalized) return false;
+    for (const [sessionId, group] of this.groups) {
+      for (const entry of group.tabs.values()) {
+        if (entry.localPreview) continue;
+        if (Number(entry.view.webContents.id ?? -1) !== webContentsId) continue;
+        const key = `${webContentsId}|${normalized}`;
+        const now = Date.now();
+        const last = this.localDropHandled.get(key) ?? 0;
+        if (now - last > 2000) {
+          this.localDropHandled.set(key, now);
+          if (this.localDropHandled.size > 200) {
+            const oldest = this.localDropHandled.keys().next().value;
+            if (oldest) this.localDropHandled.delete(oldest);
+          }
+          this.deps.onLocalFileDrop?.(normalized, sessionId);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * 新建标签（可带初始 URL）并切为该会话的活动标签；同 URL 已存在时复用。
    * origin="agent" = Agent 新建：被复用的那个标签同样归属「Agent 工作区」。
    */
@@ -876,6 +1005,7 @@ export class BrowserHost {
     }
     // 关闭前先静音：视图销毁/分离的瞬间，页面仍可能继续播放声音。
     entry.view.webContents.setAudioMuted?.(true);
+    if (entry.localPreview) this.deps.onLocalPreview?.(Number(entry.view.webContents.id ?? -1), entry.url, false);
     group.tabs.delete(tabId);
     try {
       await entry.adapter.close();
@@ -1037,7 +1167,7 @@ export class BrowserHost {
     const tabs: PersistedBrowserTab[] = [];
     let activeIndex = 0;
     for (const [id, entry] of group.tabs) {
-      if (!entry.url) continue;
+      if (!entry.url || entry.localPreview) continue;
       if (id === group.activeId) activeIndex = tabs.length;
       tabs.push({
         url: entry.url,

@@ -50,6 +50,13 @@
       "hasRequest": true
     },
     {
+      "channel": "documents:open",
+      "domain": "documents",
+      "method": "open",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "fs:saveImage",
       "domain": "fs",
       "method": "saveImage",
@@ -1310,6 +1317,7 @@
     "schedule:updated",
     "ui:compose",
     "ui:openSettings",
+    "ui:notice",
     "update:state"
   ]
 }

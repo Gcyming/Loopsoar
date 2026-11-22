@@ -35,6 +35,7 @@ const CHANNEL_ORDER = [
   "chat:renameSession",
   "chat:forkSession",
   "fs:readImage",
+  "documents:open",
   "fs:saveImage",
   "chat:saveTimeline",
   "chat:stop",
