@@ -23,6 +23,8 @@ const tagIndex = process.argv.indexOf("--tag");
 const tag = tagIndex >= 0 ? process.argv[tagIndex + 1] : "";
 const notesIndex = process.argv.indexOf("--notes");
 const notesPath = notesIndex >= 0 ? process.argv[notesIndex + 1] : "";
+const nameIndex = process.argv.indexOf("--name");
+const releaseName = nameIndex >= 0 ? process.argv[nameIndex + 1] : `Loopsoar ${tag.replace(/^v/, "")}`;
 
 if (!tag) {
   console.error("缺少 --tag（例如 --tag v0.0.1）");
@@ -71,14 +73,15 @@ const release = await api(`https://api.github.com/repos/${repo}/releases`, {
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
     tag_name: tag,
-    name: `Loopsoar ${tag.replace(/^v/, "")}`,
+    name: releaseName,
     body,
-    draft: false,
+    draft: true,
     prerelease: true,
   }),
 });
-console.log("release 已创建：", release.html_url);
+console.log("release draft 已创建：", release.html_url);
 
+let uploadFailed = false;
 for (const name of assets) {
   const file = path.join(DIST, name);
   const bytes = statSync(file).size;
@@ -95,10 +98,24 @@ for (const name of assets) {
     body: readFileSync(file),
   });
   if (!res.ok) {
+    uploadFailed = true;
     console.error(`上传失败：${name} → ${res.status} ${(await res.text()).slice(0, 200)}`);
-    process.exitCode = 1;
   } else {
     console.log(`已上传：${name}（${(bytes / 1024 / 1024).toFixed(1)} MB）`);
   }
 }
-console.log("完成：", release.html_url);
+
+// 仓库启用了 immutable releases：已发布 release 不能再补资产，且 tag 一旦被
+// 发布过的 release 使用就不能复用。因此必须先在 draft 状态传完所有资产，
+// 全部成功后才 publish；任何一步失败都保留 draft，绝不发布半成品。
+if (uploadFailed) {
+  console.error(`存在上传失败，release 保持 draft：${release.html_url}`);
+  process.exit(1);
+}
+
+const published = await api(`https://api.github.com/repos/${repo}/releases/${release.id}`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ draft: false }),
+});
+console.log("release 已发布：", published.html_url);
