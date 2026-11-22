@@ -69,6 +69,9 @@ pnpm package:stage
 ## 安装与升级
 
 - 内测用户：从 GitHub Releases 下载 `Loopsoar-Setup-<version>.exe`，核对 `SHA256SUMS.txt` 后再安装。
+- **安装目录检查**：安装器在写入前检查目标目录；带 Windows 低完整性标签、DENY ACL 或不可写的目录会被拒绝，
+  并提示改用默认的当前用户 `LocalAppData\Programs\Loopsoar`（Chromium 子进程无法从这类目录启动）。
+  免安装 zip 也请解压到普通、可写目录，不要放在受限沙箱/安全软件控制的目录。
 - **覆盖安装**（推荐）：直接运行新版本安装包，用户数据目录保留，启动时若版本变化会自动备份到
   `<数据目录>\backups\pre-<旧版本>-<时间戳>`。
 - **卸载重装**：卸载只删除程序目录，默认保留 `%APPDATA%\loopsoar`（或 `LOOPSOAR_DATA_DIR`）；
