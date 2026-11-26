@@ -334,6 +334,8 @@ export interface TabState {
   muted?: boolean;
   /** 固定标签：排在最左侧，关闭其他标签时保留。 */
   pinned?: boolean;
+  /** UI 侧管理页标签（历史/下载/收藏/设置）：该标签没有 URL，标签条按它显示页面名。 */
+  pageKind?: ChromePageKind;
   /** 最近一次主框架加载失败（已过滤 ERR_ABORTED）。 */
   loadFailure?: {
     code: number;
@@ -397,7 +399,11 @@ export interface DownloadItem {
   id: string;
   filename: string;
   savePath: string;
-  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  /** 原始下载地址（右键菜单「复制下载链接」用）。 */
+  url: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted"; missing?: boolean; reason?: "cancelled" | "interrupted" | "permission" | "app-closed" | "stale";
+  /** 排队中（已暂停，等待前面的下载完成或用户点「开始」插队）。 */
+  queued?: boolean;
   received: number;
   total: number;
   startedAt: number;
@@ -869,7 +875,7 @@ export interface LoopsoarAPI {
       sessionId?: string;
       mode?: "build" | "plan";
       reasoningEffort?: string;
-    }): Promise<{ accepted: boolean; sessionId: string }>;
+    }): Promise<{ accepted: boolean; sessionId: string; error?: string }>;
     stop(payload: { sessionId?: string }): Promise<{ stopped: boolean }>;
     /** 暂停当前运行（缺省会话）：当前工具结束后在边界等待；返回 paused=false 表示无可暂停流。 */
     pause(payload?: { sessionId?: string }): Promise<{ paused: boolean; sessionId?: string; error?: string }>;
@@ -922,9 +928,11 @@ export interface LoopsoarAPI {
     /** 原子开关：已打开 → 关闭（open:false），否则打开（open:true）。 */
     togglePopover(payload: { kind: ChromePopoverKind; anchor: { x: number; y: number; width: number; height: number }; lang?: "zh-CN" | "en-US"; tabId?: string }): Promise<{ ok: boolean; open: boolean; error?: string }>;
     closePopover(): Promise<{ ok: boolean }>;
-    popoverAction(payload: { action: string; payload?: unknown }): Promise<{ ok: boolean }>;
+    popoverAction(payload: { action: string; payload?: unknown }): Promise<{ ok: boolean }>; setContextMenuSuppressed(payload: { suppressed: boolean }): Promise<{ ok: boolean }>;
     /** 打开 Agent 会话栏独立窗口（真·窗口化；可拖动/缩放/最小化）。 */
     openAgentWindow(payload: { sessionId?: string }): Promise<{ ok: boolean; error?: string }>;
+    /** 在独立浏览器窗口中打开 URL（共享登录态）。 */
+    openBrowserWindow(payload: { url: string }): Promise<{ ok: boolean; error?: string }>;
     /** 关闭会话栏独立窗口。 */
     closeAgentWindow(): Promise<{ ok: boolean }>;
     /** 最小化会话栏独立窗口（自绘无系统边框后由标题栏按钮调用）。 */
@@ -1029,7 +1037,7 @@ export interface LoopsoarAPI {
   };
   browser: LoopsoarDomain & {
     navigate(payload: { url: string }): Promise<{ ok: boolean; url?: string; tabId?: string; error?: string }>;
-    newTab(payload?: { url?: string; afterTabId?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
+    newTab(payload?: { url?: string; afterTabId?: string; openerTabId?: string }): Promise<{ ok: boolean; tabId: string; url?: string; error?: string }>;
     closeTab(payload: { tabId: string }): Promise<{ closed: boolean }>;
     closeTabs(payload: { tabIds: string[] }): Promise<{ closed: number }>;
     duplicateTab(payload: { tabId: string }): Promise<{ ok: boolean; tabId?: string; error?: string }>;
@@ -1039,6 +1047,8 @@ export interface LoopsoarAPI {
     /** 删除会话时关闭该会话名下的全部网页（工作区 > 会话 > 网页；删会话才关网页，关网页不删会话）。 */
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
+    /** 拖拽重排：把 tabId 移到 targetTabId 之前/之后。 */
+    moveTab(payload: { tabId: string; targetTabId: string; after?: boolean }): Promise<{ ok: boolean }>;
     listTabs(): Promise<{ tabs: TabState[]; visibleSession: string }>;
     /** 结束任务工作区：关页 + 清任务快照/标记（不再复活）。 */
     endTask(payload: { sessionId: string }): Promise<{ ok: boolean }>;
@@ -1073,7 +1083,7 @@ export interface LoopsoarAPI {
     /** 删除选中的历史条目（urls 来自 history().entries；幂等）。 */
     historyRemove(payload: { urls: string[] }): Promise<{ removed: number }>;
     downloads(): Promise<{ downloads: DownloadItem[] }>;
-    downloadAction(payload: { id: string; action: "cancel" | "open" | "showInFolder" | "remove" }): Promise<{ ok: boolean }>;
+    downloadAction(payload: { id: string; action: "cancel" | "open" | "showInFolder" | "remove" | "deleteFile" | "start" | "alwaysOpen" | "retry" }): Promise<{ ok: boolean }>;
     snapshot(): Promise<BrowserSnapshotResult>;
     screenshot(payload?: { selector?: string }): Promise<{ ok: boolean; data?: string; error?: string }>;
     /** 保存当前页面 HTML 全页到下载目录 saved-pages/。 */
@@ -1084,6 +1094,8 @@ export interface LoopsoarAPI {
     list(): Promise<{ bookmarks: BookmarkItem[] }>;
     /** 新增书签；duplicate=true 表示已存在（返回已有项，不重复插入）。 */
     add(payload: { url: string; title?: string }): Promise<BookmarkAddResult>;
+    /** 编辑书签：改标题/网址。 */
+    update(payload: { id: string; title?: string; url?: string }): Promise<{ ok: boolean; bookmark?: BookmarkItem; error?: string }>;
     /** 删除书签；ok=false 表示已不存在（幂等）。 */
     remove(payload: { id: string }): Promise<{ ok: boolean }>;
   };
@@ -1140,6 +1152,8 @@ export interface LoopsoarAPI {
   settings: LoopsoarDomain & {
     listModels(payload: {
       provider: string;
+      /** 正在编辑的供应商 id（取该供应商自己的已保存 Key；不要用活动供应商的 Key 冒名）。 */
+      providerId?: string;
       baseUrl: string;
       model?: string;
       apiFormat?: "auto" | "openai" | "anthropic";

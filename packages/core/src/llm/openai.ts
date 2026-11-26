@@ -210,16 +210,21 @@ export function createOpenAiClient(opts: OpenAiClientOptions): LlmClient {
         if (RETRYABLE_STATUS.has(res.status)) {
           const retryAfterMs = parseRetryAfterMs(res.headers);
           if (res.status === 429) {
-            // 普通限流：只有「很快就会恢复」才值得在本次请求内等；retry-after 很大/缺失 → 立即报错
-            if (retryAfterMs === undefined || retryAfterMs > MAX_RETRY_AFTER_MS) {
-              const waitHint =
-                retryAfterMs !== undefined
-                  ? `上游限流，约 ${humanizeWait(retryAfterMs)} 后可重试`
-                  : "上游限流且未提供 retry-after，请稍后手动重试";
-              yield { kind: "error", message: `${waitHint}（HTTP 429：${info.message}）` };
+            // retry-after 很大：额度类限流，重试只会让用户空等 → 立即报错。
+            if (retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS) {
+              yield {
+                kind: "error",
+                message: `上游限流，约 ${humanizeWait(retryAfterMs)} 后可重试（HTTP 429：${info.message}）`,
+              };
               return;
             }
-            throw new RetryableError(`HTTP ${res.status}: ${info.message}`, retryAfterMs, MAX_429_RETRIES);
+            // 普通过载 429 常常不带 retry-after（"The inference service is overloaded"）：
+            // 旧实现直接报「请稍后手动重试」，用户频繁手动重发。这里用短退避自动重试 2 次。
+            throw new RetryableError(
+              `HTTP ${res.status}: ${info.message}`,
+              retryAfterMs ?? 800,
+              MAX_429_RETRIES,
+            );
           }
           const capped = retryAfterMs !== undefined ? Math.min(retryAfterMs, 60_000) : undefined;
           throw new RetryableError(`HTTP ${res.status}: ${info.message}`, capped ?? 1000);

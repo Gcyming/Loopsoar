@@ -276,6 +276,7 @@ export default function SessionListPanel({
             title={tr("chat.deleteSession")}
             onClick={(event) => {
               event.stopPropagation();
+              if (!window.confirm(tr("chat.deleteSessionConfirm", { title: session.title }))) return;
               onDeleteSession(session.id);
             }}
             data-testid="session-delete"
@@ -521,6 +522,8 @@ export default function SessionListPanel({
                     type="button"
                     style={{ ...styles.menuItem, ...styles.menuItemDanger }}
                     onClick={() => {
+                      const title = sessions.find((session) => session.id === menu.id)?.title ?? menu.id;
+                      if (!window.confirm(tr("chat.deleteSessionConfirm", { title }))) return;
                       onDeleteSession(menu.id);
                       setMenu(null);
                     }}

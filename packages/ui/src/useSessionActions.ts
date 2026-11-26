@@ -44,7 +44,8 @@ export interface UseSessionActionsOptions {
   setCurrentSession: React.Dispatch<React.SetStateAction<string | null>>;
   setNotice: (value: string) => void;
   setSessionOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setChromePage: React.Dispatch<React.SetStateAction<ChromePageKind | null>>;
+  /** 打开管理页：优先复用同类标签，否则新建标签承载（不再覆盖当前网页）。 */
+  openChromePage: (kind: ChromePageKind) => void;
   setSnapshotData: React.Dispatch<React.SetStateAction<BrowserSnapshotResult | null>>;
   setTabs: React.Dispatch<React.SetStateAction<TabState[]>>;
   setAddress: React.Dispatch<React.SetStateAction<string>>;
@@ -109,7 +110,7 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
     setCurrentSession,
     setNotice,
     setSessionOpen,
-    setChromePage,
+    openChromePage,
     setSnapshotData,
     setTabs,
     setAddress,
@@ -163,6 +164,9 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
 
   // 浮层动作（独立子窗口经主进程转发）：打开整页管理 / 主窗口导航 / 保存页面
   const savePageRef = React.useRef<null | (() => void)>(null);
+  // 浮层动作 effect 只订阅一次：openChromePage 会随标签列表重建，用 ref 取最新实现（避免旧闭包重复开标签）。
+  const openChromePageRef = React.useRef(openChromePage);
+  openChromePageRef.current = openChromePage;
   // 工具栏浮层（独立子窗口）的「点击列表外收起」：主窗口内任何非触发按钮的按下都关闭它。
   // 触发按钮自己负责原子 toggle（ui:togglePopover），这里跳过，避免 pointerdown 先关、click 又开导致连闪。
   React.useEffect(() => {
@@ -193,7 +197,7 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
       }
       if (p?.action === "openPage" && p.payload?.kind) {
         dismissAllPopovers();
-        setChromePage(p.payload.kind);
+        openChromePageRef.current(p.payload.kind);
         return;
       }
       if (p?.action === "navigate" && p.payload?.url) {

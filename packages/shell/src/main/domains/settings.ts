@@ -575,7 +575,12 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:removeProvider", (payload) => {
     const p = payload as { id: string };
     const removed = deps.providers?.remove(p.id) ?? false;
-    if (removed) deps.onProvidersChanged?.();
+    if (removed) {
+      // 删除供应商必须同时清掉它的密钥：否则同名/同端点重新添加会复用旧 Key，
+      // 卡片显示「已保存」而用户从未输入过（也避免残留凭据）。
+      deps.secrets?.clear(p.id);
+      deps.onProvidersChanged?.();
+    }
     return { removed, items: deps.providers?.list() ?? [], activeId: deps.providers?.active()?.id ?? null };
   });
 
@@ -911,6 +916,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:listModels", async (payload) => {
     const raw = payload as {
       provider: string;
+      providerId?: string;
       baseUrl: string;
       model?: string;
       apiFormat?: "auto" | "openai" | "anthropic";
@@ -921,10 +927,12 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
     // SSRF 门：模型服务地址可以指向本机回环，但不能指向内网/链路本地/元数据服务
     const target = await validateProbeTarget(deps.platform, cfg.baseUrl);
     if (!target.ok) return { models: [], error: target.message };
-    const activeId = deps.providers?.active()?.id;
-    // 密钥优先级：表单刚输入的（未保存）> 活跃供应商已保存 > 环境变量
+    // 密钥优先级：表单刚输入的（未保存）> **正在编辑的供应商自己的**已保存密钥 > 环境变量。
+    // 绝不能回退到「活动供应商」的 Key：编辑备用供应商时会把别人的 Key 发到对方端点（401 + 密钥泄露）。
     const typedKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
-    const apiKey = typedKey || (activeId ? (deps.secrets?.get(activeId) ?? "") : "") || resolveApiKeyFromEnv(deps.env);
+    const editingId = typeof raw.providerId === "string" ? raw.providerId.trim() : "";
+    const storedKey = editingId ? (deps.secrets?.get(editingId) ?? "") : "";
+    const apiKey = typedKey || storedKey || resolveApiKeyFromEnv(deps.env);
     const isAnthropic =
       raw.apiFormat === "anthropic" || (raw.apiFormat !== "openai" && /anthropic|claude/i.test(cfg.baseUrl));
     const modelsUrl = resolveModelsUrl(cfg.baseUrl, isAnthropic);

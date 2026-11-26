@@ -38,7 +38,7 @@ interface CompositionRoot {
  */
 const COMPOSITION_ROOTS: Record<string, CompositionRoot> = {
   "packages/shell/src/main/index.ts": {
-    ceiling: 1411,
+    ceiling: 1405,
     reason:
       "Electron 主进程组合根：协议注册、核心服务装配、浏览器栈、IPC 域、窗口生命周期必须按顺序发生，拆开会让启动顺序隐式化。已把任务分支状态机（taskForks.ts）、崩溃取证（crashLog.ts）、退出守卫（quitGuard.ts）、指针几何（pointerScreenArea）、Chromium 启动开关（chromiumSwitches.ts）、进程树守护接线（jobGuardRuntime.ts）移出。",
     target:
@@ -50,8 +50,22 @@ const COMPOSITION_ROOTS: Record<string, CompositionRoot> = {
     target:
       "下一步把 vault 索引层（loadIndex/persistIndex/readVaultIndexed/reconcile*）抽成 MemoryVaultIndex，门面只保留事实读写与召回。",
   },
+  "packages/shell/src/main/browserHost.ts": {
+    ceiling: 1424,
+    reason:
+      "浏览器宿主：标签生命周期、会话分组、原生视图布局、导航历史与检索/下载/扩展工具共用同一份 per-session 状态机；已把几何（browserViewLayout）、标签视图（browserTabView）、关闭栈合并（browserTabView）等移出。",
+    target:
+      "下一步把导航失败历史入栈/新标签归属辅助也抽到 browserNavigationSupport.ts（约 -30 行），再下调天花板。",
+  },
+  "packages/ui/src/Settings.tsx": {
+    ceiling: 1406,
+    reason:
+      "设置页组合根：供应商/模型/密钥编辑、通用偏好、记忆、扩展、技能、MCP、Loop 工作台与关于页共享同一套表单与保存状态；子分区已拆到独立 Section 文件。",
+    target:
+      "下一步把「供应商编辑弹窗 + 模型表/请求头/能力三态」抽成 ProviderSettingsSection（约 -250 行），再下调天花板。",
+  },
   "packages/ui/src/App.tsx": {
-    ceiling: 1465,
+    ceiling: 1446,
     reason:
       "UI 组合根：一个交互式单组件，已把 20+ 个子面板拆到独立文件；剩余部分是同一份会话状态上的分布布局，跨文件会引入大量透传。",
     target: "下一步把 body JSX 抽成 AppBody 并显式声明 props（约 -400 行），届时本条目应下调到 ~1070。",

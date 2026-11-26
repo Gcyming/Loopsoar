@@ -10,6 +10,7 @@
  *   · 保留复制/剪切/粘贴等编辑命令，避免用户右键输入框时无菜单可用。
  */
 import { clipboard, Menu, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from "electron";
+import { isContextMenuSuppressed } from "./domains/window.js";
 
 export interface PageContextMenuOptions {
   webContents: WebContents;
@@ -54,6 +55,7 @@ export function attachPageContextMenu(options: PageContextMenuOptions): void {
   if (!wc || attached.has(wc)) return;
   attached.add(wc);
   wc.on("context-menu", (_event, params: ContextMenuParams) => {
+    if (isContextMenuSuppressed()) return;
     const win = options.getWindow();
     if (!win || win.isDestroyed()) return;
     const nav = navigation(wc);

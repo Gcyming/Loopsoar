@@ -137,16 +137,38 @@ export function placePopover(input: PlacePopoverInput): PopoverPosition {
 
   // 原生网页区域避让：菜单与网页只相交几像素时，宁可把菜单平移到网页旁边，
   // 也不要把整页隐藏成静态底图（那会让网页点击/跳转全部失效）。
+  //
+  // 关键补充：侧栏很窄时（例如模型菜单 340px、侧栏只有 240px），旧实现「右边放不下、
+  // 左边也没空间」就原地不动 —— 菜单被原生网页盖住，只能靠截一张静态底图再隐藏视图，
+  // 用户看到网页“停止渲染”。这里第三优先级是**收窄菜单**贴到网页右侧的侧栏里：
+  // 少几像素宽度也比整页冻结好，且网页始终保持实时渲染。
   const avoid = input.avoid;
+  let finalMaxWidth = maxWidth;
+  let finalWidth = width;
   if (avoid) {
     const verticalOverlap = top < avoid.y + avoid.height && top + effectiveHeight > avoid.y;
     const intersects = left < avoid.x + avoid.width && left + width > avoid.x;
     if (verticalOverlap && intersects) {
-      const fits = (candidate: number): boolean => candidate >= margin && candidate + width <= viewportWidth - margin;
+      const fits = (candidate: number, candidateWidth: number): boolean =>
+        candidate >= margin && candidate + candidateWidth <= viewportWidth - margin;
       const rightCandidate = avoid.x + avoid.width + gap;
       const leftCandidate = avoid.x - gap - width;
-      if (fits(rightCandidate)) left = rightCandidate;
-      else if (fits(leftCandidate)) left = leftCandidate;
+      const rightSpace = viewportWidth - margin - rightCandidate;
+      const leftSpace = avoid.x - gap - margin;
+      const MIN_AVOID_WIDTH = 200;
+      if (fits(rightCandidate, width)) {
+        left = rightCandidate;
+      } else if (fits(leftCandidate, width)) {
+        left = leftCandidate;
+      } else if (rightSpace >= MIN_AVOID_WIDTH && rightSpace >= leftSpace) {
+        finalMaxWidth = Math.min(finalMaxWidth, rightSpace);
+        finalWidth = Math.min(width, finalMaxWidth);
+        left = rightCandidate;
+      } else if (leftSpace >= MIN_AVOID_WIDTH) {
+        finalMaxWidth = Math.min(finalMaxWidth, leftSpace);
+        finalWidth = Math.min(width, finalMaxWidth);
+        left = avoid.x - gap - finalWidth;
+      }
     }
   }
 
@@ -155,6 +177,6 @@ export function placePopover(input: PlacePopoverInput): PopoverPosition {
     left,
     placement: `${side}-${alignment}` as PopoverPlacement,
     maxHeight,
-    maxWidth,
+    maxWidth: finalMaxWidth,
   };
 }

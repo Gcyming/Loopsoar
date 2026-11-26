@@ -140,6 +140,11 @@ export interface PopoverMainWindowLike {
   isDestroyed?(): boolean;
   /** 主窗口是否获得焦点（用于「点回主窗口不立即关浮层」的判定）。 */
   isFocused?(): boolean;
+  /** 关闭浮层后把焦点还给主窗口（仅程序化关闭；失焦关闭不抢焦点）。 */
+  show?(): void;
+  focus?(): void;
+  isMinimized?(): boolean;
+  restore?(): void;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   removeListener?(event: string, listener: (...args: unknown[]) => void): unknown;
 }
@@ -282,11 +287,13 @@ export interface ChromePopoverManagerDeps {
 export interface ChromePopoverManager {
   /** 打开（或切换）浮层；同一时刻只保留一个。 */
   open(input: ChromePopoverOpenInput): ChromePopoverOpenResult;
-  /** 关闭当前浮层（幂等）。 */
-  close(): void;
+  /** 关闭当前浮层（幂等）。refocus=true 时把焦点还给主窗口（程序化关闭）。 */
+  close(refocus?: boolean): void;
   /** 浮层内动作：交给 onAction 并关闭浮层。 */
   handleAction(payload: ChromePopoverActionInput): void;
-  isOpen(): boolean;
+  isOpen(kind?: ChromePopoverKind): boolean;
+  /** 在同一锚点切换到另一类浮层（更多菜单里的历史/下载/收藏）。 */
+  switchKind(kind: ChromePopoverKind): ChromePopoverOpenResult;
   /** 应用退出时调用：关闭浮层并解绑主窗口监听。 */
   dispose(): void;
 }
@@ -304,8 +311,16 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
     deps.clearIntervalFn ?? ((handle: unknown): void => clearInterval(handle as ReturnType<typeof setInterval>));
 
   let popover: PopoverWindowLike | null = null;
+  /** 当前打开的是哪一类（点击 toggle 时区分「同键收起 / 异键切换」）。 */
+  let openKind: ChromePopoverKind | null = null;
   /** 当前浮层对应的锚点屏幕矩形（hover 判定用）。 */
   let anchorScreen: PopoverRect | null = null;
+  /** 最近一次 open 的锚点（主窗口内容区 CSS px）：更多菜单切 kind 时复用同一位置。 */
+  let lastAnchorCss: PopoverRect | null = null;
+  let lastLang: string | undefined;
+  let lastTabId: string | undefined;
+  /** 切 kind 时暂存的旧窗口：等新窗口 ready-to-show 再关，避免中间空一帧。 */
+  let switchingFrom: PopoverWindowLike | null = null;
   let pollHandle: unknown = null;
   let mainWindow: PopoverMainWindowLike | null = null;
   let mainListeners: { event: string; listener: (...args: unknown[]) => void }[] = [];
@@ -346,11 +361,26 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
     }
   }
 
-  function close(): void {
+  function close(refocus = false): void {
     stopPolling();
+    const main = mainWindow;
     const win = popover;
     popover = null;
+    openKind = null;
     anchorScreen = null;
+    // 切换过程中被关闭（Esc/点外部）：旧窗口也要一起收掉，不能留在屏幕上。
+    const old = switchingFrom;
+    switchingFrom = null;
+    if (old && !old.isDestroyed()) {
+      try {
+        // 透明窗口直接销毁时 Windows 有时会闪一帧灰底（慢动作里看到的灰块）：
+        // 先 hide 摘掉可见表面，再销毁，销毁就对合成器不可见了。
+        old.hide?.();
+        old.close();
+      } catch {
+        // 已销毁
+      }
+    }
     if (win) {
       try {
         win.removeAllListeners?.();
@@ -358,15 +388,34 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
         // 忽略解绑失败
       }
       try {
-        if (!win.isDestroyed()) win.close();
+        if (!win.isDestroyed()) {
+          // 先 hide 再 close：避免透明窗口销毁瞬间闪一帧未合成灰底。
+          win.hide?.();
+          win.close();
+        }
       } catch {
         // 窗口可能已被系统销毁：忽略
       }
-      // 通知渲染层「浮层已关闭」，用于「再次点击即收起」的状态同步（避免切 kind 时误判）
+    }
+    // 通知渲染层「浮层已关闭」，用于「再次点击即收起」的状态同步（避免切 kind 时误判）。
+    // 切换过程中 active 可能已经是 null，但旧窗口确实被收掉了，也要通知。
+    if (win || old) {
       try {
         deps.onClosed?.();
       } catch {
         // 回调异常不影响关闭（渲染层正在销毁等）
+      }
+    }
+    // 程序化关闭（点按钮/Esc/更多菜单动作）后把焦点还给主窗口：
+    // 否则 Windows 会把前台让给下一个窗口（用户看到别的程序压到 Loopsoar 上面）。
+    // 失焦关闭（blur）不抢焦点，避免用户切到别的应用时又被拉回来。
+    if (refocus && main && !main.isDestroyed?.()) {
+      try {
+        if (main.isMinimized?.()) main.restore?.();
+        main.show?.();
+        main.focus?.();
+      } catch {
+        // 主窗口已销毁
       }
     }
     detachMainListeners();
@@ -407,8 +456,9 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
       return { ok: false, error: "主窗口未就绪，无法打开工具栏浮层" };
     }
 
-    // 同一时刻只保留一个浮层（切换 kind 时先关旧的）
-    close();
+    lastAnchorCss = input.anchor;
+    lastLang = input.lang;
+    lastTabId = input.tabId;
 
     try {
       const runtime = deps.createWindow && deps.screen ? null : loadElectronRuntime();
@@ -442,6 +492,47 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
       });
       const bounds = computePopoverBounds(anchorRect, sizeFor(input.kind), workArea, DEFAULT_POPOVER_GAP);
 
+      // 同一类已经打开：只更新锚点/位置，绝不销毁重建。
+      // 悬停会反复触发 open（鼠标/焦点变化会再次派发 mouseenter），重建窗口就表现为菜单闪烁；
+      // 同时每次重建都会重新加载整页，也会把帧率拖下去。
+      if (popover && openKind === input.kind && !popover.isDestroyed()) {
+        anchorScreen = anchorRect;
+        try {
+          const current = popover.getBounds();
+          // 位置没变就不 setBounds：避免无意义的重绘。
+          if (
+            current.x !== bounds.x ||
+            current.y !== bounds.y ||
+            current.width !== bounds.width ||
+            current.height !== bounds.height
+          ) {
+            popover.setBounds?.(bounds);
+          }
+        } catch {
+          // 位置更新失败不影响已显示的菜单
+        }
+        return { ok: true };
+      }
+
+      if (popover) {
+        // 换到另一类（按钮点击/悬停/更多菜单切列表）：旧窗口先留着（继续显示），
+        // 等新窗口 ready-to-show 后再关；先 close 再开新会有 200~300ms 空档，看起来就是掉帧。
+        const previous = popover;
+        switchingFrom = previous;
+        stopPolling();
+        try {
+          previous.removeAllListeners?.();
+        } catch {
+          // 解绑失败不影响后续
+        }
+        popover = null;
+        openKind = null;
+        anchorScreen = null;
+      } else {
+        // 同一时刻只保留一个浮层
+        close();
+      }
+
       const win = createWindow({
         parent: main,
         x: bounds.x,
@@ -471,6 +562,7 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
       });
 
       popover = win;
+      openKind = input.kind;
       anchorScreen = anchorRect;
 
       win.on("ready-to-show", () => {
@@ -481,14 +573,31 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
           close();
           return;
         }
+        // 新窗口已经显示：这时才关掉旧窗口，视觉上是一次原地换内容。
+        const old = switchingFrom;
+        switchingFrom = null;
+        if (old && !old.isDestroyed()) {
+          try {
+            // 先 hide 再销毁：旧窗口消失时不再闪灰底。
+            old.hide?.();
+            old.close();
+          } catch {
+            // 已销毁
+          }
+        }
         startPolling(screenApi);
       });
-      // 浮层失焦 → 关闭；但用户点回主窗口时先不关（让 click 的 toggle 正确收起，
-      // 也避免 pointerdown 先关、click 再开导致「再次点击重复展开」）；离开菜单/锚点的点击由 hover 轮询兜底关闭。
+      // 浮层失焦 → 关闭；但鼠标仍停在触发按钮（锚点）上时不关：这次失焦大概率就是
+      // 「点击触发按钮」本身，交给 click 的原子 toggle 处理；否则会先关、click 再开，
+      // 表现为「收起后又重复展开」（用户实测）。
       win.on("blur", () => {
         if (popover !== win) return;
-        const main = deps.getMainWindow();
-        if (main && !main.isDestroyed?.() && main.isFocused?.()) return;
+        try {
+          const cursor = screenApi.getCursorScreenPoint();
+          if (anchorScreen && isPointWithin(anchorScreen, cursor, POPOVER_ANCHOR_PADDING)) return;
+        } catch {
+          // 取光标失败就按普通失焦处理
+        }
         close();
       });
       win.on("closed", () => {
@@ -497,7 +606,7 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
       // Esc：渲染层通常自己调 closePopover，这里再加一道主进程兜底（不依赖渲染层是否处理）
       win.webContents?.on?.("before-input-event", (...args: unknown[]) => {
         const inputEvent = args[1] as { key?: string; type?: string } | undefined;
-        if (popover === win && (inputEvent?.key === "Escape" || inputEvent?.key === "Esc")) close();
+        if (popover === win && (inputEvent?.key === "Escape" || inputEvent?.key === "Esc")) close(true);
       });
 
       attachMainListeners(main);
@@ -521,6 +630,12 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
     }
   }
 
+  /** 在同一锚点切换到另一类浮层（更多菜单里的历史/下载/收藏）。 */
+  function switchKind(kind: ChromePopoverKind): ChromePopoverOpenResult {
+    if (!lastAnchorCss) return { ok: false, error: "浮层尚未打开过，无法切换" };
+    return open({ kind, anchor: lastAnchorCss, lang: lastLang, tabId: lastTabId });
+  }
+
   function handleAction(payload: ChromePopoverActionInput): void {
     try {
       deps.onAction?.(payload);
@@ -538,7 +653,8 @@ export function createChromePopoverManager(deps: ChromePopoverManagerDeps): Chro
     open,
     close,
     handleAction,
-    isOpen: () => popover !== null,
+    isOpen: (kind?: ChromePopoverKind) => popover !== null && (!kind || openKind === kind),
+    switchKind,
     dispose,
   };
 }

@@ -364,7 +364,13 @@ export default function MemorySettingsSection({
             }
           />
           <Btn label={tr("settings.memory.review")} onClick={() => void api.memory.review().then(setReview).catch(bad)} />
-          <Btn label={tr("settings.memory.clearAll")} onClick={() => void api.memory.clear().then(async () => setMem(await api.memory.list()))} />
+          <Btn
+            label={tr("settings.memory.clearAll")}
+            onClick={() => {
+              if (!window.confirm(tr("settings.memory.clearAllConfirm"))) return;
+              void api.memory.clear().then(async () => setMem(await api.memory.list())).catch(bad);
+            }}
+          />
         </div>
         {review ? (
           <div className="panel-card" style={S.card}>
@@ -463,7 +469,14 @@ export default function MemorySettingsSection({
                 {mEdit?.id === f.id ? <>
                   <Btn label={tr("settings.save")} small onClick={() => void saveMemEdit()} /><Btn label={tr("settings.cancel")} small onClick={() => setMEdit(null)} />
                 </> : <Btn label={tr("settings.edit")} small onClick={() => setMEdit({ id: f.id, content: f.content })} />}
-                <Btn label={tr("settings.delete")} small onClick={() => void api.memory.delete({ id: f.id }).then(async () => setMem(await api.memory.list()))} />
+                <Btn
+                  label={tr("settings.delete")}
+                  small
+                  onClick={() => {
+                    if (!window.confirm(tr("settings.memory.deleteConfirm"))) return;
+                    void api.memory.delete({ id: f.id }).then(async () => setMem(await api.memory.list())).catch(bad);
+                  }}
+                />
               </span>
             </div>
             {mEdit?.id === f.id ? <Area v={mEdit.content} rows={2} on={(x) => setMEdit({ id: f.id, content: x })} /> : <div style={S.memText}>{f.content}</div>}

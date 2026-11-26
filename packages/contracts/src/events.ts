@@ -11,6 +11,7 @@ export const EVENTS = [
   "chat:stream:done",
   "chat:stream:error",
   "chat:stream:heartbeat",
+  "chat:running",
   "chat:steer:applied",
   /** 会话运行控制状态：{ sessionId, paused }（暂停/恢复时推送，多窗口同步）。 */
   "chat:pauseState",
@@ -37,6 +38,12 @@ export const EVENTS = [
   "chrome:popoverClosed",
   "chrome:dismissPopovers",
   "chrome:devToolsPanel",
+  /**
+   * 网页视图获得键盘焦点时按下的浏览器快捷键（WebContentsView 焦点不在主窗口，
+   * 主窗口 window keydown 收不到）：{ action: "new-tab" | "reopen-tab" | "close-tab" | "reload" | "mute-tab" | "duplicate-tab" }。
+   * 渲染层据此执行与主窗口完全相同的标签动作。
+   */
+  "browser:shortcut",
   /**
    * Agent 正在操控浏览器的实时活动（{ sessionId?, tool, phase: "start" | "end" }）。
    * 渲染层据此：① 当前会话只在动作期间显示浏览器边框呼吸灯；② 把操作中的标签切到可见。

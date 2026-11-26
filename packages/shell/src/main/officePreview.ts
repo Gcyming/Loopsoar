@@ -213,9 +213,17 @@ export async function prepareOfficePreview(
   }
 
   const nativeKind = options.preferMicrosoftOffice === false ? null : officeKindForFile(resolved);
-  const nativeApp = nativeKind && !isOfficeProcessRunning(nativeKind) ? findOfficeApp(nativeKind) : null;
+  const officeRunning = Boolean(nativeKind && isOfficeProcessRunning(nativeKind));
+  const nativeApp = nativeKind && !officeRunning ? findOfficeApp(nativeKind) : null;
   const command = findSoffice();
   if (!nativeApp && !command) {
+    // 关键区分：Office 已安装但正在运行 ≠ 未安装。旧实现一律提示「请安装 Microsoft Office」，
+    // 用户明明装着 Office，会反复检查安装、以为软件坏了。
+    if (officeRunning) {
+      throw new Error(
+        "检测到 Microsoft Office 正在运行：为避免占用你正在编辑的文档，暂时不自动转换。请先保存并关闭 Office 后重试，或安装 LibreOffice 作为备用转换器",
+      );
+    }
     throw new Error("未找到可用的 Office 转换器：请安装 Microsoft Office（推荐）或 LibreOffice");
   }
 

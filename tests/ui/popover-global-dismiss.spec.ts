@@ -45,7 +45,8 @@ describe("工具栏浮层：再次点击按钮 = 收起（原子 toggle，不连
     expect(contracts).toContain('"ui:togglePopover"');
     const domain = read("packages/shell/src/main/domains/chromePopover.ts");
     expect(domain).toContain("ui:togglePopover");
-    expect(domain).toContain("manager.isOpen()");
+    // 同键才收起、异键直接切换（旧实现只 isOpen() 就关，导致「收起后又重复展开」）
+    expect(domain).toContain("manager.isOpen(input.kind as ChromePopoverKind)");
   });
 
   it("渲染层点击走 togglePopover；浮层外点击（主窗口）走 closePopover", () => {

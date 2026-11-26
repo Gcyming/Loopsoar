@@ -4,7 +4,8 @@
  * 口径：
  *   · 只在本机记录的版本号与当前版本不同时备份（首次启动没有旧数据，不备份）；
  *   · 备份到 <dataDir>/backups/pre-<旧版本>-<时间戳>/，整目录拷贝但排除可再生缓存
- *     （Chromium 缓存、日志、traces、上一次备份本身），这些占空间且没有恢复价值；
+ *     （Chromium 缓存、日志、traces、上一次备份本身，以及 documentRuntime.ts 的
+ *     <dataDir>/office-preview Office 预览缓存），这些占空间且没有恢复价值；
  *   · 单文件超过 64MB 跳过并记录（多为导出的媒体文件），避免备份把磁盘写满；
  *   · 版本记录写 <dataDir>/version.json：{ version, firstRunAt, lastRunAt }。
  *   · 任何失败都只记录，不阻断启动（备份是尽力而为，不是启动前置条件）。
@@ -16,6 +17,8 @@ import path from "node:path";
 export const VERSION_FILE = "version.json";
 /** 备份根目录名（位于 dataDir 下）。 */
 export const BACKUP_DIR = "backups";
+/** Office 预览缓存目录名（documentRuntime.ts 的 cacheDir）：PDF 可由源文件重新生成，无恢复价值。 */
+export const OFFICE_PREVIEW_CACHE_DIR = "office-preview";
 /** 单文件上限：超过则跳过，记录在 skipped。 */
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -34,6 +37,8 @@ export const SKIP_NAMES = new Set([
   "logs",
   "traces",
   "Partitions",
+  // Office 预览缓存（documentRuntime.ts 的 cacheDir）：可再生，不进升级备份。
+  OFFICE_PREVIEW_CACHE_DIR,
   "blob_storage",
   "Local Storage",
   "Session Storage",

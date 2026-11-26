@@ -33,4 +33,9 @@ export function registerBookmarksDomain(deps: TrustedIpcDeps, store: BookmarksSt
     const p = payload as { id: string };
     return { ok: store.remove(p?.id ?? "") };
   });
+
+  handleTrusted(deps, "bookmarks:update", (payload) => {
+    const p = payload as { id: string; title?: string; url?: string };
+    return store.update(p?.id ?? "", { title: p?.title, url: p?.url });
+  });
 }

@@ -11,24 +11,25 @@ describe("布局契约", () => {
     expect(LAYOUT.TOP_BAR_HEIGHT).toBe(48);
     expect(LAYOUT.SIDEBAR_WIDTH).toBe(360);
     expect(LAYOUT.STATUS_BAR_HEIGHT).toBe(32);
-    // 网页面板：四边留白 + 圆角（DOM 页框与原生 WebContentsView 共用同一契约值）
-    expect(LAYOUT.BROWSER_VIEW_INSET).toBe(8);
-    expect(LAYOUT.BROWSER_VIEW_RADIUS).toBe(14);
+    // 网页面板：已改为方形铺满（不再留应用底色缝隙、不再圆角裁切）
+    expect(LAYOUT.BROWSER_VIEW_INSET).toBe(0);
+    expect(LAYOUT.BROWSER_VIEW_INSET_RIGHT).toBe(0);
+    expect(LAYOUT.BROWSER_VIEW_RADIUS).toBe(0);
   });
 
-  it("原生浏览器视图避开标题栏/顶栏/侧栏/状态条，并内缩为圆角面板", () => {
+  it("原生浏览器视图避开标题栏/顶栏/侧栏/状态条，并铺满整列（无应用底色缝隙）", () => {
     expect(computeBrowserViewBounds({ width: 1280, height: 800 })).toEqual({
-      x: 8,
-      y: 96,
-      width: 906,
-      height: 664,
+      x: 0,
+      y: 88,
+      width: 918,
+      height: 680,
     });
   });
 
   it("窗口过小时钳制为 0（不产生负尺寸）", () => {
     expect(computeBrowserViewBounds({ width: 100, height: 40 })).toEqual({
-      x: 8,
-      y: 96,
+      x: 0,
+      y: 88,
       width: 0,
       height: 0,
     });

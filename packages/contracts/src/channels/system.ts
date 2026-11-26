@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AskRespondSchema, ChromePopoverActionSchema, LoopDeleteSchema, LoopGetSchema, LoopSaveSchema, LoopSetActiveSchema, MoveAgentWindowSchema, OpenAgentWindowSchema, OpenChromePopoverSchema, TerminalCloseSchema, TerminalHistorySchema, TerminalInputSchema, TerminalInterruptSchema, TerminalOpenSchema, TerminalRunSchema } from "../validators.js";
+import { AskRespondSchema, ChromePopoverActionSchema, LoopDeleteSchema, LoopGetSchema, LoopSaveSchema, LoopSetActiveSchema, MoveAgentWindowSchema, OpenAgentWindowSchema, OpenBrowserWindowSchema, OpenChromePopoverSchema, SetContextMenuSuppressedSchema, TerminalCloseSchema, TerminalHistorySchema, TerminalInputSchema, TerminalInterruptSchema, TerminalOpenSchema, TerminalRunSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 system 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -112,10 +112,22 @@ export const systemChannels: Record<string, ChannelBinding> = {
     request: ChromePopoverActionSchema,
     sensitive: true,
   },
+  "ui:setContextMenuSuppressed": {
+    domain: "ui",
+    method: "setContextMenuSuppressed",
+    request: SetContextMenuSuppressedSchema,
+    sensitive: true,
+  },
   "ui:openAgentWindow": {
     domain: "ui",
     method: "openAgentWindow",
     request: OpenAgentWindowSchema,
+    sensitive: true,
+  },
+  "ui:openBrowserWindow": {
+    domain: "ui",
+    method: "openBrowserWindow",
+    request: OpenBrowserWindowSchema,
     sensitive: true,
   },
   "ui:closeAgentWindow": {

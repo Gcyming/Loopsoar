@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BookmarkAddSchema, BookmarkRemoveSchema, BrowserBottomInsetSchema, BrowserCloseTabsSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabMuteSchema, BrowserTabPinSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
+import { BookmarkAddSchema, BookmarkRemoveSchema, BookmarkUpdateSchema, BrowserBottomInsetSchema, BrowserCloseTabsSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserMoveTabSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabMuteSchema, BrowserTabPinSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 browser 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -80,6 +80,12 @@ export const browserChannels: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "selectTab",
     request: BrowserTabIdSchema,
+    sensitive: true,
+  },
+  "browser:moveTab": {
+    domain: "browser",
+    method: "moveTab",
+    request: BrowserMoveTabSchema,
     sensitive: true,
   },
   "browser:resolveFavicon": {
@@ -224,6 +230,12 @@ export const browserChannels: Record<string, ChannelBinding> = {
     domain: "bookmarks",
     method: "remove",
     request: BookmarkRemoveSchema,
+    sensitive: true,
+  },
+  "bookmarks:update": {
+    domain: "bookmarks",
+    method: "update",
+    request: BookmarkUpdateSchema,
     sensitive: true,
   },
   "browser:savePage": {

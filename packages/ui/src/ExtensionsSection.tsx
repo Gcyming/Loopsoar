@@ -493,7 +493,14 @@ export default function ExtensionsSection({ onError }: ExtensionsSectionProps): 
                   {trustInfo?.fingerprint && trustInfo.status !== "trusted" ? (
                     <Btn label={tr("settings.extensions.trustKey")} small onClick={() => trustExtension(ext)} />
                   ) : null}
-                  <Btn label={tr("settings.uninstall")} small onClick={() => run(() => api!.extensions.remove({ id: ext.manifest.id }))} />
+                  <Btn
+                    label={tr("settings.uninstall")}
+                    small
+                    onClick={() => {
+                      if (!window.confirm(tr("settings.uninstallConfirm", { name: ext.manifest.name }))) return;
+                      run(() => api!.extensions.remove({ id: ext.manifest.id }));
+                    }}
+                  />
                 </span>
               </div>
               {ext.manifest.description ? <div style={S.providerVal}>{ext.manifest.description}</div> : null}

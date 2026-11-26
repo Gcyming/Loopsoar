@@ -41,6 +41,30 @@ export function useBrowserTabs({
 
   const activeTabId = useMemo(() => tabs.find((tab) => tab.active)?.id ?? null, [tabs]);
 
+  /**
+   * 主进程标签事件 → tabs 状态。
+   *
+   * 启动恢复、Agent 开页/关页、后台切换都会推 browser:tabs；本 hook 之前**没有订阅**，
+   * 只靠用户动作后的 listTabs 刷新 —— 启动恢复早于窗口创建时那一条事件会丢，
+   * 于是出现「网页已经恢复显示，但标签栏一个标签都没有；点新建后才全部蹦出来」。
+   *
+   * 只覆盖 tabs 与「已确认 URL」，不覆盖用户正在输入的地址：导航期间 tab.url 还是旧值，
+   * 无脑写地址栏会把用户刚输入的目标地址顶掉。
+   */
+  const applyTabEvent = useCallback(
+    (list: TabState[]): void => {
+      setTabs(list);
+      const active = list.find((tab) => tab.active);
+      const url = active?.url ?? "";
+      if (url !== lastSyncedUrlRef.current) {
+        lastSyncedUrlRef.current = url;
+        setAddress(url);
+        setCurrentUrl(url);
+      }
+    },
+    [lastSyncedUrlRef],
+  );
+
   /** 用主进程返回的标签快照同步 tabs/地址/当前 URL（所有动作的统一收口）。 */
   const applyTabSnapshot = useCallback(
     (nextTabs: TabState[]): void => {
@@ -108,6 +132,19 @@ export function useBrowserTabs({
     [api, applyTabSnapshot],
   );
 
+  /** 拖拽重排：主进程重建 Map 顺序后回拉一次快照（活动标签不变）。 */
+  const moveTab = useCallback(
+    (tabId: string, targetTabId: string, after: boolean): void => {
+      if (!api || tabId === targetTabId) return;
+      void api.browser
+        .moveTab({ tabId, targetTabId, after })
+        .then(() => api.browser.listTabs())
+        .then((r) => applyTabSnapshot(r.tabs))
+        .catch(() => undefined);
+    },
+    [api, applyTabSnapshot],
+  );
+
   const closeTab = useCallback(
     (tabId: string): void => {
       if (!api) return;
@@ -119,6 +156,16 @@ export function useBrowserTabs({
         .then(() => api.browser.listTabs())
         .then((r) => {
           applyTabSnapshot(r.tabs);
+          // 零标签态：关掉最后一个网页就补一个空白标签页（**不重置会话**，侧栏保持原样）。
+          // 旧行为会留下「网页区还在但标签栏空着」的怪状态，用户点新建后才一起出现。
+          if (r.tabs.length === 0) {
+            void api.browser
+              .newTab({})
+              .then(() => api.browser.listTabs())
+              .then((rr) => applyTabSnapshot(rr.tabs))
+              .catch(() => undefined);
+            return;
+          }
           // 关掉任务工作区的最后一个绑定页：离开特殊会话，回到空白会话。
           if (closedBound && !r.tabs.some((tab) => tab.agentBound === true)) {
             const sessionId = currentSessionRef.current;
@@ -198,6 +245,31 @@ export function useBrowserTabs({
     [api, applyTabSnapshot, closeTab, setNotice, tabs],
   );
 
+  /**
+   * 启动补拉：主进程恢复标签是异步的，窗口创建/渲染层挂载可能早于恢复完成。
+   * 首帧立刻拉一次，250ms/1200ms 再各兜一次；之后完全由 browser:tabs 事件驱动。
+   */
+  useEffect(() => {
+    if (!api) return;
+    let cancelled = false;
+    const sync = (): void => {
+      void api.browser
+        .listTabs()
+        .then((r) => {
+          if (!cancelled) applyTabEvent(r.tabs);
+        })
+        .catch(() => undefined);
+    };
+    sync();
+    const t1 = window.setTimeout(sync, 250);
+    const t2 = window.setTimeout(sync, 1200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [api, applyTabEvent]);
+
   /** 与标签右键菜单文案一致的快捷键：菜单里展示了就必须真的能用。 */
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -235,6 +307,38 @@ export function useBrowserTabs({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [newTab, tabAction, tabs]);
+
+  /** 网页（WebContentsView）有焦点时主窗口收不到 keydown：走主进程转发的同一套快捷键。 */
+  useEffect(() => {
+    if (!api?.on) return;
+    const off = api.on("browser:shortcut", (payload) => {
+      const action = (payload as { action?: string } | null)?.action;
+      const active = tabs.find((tab) => tab.active);
+      switch (action) {
+        case "new-tab":
+          newTab();
+          return;
+        case "reopen-tab":
+          tabAction("reopen", active?.id ?? "");
+          return;
+        case "duplicate-tab":
+          if (active) tabAction("duplicate", active.id);
+          return;
+        case "close-tab":
+          if (active) tabAction("close", active.id);
+          return;
+        case "reload":
+          if (active) tabAction("reload", active.id);
+          return;
+        case "mute-tab":
+          if (active) tabAction(active.muted ? "unmute" : "mute", active.id);
+          return;
+        default:
+          return;
+      }
+    });
+    return () => off?.();
+  }, [api, newTab, tabAction, tabs]);
 
   /**
    * 标签右键菜单：用主进程的独立浮层窗口（chromePopover）渲染。
@@ -344,6 +448,7 @@ export function useBrowserTabs({
     navigate,
     newTab,
     selectTab,
+    moveTab,
     closeTab,
     tabAction,
     openTabMenu,

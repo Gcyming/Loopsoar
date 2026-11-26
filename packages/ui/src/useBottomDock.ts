@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import type { LoopsoarAPI } from "./types.js";
 
@@ -40,14 +40,48 @@ export function useBottomDock({ api, activeTabId, setNotice }: BottomDockOptions
   const [devtoolsHeight] = useState(360);
   const [terminalHeight, setTerminalHeight] = useState<number>(() => readTerminalHeight());
 
-  // 全宽终端/DevTools 占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住
+  /** 最近一次下发给原生视图的底部 inset（动画起点）。 */
+  const lastBottomRef = useRef<number | null>(null);
+  const bottomRafRef = useRef<number | null>(null);
+
+  // 全宽终端/DevTools 占用的底部高度 → 原生网页视图必须让出，否则面板会被 WebContentsView 盖住。
+  // 面板本身有 240ms 的高度过渡；inset 也必须逐帧跟随，否则过渡期间网页底边与面板之间会露出
+  // 应用底色（用户看到的“黑边”）。用与 CSS 近似的 easeOutCubic 在 240ms 内同步。
   useEffect(() => {
     if (!api) return;
-    const bottom = terminalOpen ? terminalHeight : devtoolsOpen ? devtoolsHeight : 0;
-    const timer = window.setTimeout(() => {
-      void api.browser.setBottomInset({ bottom }).catch(() => {});
-    }, 60);
-    return () => window.clearTimeout(timer);
+    const target = terminalOpen ? terminalHeight : devtoolsOpen ? devtoolsHeight : 0;
+    if (bottomRafRef.current !== null) {
+      cancelAnimationFrame(bottomRafRef.current);
+      bottomRafRef.current = null;
+    }
+    const previous = lastBottomRef.current;
+    lastBottomRef.current = target;
+    if (previous === null || previous === target) {
+      void api.browser.setBottomInset({ bottom: target }).catch(() => {});
+      return;
+    }
+    const from = previous;
+    const startedAt = performance.now();
+    const step = (now: number): void => {
+      const t = Math.min(1, (now - startedAt) / 240);
+      const eased = 1 - Math.pow(1 - t, 3);
+      void api.browser
+        .setBottomInset({ bottom: Math.round(from + (target - from) * eased) })
+        .catch(() => {});
+      if (t < 1) {
+        bottomRafRef.current = requestAnimationFrame(step);
+      } else {
+        bottomRafRef.current = null;
+        void api.browser.setBottomInset({ bottom: target }).catch(() => {});
+      }
+    };
+    bottomRafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (bottomRafRef.current !== null) {
+        cancelAnimationFrame(bottomRafRef.current);
+        bottomRafRef.current = null;
+      }
+    };
   }, [api, terminalOpen, terminalHeight, devtoolsOpen, devtoolsHeight]);
 
   // 底部开发者工具：主进程负责面板开合（含页面内 F12 / devtools 自身关闭），渲染层只同步状态。

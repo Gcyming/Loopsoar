@@ -64,7 +64,14 @@ console.log(`启动 Electron：${electron} ${args.join(" ")}`);
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE; // 该变量会让 electron 退化成纯 Node
 
+const startedAt = Date.now();
 const child = spawn(electron, args, { cwd: ROOT, stdio: "inherit", env });
 child.on("exit", (code) => {
+  // 单实例锁：旧窗口还在时，新进程会立刻退出并把焦点还给旧实例——
+  // 用户看到的是旧构建，误以为新改动没生效。这里明确提示。
+  if (Date.now() - startedAt < 3000) {
+    console.error("\n[dev] Electron 启动后立即退出：可能已有 Loopsoar 实例在运行（单实例锁）。");
+    console.error("[dev] 请先完全关闭旧窗口（任务管理器结束 electron.exe / Loopsoar），再重新运行 pnpm dev。\n");
+  }
   process.exit(code ?? 0);
 });

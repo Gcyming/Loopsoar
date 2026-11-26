@@ -17,6 +17,8 @@ export interface AppDialogsProps {
   activeAsk: AskUserRequest | null;
   onRespondAsk: (answer: string | null) => void;
   otherSessionAsk: AskUserRequest | null;
+  /** 其它会话有挂起的权限确认（只给入口，不抢当前界面）。 */
+  otherSessionPerm?: { sessionId?: string } | null;
   onSwitchSession: (sessionId: string) => void;
   notice: string;
   miniWindow: boolean;
@@ -33,6 +35,7 @@ export default function AppDialogs({
   activeAsk,
   onRespondAsk,
   otherSessionAsk,
+  otherSessionPerm,
   onSwitchSession,
   notice,
   miniWindow,
@@ -51,6 +54,18 @@ export default function AppDialogs({
           type="button"
           className="ask-pending-other"
           onClick={() => onSwitchSession(otherSessionAsk.sessionId as string)}
+          title={t(getLanguage(), "ask.pendingOther")}
+        >
+          {t(getLanguage(), "ask.pendingOther")}
+        </button>
+      ) : null}
+
+      {/* 其它会话有权限确认：同样给一个可点击入口，切过去再弹窗确认。 */}
+      {!permReq && !activeAsk && !otherSessionAsk && otherSessionPerm?.sessionId ? (
+        <button
+          type="button"
+          className="ask-pending-other"
+          onClick={() => onSwitchSession(otherSessionPerm.sessionId as string)}
           title={t(getLanguage(), "ask.pendingOther")}
         >
           {t(getLanguage(), "ask.pendingOther")}

@@ -28,6 +28,10 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.start": { zh: "启动", en: "Start" },
   "settings.stop": { zh: "停止", en: "Stop" },
   "settings.uninstall": { zh: "卸载", en: "Uninstall" },
+  "settings.uninstallConfirm": {
+    zh: "卸载扩展「{name}」？扩展目录会被删除，无法撤销（可重新安装）。",
+    en: "Uninstall extension “{name}”? Its directory will be deleted and cannot be restored (you can reinstall it).",
+  },
   "settings.browse": { zh: "浏览…", en: "Browse…" },
   "settings.rescan": { zh: "重新扫描", en: "Rescan" },
   "settings.error": { zh: "错误", en: "Error" },
@@ -201,38 +205,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.general.memoryAutoHint": { zh: "每轮对话结束自动抽取记忆", en: "Capture memories at the end of each turn" },
   "settings.general.skillAuto": { zh: "自动技能候选（实验）", en: "Automatic skill candidates (experimental)" },
   "settings.general.skillAutoHint": { zh: "成功任务后生成默认禁用的候选技能，需在设置·技能中人工启用；每会话 10 分钟最多一次", en: "Create disabled skill candidates after successful tasks; enable manually in Skills; at most once per session per 10 min" },
-  "settings.general.loop": { zh: "Agent Loop", en: "Agent loop" },
-  "settings.general.loopHint": {
-    zh: "Agent 执行循环。内置 loop 不可删除、不可原位修改；自定义 loop 失败会自动回退到内置（同一上下文重跑，任务不重来）",
-    en: "Execution loop. Builtin loops cannot be deleted or edited in place; a failing custom loop falls back to the builtin with the same context, without restarting the task",
-  },
-  "settings.general.loopBuiltinTitle": {
-    zh: "内置 loop：不可删除、不可原位修改（可复制为新 loop 再改）",
-    en: "Builtin loop: cannot be deleted or edited in place (copy it to a new loop to modify)",
-  },
-  "settings.general.loopCustomTitle": { zh: "自定义 loop", en: "Custom loop" },
-  "settings.general.loopCurrent": { zh: "当前", en: "Current" },
-  "settings.general.loopEmpty": { zh: "没有可运行的 Agent-Loop", en: "No runnable agent loop" },
-  "settings.general.loopUnavailable": {
-    zh: "Agent-Loop 不可用（shell 未装配 loop 域）",
-    en: "Agent loop unavailable (the shell does not expose the loop domain)",
-  },
-  "settings.general.loopFallback": {
-    zh: "最近回退（{when}）：{reason}",
-    en: "Last fallback ({when}): {reason}",
-  },
   "settings.general.loopFallbackNotice": {
     zh: "Agent-Loop 已回退到内置 loop：{reason}",
     en: "Agent loop fell back to the builtin loop: {reason}",
   },
-  "settings.general.loopSwitchFailed": { zh: "切换 Agent-Loop 失败", en: "Failed to switch the agent loop" },
-  "settings.general.loopSwitched": { zh: "Agent-Loop 已切换：{name}", en: "Agent loop switched: {name}" },
-  "settings.general.loopReload": { zh: "重新扫描 loops", en: "Rescan loops" },
   "settings.general.loopReloaded": { zh: "已重新扫描 Agent-Loop", en: "Agent loops rescanned" },
-  "settings.general.loopKind.builtin": { zh: "内置", en: "builtin" },
-  "settings.general.loopKind.declarative": { zh: "声明式", en: "declarative" },
-  "settings.general.loopKind.script": { zh: "脚本", en: "script" },
-  "settings.general.loopKind.custom": { zh: "自定义", en: "custom" },
   "settings.general.note": { zh: "以上设置修改后立即生效（自动保存）。", en: "These settings apply immediately (auto-saved)." },
 
   /* ── 权限 / 安全 ── */
@@ -296,6 +273,10 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.providers.keyFromEnv": { zh: "环境变量", en: "environment variable" },
   "settings.providers.keychain": { zh: "密钥库", en: "key store" },
   "settings.providers.keyMissing": { zh: "未配置", en: "Not configured" },
+  "settings.providers.deleteConfirm": {
+    zh: "删除供应商「{name}」？它会从清单移除并同时清除已保存的 API Key，此操作不可撤销。",
+    en: "Delete provider “{name}”? It will be removed and its saved API key cleared. This cannot be undone.",
+  },
   "settings.providers.clear": { zh: "清除", en: "Clear" },
   "settings.providers.cleared": { zh: "已清除该供应商的密钥", en: "API key cleared for this provider" },
   "settings.providers.add": { zh: "添加供应商", en: "Add provider" },
@@ -585,6 +566,11 @@ export const SETTINGS_I18N: Record<string, { zh: string; en: string }> = {
   "settings.memory.added": { zh: "记忆已添加", en: "Memory added" },
   "settings.memory.consolidate": { zh: "整理记忆", en: "Consolidate" },
   "settings.memory.clearAll": { zh: "清空全部记忆", en: "Clear all memories" },
+  "settings.memory.clearAllConfirm": {
+    zh: "清空全部记忆？所有记忆条目、归档与使用统计都会被永久删除，无法撤销。",
+    en: "Clear all memories? Every entry, archived record and usage stat will be permanently deleted. This cannot be undone.",
+  },
+  "settings.memory.deleteConfirm": { zh: "删除这条记忆？此操作无法撤销。", en: "Delete this memory? This cannot be undone." },
 
   /* ── 扩展 ── */
   "settings.extensions.head": { zh: "扩展", en: "Extensions" },

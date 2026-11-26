@@ -22,6 +22,8 @@ import {
 } from "./browserRequestGuard.js";
 import { attachPageContextMenu } from "./browserPageContextMenu.js";
 import { officeFileFromUrl } from "./officePreview.js";
+import { browserUserAgent } from "./browserUserAgent.js";
+import { downloadCompatibleReferer, isDownloadHost } from "./browserNavigationSupport.js";
 
 export interface ElectronBrowserHostOptions {
   initialSessionId?: string;
@@ -58,6 +60,32 @@ export interface ElectronBrowserHostOptions {
    * pointerdown —— 主窗口里的内联浮层（模型菜单/会话列表等）需要靠这个信号收起。
    */
   onViewFocused?: () => void;
+  /** 网页焦点下的浏览器快捷键（Ctrl+T/W/R/M、Ctrl+Shift+T/K）：转给渲染层执行同一套标签动作。 */
+  onBrowserShortcut?: (action: string) => void;
+}
+
+/**
+ * 防盗链下载站的 Referer 兼容（一次性注册到浏览器分区）。
+ *
+ * 实测 CLDisk：GET 下载链接不带 Referer → WAF 403；带 `Referer: https://d0.cldisk.com/`
+ * → 200 + Content-Disposition。Agent 程序化导航（loadURL）默认不带 Referer，用户粘贴/
+ * 新标签打开也可能没有，于是「下载任务全 403」。这里只对已知下载域的主框架请求
+ * 把 Referer 归一成目标站 origin（不碰其它站点、不碰子资源）。
+ */
+const downloadRefererSessions = new WeakSet<object>();
+function installDownloadRefererGuard(browserSession: Electron.Session): void {
+  if (downloadRefererSessions.has(browserSession)) return;
+  downloadRefererSessions.add(browserSession);
+  browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    if (details.resourceType === "mainFrame" && isDownloadHost(details.url)) {
+      const referer = downloadCompatibleReferer(details.url);
+      if (referer) {
+        callback({ requestHeaders: { ...details.requestHeaders, Referer: referer } });
+        return;
+      }
+    }
+    callback({ requestHeaders: details.requestHeaders });
+  });
 }
 
 /** 默认 DNS 解析：只把地址交给守卫，解析失败返回空数组（守卫按 fail-closed 拦截）。 */
@@ -459,7 +487,12 @@ export function createElectronBrowserHost(
   options: ElectronBrowserHostOptions = {},
 ): BrowserHost {  // 守卫必须在任何 WebContentsView 创建之前装好（否则首批请求会漏检）；
   // 只在浏览器分区上挂，不影响主窗口（loopsoar://）与下载。
-  installBrowserRequestGuard(session.fromPartition(SESSION_PARTITION), options);
+  const partitionSession = session.fromPartition(SESSION_PARTITION);
+  // WAF/下载站兼容：网页分区用标准 Chrome UA（去掉 Electron/Loopsoar 标记），
+  // 否则 CLisk 这类防盗链会对「非浏览器客户端」直接 403。
+  partitionSession.setUserAgent(browserUserAgent(), "zh-CN,zh;q=0.9,en;q=0.8");
+  installDownloadRefererGuard(partitionSession);
+  installBrowserRequestGuard(partitionSession, options);
 
   // 原生 WebContentsView 在 Windows 上不会真正裁掉网页内容（setBorderRadius 只影响视图边框），
   // 四角始终是方的。用一个常驻的透明子窗口把四角盖成外壳色，形状用 radial-gradient 的
@@ -486,6 +519,9 @@ export function createElectronBrowserHost(
     + "<div class='c tl'></div><div class='c tr'></div><div class='c bl'></div><div class='c br'></div></body></html>";
 
   const ensureCornerWindow = (): BrowserWindow | null => {
+    // 网页面板已改为方形铺满（BROWSER_VIEW_RADIUS=0）：不再需要四角遮罩，
+    // 也不允许遮罩窗口在任何情况下盖住页面边角（那正是用户看到的“黑圈”）。
+    if (LAYOUT.BROWSER_VIEW_RADIUS <= 0) return null;
     const parent = getWindow();
     if (!parent || parent.isDestroyed()) return null;
     if (cornerWindow && !cornerWindow.isDestroyed()) return cornerWindow;
@@ -516,6 +552,11 @@ export function createElectronBrowserHost(
   };
 
   const syncCornerWindow = (rect: BrowserViewBounds | null): void => {
+    if (LAYOUT.BROWSER_VIEW_RADIUS <= 0) {
+      // 半径归零后旧遮罩必须收掉（升级/热重载时可能还残留一个可见窗口）。
+      if (cornerWindow && !cornerWindow.isDestroyed()) cornerWindow.hide();
+      return;
+    }
     const win = ensureCornerWindow();
     if (!win) return;
     const parent = getWindow();
@@ -565,6 +606,7 @@ export function createElectronBrowserHost(
       syncCornerWindow(rect);
     },
     openDevToolsPanel: options.devToolsPanel ? (webContents) => options.devToolsPanel!.open(webContents as Electron.WebContents) : undefined,
+    ...(options.onBrowserShortcut ? { onShortcut: options.onBrowserShortcut } : {}),
     closeDevToolsPanel: options.devToolsPanel ? () => options.devToolsPanel!.close() : undefined,
     isDevToolsPanelOpen: options.devToolsPanel ? () => options.devToolsPanel!.isOpen() : undefined,
     createView: (sessionId?: string) => {
@@ -585,9 +627,9 @@ export function createElectronBrowserHost(
       // 网页面板圆角：与 DOM 页框（StartPage.browserPane）共用同一契约值，
       // 原生视图切掉的四角露出应用底色，不再出现「网页直角顶到边缘」的硬缝。
       view.setBorderRadius(LAYOUT.BROWSER_VIEW_RADIUS);
-      // 圆角切掉的四个角是「视图背景」而不是窗口背景：默认黑色会在呼吸灯外侧留下黑色方角。
-      // 颜色跟随主题（UI 通过 browser:setCornerColor 下发），避免 soft 主题色差。
-      view.setBackgroundColor(cornerColor);
+      // 页面已方形铺满：视图背景只在「页面尚未绘制/页面自身透明」的一瞬间可见。
+      // 用浏览器默认白色，避免旧实现的应用底色在加载瞬间透出成黑块。
+      view.setBackgroundColor("#ffffff");
       view.webContents.setWindowOpenHandler(
         createWindowOpenHandler((url) => {
           // 归属必须跟着「发起窗口所在的标签组」，不能一律落到用户全局标签：
@@ -597,7 +639,13 @@ export function createElectronBrowserHost(
             // 用户标签/普通页面开的页保持用户语义，不因为落在某个会话组就被标成任务页。
             const fromAgent =
               typeof view.webContents.id === "number" && hostRef.isAgentWebContents(view.webContents.id);
-            void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user", { forceNew: true });
+            // window.open/target=_blank 的新页也带上发起页 Referer（防盗链下载站在新标签里
+            // 直接打开时同样会 403）。取不到就交给宿主按当前页推断。
+            const referer = view.webContents.getURL();
+            void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user", {
+              forceNew: true,
+              ...(referer ? { referer } : {}),
+            });
             return;
           }
           openInNewTab(url);
@@ -612,7 +660,11 @@ export function createElectronBrowserHost(
           // 右键「在右侧新建标签页」要沿用发起页的归属：Agent 页开出的仍是 Agent 页，
           // 否则任务工作区里右键会漏出一个用户标签。
           const fromAgent = hostRef.isAgentWebContents(view.webContents.id);
-          void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user", { forceNew: true });
+          const referer = view.webContents.getURL();
+          void hostRef.newTab(url, sessionId, fromAgent ? "agent" : "user", {
+            forceNew: true,
+            ...(referer ? { referer } : {}),
+          });
         },
         onAskAgent: (text) => {
           const win = getWindow();
@@ -680,11 +732,22 @@ export function createElectronBrowserHost(
 
 export type DownloadState = "progressing" | "completed" | "cancelled" | "interrupted";
 
+/** 异常原因：用户取消 / 网络中断 / 无权限 / 应用关闭 / 上次退出未完成。 */
+export type DownloadReason = "cancelled" | "interrupted" | "permission" | "app-closed" | "stale";
+
 export interface DownloadView {
   id: string;
   filename: string;
   savePath: string;
+  /** 原始下载地址（右键「复制下载链接」用；敏感查询串只留在主进程/本地 UI）。 */
+  url: string;
   state: DownloadState;
+  /** 异常原因（UI 文案用；completed 时为空）。 */
+  reason?: DownloadReason;
+  /** 文件已不在下载目录（仅 completed 时检测；列表渲染横杠）。 */
+  missing?: boolean;
+  /** 排队中（已暂停，等前面的下载完成，或用户点「开始」插队）。 */
+  queued?: boolean;
   received: number;
   total: number;
   startedAt: number;
@@ -692,23 +755,51 @@ export interface DownloadView {
 
 interface DownloadHandle {
   view: DownloadView;
+  item: Electron.DownloadItem;
   cancel: () => void;
   open: () => Promise<string>;
   showInFolder: () => void;
   done: boolean;
 }
 
+const MAX_DOWNLOAD_HISTORY = 200;
+
 /** 下载管理：会话级 will-download → 内存条目 + 变更推送；文件落盘目录由偏好注入。 */
 export class DownloadsBridge {
   private handles = new Map<string, DownloadHandle>();
   private seq = 0;
+  /** 等待放行的下载 id（注册顺序 = 下载顺序）。 */
+  private queue: string[] = [];
+  /** 当前正在下载的队列项；同一时刻只放行一个。 */
+  private activeId: string | null = null;
+  /** 用户选择「始终打开」的扩展名（小写，带点）。 */
+  private autoOpen = new Set<string>();
+  /** 已结束的下载记录（跨重启持久化；只存视图，不持有 DownloadItem）。 */
+  private history: DownloadView[] = [];
+  /** 文件存在性缓存：轮询检测外部删除，变化时推送 UI。 */
+  private missing = new Map<string, boolean>();
+  /** 进度推送节流：下载 updated 事件很密，避免整页 UI 每 10ms 重渲染。 */
+  private lastProgressPush = 0;
 
   constructor(
     private getDownloadDir: () => string,
     private onChange: () => void,
     private onLocalFile?: (file: string) => boolean,
+    private onSource?: (webContents: Electron.WebContents) => void,
   ) {
-    session.fromPartition(SESSION_PARTITION).on("will-download", (event, item) => {
+    this.loadHistory();
+    this.loadAutoOpen();
+    this.checkMissing();
+    const missingTimer = setInterval(() => this.checkMissing(), 5000);
+    missingTimer.unref?.();
+    app.on("will-quit", () => {
+      clearInterval(missingTimer);
+      this.markActiveInterrupted("app-closed");
+    });
+    session.fromPartition(SESSION_PARTITION).on("will-download", (event, item, webContents) => {
+      // 下载常由 target=_blank 触发：把发起下载的空白标签交给宿主处理，避免落到新建页。
+      // 注意：session.downloadURL（重试）没有发起 webContents，必须判空。
+      if (webContents) this.onSource?.(webContents);
       // 拖入的 Office 文档在 Chromium 里有时走“下载”而不是导航：此时不能弹系统 Save As，
       // 交给壳层转 PDF 预览；普通 http(s) 下载完全不受影响。
       const localFile = officeFileFromUrl(item.getURL());
@@ -730,9 +821,156 @@ export class DownloadsBridge {
     }
   }
 
+  private autoOpenFile(): string {
+    return path.join(app.getPath("userData"), "downloads-auto-open.json");
+  }
+
+  private loadAutoOpen(): void {
+    try {
+      const raw = fs.readFileSync(this.autoOpenFile(), "utf8");
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        this.autoOpen = new Set(parsed.filter((value): value is string => typeof value === "string" && value.startsWith(".")));
+      }
+    } catch {
+      // 文件不存在/损坏：空集合启动，不影响下载。
+    }
+  }
+
+  private saveAutoOpen(): void {
+    try {
+      fs.writeFileSync(this.autoOpenFile(), JSON.stringify([...this.autoOpen]));
+    } catch {
+      // 写失败只影响下次启动的自动打开，不影响当前下载。
+    }
+  }
+
+  private historyFile(): string {
+    return path.join(app.getPath("userData"), "downloads-history.json");
+  }
+
+  private loadHistory(): void {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.historyFile(), "utf8")) as unknown;
+      if (!Array.isArray(parsed)) return;
+      let recovered = false;
+      this.history = parsed
+        .filter((entry): entry is DownloadView => {
+          if (!entry || typeof entry !== "object") return false;
+          const view = entry as Partial<DownloadView>;
+          return typeof view.id === "string"
+            && typeof view.filename === "string"
+            && typeof view.savePath === "string"
+            && typeof view.url === "string"
+            && (view.state === "completed" || view.state === "cancelled" || view.state === "interrupted" || view.state === "progressing")
+            && typeof view.received === "number"
+            && typeof view.total === "number"
+            && typeof view.startedAt === "number";
+        })
+        .map((view): DownloadView => {
+          if (view.state !== "progressing") return view;
+          // 启动时仍有 progressing：上次进程被关闭/崩溃，没来得及写 done。
+          recovered = true;
+          return { ...view, state: "interrupted", reason: "stale", queued: false };
+        })
+        .slice(0, MAX_DOWNLOAD_HISTORY);
+      if (recovered) this.saveHistory();
+    } catch {
+      // 首次启动或文件损坏：空历史启动，不影响新下载。
+    }
+  }
+
+  private saveHistory(): void {
+    try {
+      fs.writeFileSync(this.historyFile(), JSON.stringify(this.history));
+    } catch {
+      // 写失败只影响下次启动的历史，不影响当前下载。
+    }
+  }
+
+  /** 记住一条下载（开始即写 progressing，进程崩溃后下次启动能识别为中断）。 */
+  private remember(view: DownloadView): void {
+    const record: DownloadView = { ...view, queued: false };
+    this.history = [record, ...this.history.filter((item) => item.id !== record.id)].slice(0, MAX_DOWNLOAD_HISTORY);
+    this.saveHistory();
+  }
+
+  private forget(id: string): void {
+    this.missing.delete(id);
+    const next = this.history.filter((item) => item.id !== id);
+    if (next.length === this.history.length) return;
+    this.history = next;
+    this.saveHistory();
+  }
+
+  private allViews(): DownloadView[] {
+    const byId = new Map<string, DownloadView>();
+    for (const handle of this.handles.values()) byId.set(handle.view.id, handle.view);
+    for (const record of this.history) if (!byId.has(record.id)) byId.set(record.id, record);
+    return [...byId.values()];
+  }
+
+  /** 轮询 completed 文件是否存在；外部删除/移动后推送 UI（列表横杠 + 已删除）。 */
+  private checkMissing(): void {
+    let changed = false;
+    for (const view of this.allViews()) {
+      const missing = view.state === "completed" && Boolean(view.savePath) && !fs.existsSync(view.savePath);
+      const previous = this.missing.get(view.id);
+      if (previous !== undefined && previous !== missing) changed = true;
+      this.missing.set(view.id, missing);
+    }
+    if (changed) this.onChange();
+  }
+
+  /** 失败原因：保存目录不可写 → 没权限；否则按网络/其它中断。 */
+  private interruptionReason(view: DownloadView): DownloadReason {
+    try {
+      fs.accessSync(path.dirname(view.savePath), fs.constants.W_OK);
+      if (fs.existsSync(view.savePath)) fs.accessSync(view.savePath, fs.constants.W_OK);
+      return "interrupted";
+    } catch {
+      return "permission";
+    }
+  }
+
+  /** 应用退出时把未完成下载记为中断；正常退出也能留下记录。 */
+  private markActiveInterrupted(reason: DownloadReason): void {
+    for (const handle of this.handles.values()) {
+      if (handle.done) continue;
+      // 只写历史副本：will-quit 可能被其它处理器取消，不能污染仍在下载的 view。
+      let received = handle.view.received;
+      let total = handle.view.total;
+      try {
+        received = handle.item.getReceivedBytes();
+        total = Math.max(total, handle.item.getTotalBytes());
+      } catch {
+        // DownloadItem 已被销毁：用最后一次进度。
+      }
+      this.remember({
+        ...handle.view,
+        state: "interrupted",
+        queued: false,
+        reason,
+        received,
+        total,
+      });
+    }
+  }
+
+  private retry(url: string): boolean {
+    if (!url) return false;
+    try {
+      session.fromPartition(SESSION_PARTITION).downloadURL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private register(item: Electron.DownloadItem): void {
     this.seq += 1;
-    const id = `dl-${this.seq}`;
+    // 带上会话时间前缀：重启后 seq 归零，不能和历史记录里的 dl-1 撞 id。
+    const id = `dl-${Date.now().toString(36)}-${this.seq}`;
     const filename = item.getFilename() || `download-${this.seq}`;
     const savePath = path.join(this.dir(), filename.replace(/[\\/:*?"<>|]/g, "_"));
     try {
@@ -747,6 +985,7 @@ export class DownloadsBridge {
       id,
       filename,
       savePath,
+      url: item.getURL(),
       state: "progressing",
       received: 0,
       total: Math.max(0, item.getTotalBytes()),
@@ -757,6 +996,7 @@ export class DownloadsBridge {
     }
     const handle: DownloadHandle = {
       view,
+      item,
       cancel: () => {
         try {
           item.cancel();
@@ -769,39 +1009,186 @@ export class DownloadsBridge {
       done: false,
     };
     this.handles.set(id, handle);
+    this.missing.set(id, false);
+    this.remember(view);
 
     item.on("updated", (_e, state) => {
+      // 队列项：即使 will-download 阶段的 pause() 没生效，也在第一次进度回调时强制暂停，
+      // 避免「已入队但仍在后台下载」。轮到它时 pump() 会先把 queued 置 false 再 resume。
+      if (view.queued) {
+        try {
+          if (!item.isPaused()) {
+            item.pause();
+            this.logQueue("force-pause", { id, paused: item.isPaused(), received: item.getReceivedBytes() });
+          }
+        } catch {
+          // 已结束
+        }
+        return;
+      }
       view.received = item.getReceivedBytes();
       view.total = Math.max(view.total, item.getTotalBytes());
       if (state === "interrupted") view.state = "interrupted";
       if (process.env.LOOPSOAR_DEBUG_DOWNLOAD === "1") {
         console.log("[download] updated", JSON.stringify({ state, received: view.received, total: view.total }));
       }
-      this.onChange();
+      const now = Date.now();
+      if (now - this.lastProgressPush >= 120) {
+        this.lastProgressPush = now;
+        this.onChange();
+      }
     });
     item.once("done", (_e, state) => {
       handle.done = true;
+      view.queued = false;
       view.state = state === "completed" ? "completed" : state === "cancelled" ? "cancelled" : "interrupted";
       view.received = item.getReceivedBytes();
       view.total = Math.max(view.total, item.getTotalBytes());
+      // setSavePath 失败/Chromium 重名时，实际落盘路径可能和计算值不同。
+      const actualSavePath = item.getSavePath();
+      if (actualSavePath) view.savePath = actualSavePath;
+      view.reason = state === "cancelled" ? "cancelled" : state === "interrupted" ? this.interruptionReason(view) : undefined;
+      this.missing.set(id, view.state === "completed" && Boolean(view.savePath) && !fs.existsSync(view.savePath));
       if (process.env.LOOPSOAR_DEBUG_DOWNLOAD === "1") {
         console.log("[download] done", JSON.stringify({ state, received: view.received, total: view.total, savePath, url: item.getURL() }));
       }
+      if (this.activeId === id) this.activeId = null;
+      this.dequeue(id);
+      if (this.handles.get(id) === handle) this.remember(view);
       this.onChange();
+      if (state === "completed") {
+        const ext = path.extname(view.filename).toLowerCase();
+        if (ext && this.autoOpen.has(ext)) void shell.openPath(view.savePath);
+      }
+      this.pump();
     });
+    // 队列：新下载先暂停，按注册顺序由 pump() 逐个放行；UI 的「开始」可插队。
+    view.queued = true;
+    this.queue.push(id);
+    this.logQueue("enqueue", { id, url: item.getURL(), paused: item.isPaused(), active: this.activeId, queue: this.queue.length });
+    const pauseItem = (): void => {
+      try {
+        item.pause();
+      } catch {
+        // 少数协议不可暂停：仍入队，pump 时 resume 不生效也不会阻塞其它下载
+      }
+    };
+    pauseItem();
+    // will-download 阶段有时还没进入可暂停状态：下一拍再补一次，确保真的排队而不是并发。
+    if (!item.isPaused()) {
+      setTimeout(pauseItem, 0);
+    }
+    this.onChange();
+    this.pump();
+  }
+
+  /** 队列诊断：写入 userData/downloads.log，便于排查「为何没有排队」。失败不影响下载。 */
+  private logQueue(event: string, data: Record<string, unknown>): void {
+    try {
+      const file = path.join(app.getPath("userData"), "downloads.log");
+      fs.appendFileSync(file, `${new Date().toISOString()} ${event} ${JSON.stringify(data)}\n`);
+    } catch {
+      // 日志失败不影响下载
+    }
+  }
+
+  private dequeue(id: string): void {
+    const index = this.queue.indexOf(id);
+    if (index >= 0) this.queue.splice(index, 1);
+  }
+
+  /** 一次只放行一个下载；完成/取消后自动推进队列。 */
+  private pump(): void {
+    if (this.activeId) return;
+    const id = this.queue.shift();
+    if (!id) return;
+    const handle = this.handles.get(id);
+    if (!handle || handle.done) {
+      this.pump();
+      return;
+    }
+    this.activeId = id;
+    handle.view.queued = false;
+    this.logQueue("pump", { id, queue: this.queue.length, paused: handle.item.isPaused() });
+    try {
+      handle.item.resume();
+    } catch {
+      // 恢复失败由 done/updated 兜底
+    }
+    if (handle.item.isPaused()) {
+      setTimeout(() => {
+        try {
+          handle.item.resume();
+        } catch {
+          // 已结束
+        }
+      }, 0);
+    }
     this.onChange();
   }
 
-  list(): DownloadView[] {
-    return [...this.handles.values()].map((h) => ({ ...h.view })).sort((a, b) => b.startedAt - a.startedAt);
+  /** 插队：立即开始指定项；当前活动项暂停并放回队首，稍后优先恢复。 */
+  private startNow(id: string): boolean {
+    const handle = this.handles.get(id);
+    if (!handle || handle.done) return false;
+    if (this.activeId === id) {
+      try {
+        handle.item.resume();
+      } catch {
+        // 已结束
+      }
+      return true;
+    }
+    if (this.activeId) {
+      const current = this.handles.get(this.activeId);
+      if (current && !current.done) {
+        try {
+          current.item.pause();
+        } catch {
+          // 已结束
+        }
+        current.view.queued = true;
+        if (!this.queue.includes(this.activeId)) this.queue.unshift(this.activeId);
+      }
+      this.activeId = null;
+    }
+    this.dequeue(id);
+    this.activeId = id;
+    handle.view.queued = false;
+    try {
+      handle.item.resume();
+    } catch {
+      // 已结束
+    }
+    this.onChange();
+    return true;
   }
 
-  action(id: string, action: "cancel" | "open" | "showInFolder" | "remove"): boolean {
+  list(): DownloadView[] {
+    // 进行中/排队中的按队列顺序（先来的在前），已结束的按最新在前：
+    // 批量下载时用户先看到「正在下的 + 接下来要下的」，而不是把队首压到列表底部。
+    return this.allViews()
+      .map((view) => ({ ...view, missing: this.missing.get(view.id) === true }))
+      .sort((a, b) => {
+        const rank = (v: DownloadView): number => (v.state === "progressing" ? 0 : 1);
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
+        return a.state === "progressing" ? a.startedAt - b.startedAt : b.startedAt - a.startedAt;
+      });
+  }
+
+  action(id: string, action: "cancel" | "open" | "showInFolder" | "remove" | "deleteFile" | "start" | "alwaysOpen" | "retry"): boolean {
     const handle = this.handles.get(id);
-    if (!handle) return false;
+    if (!handle) return this.actionHistory(id, action);
     switch (action) {
+      case "start":
+        return this.startNow(id);
+      case "retry":
+        return this.retry(handle.view.url);
       case "cancel":
+        this.dequeue(id);
+        if (this.activeId === id) this.activeId = null;
         handle.cancel();
+        this.pump();
         return true;
       case "open":
         if (handle.view.state !== "completed") return false;
@@ -812,9 +1199,123 @@ export class DownloadsBridge {
         handle.showInFolder();
         return true;
       case "remove":
+        this.dequeue(id);
+        if (this.activeId === id) this.activeId = null;
+        if (!handle.done) handle.cancel();
         this.handles.delete(id);
+        this.forget(id);
         this.onChange();
+        this.pump();
         return true;
+      case "alwaysOpen": {
+        const ext = path.extname(handle.view.filename).toLowerCase();
+        if (!ext) return false;
+        this.autoOpen.add(ext);
+        this.saveAutoOpen();
+        if (handle.view.state === "completed") void shell.openPath(handle.view.savePath);
+        return true;
+      }
+      case "deleteFile": {
+        // Edge 式「删除文件」：先取消进行中的任务，再删磁盘文件并移除记录。
+        try {
+          handle.cancel();
+          if (handle.view.savePath && fs.existsSync(handle.view.savePath)) fs.unlinkSync(handle.view.savePath);
+        } catch {
+          return false;
+        }
+        this.dequeue(id);
+        if (this.activeId === id) this.activeId = null;
+        this.handles.delete(id);
+        this.forget(id);
+        this.onChange();
+        this.pump();
+        return true;
+      }
     }
   }
+
+  /** 重启后只剩历史记录：打开/定位/移除/删除文件/始终打开仍可用。 */
+  private actionHistory(id: string, action: "cancel" | "open" | "showInFolder" | "remove" | "deleteFile" | "start" | "alwaysOpen" | "retry"): boolean {
+    const record = this.history.find((item) => item.id === id);
+    if (!record) return false;
+    switch (action) {
+      case "retry":
+        return this.retry(record.url);
+      case "open":
+        if (record.state !== "completed") return false;
+        void shell.openPath(record.savePath);
+        return true;
+      case "showInFolder":
+        if (!record.savePath) return false;
+        shell.showItemInFolder(record.savePath);
+        return true;
+      case "remove":
+        this.forget(id);
+        this.onChange();
+        return true;
+      case "deleteFile":
+        try {
+          if (record.savePath && fs.existsSync(record.savePath)) fs.unlinkSync(record.savePath);
+        } catch {
+          return false;
+        }
+        this.forget(id);
+        this.onChange();
+        return true;
+      case "alwaysOpen": {
+        const ext = path.extname(record.filename).toLowerCase();
+        if (!ext) return false;
+        this.autoOpen.add(ext);
+        this.saveAutoOpen();
+        if (record.state === "completed") void shell.openPath(record.savePath);
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+}
+
+const standaloneWindows = new Set<BrowserWindow>();
+
+/** 独立浏览器窗口：共享浏览器分区（登录态），只允许 http/https；原生窗口壳，无应用 UI。 */
+export function openStandaloneBrowserWindow(url: string): { ok: boolean; error?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, error: "URL 不合法" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: "仅支持 http/https" };
+  }
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    show: false,
+    autoHideMenuBar: true,
+    title: parsed.hostname,
+    webPreferences: {
+      partition: SESSION_PARTITION,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      spellcheck: false,
+    },
+  });
+  standaloneWindows.add(win);
+  win.on("closed", () => standaloneWindows.delete(win));
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, target) => {
+    try {
+      const next = new URL(target);
+      if (next.protocol !== "http:" && next.protocol !== "https:") event.preventDefault();
+    } catch {
+      event.preventDefault();
+    }
+  });
+  win.webContents.on("will-attach-webview", (event) => event.preventDefault());
+  win.once("ready-to-show", () => win.show());
+  void win.loadURL(parsed.toString()).catch(() => undefined);
+  return { ok: true };
 }

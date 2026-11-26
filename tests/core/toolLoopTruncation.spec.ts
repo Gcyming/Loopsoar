@@ -82,6 +82,42 @@ describe("截断恢复", () => {
     expect(notes.some((n) => n.includes("content_filter"))).toBe(true);
   });
 
+  it("空正文（只回思考）→ 自动重问一次并拿到最终正文", async () => {
+    const llm = new MockLlmClient();
+    // 第 1 轮：只返回思考，正文为空（hy4-flash-free 等免费模型偶发）
+    llm.addScript([
+      { kind: "reasoning", text: "让我想想用户的问题……" },
+      { kind: "done", finishReason: "stop" },
+    ]);
+    // 第 2 轮：自动重问后给出正文
+    llm.addScript([{ kind: "text", text: "看得见，工作区里有 3 个文件。" }, { kind: "done", finishReason: "stop" }]);
+    const events: LoopEvent[] = [];
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      llm,
+      executeTool: { invoke: async () => ({ ok: true, content: "" }) },
+      sink: (e) => events.push(e),
+    });
+    expect(outcome.status).toBe("done");
+    expect(outcome.finalText).toContain("看得见");
+    const notes = events.filter((e) => e.type === "progress").map((e) => String(e.data?.note ?? ""));
+    expect(notes.some((n) => n.includes("没有返回正文"))).toBe(true);
+  });
+
+  it("空正文重问次数用尽后仍为空 → 交给上层给出可见兜底文案", async () => {
+    const llm = new MockLlmClient();
+    llm.addScript([{ kind: "reasoning", text: "思考中" }, { kind: "done", finishReason: "stop" }]);
+    llm.addScript([{ kind: "done", finishReason: "stop" }]);
+    const outcome = await runToolLoop({
+      ...baseOpts(),
+      llm,
+      executeTool: { invoke: async () => ({ ok: true, content: "" }) },
+      sink: () => undefined,
+    });
+    expect(outcome.status).toBe("done");
+    expect(outcome.finalText.trim()).toBe("");
+  });
+
   it("不向上游传显式 max_tokens（避免不同供应商上限差异导致 400；长度截断靠 finish_reason 续写兜底）", async () => {
     const seen: (number | undefined)[] = [];
     const client: LlmClient = {

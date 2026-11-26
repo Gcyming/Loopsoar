@@ -222,7 +222,7 @@ function TimelineNode({
   const [expanded, setExpanded] = React.useState(Boolean(autoExpand || forceExpand));
 
   if (step.kind === "think") {
-    const clean = step.text.trim();
+    const clean = typeof step.text === "string" ? step.text.trim() : "";
     if (!clean) return null;
     const preview = clean.replace(/[#*`>_]/g, "").replace(/\s+/g, " ").slice(0, 120);
     const normalizedPreview = preview.trim();
@@ -259,7 +259,7 @@ function TimelineNode({
   }
 
   if (step.kind === "body") {
-    const text = step.text.trim();
+    const text = typeof step.text === "string" ? step.text.trim() : "";
     if (!text) return null;
     return (
       <div className="think-step" data-kind="body">
@@ -289,7 +289,7 @@ function TimelineNode({
   }
 
   if (step.kind === "steer") {
-    const text = step.text.trim();
+    const text = typeof step.text === "string" ? step.text.trim() : "";
     if (!text) return null;
     return (
       <div className="think-step" data-kind="steer">
@@ -343,6 +343,17 @@ function PlanNode({ items }: { items: PlanItem[] }): React.ReactElement {
   );
 }
 
+/** 工具结果可能是非字符串（结构化工具）；统一转成可渲染文本，避免 .match/.trim 抛错。 */
+function toDisplayText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function ToolNode({
   step,
   stepNo,
@@ -357,14 +368,17 @@ function ToolNode({
   onOpenUrl?: (url: string) => void;
 }): React.ReactElement {
   const tr = useT();
-  const failed = isToolFailure(step.name, step.result, step.ok);
+  const resultRaw = toDisplayText(step.result);
+  // step.name 在旧历史/外部数据里可能是 undefined 或非字符串：先归一，避免 .replace/.match 抛错。
+  const toolName = typeof step.name === "string" ? step.name : String(step.name ?? "");
+  const failed = isToolFailure(toolName, resultRaw, step.ok);
   const running = step.state === "running";
-  const { color } = toolCategoryOf(step.name);
-  const visual = toolVisual(step.name);
+  const { color } = toolCategoryOf(toolName);
+  const visual = toolVisual(toolName);
   const status = running ? "执行中" : failed ? "失败" : "成功";
-  const hasBody = Boolean(step.detail || step.result);
+  const hasBody = Boolean(step.detail || resultRaw);
   const isUrl = Boolean(step.detail && /^https?:\/\//i.test(step.detail));
-  const parsedDiff = React.useMemo(() => parseDiffResult(step.result), [step.result]);
+  const parsedDiff = React.useMemo(() => parseDiffResult(resultRaw), [resultRaw]);
   const resultText = parsedDiff.clean.trim();
   const diffStats = React.useMemo(() => {
     if (!parsedDiff.diff) return null;
@@ -372,11 +386,11 @@ function ToolNode({
   }, [parsedDiff.diff]);
   const isCommand = visual.label === "执行命令";
   const urls = React.useMemo(() => {
-    const found = (step.result ?? "").match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
+    const found = resultRaw.slice(0, 20000).match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
     return [...new Set(found)].slice(0, 4);
-  }, [step.result]);
+  }, [resultRaw]);
   return (
-    <div className="think-tool-node" data-kind="tool" data-tool={step.name}>
+    <div className="think-tool-node" data-kind="tool" data-tool={toolName}>
       <span className="think-tool-mark" style={{ background: failed ? "var(--ls-danger, #f87171)" : color }} />
       <div
         className="think-tool-btn"
@@ -396,7 +410,7 @@ function ToolNode({
         <span className="think-tool-glyph" aria-hidden><Icon name={visual.icon} size={12} /></span>
         {stepNo ? <span className="think-tool-step" aria-label={`第 ${stepNo} 步`}>{stepNo}</span> : null}
         <span className="think-tool-type">{visual.label}</span>
-        <span className="think-tool-name" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.ochreHover }} title={step.name}>{toolLabel(step.name)}</span>
+        <span className="think-tool-name" style={{ color: failed ? "var(--ls-danger, #f87171)" : BRAND.ochreHover }} title={toolName}>{toolLabel(toolName)}</span>
         {diffStats ? (
           <span className="think-diff-inline">
             <span className="think-diff-add">+{diffStats.add}</span>

@@ -79,6 +79,15 @@ export function sanitizeErrorMessage(raw: string): string {
 
 /** 生成中的会话：UI 的 saveTimeline 可能早于会话落库到达（done 事件先于 sessions.append），先暂存。 */
 const activeStreams = new Set<string>();
+/**
+ * 「运行中被删除」的会话：回合结束时必须跳过 sessions.append —— 否则 append 会按
+ * `current ?? {新会话}` 重建并写回索引，用户刚删掉的会话会带着最后一轮“复活”。
+ */
+const deletedSessions = new Set<string>();
+/** 运行中被删除时清掉墓碑（会话 id 不复用；清掉避免集合无限增长）。 */
+function takeTombstone(sessionId: string): boolean {
+  return deletedSessions.delete(sessionId);
+}
 const stagedTimelines = new Map<string, unknown[]>();
 /**
  * 生成中的会话 → 已流出的正文累积。
@@ -107,6 +116,11 @@ export function hasActiveStreams(): boolean {
   return activeStreams.size > 0;
 }
 
+/** 正在生成的会话 id（渲染器崩溃自愈后用它恢复 busy 态，避免重复发送/并发流）。 */
+export function activeChatStreamIds(): string[] {
+  return [...activeStreams];
+}
+
 /** 启动一次流式对话（后台跑，handler 先返回 accepted）。 */
 export function startStream(
   deps: ChatDeps,
@@ -124,7 +138,7 @@ export function startStream(
     /** 本轮异常中断（已尽力保存部分正文）。 */
     onError?: (result: { sessionId: string; error: string }) => void;
   },
-): { accepted: boolean; sessionId: string } {
+): { accepted: boolean; sessionId: string; error?: string } {
   // 会话解析：显式 > 当前会话 > 新建会话（多会话列表）
   let sessionId = payload.sessionId ?? deps.sessions?.currentId() ?? null;
   if (!sessionId) {
@@ -132,9 +146,18 @@ export function startStream(
       deps.sessions?.newSession(null).sessionId ?? `sess-${Date.now()}`;
     deps.onSessionOpened?.(sessionId, null);
   }
+  // 同一会话同时只允许一条流：并发流会覆盖 abort/steer 控制器，两轮内容交错写进同一气泡、
+  // 且各自 append 一次（重启后重复）。这里在入口直接拒绝，由 UI 撤销乐观占位并提示。
+  if (activeStreams.has(sessionId)) {
+    return { accepted: false, sessionId, error: "该会话已有回复正在生成，请先停止或等待本轮结束" };
+  }
+  if (deletedSessions.has(sessionId)) {
+    return { accepted: false, sessionId, error: "会话已被删除" };
+  }
   // 用户规则（m09384）：只有完全没选工作区的新用户直接对话才落到「未归属工作区」；
   // 不再自动绑定默认工作区（工作区由输入框/左侧下拉选择，新建页不创建会话）。
   let assistantText = "";
+  let deletedMidRun = false;
   const modelInfo = deps.getModelInfo?.();
   activeStreams.add(sessionId);
   // 先上锁再开跑：模型第一个工具调用到达前，网页就已经处于「Agent 操作中」状态。
@@ -175,13 +198,18 @@ export function startStream(
     .then(async (result) => {
       const finalText = result.finalText || assistantText;
       activePartials.delete(sessionId);
+      activeStreams.delete(sessionId);
+      const stagedTimeline = stagedTimelines.get(sessionId);
+      stagedTimelines.delete(sessionId);
+      // 会话在生成期间被用户删除：不要 append（否则会话会被重建并“复活”）。
+      if (takeTombstone(sessionId)) {
+        deletedMidRun = true;
+        return;
+      }
       // 会话持久化（恢复上次会话的数据来源）
       deps.sessions?.append(sessionId, payload.message, finalText, modelInfo);
       // 时间线回填：done 事件先于 append 到达，UI 的 saveTimeline 可能先落进暂存区；
       // 这里（append 之后）再挂到刚追加的助手消息上，否则会错误覆盖上一条助手消息的时间线。
-      activeStreams.delete(sessionId);
-      const stagedTimeline = stagedTimelines.get(sessionId);
-      stagedTimelines.delete(sessionId);
       if (stagedTimeline && stagedTimeline.length > 0) {
         deps.sessions?.attachTimeline(sessionId, stagedTimeline);
       }
@@ -229,12 +257,17 @@ export function startStream(
     })
     .finally(() => {
       // 正常结束 / 异常 / 用户停止都会走到这里：解锁绝不能只挂在成功分支上。
-      deps.onTurnSettled?.(sessionId);
+      // 会话已被删除时跳过收尾钩子（任务分支/浏览器锁都不该再为一个不存在的会话工作）。
+      if (!deletedMidRun) deps.onTurnSettled?.(sessionId);
     })
     .catch((err: unknown) => {
       activeStreams.delete(sessionId);
       stagedTimelines.delete(sessionId);
       activePartials.delete(sessionId);
+      if (takeTombstone(sessionId)) {
+        deletedMidRun = true;
+        return;
+      }
       const cleaned = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
       // 异常中断也要把已经流式产出的正文落库：否则重启后这段内容凭空消失，
       // 用户看到的就是「回复被截断/丢了尾巴」（m02515 截断根除）。没有产出正文时保持原样。
@@ -400,6 +433,8 @@ export function registerChatDomain(deps: ChatDeps): ChatDeps {
 
   handleTrusted(deps, "chat:deleteSession", async (payload) => {
     const p = payload as { sessionId: string };
+    // 先停止运行中的回合，并登记墓碑：否则回合结束时的 append 会把刚删除的会话写回来。
+    if (deps.chatService.stop(p.sessionId)) deletedSessions.add(p.sessionId);
     if (deps.sessions?.get(p.sessionId)) await deps.onSessionDeleting?.(p.sessionId);
     const removed = deps.sessions?.remove(p.sessionId) ?? false;
     if (removed) await deps.onSessionDeleted?.(p.sessionId, deps.sessions?.currentId() ?? null);

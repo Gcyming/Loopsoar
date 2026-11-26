@@ -30,6 +30,8 @@ import { BRAND, MOTION, NO_DRAG_REGION, RADIUS } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { usePopover } from "./popover.js";
 import SessionListPanel from "./SessionListPanel.js";
+import ErrorBoundary from "./ErrorBoundary.js";
+import { setStartMode } from "./startMode.js";
 import { getLanguage, useT } from "./i18n.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import type { SessionMeta, SidebarMode, SidebarModeAction, WorkspaceRecord } from "./types.js";
@@ -104,6 +106,17 @@ export function conversationToMarkdown(messages: ChatMessage[], tr: Translate): 
       return `### ${who}\n\n${think}${m.text}`;
     })
     .join("\n\n---\n\n");
+}
+
+/** 消息区局部兜底：渲染出错时只替换内容区，侧栏/会话切换仍可用。 */
+function PanelError({ error, onRetry }: { error: Error; onRetry: () => void }): React.ReactElement {
+  return (
+    <div style={{ margin: "auto", padding: 24, color: "var(--ls-text-muted)", fontSize: 13, lineHeight: 1.7 }}>
+      <div style={{ color: "var(--ls-text)", fontWeight: 600, marginBottom: 6 }}>消息区渲染出错</div>
+      <div style={{ marginBottom: 12, wordBreak: "break-word" }}>{error.message}</div>
+      <button type="button" className="btn-ghost" onClick={onRetry}>重试</button>
+    </div>
+  );
 }
 
 export default function AgentSidebar({
@@ -226,19 +239,16 @@ export default function AgentSidebar({
       {/* 收起/展开开关：同一个绝对定位元素在两态间连续变形（右缘钉住窗口右边）。
           收起 = 32×32 圆角方块（仅 Loopsoar 星标）；展开 = 长方形，星标随容器左扩平滑左移，
           右侧让出的空间渐入「收起」箭头。点击方块展开、点击箭头收起，不再有两个分散的按钮。 */}
-      {fill ? null : (
+      {fill ? null : isCollapsed ? (
         <button
           type="button"
           className="sidebar-toggle"
-          data-expanded={isCollapsed ? "false" : "true"}
-          style={{
-            ...styles.toggle,
-            width: isCollapsed ? 32 : 62,
-          }}
-          title={isCollapsed ? expandLabel : collapseLabel}
-          aria-label={isCollapsed ? expandLabel : collapseLabel}
-          aria-expanded={!isCollapsed}
-          onClick={() => onModeChange(isCollapsed ? lastExpandedModeRef.current : "collapsed")}
+          data-expanded="false"
+          style={{ ...styles.toggle, width: 32 }}
+          title={expandLabel}
+          aria-label={expandLabel}
+          aria-expanded={false}
+          onClick={() => onModeChange(lastExpandedModeRef.current)}
         >
           <span style={styles.toggleStar} aria-hidden="true">
             <span style={{ ...styles.toggleIconLayer, opacity: vibeMode ? 0 : 1, transform: vibeMode ? "scale(0.78)" : "scale(1)" }}>
@@ -255,17 +265,60 @@ export default function AgentSidebar({
               <Icon name="list-details" size={16} />
             </span>
           </span>
-          <span
-            style={{
-              ...styles.toggleChevron,
-              opacity: isCollapsed ? 0 : 1,
-              transitionDelay: isCollapsed ? "0ms" : "90ms",
-            }}
-            aria-hidden="true"
+        </button>
+      ) : (
+        <div
+          className="sidebar-toggle"
+          data-expanded="true"
+          style={{
+            ...styles.toggle,
+            width: 86,
+            height: 28,
+            top: 6,
+            padding: "0 2px",
+            borderRadius: 999,
+            cursor: "default",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={styles.modeSwitch} role="group" aria-label={tr("browser.ntp.modeAria")}>
+            <span
+              aria-hidden="true"
+              style={{ ...styles.modeThumb, transform: `translateX(${vibeMode ? 30 : 0}px)` }}
+            />
+            <button
+              type="button"
+              className="sidebar-mode-option"
+              style={{ ...styles.modeOption, ...(!vibeMode ? styles.modeOptionActive : null) }}
+              aria-pressed={!vibeMode}
+              title={tr("browser.ntp.modeSearch")}
+              onClick={() => setStartMode("search")}
+            >
+              <Icon name="search" size={12} />
+            </button>
+            <button
+              type="button"
+              className="sidebar-mode-option"
+              style={{ ...styles.modeOption, ...(vibeMode ? styles.modeOptionActive : null) }}
+              aria-pressed={vibeMode}
+              title={tr("browser.ntp.modeVibe")}
+              onClick={() => setStartMode("vibe")}
+            >
+              <Icon name="sparkle" size={12} />
+            </button>
+          </div>
+          <button
+            type="button"
+            className="sidebar-collapse-btn"
+            style={styles.collapseBtn}
+            title={collapseLabel}
+            aria-label={collapseLabel}
+            aria-expanded={true}
+            onClick={() => onModeChange("collapsed")}
           >
             <Icon name="forward" size={12} />
-          </span>
-        </button>
+          </button>
+        </div>
       )}
 
       {/* 收起态简易会话列表：占住原先右侧那条空白竖列；悬停 1s 自动展开侧栏并打开会话列表 */}
@@ -362,10 +415,6 @@ export default function AgentSidebar({
                       </button>
                     </span>
                   )}
-                <span style={styles.sidebarTitle}>
-                  <Icon name={vibeMode ? "list-details" : "agent"} size={14} style={{ marginRight: 6 }} />
-                  {vibeMode ? tr("chat.sessionListTitle") : tr("chat.sidebarTitle")}
-                </span>
                 </span>
                 <span style={styles.sidebarActions}>
                   <span
@@ -386,7 +435,6 @@ export default function AgentSidebar({
                       <Icon name="copy" size={13} />
                     </button>
                   </span>
-                  <span style={styles.sidebarAgent}>{agentLabel}</span>
                   <span
                     style={{
                       display: embeddedInAgentWindow ? "none" : "inline-flex",
@@ -418,7 +466,12 @@ export default function AgentSidebar({
           </div>
           {embeddedInAgentWindow ? (
             <div style={styles.miniBody}>
-              {children}
+              <ErrorBoundary
+                resetKey={currentSession}
+                fallback={(error, reset) => <PanelError error={error} onRetry={reset} />}
+              >
+                {children}
+              </ErrorBoundary>
               {sessionOpen ? (
                 <div
                   className="agent-mini-session-overlay"
@@ -480,7 +533,12 @@ export default function AgentSidebar({
             </div>
           ) : (
             <>
-              {children}
+              <ErrorBoundary
+                resetKey={currentSession}
+                fallback={(error, reset) => <PanelError error={error} onRetry={reset} />}
+              >
+                {children}
+              </ErrorBoundary>
               {sessionOpen ? (
                 <div
                   className="agent-mini-session-overlay"
@@ -688,12 +746,71 @@ const styles: Record<string, React.CSSProperties> = {
     // 不再缩在列顶，顶部的「两块面」因此连成一条。
     height: LAYOUT.TOP_BAR_HEIGHT,
     // 右侧留出绝对定位的收起/展开开关宽度（62px + 右缘 8px + 间距 8px），按钮不会互相压住。
-    padding: "0 78px 0 12px",
+    padding: "0 104px 0 12px",
     fontWeight: 600,
     fontSize: 13,
     color: BRAND.linen,
   },
   sidebarTitle: { display: "inline-flex", alignItems: "center" },
+  modeSwitch: {
+    position: "relative",
+    display: "inline-flex",
+    alignItems: "center",
+    flex: 1,
+    height: "100%",
+    gap: 0,
+    padding: 0,
+    borderRadius: 999,
+    background: "transparent",
+    overflow: "hidden",
+  },
+  /** 滑块：在两个 30px 选项之间平移，避免切换时背景直接闪变。 */
+  modeThumb: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 30,
+    height: "100%",
+    borderRadius: 999,
+    background: "var(--ls-accent, #c8763c)",
+    boxShadow: "0 0 10px rgba(200,118,60,0.38)",
+    transition: "transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1)",
+    pointerEvents: "none",
+  },
+  modeOption: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 30,
+    height: "100%",
+    padding: 0,
+    lineHeight: 0,
+    flex: "0 0 auto",
+    border: "none",
+    borderRadius: 999,
+    position: "relative",
+    zIndex: 1,
+    background: "transparent",
+    color: BRAND.linenFaint,
+    cursor: "pointer",
+    transition: "color 160ms ease",
+  },
+  modeOptionActive: {
+    color: "#fff",
+  },
+  collapseBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 22,
+    height: "100%",
+    padding: 0,
+    border: "none",
+    borderRadius: 6,
+    background: "transparent",
+    color: BRAND.linenFaint,
+    cursor: "pointer",
+  },
   sidebarAgent: { fontSize: 11, color: BRAND.linenFaint, fontWeight: 400 },
   sidebarActions: { display: "inline-flex", alignItems: "center", gap: 6 },
   workspaceBar: {

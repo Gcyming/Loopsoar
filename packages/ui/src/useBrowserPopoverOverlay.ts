@@ -29,24 +29,18 @@ export interface BrowserPopoverOverlayOptions {
 export interface NativePageVisibilityInput {
   miniWindow: boolean;
   currentUrl: string;
-  loading: boolean;
   loadFailure: unknown;
   vibeModeActive: boolean;
 }
 
 /**
  * 与 BrowserHost.applyLayout 的原生视图 visible 条件保持同源：
- * 空 URL（搜索主页）、加载中、加载失败、Vibe 会话都不显示原生网页。
+ * 空 URL（搜索主页/新标签页）、加载失败、Vibe 会话不显示原生网页；
+ * **加载中仍显示**——导航期间原生视图继续画旧页面，绝不让 DOM 加载页盖住网页。
  * 浮层底图只能在这些条件之外抓，否则会把上一个网页的旧画面冻结到主页上。
  */
 export function isNativePageVisible(input: NativePageVisibilityInput): boolean {
-  return Boolean(
-    !input.miniWindow &&
-      input.currentUrl &&
-      !input.loading &&
-      !input.loadFailure &&
-      !input.vibeModeActive,
-  );
+  return Boolean(!input.miniWindow && input.currentUrl && !input.loadFailure && !input.vibeModeActive);
 }
 
 export function useBrowserPopoverOverlay({
@@ -65,12 +59,20 @@ export function useBrowserPopoverOverlay({
     const sync = async (): Promise<void> => {
       let overPage = false;
       if (anyPopoverOpen && !baseOverlay && nativePageVisible) {
-        const menu = document.querySelector<HTMLElement>("[data-popover]");
+        // 只认「真正可见」的浮层：DOM 里可能同时存在多个 [data-popover]（关闭态/隐藏测量态），
+        // 旧实现取第一个，拿到 0x0 矩形 → 判定不相交 → 网页不隐藏，展开的列表反而被网页盖住。
+        const menus = Array.from(document.querySelectorAll<HTMLElement>("[data-popover]"));
         const page = pageColumnRef.current;
-        if (menu && page) {
-          const a = menu.getBoundingClientRect();
+        if (page) {
           const b = page.getBoundingClientRect();
-          overPage = a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+          for (const menu of menus) {
+            const a = menu.getBoundingClientRect();
+            if (a.width <= 0 || a.height <= 0) continue;
+            if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
+              overPage = true;
+              break;
+            }
+          }
         }
       }
       if (overPage) {

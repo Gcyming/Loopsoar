@@ -122,7 +122,8 @@ describe("守卫：浏览器桥隔离（发布门 2 四攻击路径）", () => {
     const at = host.indexOf("const normalized = normalizeNavigateUrl(rawUrl);");
     expect(at, "navigate 必须先归一化 URL").toBeGreaterThan(-1);
     const body = host.slice(at);
-    const loadAt = body.indexOf("adapter.navigate(normalized.url)");
+    // 允许附带 Referer（防盗链下载站需要），但加载的仍然必须是 normalized.url。
+    const loadAt = body.search(/adapter\.navigate\(\s*normalized\.url\b/);
     expect(loadAt, "归一化后的 URL 才能进适配层").toBeGreaterThan(-1);
     expect(body.indexOf("normalizeNavigateUrl")).toBeLessThan(loadAt);
 

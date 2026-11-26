@@ -240,6 +240,15 @@ describe("mergeFetchedProviderModels（拉列表时的三态合并：显式手�
     expect(result.models.find((m) => m.id === "b")?.selected).toBe(true);
   });
 
+  it("上游列表没有的本地手工模型必须保留（不能因刷新而丢失配置）", () => {
+    const existing = [model({ id: "m1", contextWindow: 200000, selected: true }), model({ id: "local-only", maxOutput: 8192, selected: false })];
+    const fetched = [model({ id: "m1", contextWindow: 1048576 })];
+    const result = mergeFetchedProviderModels(fetched, existing, {});
+    expect(result.models.map((m) => m.id)).toEqual(["m1", "local-only"]);
+    expect(result.models.find((m) => m.id === "local-only")?.maxOutput).toBe(8192);
+    expect(result.models.find((m) => m.id === "local-only")?.selected).toBe(false);
+  });
+
   it("按模型 id 去重，并只统计真正带上游字段的模型", () => {
     const fetched = [model({ id: "m1", vision: false }), model({ id: "m1" }), model({ id: "m2", contextWindow: 128000 })];
     const result = mergeFetchedProviderModels(

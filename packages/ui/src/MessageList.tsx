@@ -11,10 +11,66 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import TopicRail from "./TopicRail.js";
-import ChatMessageView from "./ChatMessageView.js";
+import ChatMessageView, { type ChatMessageViewProps } from "./ChatMessageView.js";
 import type { ChatMessage } from "./chatStreamState.js";
 import { decideFollow, hasInnerScroller, shouldRestickAfterResize, type ScrollBox } from "./scrollFollow.js";
 import { useT } from "./i18n.js";
+
+type MessageActions = {
+  onToggleThinking: (id: string) => void;
+  onRollback: (id: string) => void;
+  onRegenerate: (id: string) => void;
+  onFork: (id: string) => void;
+  onOpenUrl: (url: string) => void;
+};
+
+type MessageRowProps = Omit<ChatMessageViewProps, "onToggleThinking" | "onRollback" | "onRegenerate" | "onFork" | "onOpenUrl"> & {
+  actions: React.MutableRefObject<MessageActions>;
+};
+
+/** 单条消息的行容器：动作走 ref，历史消息在流式增量时不再跟着整棵列表重渲染。 */
+const MessageRow = React.memo(function MessageRow({
+  actions,
+  message,
+  ...props
+}: MessageRowProps): React.ReactElement {
+  const onToggleThinking = React.useCallback((): void => {
+    actions.current.onToggleThinking(message.id);
+  }, [actions, message.id]);
+  const onRollback = React.useCallback((id: string): void => {
+    actions.current.onRollback(id);
+  }, [actions]);
+  const onRegenerate = React.useCallback((id: string): void => {
+    actions.current.onRegenerate(id);
+  }, [actions]);
+  const onFork = React.useCallback((id: string): void => {
+    actions.current.onFork(id);
+  }, [actions]);
+  const onOpenUrl = React.useCallback((url: string): void => {
+    actions.current.onOpenUrl(url);
+  }, [actions]);
+  return (
+    <ChatMessageView
+      {...props}
+      message={message}
+      onToggleThinking={onToggleThinking}
+      onRollback={onRollback}
+      onRegenerate={onRegenerate}
+      onFork={onFork}
+      onOpenUrl={onOpenUrl}
+    />
+  );
+}, (prev, next) =>
+  prev.message === next.message
+  && prev.mode === next.mode
+  && prev.contextCap === next.contextCap
+  && (prev.contextUsed > 0) === (next.contextUsed > 0)
+  && prev.thinkingOpen === next.thinkingOpen
+  && prev.busy === next.busy
+  && prev.expandAllGroups === next.expandAllGroups
+  && prev.openProducts === next.openProducts
+  && prev.actions === next.actions,
+);
 
 export interface MessageListProps {
   messages: ChatMessage[];
@@ -23,6 +79,10 @@ export interface MessageListProps {
   contextCap: number;
   contextPct: number;
   thinkingOpen: Record<string, boolean>;
+  /** 生成中禁止回滚/重新生成（并发流会让消息与持久化错乱）。 */
+  busy?: boolean;
+  /** 会话标识：切换会话时复位“跟随底部”，不沿用上一条对话的滚动位置。 */
+  resumeKey?: string;
   expandAllGroups?: boolean;
   openProducts?: boolean;
   onToggleThinking: (id: string) => void;
@@ -39,6 +99,8 @@ export default function MessageList({
   contextCap,
   contextPct,
   thinkingOpen,
+  busy = false,
+  resumeKey,
   expandAllGroups = false,
   openProducts = false,
   onToggleThinking,
@@ -48,10 +110,27 @@ export default function MessageList({
   onOpenUrl,
 }: MessageListProps): React.ReactElement {
   const tr = useT();
+  const actionsRef = React.useRef<MessageActions>({
+    onToggleThinking,
+    onRollback,
+    onRegenerate,
+    onFork,
+    onOpenUrl,
+  });
+  actionsRef.current = { onToggleThinking, onRollback, onRegenerate, onFork, onOpenUrl };
   const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   const atBottomRef = React.useRef(true);
   const [atBottom, setAtBottom] = React.useState(true);
   const scrollRafRef = React.useRef<number | null>(null);
+
+  // 切会话：旧实现沿用上一条对话的滚动位置，用户切过来会停在半空甚至顶部；
+  // 统一复位为「跟随底部」，新会话打开即看到最新消息。
+  React.useEffect(() => {
+    atBottomRef.current = true;
+    setAtBottom(true);
+    const scroller = scrollerRef.current;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }, [resumeKey]);
 
   /** 滚轮是最可靠的意图信号：向上立即解除跟随，向下且已到底则恢复。 */
   const handleWheel = (event: React.WheelEvent<HTMLDivElement>): void => {
@@ -210,7 +289,7 @@ export default function MessageList({
           <div style={styles.emptyHint}>{tr("chat.emptyHint")}</div>
         ) : (
           messages.map((message) => (
-            <ChatMessageView
+            <MessageRow
               key={message.id}
               message={message}
               mode={mode}
@@ -218,13 +297,10 @@ export default function MessageList({
               contextCap={contextCap}
               contextPct={contextPct}
               thinkingOpen={thinkingOpen[message.id] ?? true}
+              busy={busy}
               expandAllGroups={expandAllGroups}
               openProducts={openProducts}
-              onToggleThinking={() => onToggleThinking(message.id)}
-              onRollback={onRollback}
-              onRegenerate={onRegenerate}
-              onFork={onFork}
-              onOpenUrl={onOpenUrl}
+              actions={actionsRef}
             />
           ))
         )}

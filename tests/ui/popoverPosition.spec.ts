@@ -10,6 +10,45 @@ import { placePopover, POPOVER_GAP, POPOVER_MARGIN } from "../../packages/ui/src
 
 const VIEWPORT = { width: 800, height: 600 };
 
+describe("placePopover · 原生网页避让（优先移动/收窄，绝不冻结页面）", () => {
+  it("与网页相交且网页右侧放得下 → 平移到网页右侧", () => {
+    const avoid = { x: 0, y: 60, width: 500, height: 500 };
+    const position = placePopover({
+      anchor: { x: 120, y: 300, width: 80, height: 24 },
+      size: { width: 300, height: 200 },
+      viewport: { width: 900, height: 700 },
+      avoid,
+    });
+    expect(position.left).toBe(500 + POPOVER_GAP);
+    expect(position.maxWidth).toBeGreaterThanOrEqual(300);
+  });
+
+  it("侧栏比菜单窄 → 收窄菜单贴到网页右侧（而不是留在网页上被盖住）", () => {
+    const avoid = { x: 0, y: 60, width: 700, height: 500 };
+    const position = placePopover({
+      anchor: { x: 720, y: 300, width: 80, height: 24 },
+      size: { width: 340, height: 200 },
+      viewport: { width: 960, height: 700 },
+      avoid,
+    });
+    const room = 960 - POPOVER_MARGIN - (700 + POPOVER_GAP);
+    expect(position.left).toBe(700 + POPOVER_GAP);
+    expect(position.maxWidth).toBe(room);
+    expect(position.maxWidth).toBeGreaterThanOrEqual(200);
+  });
+
+  it("旁边空间连最小可用宽度都不够 → 不改几何（由覆盖层兜底）", () => {
+    const avoid = { x: 0, y: 60, width: 900, height: 500 };
+    const position = placePopover({
+      anchor: { x: 800, y: 300, width: 80, height: 24 },
+      size: { width: 340, height: 200 },
+      viewport: { width: 960, height: 700 },
+      avoid,
+    });
+    expect(position.maxWidth).toBe(960 - POPOVER_MARGIN * 2);
+  });
+});
+
 function place(
   anchor: { x: number; y: number; width: number; height: number },
   size: { width: number; height: number },
@@ -158,14 +197,16 @@ describe("placePopover · 原生网页避让", () => {
     expectInsideViewport(position, { width: 200, height: 120 }, VIEWPORT);
   });
 
-  it("右侧空间不足时平移到网页左侧；两侧都不行则保持原位置", () => {
+  it("右侧放不下完整宽度时收窄贴到网页右侧；网页左侧有空间则移到左侧", () => {
     const rightBlocked = placePopover({
       anchor: { x: 100, y: 100, width: 60, height: 24 },
       size: { width: 500, height: 120 },
       viewport: { width: 800, height: 600 },
       avoid: { x: 0, y: 0, width: 500, height: 500 },
     });
-    expect(rightBlocked.left).toBe(100); // 右侧/左侧都塞不下，交给冻结兜底
+    // 右侧只有 284px：收窄到 284 贴过去（旧行为是原地不动，只能靠冻结整页露菜单）
+    expect(rightBlocked.left).toBe(500 + POPOVER_GAP);
+    expect(rightBlocked.maxWidth).toBe(800 - POPOVER_MARGIN - (500 + POPOVER_GAP));
 
     const leftFits = placePopover({
       anchor: { x: 700, y: 100, width: 60, height: 24 },

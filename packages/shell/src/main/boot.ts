@@ -76,8 +76,14 @@ export function makeUiProtocolHandler(
     }
     try {
       const data = readFileSync(mapping.filePath);
+      // 带指纹的构建产物（/assets/*-HASH.js）可长缓存：浮层每次是新的渲染进程，
+      // 缓存命中后不必重新读盘/解析，第二次打开明显更快；入口 HTML 必须每次校验。
+      const immutable = /[\\/]assets[\\/]/.test(mapping.filePath);
       return new Response(new Uint8Array(data), {
-        headers: { "content-type": mapping.contentType },
+        headers: {
+          "content-type": mapping.contentType,
+          "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+        },
       });
     } catch {
       return new Response(`资源不存在：${path.basename(mapping.filePath)}`, {

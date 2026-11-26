@@ -32,6 +32,10 @@ export type BookmarkAddResult =
   | { ok: true; bookmark: BookmarkItem; duplicate: boolean }
   | { ok: false; error: string };
 
+export type BookmarkUpdateResult =
+  | { ok: true; bookmark: BookmarkItem }
+  | { ok: false; error: string };
+
 /** 书签上限：超过后淘汰 createdAt 最旧的条目。 */
 export const MAX_BOOKMARKS = 500;
 /** 与 contracts 的 BookmarkAddSchema 对齐。 */
@@ -141,6 +145,28 @@ export class BookmarksStore {
       .slice(0, this.maxItems);
     this.save();
     return { ok: true, bookmark: { ...bookmark }, duplicate: false };
+  }
+
+  /** 编辑书签：改标题/网址；网址仍走规范化与去重，失败返回可读错误。 */
+  update(id: string, input: { title?: string; url?: string }): BookmarkUpdateResult {
+    const targetId = typeof id === "string" ? id.trim() : "";
+    if (!targetId) return { ok: false, error: "书签 id 为空" };
+    const target = this.items.find((item) => item.id === targetId);
+    if (!target) return { ok: false, error: "书签不存在" };
+    let url = target.url;
+    if (typeof input?.url === "string") {
+      const normalized = normalizeBookmarkUrl(input.url);
+      if (!normalized.ok) return { ok: false, error: normalized.error };
+      url = normalized.url;
+    }
+    if (this.items.some((item) => item.id !== targetId && item.url === url)) {
+      return { ok: false, error: "该网址已在书签中" };
+    }
+    const rawTitle = typeof input?.title === "string" ? input.title.trim() : target.title;
+    target.url = url;
+    target.title = (rawTitle || this.hostnameOf(url)).slice(0, MAX_TITLE_LENGTH);
+    this.save();
+    return { ok: true, bookmark: { ...target } };
   }
 
   /** 删除书签；不存在返回 false（UI 按「已不存在」处理，不报错）。 */

@@ -18,6 +18,7 @@ import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
 import { classifyLoadFailure, type BrowserFailureKind } from "./browserFailure.js";
 import { hostOf } from "./startPageModel.js";
+import { setStartMode, useStartMode } from "./startMode.js";
 import { styles } from "./startPageStyles.js";
 import NewTabPage from "./StartPageNewTab.js";
 import VibeChatView from "./StartPageChat.js";
@@ -43,8 +44,9 @@ export default function StartPage(props: StartPageProps): React.JSX.Element {
 
   /** ntp = 新建标签页；chat = Vibecoding 会话页（发送后平滑切换）。 */
   const [mode, setMode] = React.useState<"ntp" | "chat">("ntp");
-  /** 新标签页拨片：搜索 / Vibecoding。 */
-  const [tabMode, setTabMode] = React.useState<"search" | "vibe">("search");
+  /** 搜索 / Vibecoding：模块级 store，新建页拨片与侧栏开关共用同一份状态。 */
+  const tabMode = useStartMode();
+  const setTabMode = setStartMode;
   const [draft, setDraft] = React.useState("");
 
   // 页面被真正导航走（有 URL）后回到新标签页状态：下次回到空白页仍是起始页，而不是旧会话。
@@ -64,6 +66,11 @@ export default function StartPage(props: StartPageProps): React.JSX.Element {
     // 此时 tabMode=vibe 仍是用户看到的界面，侧栏必须同步切成会话列表；导航发生时下面的 effect 会把 tabMode 复位为 search。
     props.onVibeModeChange?.(mode === "chat" || tabMode === "vibe");
   }, [mode, tabMode, props.onVibeModeChange]);
+  // 侧栏/外部把模式切回搜索时，离开 Vibecoding 会话页（回到起始页）。
+  React.useLayoutEffect(() => {
+    if (tabMode === "search" && mode === "chat") setMode("ntp");
+  }, [tabMode, mode]);
+
   // Vibecoding 页面：主页面显示会话正文（右栏只剩会话列表）。
   // 切换拨片或从右栏列表选择已有会话时，只要该会话有消息，就把左页从「今天想聊点什么」切到会话页。
   // 用 useLayoutEffect：与拨片切换同帧，避免先闪一帧初始页（用户 m07865）。
@@ -140,8 +147,8 @@ export default function StartPage(props: StartPageProps): React.JSX.Element {
         </div>
       ) : loading ? (
         <div style={styles.statePane} data-browser-state="loading">
-          <div style={styles.loadingLogoWrap}>
-            <img src="./logo.png" alt="Loopsoar" width={58} height={58} className="browser-loading-logo" />
+          <div style={styles.loadingLogoWrap} aria-hidden="true">
+            <span className="browser-loading-spinner" />
           </div>
           <div style={styles.loadingTitle}>{tr("browser.loading.title")}</div>
           <div style={styles.loadingTarget} title={currentUrl}>{hostOf(currentUrl)}</div>

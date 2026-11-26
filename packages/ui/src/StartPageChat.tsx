@@ -78,6 +78,7 @@ export default function VibeChatView({
             contextCap={contextCap}
             contextPct={contextPct}
             thinkingOpen={thinkingOpen}
+            busy={busy}
             onToggleThinking={onToggleThinking}
             onRollback={onRollback}
             onRegenerate={onRegenerate}

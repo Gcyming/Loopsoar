@@ -6,10 +6,13 @@
  * 「引用到对话」、设置、重载界面、检查元素。没有这一层时，Chromium 默认不弹菜单。
  */
 import { Menu, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
+import { isContextMenuSuppressed, resetContextMenuSuppression } from "./domains/window.js";
 
 export function attachAppContextMenu(win: BrowserWindow): void {
+  win.webContents.on("did-finish-load", () => resetContextMenuSuppression());
   win.webContents.on("context-menu", (_event, params: ContextMenuParams) => {
     if (win.isDestroyed()) return;
+    if (isContextMenuSuppressed()) return;
     // 标签条有自己的 React 右键菜单（固定/静音/复制…）；Electron 的 context-menu
     // 仍会为同一手势触发主进程事件，若不拦住会同时弹出两套菜单。
     // 标签条位于窗口顶部 TITLE_BAR_HEIGHT（40px）；内容区从 40px 之后开始。

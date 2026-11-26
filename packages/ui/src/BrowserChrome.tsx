@@ -40,6 +40,8 @@ export interface BrowserChromeProps {
   onSnapshot: () => void;
   /** 工具条内操作提示（收藏/取消收藏结果）。 */
   onNotice: (text: string) => void;
+  /** 下载状态摘要：只有存在进行中的下载任务时才出现按钮；脉冲 + 点击展开下载浮层。 */
+  downloadsSummary?: { active: number; percent: number; visible: boolean };
 }
 
 /** 地址栏引擎下拉可选项（与 Preferences.searchEngine 枚举一致）。 */
@@ -57,13 +59,36 @@ function engineName(engine: SearchEngine): string {
 /** 悬停触发延迟：太快误触、太慢像没反应。用户要求放慢（m01845：放上去就展开太急）→ 600ms。 */
 const HOVER_DELAY_MS = 600;
 
+/**
+ * 工具栏按钮的渐入/渐出容器：宽度 + 透明度一起过渡，收起时用负 margin 抵消 flex gap，
+ * 避免按钮出现/消失时整排图标硬跳（topActions 的 gap 是 2px）。
+ */
+function ActionSlot({
+  open,
+  instant,
+  children,
+}: {
+  open: boolean;
+  instant?: boolean;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <span
+      className={`chrome-action-slot${open ? " is-open" : ""}${instant ? " is-instant" : ""}`}
+      aria-hidden={!open}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** 书签同一性判据：忽略 URL hash 与末尾斜杠（同页锚点不产生第二条书签）。 */
 function pageKey(url: string): string {
   const trimmed = url.trim().replace(/#.*$/, "");
   return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
-export default function BrowserChrome({
+function BrowserChrome({
   tabs,
   address,
   currentUrl,
@@ -77,8 +102,10 @@ export default function BrowserChrome({
   onReload,
   onSnapshot,
   onNotice,
+  downloadsSummary,
 }: BrowserChromeProps): React.ReactElement {
   const api = useLoopsoarApi();
+  const downloadsButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const tr = useT();
   const active = tabs.find((tab) => tab.active);
   const starButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -89,6 +116,25 @@ export default function BrowserChrome({
   /** 地址栏左侧搜索引擎下拉（只在新建标签页显示；页面打开后恢复普通放大镜）。 */
   const [engineMenuOpen, setEngineMenuOpen] = React.useState(false);
   usePopover("browser-engine", engineMenuOpen, setEngineMenuOpen);
+  /** 当前打开的是哪一类工具栏浮层（主进程推送）：在“更多”左侧显示对应的“认领”按钮。 */
+  const [popoverKind, setPopoverKind] = React.useState<ChromePopoverKind | null>(null);
+  /** 收起时保留最后一次的认领类型，让按钮能把渐出动画播完。 */
+  const claimKindRef = React.useRef<"bookmarks" | "history" | null>(null);
+  if (popoverKind === "bookmarks" || popoverKind === "history") claimKindRef.current = popoverKind;
+  const claimKind =
+    popoverKind === "bookmarks" || popoverKind === "history" ? popoverKind : claimKindRef.current;
+  React.useEffect(() => {
+    if (!api?.on) return;
+    const offKind = api.on("chrome:popoverAction", (payload) => {
+      const p = payload as { action?: string; payload?: { kind?: string } } | null;
+      if (p?.action === "popoverKind") setPopoverKind((p.payload?.kind as ChromePopoverKind) ?? null);
+    });
+    const offClosed = api.on("chrome:popoverClosed", () => setPopoverKind(null));
+    return () => {
+      offKind?.();
+      offClosed?.();
+    };
+  }, [api]);
 
   const [bookmarks, setBookmarks] = React.useState<BookmarkItem[]>([]);
   const refreshBookmarks = React.useCallback(async (): Promise<void> => {
@@ -189,8 +235,14 @@ export default function BrowserChrome({
   const togglePopover = React.useCallback(
     (kind: ChromePopoverKind, element: HTMLElement | null): void => {
       const ui = api?.ui;
-      if (!ui?.togglePopover || !element) return;
+      if (!element) return;
       cancelHover();
+      // 旧主进程/preload 可能还没有 togglePopover：退回 openPopover，保证按钮至少能打开列表。
+      if (!ui?.togglePopover) {
+        suppressHoverRef.current = true;
+        openPopover(kind, element);
+        return;
+      }
       const rect = element.getBoundingClientRect();
       // 点击后先抑制 hover 重开，直到鼠标离开按钮（否则收起瞬间 hover 又把它打开）
       suppressHoverRef.current = true;
@@ -202,13 +254,18 @@ export default function BrowserChrome({
         })
         .then((result) => {
           // 仍处于打开状态（例如把另一个列表切换成这个）→ 允许后续 hover 行为
-          if (result?.open) suppressHoverRef.current = false;
+          if (result?.open) {
+            suppressHoverRef.current = false;
+            setPopoverKind(kind);
+          }
         })
         .catch(() => {
+          // toggle 失败（旧主进程未接线等）→ 退回普通打开，按钮不能变成死键。
           suppressHoverRef.current = false;
+          openPopover(kind, element);
         });
     },
-    [api, cancelHover],
+    [api, cancelHover, openPopover],
   );
 
   /** 悬停 600ms 后打开预览；离开按钮即取消（鼠标进入浮层由主进程命中测试处理）。 */
@@ -301,8 +358,11 @@ export default function BrowserChrome({
             value={address}
             onChange={(event) => onAddressChange(event.target.value)}
             onKeyDown={(event) => {
+              // 中文输入法选词的回车不能触发导航（部分 IME 会补发 isComposing=false 的 Enter）。
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === "Enter") onNavigate();
             }}
+            onFocus={(event) => event.currentTarget.select()}
             ref={omniboxRef}
             placeholder={tr("browser.addressPlaceholder")}
             style={styles.omnibox}
@@ -344,6 +404,11 @@ export default function BrowserChrome({
           </span>
         </div>
 
+        {active?.loading ? (
+          <div style={styles.loadingBar} aria-hidden="true">
+            <span style={styles.loadingBarFill} />
+          </div>
+        ) : null}
         <div style={styles.topActions}>
           <button
             type="button"
@@ -355,11 +420,54 @@ export default function BrowserChrome({
           >
             <Icon name="capture" size={17} />
           </button>
+          <ActionSlot
+            open={Boolean(downloadsSummary?.visible || popoverKind === "downloads")}
+            instant={(downloadsSummary?.active ?? 0) > 0}
+          >
+            <button
+              ref={downloadsButtonRef}
+              type="button"
+              data-downloads-trigger
+              data-chrome-popover-trigger
+              className={`icon-btn${popoverKind === "downloads" ? " is-popover-claim" : ""}${
+                (downloadsSummary?.active ?? 0) > 0 ? " is-downloading" : ""
+              }`}
+              title={
+                (downloadsSummary?.active ?? 0) > 0
+                  ? tr("browser.menuDownloads") + ` · ${downloadsSummary?.percent ?? 0}%`
+                  : tr("browser.menuDownloads")
+              }
+              aria-label={tr("browser.menuDownloads")}
+              aria-haspopup="menu"
+              style={styles.downloadsButton}
+              onClick={() => togglePopover("downloads", downloadsButtonRef.current)}
+            >
+              <Icon name="download" size={17} />
+              {(downloadsSummary?.active ?? 0) > 0 ? <span style={styles.downloadDot} aria-hidden="true" /> : null}
+            </button>
+          </ActionSlot>
+          <ActionSlot open={popoverKind === "bookmarks" || popoverKind === "history"}>
+            {claimKind ? (
+              <button
+                type="button"
+                data-chrome-popover-trigger
+                className="icon-btn is-popover-claim"
+                title={claimKind === "bookmarks" ? tr("browser.menuBookmarks") : tr("browser.menuHistory")}
+                aria-label={claimKind === "bookmarks" ? tr("browser.menuBookmarks") : tr("browser.menuHistory")}
+                aria-haspopup="menu"
+                onClick={() => {
+                  void api?.ui?.closePopover?.().catch(() => undefined);
+                }}
+              >
+                <Icon name={claimKind === "bookmarks" ? "star-filled" : "history"} size={17} />
+              </button>
+            ) : null}
+          </ActionSlot>
           <button
             ref={moreButtonRef}
             type="button"
             data-chrome-popover-trigger
-            className="icon-btn"
+            className={popoverKind === "more" ? "icon-btn is-popover-claim" : "icon-btn"}
             title={tr("browser.more")}
             aria-label={tr("browser.more")}
             aria-haspopup="menu"
@@ -378,12 +486,15 @@ export default function BrowserChrome({
   );
 }
 
+export default React.memo(BrowserChrome);
+
 const styles: Record<string, React.CSSProperties> = {
   topBar: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     padding: "0 10px",
+    position: "relative",
     // 抬高一档的「工具条底」：与右侧会话栏同色，地址栏作为更暗的胶囊嵌在上面（参考 Tabbit）。
     background: BRAND.inkRaised,
     flexShrink: 0,
@@ -455,4 +566,36 @@ const styles: Record<string, React.CSSProperties> = {
   starWrap: { position: "relative", display: "inline-flex", alignItems: "center", flex: "none" },
   omniboxStar: { width: 24, height: 24, flex: "none" },
   topActions: { display: "flex", gap: 2, flexShrink: 0, marginLeft: "auto" },
+  downloadsButton: { position: "relative" },
+  /** 下载中角标：小圆点 + 呼吸动画（进度百分比在 title 与浮层里）。 */
+  downloadDot: {
+    position: "absolute",
+    right: 4,
+    bottom: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    background: "var(--ls-accent, #c8763c)",
+    boxShadow: "0 0 0 2px rgba(200,118,60,0.25)",
+    animation: "loopsoar-download-pulse 1.1s ease-in-out infinite",
+  },
+  /** 加载进度条：页面视图在导航期间保持可见，加载反馈只能放在工具条上（不遮网页）。 */
+  loadingBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 2,
+    overflow: "hidden",
+    pointerEvents: "none",
+    background: "rgba(200,118,60,0.16)",
+  },
+  loadingBarFill: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: "38%",
+    background: "var(--ls-accent, #c8763c)",
+    animation: "loopsIndeterminate 1.2s cubic-bezier(0.4,0,0.2,1) infinite",
+  },
 };

@@ -73,6 +73,18 @@ export interface DownloadsPanelProps {
   onRefresh: () => void;
 }
 
+/** 下载状态文案：文件被删除 > 异常原因 > 基础状态。 */
+function downloadStatusText(item: DownloadItem, tr: (key: string, vars?: Record<string, string | number>) => string): string {
+  if (item.missing) return tr("chromePage.downloads.deleted");
+  if (item.reason === "cancelled") return tr("chromePage.downloads.cancelledByUser");
+  if (item.reason === "permission") return tr("chromePage.downloads.permission");
+  if (item.reason === "app-closed") return tr("chromePage.downloads.appClosed");
+  if (item.reason === "stale") return tr("chromePage.downloads.stale");
+  if (item.state === "interrupted") return tr("chromePage.downloads.failedReason");
+  if (item.state === "cancelled") return tr("browser.downloadCancelled");
+  return tr("browser.downloadCompleted");
+}
+
 /** 下载列表：进行中可取消，完成后可打开/定位，记录可移除。 */
 export function DownloadsPanel({ downloads, api, onRefresh }: DownloadsPanelProps): React.JSX.Element {
   const tr = useT();
@@ -85,31 +97,42 @@ export function DownloadsPanel({ downloads, api, onRefresh }: DownloadsPanelProp
         downloads.map((d) => (
           <div key={d.id} style={styles.dlRow}>
             <div style={styles.dlMeta}>
-              <span style={styles.dlName} title={d.savePath}>{d.filename}</span>
+              <span style={d.missing ? { ...styles.dlName, textDecoration: "line-through", opacity: 0.55 } : styles.dlName} title={d.savePath}>{d.filename}</span>
               <span style={styles.dlState}>
-                {d.state === "completed"
-                  ? tr("browser.downloadCompleted")
+                {d.queued
+                  ? tr("browser.downloadQueued")
                   : d.state === "progressing"
                     ? `${Math.round((d.received / Math.max(1, d.total)) * 100)}%`
-                    : d.state === "cancelled"
-                      ? tr("browser.downloadCancelled")
-                      : tr("browser.downloadFailed")}
+                    : d.state === "completed" && !d.missing
+                      ? (
+                        <button type="button" className="chrome-pop-open-link" onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" }).catch(() => undefined)}>
+                          {tr("chromePage.downloads.openFile")}
+                        </button>
+                      )
+                      : downloadStatusText(d, tr)}
               </span>
             </div>
             <div style={styles.dlActions}>
+              {d.state === "progressing" && d.queued ? (
+                <button type="button" className="icon-btn" title={tr("browser.downloadStart")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "start" }).then(() => onRefresh())}>
+                  <Icon name="play" size={12} />
+                </button>
+              ) : null}
               {d.state === "progressing" ? (
                 <button type="button" className="icon-btn" title={tr("browser.downloadCancel")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "cancel" })}>
                   <Icon name="close" size={12} />
                 </button>
               ) : null}
-              {d.state === "completed" ? (
-                <button type="button" className="icon-btn" title={tr("browser.downloadOpen")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "open" })}>
-                  <Icon name="arrow-go" size={12} />
+              {d.state === "interrupted" || d.state === "cancelled" ? (
+                <button type="button" className="icon-btn" title={tr("chromePage.downloads.retry")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "retry" }).then(() => onRefresh()).catch(() => undefined)}>
+                  <Icon name="refresh" size={12} />
                 </button>
               ) : null}
-              <button type="button" className="icon-btn" title={tr("browser.downloadShowInFolder")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
-                <Icon name="folder" size={12} />
-              </button>
+              {d.state === "completed" && !d.missing ? (
+                <button type="button" className="icon-btn" title={tr("browser.downloadShowInFolder")} onClick={() => void api?.browser.downloadAction({ id: d.id, action: "showInFolder" })}>
+                  <Icon name="folder" size={12} />
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="icon-btn"

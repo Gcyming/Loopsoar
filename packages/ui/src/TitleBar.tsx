@@ -86,6 +86,7 @@ export default function TitleBar({ maximized, variant = "main", tabs, tabsLeadin
       <div style={{ ...styles.windowControls, ...NO_DRAG_REGION }}>
         <button
           type="button"
+          data-window-control="minimize"
           aria-label={isAgent ? tr("titlebar.minimizeAgent") : tr("titlebar.minimize")}
           title={isAgent ? tr("titlebar.minimizeAgent") : tr("titlebar.minimize")}
           className="win-btn"

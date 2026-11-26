@@ -20,6 +20,7 @@ export interface AppTitleBarProps {
   onCloseWorkspace: () => void;
   onOpenTask: (sessionId: string) => void;
   onSelectTab: (tabId: string) => void;
+  onMoveTab: (tabId: string, targetTabId: string, after: boolean) => void;
   onCloseTab: (tabId: string) => void;
   onTabAction: (action: TabMenuAction, tabId: string) => void;
   onOpenTabMenu: (tabId: string, anchor: { x: number; y: number; width: number; height: number }) => void;
@@ -30,7 +31,7 @@ export interface AppTitleBarProps {
  * 顶部标题栏装配：窗口形态 + 工作区入口 + 标签条/Agent 任务条。
  * 纯展示组件；标签与会话状态仍由 App 持有。
  */
-export default function AppTitleBar({
+function AppTitleBar({
   maximized,
   miniWindow,
   workspaces,
@@ -44,11 +45,16 @@ export default function AppTitleBar({
   onCloseWorkspace,
   onOpenTask,
   onSelectTab,
+  onMoveTab,
   onCloseTab,
   onTabAction,
   onOpenTabMenu,
   onNewTab,
 }: AppTitleBarProps) {
+  const toggleWorkspace = React.useCallback((): void => {
+    dismissAllPopovers();
+    onToggleWorkspace();
+  }, [onToggleWorkspace]);
   return (
     <TitleBar
       maximized={maximized}
@@ -63,16 +69,13 @@ export default function AppTitleBar({
               <BrowserTabs
                 tabs={userTabs}
                 boundTabs={boundTabs}
-                onToggleWorkspace={() => {
-                  // 独立浮层：网页保持原样（不隐藏、不被挤），浮层天然压在网页之上。
-                  dismissAllPopovers();
-                  onToggleWorkspace();
-                }}
+                onToggleWorkspace={toggleWorkspace}
                 onCloseWorkspace={onCloseWorkspace}
                 agentTasks={agentTasks}
                 currentSessionId={browserVisibleSession ?? currentSession}
                 onOpenTask={onOpenTask}
                 onSelectTab={onSelectTab}
+                onMoveTab={onMoveTab}
                 onCloseTab={onCloseTab}
                 onTabAction={onTabAction}
                 onOpenTabMenu={onOpenTabMenu}
@@ -83,3 +86,5 @@ export default function AppTitleBar({
     />
   );
 }
+
+export default React.memo(AppTitleBar);

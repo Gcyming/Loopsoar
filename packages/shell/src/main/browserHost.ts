@@ -17,6 +17,9 @@ import { computeBrowserViewBounds,
 import { normalizeNavigateUrl } from "loopsoar-contracts/navigation";
 import { pathToFileURL } from "node:url";
 import { officeDocumentTitle, officeFileFromUrl } from "./officePreview.js";
+import { closeBlankDownloadTab, type DownloadSourceHost } from "./downloadSource.js";
+import { activateTab, activeAfterClose } from "./tabActivation.js";
+import { moveTabRelative } from "./tabOrder.js";
 import {
   createWebContentsViewAdapter,
   type WebContentsViewLike,
@@ -30,6 +33,7 @@ import type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browse
 import { AgentInputDriver } from "./agentInput.js";
 import { BrowserViewLayout, type LayoutGroup } from "./browserViewLayout.js";
 import { mergeRecent, toTabStates } from "./browserTabView.js";
+import { downloadCompatibleReferer, refererForNavigation } from "./browserNavigationSupport.js";
 export type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browserHostTypes.js";
 
 /**
@@ -38,12 +42,10 @@ export type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browse
  * 有上限才能保证挂死的页面不会把每次 emitTabs 都变成一次无意义的 executeJavaScript。
  */
 const USER_LOCK_MAX_ATTEMPTS = 3;
-
 /** 全局用户标签组（不属于任何会话）：网页 ＜ 会话 的解耦锚点。 */
 export const USER_TABS_SESSION = "__user_tabs__";
 
 export type { PersistedBrowserState, PersistedBrowserTab } from "./browserSessionState.js";
-
 interface TabEntry {
   view: HostView;
   adapter: BrowserAdapter;
@@ -59,7 +61,7 @@ interface TabEntry {
    * 窗口会返回 false（旧实现静默 no-op）→ applyLayout 发现未挂载时补挂，页面才会真正显示。
    */
   attached: boolean;
-  /** 页面正在加载（主框架）：为 true 时隐藏原生视图，由 DOM 加载页接管。 */
+  /** 页面正在加载（主框架）：只用于标签加载条/UI 状态，**不再隐藏原生视图**。 */
   loading: boolean;
   /** 最近一次 setVisible 的值：动画帧里避免对同一视图重复调用 setVisible。 */
   lastVisible?: boolean;
@@ -73,6 +75,8 @@ interface TabEntry {
   favicon?: string;
   /** 由 Agent 打开或导航过（UI 据此折叠进「Agent 工作区」标签组；用户导航不撤销）。 */
   agentBound: boolean;
+  /** 打开它的来源标签（页面内链接/window.open）：关闭时优先回到它。 */
+  openerId?: string;
   /** 页面是否在出声 / 是否被静音（音频事件同步；只影响展示与静音按钮）。 */
   audible?: boolean;
   muted?: boolean;
@@ -87,10 +91,10 @@ interface TabEntry {
 interface SessionGroup {
   tabs: Map<string, TabEntry>;
   activeId: string | null;
+  previousActiveId: string | null;
 }
 
 export type NavigateOutcome = { ok: true; url: string; tabId: string } | { ok: false; error: string };
-
 export class BrowserHost {
   private groups = new Map<string, SessionGroup>();
   /** 控制台/网络旁路观测：不参与标签生命周期，只保留最近 N 条。 */
@@ -130,16 +134,14 @@ export class BrowserHost {
     // 初始仍显示当前会话（启动恢复测试与旧行为兼容）；index 启动时会显式 showUserTabs()。
     this.visibleSession = this.activeSession;
   }
-
   private ensureGroup(sessionId: string): SessionGroup {
     let group = this.groups.get(sessionId);
     if (!group) {
-      group = { tabs: new Map(), activeId: null };
+      group = { tabs: new Map(), activeId: null, previousActiveId: null };
       this.groups.set(sessionId, group);
     }
     return group;
   }
-
   private group(sessionId?: string): SessionGroup {
     return this.ensureGroup(sessionId ?? this.activeSession);
   }
@@ -171,7 +173,6 @@ export class BrowserHost {
   private tryAttach(view: HostView): boolean {
     return this.deps.attachView(view) !== false;
   }
-
   private createTab(sessionId: string): TabEntry {
     const view = this.deps.createView(sessionId);
     const attached = this.tryAttach(view);
@@ -181,6 +182,7 @@ export class BrowserHost {
     // 网页内点击/重定向/SPA 路由：同步地址、标题与历史栈，让地址栏与网页始终一致。
     const adapter = createWebContentsViewAdapter({
       view,
+      ...(this.deps.onShortcut ? { onShortcut: this.deps.onShortcut } : {}),
       onDevToolsRequest: (): void => {
         this.toggleDevTools(id, sessionId);
       },
@@ -227,6 +229,9 @@ export class BrowserHost {
         // 新文档开始加载：上一份文档里的接管锁浮层已随文档销毁，注入状态清零，
         // 加载完成后由 emitTabs 重新盖上（否则锁只在首个页面生效，一导航就失效）。
         this.resetUserLockTracking(sessionId, id, entry);
+        // 不隐藏原生视图：让 Chromium 继续画旧页面，直到新页面可绘制。
+        // 首次加载（entry.url 还是空）也要把视图亮出来（白底），避免露出 DOM 深色加载页。
+        this.applyLayout();
         this.emitTabs(sessionId);
       },
       onLoadEnd: (): void => {
@@ -240,6 +245,8 @@ export class BrowserHost {
         if (!entry) return;
         entry.loading = false;
         entry.loadFailure = failure;
+        // 失败时收起原生视图，让 DOM 错误页露出来（视图只能显示 Chromium 默认错误页）。
+        this.applyLayout();
         // 失败也把地址栏落到「尝试访问的 URL」：用户能看到自己打错/失败的地址，
         // 且地址栏由此恢复为无功能放大镜（不再显示可切换的搜索引擎图标）。
         if (failure.url && entry.url !== failure.url) entry.url = failure.url;
@@ -293,11 +300,10 @@ export class BrowserHost {
     const group = this.group(sessionId);
     group.tabs.set(id, entry);
     // 新标签必须立即成为该会话的活动标签
-    group.activeId = id;
+    activateTab(group, id);
     this.observability.attach(sessionId, id, view.webContents);
     return entry;
   }
-
   private activeEntry(sessionId?: string): TabEntry | null {
     const group = this.group(sessionId);
     return group.activeId ? group.tabs.get(group.activeId) ?? null : null;
@@ -409,7 +415,6 @@ export class BrowserHost {
       this.tryAttach(view as unknown as HostView),
     );
   }
-
 
   /**
    * 把「某个标签的当前文档该不该有接管锁」的记账清掉。
@@ -653,9 +658,10 @@ export class BrowserHost {
     tabId?: string,
     sessionId?: string,
     origin: "agent" | "user" = "user",
+    referer?: string,
   ): Promise<NavigateOutcome> {
     // 导航是明确的「我要看这个页面」：把切会话时收起的网页重新展开。
-    return this.navigateRecorded(rawUrl, tabId, true, sessionId, origin);
+    return this.navigateRecorded(rawUrl, tabId, true, sessionId, origin, referer);
   }
 
   private async navigateRecorded(
@@ -664,6 +670,7 @@ export class BrowserHost {
     record = true,
     sessionId?: string,
     origin: "agent" | "user" = "user",
+    referer?: string,
   ): Promise<NavigateOutcome> {
     const normalized = normalizeNavigateUrl(rawUrl);
     if (!normalized.ok) return { ok: false, error: normalized.reason };
@@ -675,14 +682,18 @@ export class BrowserHost {
       this.createTab(sid);
       id = group.activeId!;
     }
-    group.activeId = id;
+    activateTab(group, id);
     const entry = group.tabs.get(id)!;
     // Agent 导航过的标签永久属于 Agent 工作区：用户之后在同一标签点链接/输入地址也不撤销绑定，
     // 否则「Agent 打开的页面」会因为用户碰了一下就从折叠组里掉出去。
     if (origin === "agent") entry.agentBound = true;
     entry.navigating = true;
+    // Agent 用 browser_navigate 直接打开从页面里读到的链接时，Chromium 的程序化导航默认不带
+    // Referer；不少下载站/防盗链（如 CLisk）会因此返回 403。这里补上「用户点击链接」等价的
+    // Referer（同源给完整路径，跨源只给 origin，符合默认 referrer policy）。
+    const effectiveReferer = referer ?? downloadCompatibleReferer(normalized.url) ?? (origin === "agent" ? refererForNavigation(entry.url, normalized.url) : undefined);
     try {
-      const result = await entry.adapter.navigate(normalized.url);
+      const result = await entry.adapter.navigate(normalized.url, effectiveReferer);
       entry.url = result.url;
       if (record) {
         const current = entry.index >= 0 ? entry.history[entry.index] : undefined;
@@ -703,6 +714,19 @@ export class BrowserHost {
       this.emitTabs(sid);
       return { ok: true, url: result.url, tabId: id };
     } catch (err) {
+      // 导航失败也要入历史（与 Chrome 一致：错误页也是历史里的一条）。
+      // 旧实现失败后不动 history，而 onLoadFailure 又把 entry.url 改成失败 URL →
+      // canBack 仍为假：错误页上的「返回」消失，用户被困在错误页。
+      if (record) {
+        const failedUrl = normalized.url;
+        const current = entry.index >= 0 ? entry.history[entry.index] : undefined;
+        if (current !== failedUrl) {
+          entry.history = entry.history.slice(0, entry.index + 1);
+          entry.history.push(failedUrl);
+          entry.index = entry.history.length - 1;
+        }
+      }
+      this.emitTabs(sid);
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {
       entry.navigating = false;
@@ -744,7 +768,7 @@ export class BrowserHost {
       entry = existing;
       id = options.tabId;
       if (entry.localPreview) this.deps.onLocalPreview?.(Number(entry.view.webContents.id ?? -1), entry.url, false);
-      group.activeId = id;
+      activateTab(group, id);
     } else {
       entry = this.createTab(sid);
       id = group.activeId!;
@@ -782,6 +806,9 @@ export class BrowserHost {
       entry.navigating = false;
     }
   }
+  handleDownloadSource(webContentsId: number): void {
+    closeBlankDownloadTab(this as unknown as DownloadSourceHost, webContentsId);
+  }
 
   /**
    * 请求守卫/导航拦截的统一入口：找到发起 file:// 的浏览器标签，交给壳层打开预览。
@@ -792,7 +819,6 @@ export class BrowserHost {
     const file = officeFileFromUrl(rawUrl);
     return file ? this.handleLocalFilePath(webContentsId, file) : false;
   }
-
   /** 浏览器页 preload 直接送来的本地路径：校验扩展名/归属后打开预览。 */
   handleLocalFilePath(webContentsId: number, file: string): boolean {
     let normalized: string | null = null;
@@ -831,7 +857,7 @@ export class BrowserHost {
     rawUrl?: string,
     sessionId?: string,
     origin: "agent" | "user" = "user",
-    options: { afterTabId?: string; forceNew?: boolean; pinned?: boolean } = {},
+    options: { afterTabId?: string; forceNew?: boolean; pinned?: boolean; referer?: string; openerId?: string } = {},
   ): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
     const sid = sessionId ?? this.activeSession;
     const group = this.group(sid);
@@ -841,15 +867,17 @@ export class BrowserHost {
         for (const [id, tab] of group.tabs) {
           if (tab.url === normalized.url) {
             if (origin === "agent") tab.agentBound = true;
-            group.activeId = id;
+            activateTab(group, id);
             this.emitTabs(sid);
             return { tabId: id, ok: true, url: tab.url };
           }
         }
       }
     }
+    const openerId = options.openerId;
     const entry = this.createTab(sid);
     const id = group.activeId!;
+    if (openerId && openerId !== id) entry.openerId = openerId;
     if (origin === "agent") entry.agentBound = true;
     if (options.pinned) entry.pinned = true;
     if (options.afterTabId && group.tabs.has(options.afterTabId) && !entry.pinned) {
@@ -859,23 +887,14 @@ export class BrowserHost {
     }
     this.emitTabs(sid);
     if (!rawUrl) return { tabId: id, ok: true };
-    const outcome = await this.navigate(rawUrl, id, sid, origin);
+    const outcome = await this.navigate(rawUrl, id, sid, origin, options.referer);
     if (!outcome.ok) return { tabId: id, ok: false, error: outcome.error };
     return { tabId: id, ok: true, url: outcome.url };
   }
 
   /** 新标签插到指定标签右侧（Chrome「在右侧新建标签页」）；固定标签永远在最左。 */
   private moveTabAfter(sessionId: string, tabId: string, afterTabId: string): void {
-    const group = this.group(sessionId);
-    const entry = group.tabs.get(tabId);
-    if (!entry) return;
-    const entries = [...group.tabs.entries()];
-    const without = entries.filter(([id]) => id !== tabId);
-    const anchor = without.findIndex(([id]) => id === afterTabId);
-    if (anchor < 0) return;
-    without.splice(anchor + 1, 0, [tabId, entry]);
-    group.tabs.clear();
-    for (const [id, value] of without) group.tabs.set(id, value);
+    moveTabRelative(this.group(sessionId).tabs, tabId, afterTabId, true);
   }
 
   /** 固定标签必须排在普通标签之前；Map 保持插入顺序，重排即可持久化视觉顺序。 */
@@ -957,13 +976,25 @@ export class BrowserHost {
    * 页面看起来就是“点了没反应”。Agent 的工具调用仍用 newTab(activeSession)，不受影响。
    */
   async newTabInVisibleSession(rawUrl?: string): Promise<{ tabId: string; url?: string; ok: boolean; error?: string }> {
-    return this.newTab(rawUrl, this.visibleSession);
+    // 从网页里点开的链接/下载：带上当前可见页的 Referer（同 window.open 语义）。
+    const active = this.activeEntry(this.visibleSession);
+    const referer = rawUrl ? (downloadCompatibleReferer(rawUrl) ?? (active?.url ? refererForNavigation(active.url, rawUrl) : undefined)) : undefined;
+    const openerId = active?.url ? this.group(this.visibleSession).activeId ?? undefined : undefined;
+    return this.newTab(rawUrl, this.visibleSession, "user", { ...(referer ? { referer } : {}), ...(openerId ? { openerId } : {}) });
   }
-
   selectTab(tabId: string, sessionId?: string): boolean {
     const group = this.group(sessionId);
     if (!group.tabs.has(tabId)) return false;
-    group.activeId = tabId;
+    activateTab(group, tabId);
+    this.emitTabs(sessionId ?? this.activeSession);
+    return true;
+  }
+
+  /** 拖拽重排：把 tabId 移到 targetTabId 之前/之后；固定标签仍排最前。 */
+  moveTab(tabId: string, targetTabId: string, after: boolean, sessionId?: string): boolean {
+    const group = this.group(sessionId);
+    if (!moveTabRelative(group.tabs, tabId, targetTabId, after)) return false;
+    this.applyTabOrder(group);
     this.emitTabs(sessionId ?? this.activeSession);
     return true;
   }
@@ -987,7 +1018,6 @@ export class BrowserHost {
     }
     return false;
   }
-
   async closeTab(tabId: string, sessionId?: string): Promise<boolean> {
     const group = this.group(sessionId);
     const entry = group.tabs.get(tabId);
@@ -1013,7 +1043,7 @@ export class BrowserHost {
       this.deps.detachView(entry.view);
     }
     if (group.activeId === tabId) {
-      group.activeId = group.tabs.keys().next().value ?? null;
+      group.activeId = activeAfterClose(group, tabId, entry.openerId);
     }
     // 关页即释放该标签的接管锁重试计数，否则 Map 随标签数单调增长（closeSessionTabs 才按会话清）。
     this.lockAttempts.delete(`${sid}::${tabId}`);
@@ -1131,7 +1161,6 @@ export class BrowserHost {
   async agentKey(sessionId: string | undefined, tabId: string | undefined, key: string): Promise<boolean> {
     return this.input.pressKey(sessionId, tabId, key);
   }
-
 
   /**
    * 快照：缺省取活动标签；返回值带上 tabId。
@@ -1294,13 +1323,10 @@ export class BrowserHost {
     return this.listTabs(sid);
   }
 
-  /** 主题外壳色：同步给四角遮罩与所有网页视图的切角背景。 */
+  /** 主题外壳色：只同步给四角遮罩窗口，绝不改网页视图背景（页面透明时深色会透成黑底，视图保持创建时的白）。 */
   setCornerColor(color: string): void {
     if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
     this.deps.onCornerColor?.(color);
-    for (const group of this.groups.values()) {
-      for (const entry of group.tabs.values()) entry.view.setBackgroundColor?.(color);
-    }
   }
 
   /** 启动恢复全局用户标签（不属于任何会话）。 */
@@ -1316,6 +1342,7 @@ export class BrowserHost {
     if (!safe) return;
     const group = this.ensureGroup(sessionId);
     const ids: string[] = [];
+    const pending: { entry: TabEntry; url: string }[] = [];
     for (const tab of safe.tabs) {
       const entry = this.createTab(sessionId);
       const id = group.activeId!;
@@ -1325,25 +1352,23 @@ export class BrowserHost {
       entry.agentBound = tab.agentBound === true;
       entry.pinned = tab.pinned === true;
       entry.history = Array.isArray(tab.history) && tab.history.length > 0 ? tab.history.slice() : [tab.url];
-      entry.index =
-        typeof tab.index === "number" ? Math.max(0, Math.min(tab.index, entry.history.length - 1)) : entry.history.length - 1;
+      entry.index = typeof tab.index === "number" ? Math.max(0, Math.min(tab.index, entry.history.length - 1)) : entry.history.length - 1;
       entry.navigating = true;
+      pending.push({ entry, url: tab.url });
+    }
+    // 并行导航：启动恢复不再一页一页串行等待（配合启动面板，恢复期用户看不到闪烁）。
+    await Promise.all(pending.map(async ({ entry, url }) => {
       try {
-        const result = await entry.adapter.navigate(tab.url);
+        const result = await entry.adapter.navigate(url);
         entry.url = result.url;
       } catch (err) {
-        // 加载失败也要把 URL 留在标签里（视图显示 Chromium 错误页，用户能看到失败而不是白屏；
-        // 地址栏/刷新也能针对该 URL 重试）。旧行为是留空白标签 + 静默，重启后页面像是「丢了」。
-        entry.url = tab.url;
-        console.warn(
-          "[browser] 恢复页面失败，保留 URL 供刷新重试",
-          tab.url,
-          err instanceof Error ? err.message : String(err),
-        );
+        // 加载失败也要把 URL 留在标签里（视图显示 Chromium 错误页，地址栏/刷新也能重试），不能留空白标签 + 静默。
+        entry.url = url;
+        console.warn("[browser] 恢复页面失败，保留 URL 供刷新重试", url, err instanceof Error ? err.message : String(err));
       } finally {
         entry.navigating = false;
       }
-    }
+    }));
     const active = ids[Math.max(0, Math.min(safe.activeIndex, ids.length - 1))];
     if (active) group.activeId = active;
     this.applyTabOrder(group);

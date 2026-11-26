@@ -71,6 +71,11 @@ export interface BrowserHostDeps {
   isDevToolsPanelOpen?: () => boolean;
   /** 网页请求新窗口时由宿主转为新标签。 */
   openInNewTab?: (url: string) => void;
+  /**
+   * 网页焦点下的浏览器快捷键（Ctrl+T/W/R/M、Ctrl+Shift+T/K）：
+   * WebContentsView 有独立焦点，主窗口收不到 keydown；宿主把动作转给壳层再推渲染层执行。
+   */
+  onShortcut?: (action: string) => void;
   /** 初始会话（默认 default）。 */
   initialSessionId?: string;
 }

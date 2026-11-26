@@ -400,11 +400,14 @@ describe("createChromePopoverManager：窗口创建与生命周期", () => {
     harness.manager.dispose();
   });
 
-  it("同一时刻只保留一个浮层：再次 open 会关闭旧窗口", () => {
+  it("同一时刻只显示一个浮层：换 kind 时旧窗口保留到新窗口 ready 再关", () => {
     const harness = makeHarness();
     const first = openReady(harness);
     const second = harness.manager.open({ kind: "bookmarks", anchor: ANCHOR });
     expect(second.ok).toBe(true);
+    expect(first.closed).toBe(false);
+    harness.created[1].emit("ready-to-show");
+    expect(first.visible).toBe(false);
     expect(first.closed).toBe(true);
     expect(harness.created).toHaveLength(2);
     expect(harness.created[1].closed).toBe(false);
@@ -417,7 +420,7 @@ describe("createChromePopoverManager：窗口创建与生命周期", () => {
       const harness = makeHarness();
       const win = openReady(harness);
       harness.main.emit(event);
-      expect(win.closed, event).toBe(true);
+      expect(win.visible, event).toBe(false);
       expect(harness.manager.isOpen(), event).toBe(false);
       expect(harness.main.listenerCount(event), event).toBe(0);
       harness.manager.dispose();
@@ -428,7 +431,7 @@ describe("createChromePopoverManager：窗口创建与生命周期", () => {
     const harness = makeHarness();
     const win = openReady(harness);
     win.emit("blur");
-    expect(win.closed).toBe(true);
+    expect(win.visible).toBe(false);
     expect(harness.manager.isOpen()).toBe(false);
     harness.manager.dispose();
   });
@@ -437,7 +440,7 @@ describe("createChromePopoverManager：窗口创建与生命周期", () => {
     const harness = makeHarness();
     const win = openReady(harness);
     win.emitWebContents("before-input-event", { type: "keyDown" }, { key: "Escape" });
-    expect(win.closed).toBe(true);
+    expect(win.visible).toBe(false);
     harness.manager.dispose();
   });
 
@@ -454,7 +457,7 @@ describe("createChromePopoverManager：窗口创建与生命周期", () => {
     const win = openReady(harness);
     harness.manager.handleAction({ action: "openSettings", payload: { a: 1 } });
     expect(harness.actions).toEqual([{ action: "openSettings", payload: { a: 1 } }]);
-    expect(win.closed).toBe(true);
+    expect(win.visible).toBe(false);
     harness.manager.dispose();
   });
 
@@ -533,7 +536,7 @@ describe("createChromePopoverManager：hover 自动关闭（120ms 轮询）", ()
     const win = openReady(harness);
     harness.screen.cursor = { x: 0, y: 0 };
     harness.timers.tick();
-    expect(win.closed).toBe(true);
+    expect(win.visible).toBe(false);
     expect(harness.timers.active).toBe(false);
     harness.manager.dispose();
   });
@@ -708,7 +711,7 @@ describe("registerChromePopoverDomain：IPC 入口", () => {
 });
 
 describe("createChromePopoverManager：onClosed 状态同步（点击收起不闪烁）", () => {
-  it("浮层关闭（close/失焦/动作/切 kind）时回调 onClosed；没有浮层时不回调", () => {
+  it("浮层真正关闭（close/失焦/动作）时回调 onClosed；切 kind 不回调（新浮层仍开着）", () => {
     let closedCount = 0;
     const harness = makeHarness({ onClosed: () => { closedCount += 1; } });
     harness.manager.close(); // 没有浮层 → 不回调
@@ -716,14 +719,18 @@ describe("createChromePopoverManager：onClosed 状态同步（点击收起不�
     openReady(harness);
     harness.manager.close();
     expect(closedCount).toBe(1);
-    // 切 kind：先关旧（+1）再开新；新窗口还没 ready，不算关闭
+    // 切 kind：旧浮层保留到新窗口 ready（这时才 +1）
     openReady(harness);
-    const second = openReady(harness);
+    const switchResult = harness.manager.open({ kind: "history", anchor: ANCHOR });
+    expect(switchResult.ok).toBe(true);
+    expect(closedCount).toBe(1);
+    const second = harness.created[harness.created.length - 1];
+    second.emit("ready-to-show");
     expect(second.closed).toBe(false);
-    expect(closedCount).toBe(2);
+    expect(closedCount).toBe(1); // 切 kind 不回调：新浮层仍打开
     second.emit("blur");
-    expect(closedCount).toBe(3);
+    expect(closedCount).toBe(2);
     harness.manager.dispose();
-    expect(closedCount).toBe(3); // dispose 时已无浮层
+    expect(closedCount).toBe(2); // dispose 时已无浮层
   });
 });

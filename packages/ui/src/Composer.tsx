@@ -107,7 +107,7 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-export default function Composer({
+function Composer({
   value,
   onChange,
   onSend,
@@ -293,11 +293,15 @@ export default function Composer({
       if (file) files.push(file);
     }
     if (files.length === 0) return;
+    // 剪贴板可能同时带文字与图片（从网页/文档复制图文）：两者都要保留。
+    // 旧实现 preventDefault 后只保存图片，文字被静默丢掉。
+    const text = event.clipboardData?.getData("text/plain") ?? "";
     event.preventDefault();
+    if (text.trim()) insertText(text);
     void savePastedImages(files);
   };
 
-  /** @ / Ctrl+U：用主进程文件选择框取路径，插入为附件引用。 */
+  /** Ctrl+U：用主进程文件选择框取路径，插入为附件引用（@ 不再作为快捷键，避免打不出字）。 */
   const pickFileReference = async (): Promise<void> => {
     if (!api?.dialog?.pickPath) {
       notify(tr("composer.fileUnavailable"));
@@ -345,7 +349,9 @@ export default function Composer({
   };
 
   const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.nativeEvent.isComposing) return;
+    // 中文输入法：isComposing 覆盖绝大多数情况；部分 IME（微软拼音）在「回车选词」时会补发
+    // 一次 isComposing=false 的 Enter keydown，keyCode 229 是这类合成键的通用判据。
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     const key = event.key;
 
     if (commandOpen) {
@@ -386,11 +392,8 @@ export default function Composer({
       }
     }
 
-    if (key === "@" && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault();
-      void pickFileReference();
-      return;
-    }
+    // 注意：不要把可打印字符 @ 注册成快捷键——那会让邮箱/提及/命令行参数全部打不出来
+    // （用户可感知：按 @ 就弹系统文件框，取消后 @ 也没上屏）。取文件只保留 Ctrl+U 与「+」菜单。
     if ((key === "u" || key === "U") && (event.ctrlKey || event.metaKey) && !event.altKey) {
       event.preventDefault();
       void pickFileReference();
@@ -917,6 +920,17 @@ export default function Composer({
     </div>
   );
 }
+
+/** 只比较非函数 props：输入/运行态/模型等变化才重渲染，流式 token 不再带着 1200 行输入区一起跑。 */
+function composerPropsEqual(prev: ComposerProps, next: ComposerProps): boolean {
+  for (const key of Object.keys(prev) as (keyof ComposerProps)[]) {
+    if (typeof prev[key] === "function") continue;
+    if (prev[key] !== next[key]) return false;
+  }
+  return true;
+}
+
+export default React.memo(Composer, composerPropsEqual);
 
 const styles: Record<string, React.CSSProperties> = {
   // 只让「输入框本身」是一个独立色块：外层保持会话栏底色（raised），

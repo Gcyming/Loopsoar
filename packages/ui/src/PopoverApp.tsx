@@ -19,6 +19,8 @@
  */
 import * as React from "react";
 import { Icon } from "./Icon.js";
+import DownloadIcon from "./DownloadIcon.js";
+import RowContextMenu, { type RowMenuItem } from "./RowContextMenu.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
 import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry, TabState, WorkspaceRecord } from "./types.js";
@@ -61,6 +63,17 @@ function isPopoverKind(value: unknown): value is ChromePopoverKind {
   return typeof value === "string" && POPOVER_KINDS.includes(value as ChromePopoverKind);
 }
 
+/** 下载状态文案：文件被删除 > 异常原因 > 基础状态。 */
+function downloadStatusText(item: DownloadItem, tr: (key: string, vars?: Record<string, string | number>) => string): string {
+  if (item.missing) return tr("chromePage.downloads.deleted");
+  if (item.reason === "cancelled") return tr("chromePage.downloads.cancelledByUser");
+  if (item.reason === "permission") return tr("chromePage.downloads.permission");
+  if (item.reason === "app-closed") return tr("chromePage.downloads.appClosed");
+  if (item.reason === "stale") return tr("chromePage.downloads.stale");
+  if (item.state === "interrupted") return tr("chromePage.downloads.failedReason");
+  return tr(downloadStateKey(item.state));
+}
+
 /** 下载状态文案 key（interrupted = 中断/失败）。 */
 function downloadStateKey(state: DownloadItem["state"]): string {
   if (state === "completed") return "browser.downloadCompleted";
@@ -81,7 +94,69 @@ function formatTime(at: number | undefined, lang: "zh-CN" | "en-US"): string {
   }
 }
 
+/**
+ * 长文本单元格（用户要求）：未悬停整行时单行省略号；悬停且确实溢出时，按阅读顺序
+ * 从右向左循环滚动（读起来是左→右）。只做 transform，不改变布局宽度，所以不会
+ * 出现横向滚动条；上下滚动仍由列表容器负责。
+ */
+function MarqueeText({
+  text,
+  className,
+  title,
+  style,
+}: {
+  text: string;
+  className?: string;
+  title?: string;
+  style?: React.CSSProperties;
+}): React.ReactElement {
+  const ref = React.useRef<HTMLSpanElement | null>(null);
+  const [run, setRun] = React.useState<{ active: boolean; distance: number }>({ active: false, distance: 0 });
+  React.useEffect(() => {
+    const el = ref.current;
+    const row = el?.closest<HTMLElement>(".chrome-pop-item");
+    if (!el || !row) return;
+    const enter = (): void => {
+      const distance = Math.max(0, el.scrollWidth - el.clientWidth);
+      if (distance > 1) setRun({ active: true, distance });
+    };
+    const leave = (): void => setRun((prev) => (prev.active ? { active: false, distance: 0 } : prev));
+    row.addEventListener("mouseenter", enter);
+    row.addEventListener("mouseleave", leave);
+    return () => {
+      row.removeEventListener("mouseenter", enter);
+      row.removeEventListener("mouseleave", leave);
+    };
+  }, [text]);
+  const duration = Math.max(2.6, run.distance / 26);
+  return (
+    <span
+      ref={ref}
+      className={`${className ?? ""} chrome-pop-marquee${run.active ? " is-running" : ""}`}
+      title={title}
+      style={{
+        ...(run.active
+          ? ({
+              "--ls-marquee-distance": `${run.distance}px`,
+              "--ls-marquee-duration": `${duration}s`,
+            } as React.CSSProperties)
+          : undefined),
+        ...style,
+      }}
+    >
+      {run.active ? <span className="chrome-pop-marquee-run">{text}</span> : text}
+    </span>
+  );
+}
+
 export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.ReactElement {
+  // 兜底：浮层窗口不显示启动面板（入口已移除，这里防止未来入口调整后回归）。
+  React.useEffect(() => {
+    document.getElementById("boot-splash")?.remove();
+    // 首帧骨架只负责「点开立即有反馈」：React 挂载后交给真实内容。
+    document.getElementById("popover-skeleton")?.remove();
+    delete document.documentElement.dataset.popoverLoading;
+  }, []);
   const tr = useT();
   const api = useLoopsoarApi();
   // 主进程通过 props 传 kind；也兼容直接读 URL（便于手搓调试）
@@ -102,6 +177,12 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   const [tabMenuTabs, setTabMenuTabs] = React.useState<TabState[] | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
+  const [rowMenu, setRowMenu] = React.useState<
+    | { kind: "download"; x: number; y: number; item: DownloadItem }
+    | { kind: "history"; x: number; y: number; item: HistoryEntry }
+    | { kind: "bookmark"; x: number; y: number; item: BookmarkItem }
+    | null
+  >(null);
 
   /* ------------------------------ 数据拉取 ------------------------------ */
 
@@ -115,43 +196,68 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
     }
   }, [api]);
 
+  /** 下载列表实时刷新：小窗打开期间进度条要跟着动（否则只能重开才更新）。 */
   React.useEffect(() => {
-    let alive = true;
+    if (kind !== "downloads") return;
+    try {
+      return api?.on("browser:downloads", () => {
+        void refreshDownloads();
+      });
+    } catch {
+      return undefined;
+    }
+  }, [api, kind, refreshDownloads]);
+
+  /** 拉取当前浮层数据：首次挂载 + 窗口被复用后重新显示都会调用。 */
+  const loadData = React.useCallback(async (): Promise<void> => {
     setError("");
-    void (async () => {
-      try {
-        if (kind === "bookmarks") {
-          const result = await api?.bookmarks.list();
-          if (alive) setBookmarks(result?.bookmarks ?? []);
-        } else if (kind === "history") {
-          const result = await api?.browser.history({});
-          if (alive) setHistory(result?.entries ?? []);
-        } else if (kind === "downloads") {
-          const result = await api?.browser.downloads();
-          if (alive) setDownloads(result?.downloads ?? []);
-        } else if (kind === "workspace") {
-          // 浮层窗口与主窗口同进程、同一套 preload：listTabs 返回的就是「当前会话」的标签。
-          const result = await api?.browser.listTabs();
-          if (alive) setWorkspaceTabs(result?.tabs ?? []);
-        } else if (kind === "tabmenu") {
-          // 标签右键菜单独立渲染：不隐藏网页、不截图，所以不会造成页面冻结/闪烁。
-          const result = await api?.browser.listTabs();
-          if (alive) setTabMenuTabs(result?.tabs ?? []);
-        } else if (kind === "workspaces") {
-          const result = await api?.workspace.list();
-          if (alive) {
-            setWorkspaces(result?.workspaces ?? []);
-            setActiveWorkspaceId(result?.activeId ?? null);
-          }
-        }
-      } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : String(err));
+    try {
+      if (kind === "bookmarks") {
+        const result = await api?.bookmarks.list();
+        setBookmarks(result?.bookmarks ?? []);
+      } else if (kind === "history") {
+        const result = await api?.browser.history({});
+        setHistory(result?.entries ?? []);
+      } else if (kind === "downloads") {
+        const result = await api?.browser.downloads();
+        setDownloads(result?.downloads ?? []);
+      } else if (kind === "workspace") {
+        // 浮层窗口与主窗口同进程、同一套 preload：listTabs 返回的就是「当前会话」的标签。
+        const result = await api?.browser.listTabs();
+        setWorkspaceTabs(result?.tabs ?? []);
+      } else if (kind === "tabmenu") {
+        // 标签右键菜单独立渲染：不隐藏网页、不截图，所以不会造成页面冻结/闪烁。
+        const result = await api?.browser.listTabs();
+        setTabMenuTabs(result?.tabs ?? []);
+      } else if (kind === "workspaces") {
+        const result = await api?.workspace.list();
+        setWorkspaces(result?.workspaces ?? []);
+        setActiveWorkspaceId(result?.activeId ?? null);
       }
-    })();
-    return () => {
-      alive = false;
-    };
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }, [api, kind]);
+
+  React.useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  // 浮层窗口按 kind 复用（关闭只 hide）：再次显示时从 hidden 变 visible，刷新一次数据，
+  // 避免看到上一次打开时的旧列表/旧进度。
+  React.useEffect(() => {
+    const onVisibility = (): void => {
+      if (document.visibilityState === "visible") void loadData();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    // 隐藏窗口被 show 时 Chromium 不一定派发 visibilitychange（取决于窗口状态），
+    // focus 是更稳的兜底：显示即刷新，点进菜单再刷新一次也无副作用。
+    window.addEventListener("focus", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onVisibility);
+    };
+  }, [loadData]);
 
   /* ------------------------------ 动作协议 ------------------------------ */
 
@@ -180,6 +286,91 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   const openPage = (pageKind: "history" | "downloads" | "bookmarks" | "settings"): void => {
     void dispatch("openPage", { kind: pageKind });
   };
+  /** 更多菜单里的列表项：原地把小浮层切换成对应列表（整页由列表底部「查看更多」进入）。 */
+  const switchTo = (next: ChromePopoverKind): void => {
+    void api?.ui?.popoverAction({ action: "switchPopover", payload: { kind: next } }).catch(() => {});
+  };
+
+  const copyText = (text: string): void => {
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+  };
+
+  const openInNewTab = (url: string): void => {
+    void api?.browser.newTab({ url }).then(() => void api?.ui?.closePopover()).catch(() => undefined);
+  };
+
+  const openInNewWindow = (url: string): void => {
+    const open = api?.ui?.openBrowserWindow;
+    if (typeof open !== "function") {
+      navigate(url);
+      return;
+    }
+    void open({ url }).catch(() => undefined);
+    void api?.ui?.closePopover().catch(() => undefined);
+  };
+
+  const removeHistoryEntry = (entry: HistoryEntry): void => {
+    void api?.browser.historyRemove({ urls: [entry.url] }).then(() => void loadData()).catch(() => undefined);
+  };
+
+  const removeBookmarkEntry = (item: BookmarkItem): void => {
+    void api?.bookmarks.remove({ id: item.id }).then(() => void loadData()).catch(() => undefined);
+  };
+
+  const runDownloadAction = (
+    item: DownloadItem,
+    action: "cancel" | "open" | "showInFolder" | "remove" | "deleteFile" | "start" | "alwaysOpen" | "retry",
+  ): void => {
+    void api?.browser.downloadAction({ id: item.id, action }).then(() => void refreshDownloads()).catch(() => undefined);
+  };
+
+  const menuItems: RowMenuItem[] = (() => {
+    if (!rowMenu) return [];
+    if (rowMenu.kind === "download") {
+      const item = rowMenu.item;
+      const items: RowMenuItem[] = [];
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "open", label: tr("chromePage.downloads.openFile"), icon: "arrow-go", onClick: () => runDownloadAction(item, "open") });
+      }
+      if (item.state === "progressing" && item.queued) {
+        items.push({ id: "start", label: tr("browser.downloadStart"), icon: "play", onClick: () => runDownloadAction(item, "start") });
+      }
+      if (item.state === "progressing") {
+        items.push({ id: "cancel", label: tr("chromePage.downloads.cancel"), icon: "close", onClick: () => runDownloadAction(item, "cancel") });
+      }
+      if (item.state === "interrupted" || item.state === "cancelled") {
+        items.push({ id: "retry", label: tr("chromePage.downloads.retry"), icon: "refresh", onClick: () => runDownloadAction(item, "retry") });
+      }
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "always", label: tr("chromePage.downloads.alwaysOpen"), icon: "check", onClick: () => runDownloadAction(item, "alwaysOpen") });
+      }
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "show", label: tr("chromePage.downloads.showInFolder"), icon: "folder", onClick: () => runDownloadAction(item, "showInFolder") });
+      }
+      items.push({ id: "copy", label: tr("chromePage.downloads.copyLink"), icon: "copy", onClick: () => copyText(item.url) });
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "deleteFile", label: tr("chromePage.downloads.deleteFile"), icon: "delete", danger: true, separatorBefore: true, onClick: () => runDownloadAction(item, "deleteFile") });
+      }
+      items.push({ id: "remove", label: tr("chromePage.downloads.remove"), icon: "delete-record", danger: true, separatorBefore: item.state !== "completed", onClick: () => runDownloadAction(item, "remove") });
+      return items;
+    }
+    if (rowMenu.kind === "history") {
+      const item = rowMenu.item;
+      return [
+        { id: "open", label: tr("chromePage.history.openInNewTab"), icon: "arrow-go", onClick: () => openInNewTab(item.url) },
+        { id: "window", label: tr("chromePage.history.openInNewWindow"), icon: "float", onClick: () => openInNewWindow(item.url) },
+        { id: "copy", label: tr("chromePage.history.copyLink"), icon: "copy", separatorBefore: true, onClick: () => copyText(item.url) },
+        { id: "delete", label: tr("chromePage.history.deleteItem"), icon: "delete", danger: true, separatorBefore: true, onClick: () => removeHistoryEntry(item) },
+      ];
+    }
+    const item = rowMenu.item;
+    return [
+      { id: "open", label: tr("chromePage.bookmarks.openInNewTab"), icon: "arrow-go", onClick: () => openInNewTab(item.url) },
+      { id: "window", label: tr("chromePage.bookmarks.openInNewWindow"), icon: "float", onClick: () => openInNewWindow(item.url) },
+      { id: "copy", label: tr("chromePage.bookmarks.copyLink"), icon: "copy", separatorBefore: true, onClick: () => copyText(item.url) },
+      { id: "delete", label: tr("chromePage.bookmarks.delete"), icon: "delete", danger: true, separatorBefore: true, onClick: () => removeBookmarkEntry(item) },
+    ];
+  })();
 
   /* ------------------------------ 窗口行为 ------------------------------ */
 
@@ -225,7 +416,6 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
     <div className="chrome-pop-footer">
       <button type="button" className="chrome-pop-viewmore" onClick={() => openPage(pageKind)}>
         {tr("browser.popover.viewMore")}
-        <Icon name="arrow-go" size={12} className="chrome-pop-viewmore-icon" />
       </button>
     </div>
   );
@@ -253,7 +443,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
             onClick={() => void dispatch("selectWorkspace", { id: item.id })}
           >
             <Icon name={item.id === activeWorkspaceId ? "check" : "folder"} size={14} className="chrome-pop-icon" />
-            <span className="chrome-pop-label">{item.name}</span>
+            <MarqueeText className="chrome-pop-label" text={item.name} />
           </button>
         ))}
         <div className="chrome-pop-sep" role="separator" />
@@ -291,7 +481,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
                   ) : (
                     <Icon name="globe" size={14} className="chrome-pop-icon" />
                   )}
-                  <span className="chrome-pop-label">{tab.title || tab.url}</span>
+                  <MarqueeText className="chrome-pop-label" text={tab.title || tab.url} title={tab.url || tab.title} />
                 </button>
                 <button
                   type="button"
@@ -310,15 +500,15 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
 
   const renderMore = (): React.ReactElement => (
     <div className="chrome-pop-menu" role="menu" aria-label={tr("browser.more")} onKeyDown={onListKeyDown}>
-      <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => openPage("history")}>
+      <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => switchTo("history")}>
         <Icon name="history" size={14} className="chrome-pop-icon" />
         <span className="chrome-pop-label">{tr("browser.menuHistory")}</span>
       </button>
-      <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => openPage("downloads")}>
+      <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => switchTo("downloads")}>
         <Icon name="download" size={14} className="chrome-pop-icon" />
         <span className="chrome-pop-label">{tr("browser.menuDownloads")}</span>
       </button>
-      <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => openPage("bookmarks")}>
+      <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => switchTo("bookmarks")}>
         <Icon name="star" size={14} className="chrome-pop-icon" />
         <span className="chrome-pop-label">{tr("browser.menuBookmarks")}</span>
       </button>
@@ -351,12 +541,17 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
                 type="button"
                 className="chrome-pop-item chrome-pop-item-two-line"
                 title={item.url}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setRowMenu({ kind: "bookmark", x: event.clientX, y: event.clientY, item });
+                }}
                 onClick={() => navigate(item.url)}
               >
                 <Icon name="star-filled" size={13} className="chrome-pop-icon" />
                 <span className="chrome-pop-main">
-                  <span className="chrome-pop-label">{item.title || item.url}</span>
-                  <span className="chrome-pop-sub">{item.url}</span>
+                  <MarqueeText className="chrome-pop-label" text={item.title || item.url} />
+                  <MarqueeText className="chrome-pop-sub" text={item.url} />
                 </span>
               </button>
             ))}
@@ -384,16 +579,20 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
                 type="button"
                 className="chrome-pop-item chrome-pop-item-two-line"
                 title={entry.url}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setRowMenu({ kind: "history", x: event.clientX, y: event.clientY, item: entry });
+                }}
                 onClick={() => navigate(entry.url)}
               >
                 <Icon name="history" size={13} className="chrome-pop-icon" />
                 <span className="chrome-pop-main">
-                  <span className="chrome-pop-label">{entry.title || entry.url}</span>
-                  <span className="chrome-pop-sub">
-                    {formatTime(entry.visitedAt, lang)}
-                    {entry.visitedAt ? " · " : ""}
-                    {entry.url}
-                  </span>
+                  <MarqueeText className="chrome-pop-label" text={entry.title || entry.url} />
+                  <MarqueeText
+                    className="chrome-pop-sub"
+                    text={`${formatTime(entry.visitedAt, lang)}${entry.visitedAt ? " · " : ""}${entry.url}`}
+                  />
                 </span>
               </button>
             ))}
@@ -418,17 +617,77 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
               {preview.map((item) => {
                 const ratio = item.total > 0 ? Math.min(1, item.received / item.total) : 0;
                 return (
-                  <div key={item.id} className="chrome-pop-item chrome-pop-item-static">
-                    <Icon name="file" size={13} className="chrome-pop-icon" />
+                  <div
+                    key={item.id}
+                    className="chrome-pop-item chrome-pop-item-static"
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setRowMenu({ kind: "download", x: event.clientX, y: event.clientY, item });
+                    }}
+                  >
+                    <span className="chrome-pop-icon"><DownloadIcon url={item.url} filename={item.filename} size={13} /></span>
                     <span className="chrome-pop-main">
-                      <span className="chrome-pop-label" title={item.savePath}>{item.filename}</span>
+                      <MarqueeText
+                        className="chrome-pop-label"
+                        text={item.filename}
+                        title={item.savePath}
+                        style={item.missing ? { textDecoration: "line-through", opacity: 0.55 } : undefined}
+                      />
                       <span className="chrome-pop-sub">
-                        {item.state === "progressing"
-                          ? `${Math.round(ratio * 100)}% · ${tr("browser.popover.downloading")}`
-                          : tr(downloadStateKey(item.state))}
+                        {item.queued
+                          ? tr("browser.downloadQueued")
+                          : item.state === "progressing"
+                            ? `${Math.round(ratio * 100)}% · ${tr("browser.popover.downloading")}`
+                            : item.state === "completed" && !item.missing
+                              ? (
+                                <button type="button" className="chrome-pop-open-link" onClick={() => runDownloadAction(item, "open")}>
+                                  {tr("chromePage.downloads.openFile")}
+                                </button>
+                              )
+                              : downloadStatusText(item, tr)}
                       </span>
+                      {item.state === "progressing" && !item.queued ? (
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            display: "block",
+                            height: 3,
+                            borderRadius: 2,
+                            marginTop: 4,
+                            overflow: "hidden",
+                            background: "rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          <span
+                            style={{
+                              display: "block",
+                              height: "100%",
+                              width: `${Math.round(ratio * 100)}%`,
+                              background: "var(--ls-accent, #c8763c)",
+                              transition: "width 160ms ease",
+                            }}
+                          />
+                        </span>
+                      ) : null}
                     </span>
                     <span className="chrome-pop-actions">
+                      {item.state === "progressing" && item.queued ? (
+                        <button
+                          type="button"
+                          className="chrome-pop-action"
+                          title={tr("browser.downloadStart")}
+                          aria-label={tr("browser.downloadStart")}
+                          onClick={() => {
+                            void api?.browser
+                              .downloadAction({ id: item.id, action: "start" })
+                              .catch(() => {})
+                              .finally(() => void refreshDownloads());
+                          }}
+                        >
+                          <Icon name="play" size={11} />
+                        </button>
+                      ) : null}
                       {item.state === "progressing" ? (
                         <button
                           type="button"
@@ -445,31 +704,29 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
                           <Icon name="close" size={11} />
                         </button>
                       ) : null}
-                      {item.state === "completed" ? (
-                        <>
-                          <button
-                            type="button"
-                            className="chrome-pop-action"
-                            title={tr("browser.downloadOpen")}
-                            aria-label={tr("browser.downloadOpen")}
-                            onClick={() => {
-                              void api?.browser.downloadAction({ id: item.id, action: "open" }).catch(() => {});
-                            }}
-                          >
-                            <Icon name="arrow-go" size={11} />
-                          </button>
-                          <button
-                            type="button"
-                            className="chrome-pop-action"
-                            title={tr("browser.downloadShowInFolder")}
-                            aria-label={tr("browser.downloadShowInFolder")}
-                            onClick={() => {
-                              void api?.browser.downloadAction({ id: item.id, action: "showInFolder" }).catch(() => {});
-                            }}
-                          >
-                            <Icon name="folder" size={11} />
-                          </button>
-                        </>
+                      {item.state === "completed" && !item.missing ? (
+                        <button
+                          type="button"
+                          className="chrome-pop-action"
+                          title={tr("browser.downloadShowInFolder")}
+                          aria-label={tr("browser.downloadShowInFolder")}
+                          onClick={() => {
+                            void api?.browser.downloadAction({ id: item.id, action: "showInFolder" }).catch(() => {});
+                          }}
+                        >
+                          <Icon name="folder" size={11} />
+                        </button>
+                      ) : null}
+                      {item.state === "interrupted" || item.state === "cancelled" ? (
+                        <button
+                          type="button"
+                          className="chrome-pop-action"
+                          title={tr("chromePage.downloads.retry")}
+                          aria-label={tr("chromePage.downloads.retry")}
+                          onClick={() => runDownloadAction(item, "retry")}
+                        >
+                          <Icon name="refresh" size={11} />
+                        </button>
                       ) : null}
                       <button
                         type="button"
@@ -483,7 +740,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
                             .finally(() => void refreshDownloads());
                         }}
                       >
-                        <Icon name="close" size={11} />
+                        <Icon name="delete-record" size={12} />
                       </button>
                     </span>
                   </div>
@@ -530,7 +787,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
           className="chrome-pop-item"
           onClick={() => run(tab.muted ? "unmute" : "mute")}
         >
-          <Icon name={tab.muted ? "volume-2" : "volume-x"} size={16} className="chrome-pop-icon" />
+          <Icon name={tab.muted ? "volume-2" : "volume-x"} size={18} className="chrome-pop-icon" />
           <span className="chrome-pop-label">{tab.muted ? tr("browser.tabMenuUnmute") : tr("browser.tabMenuMute")}</span>
           <span className="chrome-pop-shortcut">Ctrl+M</span>
         </button>
@@ -606,6 +863,7 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
                 ? renderHistory()
                 : renderDownloads()}
       </div>
+      {rowMenu ? <RowContextMenu x={rowMenu.x} y={rowMenu.y} items={menuItems} onClose={() => setRowMenu(null)} /> : null}
     </div>
   );
 }

@@ -109,3 +109,38 @@ describe("会话流元信息", () => {
     expect(b.activeId).toBeNull();
   });
 });
+
+describe("损坏/异常事件防护", () => {
+  it("非字符串增量不抛错、不改变消息", () => {
+    expect(applyChunk([], "a", undefined as unknown as string)).toEqual([]);
+    expect(applyReasoning([], "a", 123 as unknown as string)).toEqual([]);
+    expect(applySteer([], "a", null as unknown as string)).toEqual([]);
+  });
+
+  it("恢复历史时丢弃损坏的 timeline 与非字符串 text", () => {
+    const [message] = restoreMessages(
+      [
+        {
+          role: "assistant",
+          text: 42 as unknown as string,
+          timeline: [{ kind: "think" }, { kind: "tool", id: 1, name: null }, { kind: "bogus" }],
+        },
+      ],
+      () => "m1",
+    );
+    expect(message.text).toBe("");
+    expect(message.timeline).toBeUndefined();
+  });
+
+  it("工具结果是结构化对象时不抛错，并转成文本", () => {
+    const next = applyToolResult(
+      [{ id: "a", role: "assistant", text: "", status: "streaming", timeline: [] }] as ChatMessage[],
+      "a",
+      JSON.stringify({ toolCallId: "t1", toolName: "todo_write", result: { content: { steps: ["a"] } } }),
+      "t2",
+    );
+    const step = next[0].timeline?.find((item) => item.kind === "tool");
+    expect(step).toBeTruthy();
+    expect(typeof (step as { result?: unknown }).result).toBe("string");
+  });
+});

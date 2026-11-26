@@ -57,6 +57,25 @@ export function readImageDataUrl(filePath: string): ImageReadResult {
   }
 }
 
+/**
+ * LLM 多模态附件读取：非视觉模型 / 读取失败都返回可读原因，由 ChatService 转成可见提示。
+ * （旧实现返回 null 静默丢弃，用户以为模型看到了图，实际只发了路径文字。）
+ */
+export function readImageAttachmentForLlm(
+  filePath: string,
+  model: { id: string; vision?: boolean; inputModalities?: string[] } | null | undefined,
+  modelLabel: string,
+): { mime: string; base64: string } | { error: string } {
+  if (model?.vision !== true && !model?.inputModalities?.includes("image")) {
+    return { error: `当前模型（${modelLabel || "未配置"}）不支持图片输入，请切换视觉模型` };
+  }
+  const image = readImageDataUrl(filePath);
+  if (!image.ok || !image.dataUrl) return { error: image.error ?? "图片读取失败" };
+  const comma = image.dataUrl.indexOf(",");
+  if (comma < 0) return { error: "图片编码失败" };
+  return { mime: image.mime ?? "image/png", base64: image.dataUrl.slice(comma + 1) };
+}
+
 /** 扩展名 → 文件头魔数校验（防止把任意 6MB 文件改名成 .png 后回传渲染层）。 */
 function magicMatches(mime: string, b: Buffer): boolean {
   if (b.length < 12) return false;

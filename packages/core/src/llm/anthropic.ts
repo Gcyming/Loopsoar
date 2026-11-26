@@ -208,16 +208,16 @@ export function createAnthropicClient(opts: AnthropicClientOptions): LlmClient {
         if (res.status === 429 || res.status === 529) {
           const retryAfterMs = parseRetryAfterMs(res.headers);
           if (res.status === 429) {
-            // 普通限流：只有「很快就会恢复」才在本次请求内重试；retry-after 很大/缺失 → 立即报错
-            if (retryAfterMs === undefined || retryAfterMs > MAX_RETRY_AFTER_MS) {
-              const waitHint =
-                retryAfterMs !== undefined
-                  ? `上游限流，约 ${humanizeWait(retryAfterMs)} 后可重试`
-                  : "上游限流且未提供 retry-after，请稍后手动重试";
-              yield { kind: "error", message: `${waitHint}（HTTP 429：${info.message}）` };
+            // retry-after 很大：额度类限流，重试只会让用户空等 → 立即报错。
+            if (retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS) {
+              yield {
+                kind: "error",
+                message: `上游限流，约 ${humanizeWait(retryAfterMs)} 后可重试（HTTP 429：${info.message}）`,
+              };
               yield { kind: "done" };
               return;
             }
+            // 不带 retry-after 的过载 429：短退避自动重试（与 OpenAI 端同一策略）。
             throw new RetryableHttpError(`HTTP 429: ${info.message}`, retryAfterMs, MAX_429_RETRIES);
           }
           // 529 overloaded / 5xx：按退避重试（有 retry-after 则遵守，截断到 60s）

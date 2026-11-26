@@ -107,8 +107,19 @@ export const BrowserNavigateSchema = z.object({
   sessionId: z.string().min(1).max(128).optional(),
   origin: z.enum(["user", "agent"]).optional(),
 });
-export const BrowserNewTabSchema = z.object({ url: z.string().optional(), afterTabId: z.string().min(1).max(160).optional() });
+export const BrowserNewTabSchema = z.object({
+  url: z.string().optional(),
+  afterTabId: z.string().min(1).max(160).optional(),
+  /** 管理页/链接打开的网页：指定母页标签，关闭时优先回到它。 */
+  openerTabId: z.string().min(1).max(160).optional(),
+});
 export const BrowserTabIdSchema = z.object({ tabId: z.string().min(1) });
+/** 拖拽重排：把 tabId 移到 targetTabId 之前/之后（after=true 表示插到右侧）。 */
+export const BrowserMoveTabSchema = z.object({
+  tabId: z.string().min(1),
+  targetTabId: z.string().min(1),
+  after: z.boolean().optional(),
+});
 /** 标签静音/固定：动作只影响当前标签，不做页面导航。 */
 export const BrowserTabMuteSchema = z.object({ tabId: z.string().min(1), muted: z.boolean() });
 export const BrowserTabPinSchema = z.object({ tabId: z.string().min(1), pinned: z.boolean() });
@@ -132,7 +143,7 @@ export const BrowserInstallExtensionSchema = z.object({
 });
 export const BrowserDownloadActionSchema = z.object({
   id: z.string().min(1),
-  action: z.enum(["cancel", "open", "showInFolder", "remove"]),
+  action: z.enum(["cancel", "open", "showInFolder", "remove", "deleteFile", "alwaysOpen", "start", "retry"]),
 });
 export const ProviderModelSchema = z.object({
   id: z.string().min(1).max(200),
@@ -409,6 +420,10 @@ export const ChromePopoverActionSchema = z.object({
 /* ───────────────────────── Agent 会话栏独立窗口（真·小窗化） ───────────────────────── */
 
 /** 打开会话栏独立窗口：可指定要展示的会话（缺省 = 当前会话）。 */
+export const OpenBrowserWindowSchema = z.object({ url: z.string().url().max(4096) });
+
+/** 应用内菜单打开/关闭时抑制主进程原生右键菜单（引用计数，可嵌套）。 */
+export const SetContextMenuSuppressedSchema = z.object({ suppressed: z.boolean() });
 export const OpenAgentWindowSchema = z.object({
   sessionId: z.string().max(128).optional(),
 });
@@ -434,6 +449,11 @@ export const BookmarkAddSchema = z.object({
   title: z.string().max(300).optional(),
 });
 export const BookmarkRemoveSchema = z.object({ id: z.string().min(1).max(120) });
+export const BookmarkUpdateSchema = z.object({
+  id: z.string().min(1).max(120),
+  title: z.string().max(300).optional(),
+  url: z.string().url().max(2000).optional(),
+});
 
 /* ───────────────────────── 页面保存（全文保存） ───────────────────────── */
 
@@ -454,6 +474,8 @@ export const BrowserSidebarWidthSchema = z.object({
 });
 export const SettingsListModelsSchema = z.object({
   provider: z.string().min(1).max(64),
+  /** 正在编辑的供应商 id：用于取**它自己的**已保存密钥（缺省时不得借用其它供应商的 Key）。 */
+  providerId: z.string().min(1).max(64).optional(),
   baseUrl: z.string().url(),
   model: z.string().max(200),
   apiFormat: z.enum(["auto", "openai", "anthropic"]).optional(),

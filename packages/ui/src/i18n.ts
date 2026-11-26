@@ -25,13 +25,9 @@ const STORAGE_KEY = "loopsoar_lang";
 const DICT: Record<Lang, Record<string, string>> = {
   "zh-CN": {
     // 通用
-    "common.close": "关闭",
-    "common.cancel": "取消",
     "common.back": "上一步",
     "common.next": "下一步",
     "common.skip": "跳过",
-    "common.done": "完成",
-    "common.openSettings": "打开设置",
 
     // 标题栏
     "titlebar.minimize": "最小化",
@@ -64,7 +60,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.resumeChanged": "已注入改动并恢复运行",
     "composer.pauseUnavailable": "当前没有可暂停的运行任务",
     "composer.resumeUnavailable": "当前没有可恢复的运行任务",
-    "composer.attach": "添加附件（把文件路径放进消息，Agent 可用工具读取）",
     "composer.attachLabel": "附件",
     "composer.moreActions": "更多操作",
     "composer.modeTip": "模式：{detail}",
@@ -93,7 +88,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.modelPlanGo": "Go 订阅",
     "composer.modelPlanPayg": "按量付费",
     "composer.modelBadge.thinking": "推理",
-    "composer.modelBadge.vision": "视觉",
     /** 输入模态含 image 时在模型菜单里的紧凑徽标（用户：图片输入能力要可见）。 */
     "composer.modelBadge.image": "图",
     "composer.effortSection": "推理等级",
@@ -109,15 +103,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "pendingSteers.remove": "撤销删除",
     "pendingSteers.expand": "展开全文",
     "pendingSteers.collapse": "收起",
-    "pendingSteers.queuedNotice": "已排队（{count}/8）：本轮结束后自动发出；点「引导」可提前并入当前思考",
-    "pendingSteers.fullNotice": "待发队列已满（最多 8 条），请等本轮结束后再发",
     "pendingSteers.failedNotice": "投递失败：{reason}",
-    "pendingSteers.recallNotice": "已取回待发内容，可修改后重新发送",
-    "pendingSteers.cancelNotice": "已撤销待发指令",
-    "pendingSteers.inserted": "已投递，等待本轮注入",
-    "pendingSteers.applied": "引导已并入本轮思考历程",
-    "pendingSteers.autoSent": "本轮已结束，待发指令已自动续发",
-    "composer.generating": "生成中…",
     "composer.planFoot": "Plan 模式：只读规划，不执行写操作",
     "composer.buildFoot": "Build 模式：可在权限范围内执行工具",
     "composer.pickFile": "选择要引用的文件",
@@ -150,7 +136,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ask.ariaFree": "自由文本回答（Ctrl+Enter 提交）",
     "ask.ariaOptions": "可选回答",
     "ask.optionTitle": "点击即用此选项回答",
-    "ask.close": "关闭",
     "ask.sensitiveTitle": "敏感操作确认",
     "ask.sensitiveConfirm": "确认执行",
     "ask.sensitiveCancel": "取消",
@@ -245,8 +230,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "onboarding.capability.skills": "浏览技能",
     "onboarding.capability.workspace": "挂载项目文件夹作为工作区（右侧「工作区」按钮）",
     "onboarding.capability.footer": "这些能力都可以随时在设置中调整。",
-    "onboarding.done.title": "一切就绪",
-    "onboarding.done.desc": "在右侧输入框发一条消息开始吧；Agent 会在权限范围内使用工具。",
     "onboarding.done.start": "开始使用",
 
     // 设置 · 关于
@@ -279,13 +262,9 @@ const DICT: Record<Lang, Record<string, string>> = {
   },
   "en-US": {
     // Common
-    "common.close": "Close",
-    "common.cancel": "Cancel",
     "common.back": "Back",
     "common.next": "Next",
     "common.skip": "Skip",
-    "common.done": "Done",
-    "common.openSettings": "Open settings",
 
     // Title bar
     "titlebar.minimize": "Minimize",
@@ -318,7 +297,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.resumeChanged": "Changes injected; resumed",
     "composer.pauseUnavailable": "No running task to pause",
     "composer.resumeUnavailable": "No running task to resume",
-    "composer.attach": "Add attachment (puts the file path into the message so the agent can read it)",
     "composer.attachLabel": "Attach",
     "composer.moreActions": "More actions",
     "composer.modeTip": "Mode: {detail}",
@@ -347,7 +325,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "composer.modelPlanGo": "Go plan",
     "composer.modelPlanPayg": "Pay-as-you-go",
     "composer.modelBadge.thinking": "reasoning",
-    "composer.modelBadge.vision": "vision",
     "composer.modelBadge.image": "IMG",
     "composer.effortSection": "Reasoning effort",
     "composer.effortOff": "Disable reasoning",
@@ -362,15 +339,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "pendingSteers.remove": "Discard",
     "pendingSteers.expand": "Show full text",
     "pendingSteers.collapse": "Collapse",
-    "pendingSteers.queuedNotice": "Queued ({count}/8): sent automatically after this round; click Steer to merge it into the current round early",
-    "pendingSteers.fullNotice": "Queue is full (max 8) — wait until the current round finishes",
     "pendingSteers.failedNotice": "Delivery failed: {reason}",
-    "pendingSteers.recallNotice": "Moved back to the composer — edit and send again",
-    "pendingSteers.cancelNotice": "Pending instruction discarded",
-    "pendingSteers.inserted": "Delivered; waiting for injection in this round",
-    "pendingSteers.applied": "Steering merged into this round's thinking",
-    "pendingSteers.autoSent": "Round finished — pending instruction was auto-continued",
-    "composer.generating": "Generating…",
     "composer.planFoot": "Plan mode: read-only planning, no writes",
     "composer.buildFoot": "Build mode: tools run within your permissions",
     "composer.pickFile": "Pick a file to reference",
@@ -403,7 +372,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ask.ariaFree": "Free-text answer (Ctrl+Enter to submit)",
     "ask.ariaOptions": "Answer options",
     "ask.optionTitle": "Click to answer with this option",
-    "ask.close": "Close",
     "ask.sensitiveTitle": "Confirm sensitive action",
     "ask.sensitiveConfirm": "Confirm",
     "ask.sensitiveCancel": "Cancel",
@@ -498,8 +466,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "onboarding.capability.skills": "Browse skills",
     "onboarding.capability.workspace": "Mount a project folder as a workspace (workspace button on the right)",
     "onboarding.capability.footer": "All of this can be adjusted in settings anytime.",
-    "onboarding.done.title": "You're all set",
-    "onboarding.done.desc": "Send a message from the composer on the right to get started. The agent works within your permissions.",
     "onboarding.done.start": "Get started",
 
     // Settings · About

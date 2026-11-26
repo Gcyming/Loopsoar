@@ -122,6 +122,8 @@ export interface ToolLoopOpts {
    * 自动续写把同一助手消息续完整，用户不必手动「继续」。
    */
   maxLengthContinuations?: number;
+  /** 空正文自动重问上限（默认 1；0 = 关闭）。 */
+  maxEmptyResponseRetries?: number;
   /**
    * 长等待工具名单（默认 ["ask_user"]）。
    * 为什么单独豁免：ask_user 等真人回答可能几分钟，按普通工具静默超时（90s）会被误杀。
@@ -187,6 +189,12 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   /** 已自动续写次数（上游 finish_reason=length 截断时累计，受 maxLengthContinuations 封顶）。 */
   let lengthContinuations = 0;
   const maxLengthContinuations = Math.max(0, Math.floor(opts.maxLengthContinuations ?? 8));
+  /**
+   * 空正文自动重问次数：上游偶尔只回思考/空包（免费模型、过载时常见），
+   * 直接收束会让用户只看到「（模型没有返回文本内容）」。整轮最多重问 1 次。
+   */
+  let emptyResponseRetries = 0;
+  const maxEmptyResponseRetries = Math.max(0, Math.floor(opts.maxEmptyResponseRetries ?? 1));
   /** 长等待工具集合：默认 ask_user（真人回答耗时不可控）。 */
   const longRunningTools = new Set(opts.longRunningTools ?? ["ask_user"]);
   const longRunningTimeoutMs = opts.longRunningTimeoutMs ?? 600_000;
@@ -747,6 +755,24 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
         // 上游内容安全过滤掐断：同样不能静默，给用户一个可见原因。
         if (roundFinishReason === "content_filter") {
           emit("progress", { note: "上游内容安全过滤截断了回复（finish_reason=content_filter）" });
+        }
+        // 空正文自动重问：本轮没有任何正文、没有工具调用（纯思考/空包）→ 补一条明确的
+        // user 提示再请求一次，避免把「（模型没有返回文本内容）」直接甩给用户。
+        // 放在 length/content_filter 之后：那些情况已有各自的续写/提示路径。
+        if (!roundText.trim() && roundToolCalls.length === 0 && emptyResponseRetries < maxEmptyResponseRetries) {
+          emptyResponseRetries += 1;
+          emit("progress", { note: "模型本轮没有返回正文，正在自动重试一次…" });
+          conversation = [
+            ...conversation,
+            {
+              role: "user",
+              content:
+                "（系统提示）你上一轮没有输出任何正文，只输出了思考过程或空内容。请直接给出针对用户最近问题的最终正文回答，不要只输出思考过程，也不要再次调用工具。",
+            },
+          ];
+          // 空包不是「无进度死循环」，清零计数避免被 no-progress 误杀。
+          roundsWithoutProgress = 0;
+          continue;
         }
         // 中止优先于核验：用户已点停止就不再为收束做额外的核验 IO
         if (abortController.signal.aborted) {

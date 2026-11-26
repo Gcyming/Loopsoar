@@ -23,7 +23,7 @@ import { createCoreServices } from "./coreServices.js";
 import { TaskForkCoordinator } from "./taskForks.js";
 import { iconPath, preloadPath, openDirectoryNative } from "./mainPaths.js";
 import { ensureWritableDataDirs } from "./dataDir.js";
-import { BrowserDevToolsPanel, createElectronBrowserHost, DownloadsBridge, resolveFaviconForPage } from "./electronBrowser.js";
+import { BrowserDevToolsPanel, createElectronBrowserHost, DownloadsBridge, openStandaloneBrowserWindow, resolveFaviconForPage } from "./electronBrowser.js";
 import { BrowserExtensionHost, type ExtensionApiLike } from "./browserExtensions.js";
 import { SESSION_PARTITION } from "../shared/brand.js";
 import { withProviderDefaults } from "./providerDefaults.js";
@@ -35,7 +35,7 @@ import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
 import { registerWorkspaceDomain } from "./domains/workspace.js";
 import { registerAgentsDomain } from "./domains/agents.js";
-import { flushActivePartials, hasActiveStreams, registerChatDomain } from "./domains/chat.js";
+import { activeChatStreamIds, flushActivePartials, hasActiveStreams, registerChatDomain } from "./domains/chat.js";
 import { registerToastDomain } from "./domains/toast.js";
 import { createToastWindow } from "./toastWindow.js";
 import { createAgentPointerWindow, pointerAreaForWindow, type AgentPointerController } from "./agentPointerWindow.js";
@@ -54,14 +54,14 @@ import { checkCommandGuards, compileCommandGuards } from "loopsoar-core/rules/co
 import { registerMemoryTools } from "./memoryTools.js";
 import { buildSessionEpisode } from "./memoryEpisode.js";
 import { registerSearchTools } from "./searchTools.js";
-import { readImageDataUrl } from "./imageRead.js";
+import { readImageAttachmentForLlm } from "./imageRead.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
 import { createScheduledTaskRuntime } from "./scheduledTaskRuntime.js";
 import { showDesktopNotification } from "./desktopNotify.js";
 import { ensureSingleInstance } from "./singleInstance.js";
 import { createBrowserExternalLinks } from "./browserExternalLinks.js";
-import { createRendererPusher } from "./rendererBus.js";
+import { createRendererPusher, replayBrowserState } from "./rendererBus.js";
 import { AskBus } from "./askBus.js";
 import { setAgentTabPredicate } from "./browserRequestGuard.js";
 import { registerAskDomain } from "./domains/ask.js";
@@ -112,6 +112,7 @@ import { createAgentWindowManager, type AgentWindowManager } from "./agentWindow
 import { createE2eHooks } from "./e2eHooks.js";
 import { createMainWindowWindow } from "./mainWindowFactory.js";
 import { registerAgentWindowDomain } from "./domains/agentWindow.js";
+import { registerBrowserWindowDomain } from "./browserWindow.js";
 import { ExtensionRuntime, resolveWorkerPath } from "./extensionRuntime.js";
 import { createExtensionAgentHooks } from "./extensionAgentHooks.js";
 import { registerExtensionWiring } from "./extensionWiring.js";
@@ -136,10 +137,8 @@ import type { AutoUpdateHandle } from "./autoUpdate.js";
 import { createShutdownHandler } from "./shutdown.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 /** 启动链路计时：LOOPSOAR_BOOT_TRACE=1 时打印各阶段耗时（默认关闭，无开销）。 */
 const bootTrace = createBootTrace();
-
 // 自定义协议必须 standard + secure 且只能在 app ready 前注册，因此放在模块顶层。
 protocol.registerSchemesAsPrivileged([
   { scheme: PROTOCOL, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
@@ -259,12 +258,11 @@ function createMainWindow(): void {
     disposeDevTools: () => devToolsPanel?.dispose(),
     syncPointerArea: () => schedulePointerAreaSync.schedule(),
     cancelPointerAreaSync: () => schedulePointerAreaSync.cancel(),
-    onClosed: () => {
-      mainWindow = null;
-    },
+    onClosed: () => { mainWindow = null; },
     e2eHooks,
     getCloseBehavior: () => loadPreferences(ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged }).configDir).closeBehavior ?? "quit", onOpenSchedules: () => { pushToRenderer("ui:openSettings", { section: "schedules" }); mainWindow?.show(); mainWindow?.focus(); },
   });
+  mainWindow?.webContents.on("did-finish-load", () => { setTimeout(() => { if (mainWindow) replayBrowserState(mainWindow, browserHost, activeChatStreamIds); }, 300); });
 }
 
 applyChromiumSwitches({
@@ -451,15 +449,8 @@ app.whenReady().then(async () => {
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
     readImageAttachment: (filePath: string) => {
-      // 非视觉模型不注入图片：否则 text-only 上游会直接 400（比“看不到图”更糟）。
       const active = providers.active();
-      const spec = active?.models?.find((m) => m.id === active.model);
-      if (spec?.vision !== true && !spec?.inputModalities?.includes("image")) return null;
-      const image = readImageDataUrl(filePath);
-      if (!image.ok || !image.dataUrl) return null;
-      const comma = image.dataUrl.indexOf(",");
-      if (comma < 0) return null;
-      return { mime: image.mime ?? "image/png", base64: image.dataUrl.slice(comma + 1) };
+      return readImageAttachmentForLlm(filePath, active?.models?.find((m) => m.id === active.model), active?.model ?? "");
     },
     // 规则文件（AGENTS.md）：每次 stream 重新读取；项目规则按会话所属工作区解析。
     getSystemRules: (sessionId?: string) =>
@@ -777,14 +768,15 @@ app.whenReady().then(async () => {
         chromePopover.close();
         pushToRenderer("chrome:dismissPopovers", {});
       },
+      // 网页焦点下的 Ctrl+T/W/R/M、Ctrl+Shift+T/K：网页视图有独立焦点，主窗口收不到，由宿主转发给渲染层执行与主窗口完全相同的标签动作。
+      onBrowserShortcut: (action) => pushToRenderer("browser:shortcut", { action }),
     },
-  );
+  ); browserHost.setOverlayOpen(true); // 启动面板放行前先隐藏原生网页视图，避免恢复页面在启动期乱闪。
   // 崩溃/中途退出恢复：首次动作后没来得及 fork 的任务，在启动时补完或清掉孤儿任务标记。
   taskForks.recover();
 
-  // 出网守卫注入「Agent 标签」判定：Agent 任务标签默认不得访问回环地址（用户标签不受影响），
-  // 与 web_fetch 的 allowLoopback:false 对齐；E2E/开发可用 LOOPSOAR_ALLOW_LOOPBACK=1 放开。
-  // 放在启动恢复之前：恢复出来的任务页在加载时就要按新策略判定。
+  // 出网守卫注入「Agent 标签」判定：Agent 任务标签默认不得访问回环地址（用户标签不受影响），与 web_fetch 的
+  // allowLoopback:false 对齐；E2E/开发可用 LOOPSOAR_ALLOW_LOOPBACK=1 放开。放在启动恢复之前：恢复出来的任务页加载时就要按新策略判定。
   setAgentTabPredicate((id) => browserHost?.isAgentWebContents(id) ?? false);
 
   // 启动恢复：全局用户标签独立于会话；会话只恢复 Agent 工作区（agentBound 标签）。
@@ -803,10 +795,12 @@ app.whenReady().then(async () => {
     : undefined;
   void (async () => {
     if (bootUserState) await browserHost.restoreUserTabs(bootUserState);
-    const tabs = await browserHost.switchSession(initialSessionId, bootTaskState).catch(() => []);
+    await browserHost.switchSession(initialSessionId, bootTaskState).catch(() => []);
     // 普通会话启动时显示用户全局标签；任务会话显示自己的工作区。
     if (!sessions.isTask(initialSessionId)) browserHost.showUserTabs();
-    pushToRenderer("browser:tabs", { tabs, visibleSession: browserHost?.visibleSessionId() });
+    // 必须按「当前可见组」取标签：switchSession 返回的是会话自己的标签（普通会话为空），
+    // 直接用会把标签栏清空、只留下网页（用户实测的「有网页无标签」）。
+    pushToRenderer("browser:tabs", { tabs: browserHost?.listTabs(browserHost?.visibleSessionId()) ?? [], visibleSession: browserHost?.visibleSessionId() });
   })();
   bootTrace.mark("browser-host");
   // 注：全局历史补记（browser-history.json 的同步落盘）已移到首帧后的 deferred 启动任务里，见 runDeferredBootTasks。
@@ -947,7 +941,7 @@ app.whenReady().then(async () => {
     browserStates.flush();
   };
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
-  const downloads = new DownloadsBridge(() => loadPreferences(dirs.configDir).downloadDir ?? "", () => pushToRenderer("browser:downloads", { downloads: downloads.list() }), documents.handleDownload);
+  const downloads = new DownloadsBridge(() => loadPreferences(dirs.configDir).downloadDir ?? "", () => pushToRenderer("browser:downloads", { downloads: downloads.list() }), documents.handleDownload, (webContents) => browserHost?.handleDownloadSource(webContents.id));
   registerBrowserDataRuntime(registry, () => browserHost, downloads, resolveSessionRoot, (url: string) => session.fromPartition(SESSION_PARTITION).cookies.get({ url }));
   instrumentBrowserActivity(registry, BROWSER_AGENT_TOOLS, pushToRenderer);
   // 所有工具注册完毕后再同步一次：同步点必须晚于最后一个 register*，否则新工具在沙箱里是「未知工具」。
@@ -1187,6 +1181,7 @@ app.whenReady().then(async () => {
     { ...deps, push: pushToRenderer, getMainWebContentsId: () => mainWindow?.webContents.id ?? null },
     agentWindowManager,
   );
+  registerBrowserWindowDomain({ ...deps, openWindow: openStandaloneBrowserWindow });
   // /compact：真实压缩并写回持久化（预览/应用由 UI 决定；生成中拒绝，避免与落盘竞态）
   registerCompactDomain({
     ...deps,
@@ -1389,8 +1384,7 @@ app.whenReady().then(async () => {
   createMainWindow();
   bootTrace.mark("window-created");
   // 启动恢复发生在 createMainWindow 之前：当时 attachView 拿不到主窗口（返回 false 跳过挂载），
-  // 窗口创建后立刻重排一次，让恢复出来的原生网页视图补挂并设置 bounds/可见性。
-  // 幂等：已挂上的视图不会重复挂载；没有标签页时只是一次空布局。
+  // 窗口创建后立刻重排一次，让恢复出来的原生网页视图补挂并设置 bounds/可见性（幂等：已挂上的不会重复挂载）。
   browserHost?.syncBounds();
   browserLinks.drain();
   bootTrace.mark("window-sync-bounds");

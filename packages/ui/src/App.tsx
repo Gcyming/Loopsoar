@@ -4,7 +4,6 @@ import type {
   AskUserRequest,
   BootStatus,
   BrowserSnapshotResult,
-  DownloadItem,
   PermissionsState,
   Preferences,
   ProviderStatus,
@@ -34,6 +33,7 @@ import Composer from "./Composer.js";
 import Onboarding, { isOnboardingDone } from "./Onboarding.js";
 import { setLanguage, getLanguage, t } from "./i18n.js";
 import { splitAgentTabs } from "./agentWorkspace.js";
+import { useChromePageTabs } from "./useChromePageTabs.js";
 import type { ChromePageKind, SidebarMode, SidebarModeAction, ThemeMode } from "./types.js";
 import AppDialogs from "./AppDialogs.js";
 const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
@@ -41,6 +41,11 @@ import AgentSidebar from "./AgentSidebar.js";
 import AppBottomPanels from "./AppBottomPanels.js";
 import StartPage from "./StartPage.js";
 import { useBootstrapData, useChatStreamEvents } from "./useChatStreamEvents.js";
+import { usePermissionQueue } from "./usePermissionQueue.js";
+import { useStartupTab } from "./useStartupTab.js";
+import SplashScreen from "./SplashScreen.js";
+import { useStartupGate } from "./useStartupGate.js";
+import { useDownloads } from "./useDownloads.js";
 import {
   useE2eChatAutoSend,
   useE2eChromePageDeepLink,
@@ -126,7 +131,9 @@ export default function App(): React.JSX.Element {
   // 独立窗口模式：?mini=1 时本渲染器只画 Agent 会话栏（由主进程 Agent 窗口加载）
   const miniWindow =
     typeof location !== "undefined" && new URLSearchParams(location.search).get("mini") === "1";
-  // 浏览器管理整页（历史/下载/收藏夹/设置）：由浮层「查看更多」或动作打开
+  // 浏览器管理整页（历史/下载/收藏夹/设置）：由浮层「查看更多」或动作打开。
+  // 新行为：管理页作为「标签」打开（tabId → 页面类型），当前网页保留在它自己的标签里。
+  // chromePage 只留给 E2E 深链/旧壳层兜底，不再承载常规打开路径。
   const [chromePage, setChromePage] = useState<ChromePageKind | null>(null);
   // 首次启动向导：本地标记完成/跳过；设置·关于可重开（P6）
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => !isOnboardingDone());
@@ -138,22 +145,15 @@ export default function App(): React.JSX.Element {
   const pickedSessionRef = useRef(false);
   const [mode, setMode] = useState<"build" | "plan">("build");
   const [reasoningEffort, setReasoningEffort] = useState<string>("");
-  const [permReq, setPermReq] = useState<{
-    requestId: string;
-    toolName: string;
-    target?: string;
-    kind?: string;
-    reason?: string;
-    category?: string;
-  } | null>(null);
+
   // ask_user 弹窗队列：ask:user 事件入队，逐条回答后出队（理论上同一时刻只有一条，队列兜住连发）
   const [askQueue, setAskQueue] = useState<AskUserRequest[]>([]);
   const [permSummary, setPermSummary] = useState<PermissionsState | null>(null);
   const [settingsSection, setSettingsSection] = useState<string>("");
   /** 任意 usePopover 列表打开时都要让原生 WebContentsView 让位，否则菜单会被网页整块盖住。 */
   const anyPopoverOpen = useAnyPopoverOpen();
-  // 下载事件仍由 hook 驱动（用于下载完成提示等后续扩展）；浮层/整页各自按需拉取列表
-  const [, setDownloads] = useState<DownloadItem[]>([]);
+  // 下载状态 + 新下载反馈（工具栏角标 / 自动展开下载小窗，见 useDownloads）。
+  const { setDownloads, summary: downloadsSummary } = useDownloads({ api });
   // 浏览器工具栏浮层（更多/收藏夹/历史/下载）打开：需隐藏原生 WebContentsView，否则菜单被网页遮挡
   // 页面快照面板：null=关闭；非空时隐藏原生浏览器视图并渲染可读浮层
   const [snapshotData, setSnapshotData] = useState<BrowserSnapshotResult | null>(null);
@@ -164,6 +164,8 @@ export default function App(): React.JSX.Element {
   const [sessionResetToken, setSessionResetToken] = useState(0);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSession, setCurrentSession] = useState<string | null>(null);
+  /** 权限确认队列：当前会话才弹窗；后台会话只给「点击前往」入口（见 AppDialogs）。 */
+  const { permReq, otherSessionPerm, addPermRequest, resolvePermRequest } = usePermissionQueue(currentSession);
   /** 浏览器动作回调需要读「最新」会话，但 hook 必须在 createFreshSessionAndTab 之前调用。 */
   const currentSessionRef = useRef<string | null>(null);
   currentSessionRef.current = currentSession;
@@ -253,6 +255,7 @@ export default function App(): React.JSX.Element {
     navigate,
     newTab,
     selectTab,
+    moveTab,
     closeTab,
     tabAction,
     openTabMenu,
@@ -269,6 +272,8 @@ export default function App(): React.JSX.Element {
     createFreshSessionRef,
     currentSessionRef,
   });
+  /** 启动门：首屏数据/恢复标签到齐前保持启动面板（原生网页视图由 baseOverlay 同源隐藏）。 */
+  const { splashVisible, splashOverlay, splashStatus, splashSteps } = useStartupGate({ boot, preferences, tabs });
   /** 时间线「思考过程」卡的开合（按消息 id；流式中默认展开，收尾后自动收起）。 */
   const [thinkingOpen, setThinkingOpen] = useState<Record<string, boolean>>({});
   /** 上下文占用估算：used=约 4 字符/token；cap=模型声明上下文窗口 */
@@ -391,7 +396,8 @@ export default function App(): React.JSX.Element {
     tailSeqRef,
     metaFor,
     updateSessionMessages,
-    setPermReq,
+    setPermReq: addPermRequest,
+    resolvePermRequest,
     setAskQueue,
     setThinkingOpen,
     setDownloads,
@@ -457,6 +463,9 @@ export default function App(): React.JSX.Element {
   // Agent 工作区：Agent 打开/导航过的标签折叠进一个 chip，其余仍是普通标签条
   // （分组规则在 agentWorkspace.ts，纯函数可单测；这里只负责渲染与副作用）。
   const { user: userTabs, bound: boundTabs } = useMemo(() => splitAgentTabs(tabs), [tabs]);
+  const { activePageKind, displayUserTabs, openChromePage, closeChromePage, switchChromePage, navigateFromChromePage, openExternalFromChromePage } = useChromePageTabs({
+    api, tabs, userTabs, language: preferences?.language, navigate, setChromePage, legacyChromePage: chromePage,
+  }); const openChromeSettings = useCallback((): void => switchChromePage("settings"), [switchChromePage]);
   // 工作区里最后一个网页也没了（Agent 关页/会话切走）：折叠面板不该悬空留着。
 
   const activeTabIdRef = React.useRef<string | null>(null);
@@ -701,8 +710,8 @@ export default function App(): React.JSX.Element {
   const respondPermission = useCallback((choice: "allow-once" | "allow-session" | "deny"): void => {
     if (!api || !permReq) return;
     void api.perm.respond({ requestId: permReq.requestId, choice });
-    setPermReq(null);
-  }, [api, permReq]);
+    resolvePermRequest(permReq.requestId);
+  }, [api, permReq, resolvePermRequest]);
 
   /**
    * 只展示「当前会话」的询问：Agent 可能在后台会话里提问或触发敏感确认，
@@ -717,20 +726,19 @@ export default function App(): React.JSX.Element {
   const otherSessionAsk = askQueue.find((item) => !!item.sessionId && item.sessionId !== currentSession) ?? null;
 
   /** 设置/权限/快照等整页 DOM 已经盖住网页：这些场景不需要再抓静态底图。 */
-  const baseOverlay =
-    settingsOpen ||
+  const baseOverlay = (!miniWindow && splashOverlay) || settingsOpen ||
     workspacePanelOpen ||
     snapshotData !== null ||
     onboardingOpen ||
-    chromePage !== null ||
+    activePageKind !== null ||
     activeAsk !== null ||
     permReq !== null;
   const activeTabState = tabs.find((tab) => tab.active) ?? null;
-  /** 与 BrowserHost.applyLayout 的 visible 条件同源：搜索主页/加载/错误/vibe 时原生视图不可见。 */
+  // 与 BrowserHost.applyLayout 的 visible 条件同源：搜索主页/错误/vibe 时原生视图不可见；
+  // 加载中仍可见（页面保持渲染，DOM 加载页只在「还没有页面」时出现）。
   const nativePageVisible = isNativePageVisible({
     miniWindow,
     currentUrl,
-    loading: Boolean(activeTabState?.loading),
     loadFailure: activeTabState?.loadFailure ?? null,
     vibeModeActive,
   });
@@ -846,7 +854,7 @@ export default function App(): React.JSX.Element {
     setCurrentSession,
     setNotice,
     setSessionOpen,
-    setChromePage,
+    openChromePage,
     setSnapshotData,
     setTabs,
     setAddress,
@@ -895,19 +903,9 @@ export default function App(): React.JSX.Element {
     setInput,
     setWorkspacePanelOpen,
   });
-  // 每次进入 Loopsoar 都是新会话（用户 m07920 规则）：shell 启动恢复完成后，
-  // 新建「会话 + 空白标签页」，旧会话仍保留在会话列表/各自标签组里。
-  const initialTabEnsuredRef = React.useRef(false);
-  React.useEffect(() => {
-    if (!api || miniWindow || initialTabEnsuredRef.current || !boot) return;
-    initialTabEnsuredRef.current = true;
-    const timer = window.setTimeout(() => {
-      void createFreshSessionAndTab().catch((err: unknown) =>
-        setNotice("新建会话失败：" + (err instanceof Error ? err.message : String(err))),
-      );
-    }, 120);
-    return () => window.clearTimeout(timer);
-  }, [api, miniWindow, boot, createFreshSessionAndTab]);
+  // 每次进入 Loopsoar 都是新会话（用户 m07920 规则）；等 shell 恢复完标签后再执行，
+  // 否则会抢跑创建空标签/漏显示恢复标签（见 useStartupTab 注释）。
+  useStartupTab({ api, miniWindow, boot, createFreshSessionAndTab, setNotice });
 
   useE2eSettingsDeepLink(setSettingsOpen, setSettingsSection);
   useE2eChromePageDeepLink(setChromePage);
@@ -939,7 +937,7 @@ export default function App(): React.JSX.Element {
   // 界面隔离/换界面收起：进入设置、整页、工作区、快照等其它界面时，任何已展开列表
   // （会话下拉 / Composer 权限·模型·命令菜单）都必须一起收起，否则会压在新界面上
   // （用户实测截图）。统一走 dismissAllPopovers()，未来新增列表只要用 usePopover 就自动覆盖。
-  const otherInterfaceOpen = settingsOpen || chromePage !== null || workspacePanelOpen || snapshotData !== null;
+  const otherInterfaceOpen = settingsOpen || activePageKind !== null || workspacePanelOpen || snapshotData !== null;
   useEffect(() => {
     if (!otherInterfaceOpen) return;
     dismissAllPopovers();
@@ -995,7 +993,6 @@ export default function App(): React.JSX.Element {
   };
   // 运行中输入非空时仍可发送：此时作为「转向提示」注入（steer）
   const canSend = Boolean(api) && input.trim() !== "";
-
   const body = (
     <>
       {/* Agent 独立窗口（?mini=1）也走自绘标题栏：无系统边框，只有最小化/关闭；
@@ -1005,7 +1002,7 @@ export default function App(): React.JSX.Element {
         miniWindow={miniWindow}
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspaceId}
-        userTabs={userTabs}
+        userTabs={displayUserTabs}
         boundTabs={boundTabs}
         agentTasks={agentTasks}
         browserVisibleSession={browserVisibleSession}
@@ -1014,12 +1011,12 @@ export default function App(): React.JSX.Element {
         onCloseWorkspace={closeAgentWorkspace}
         onOpenTask={openAgentTask}
         onSelectTab={selectTab}
+        onMoveTab={moveTab}
         onCloseTab={closeTab}
         onTabAction={tabAction}
         onOpenTabMenu={openTabMenu}
         onNewTab={newTab}
       />
-
       {/* 工作区：左侧「网页列」（导航工具条 + 圆角页框），右侧会话栏。
           浏览器工具条只在网页列上方；原生 WebContentsView 几何不变。 */}
       <div style={styles.workRow}>
@@ -1042,12 +1039,13 @@ export default function App(): React.JSX.Element {
               searchEngine={preferences?.searchEngine ?? "bing"}
               onSearchEngineChange={changeSearchEngine}
               onAddressChange={setAddress}
-              onNavigate={() => navigate()}
+              onNavigate={navigate}
               onBack={goBack}
               onForward={goForward}
               onReload={reloadPage}
-              onSnapshot={() => void snapshot()}
+              onSnapshot={snapshot}
               onNotice={setNotice}
+              downloadsSummary={downloadsSummary}
             />
             <StartPage
               currentUrl={currentUrl}
@@ -1067,12 +1065,7 @@ export default function App(): React.JSX.Element {
               contextUsed={contextUsage.used}
               contextCap={contextUsage.cap}
               contextPct={contextPct}
-              hidden={
-                Boolean(currentUrl) &&
-                !tabs.find((tab) => tab.active)?.loading &&
-                !tabs.find((tab) => tab.active)?.loadFailure &&
-                !vibeModeActive
-              }
+              hidden={Boolean(currentUrl) && !tabs.find((tab) => tab.active)?.loadFailure && !vibeModeActive}
               thinkingOpen={thinkingOpen}
               onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
               onRollback={rollbackTo}
@@ -1178,7 +1171,7 @@ export default function App(): React.JSX.Element {
             contextUsed={contextUsage.used}
             contextCap={contextUsage.cap}
             contextPct={contextPct}
-            thinkingOpen={thinkingOpen}
+            thinkingOpen={thinkingOpen} busy={busy} resumeKey={currentSession ?? undefined}
             expandAllGroups={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
             openProducts={new URLSearchParams(location.search).get("openProducts") === "1"}
             onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
@@ -1325,26 +1318,17 @@ export default function App(): React.JSX.Element {
         </React.Suspense>
       ) : null}
 
-      {/* 浏览器管理整页（浮层「查看更多」跳转）：历史/下载/收藏夹/设置 */}
-      {chromePage ? (
+      {/* 浏览器管理页（历史/下载/收藏夹/设置）：作为标签打开，当前网页保留在它自己的标签里 */}
+      {activePageKind ? (
         <React.Suspense fallback={null}>
         <ChromePage
-          kind={chromePage}
+          kind={activePageKind}
           api={api}
-          onClose={() => setChromePage(null)}
-          onNavigate={(url) => {
-            setChromePage(null);
-            navigate(url);
-          }}
-          onOpenPage={(kind) => setChromePage(kind)}
-          onOpenSettings={() => setChromePage("settings")}
-          onOpenUrl={(url) => {
-            // 整页设置内打开商店等外链：直接离开整页并打开目标页（等遮罩关闭再建标签）
-            setChromePage(null);
-            window.setTimeout(() => {
-              void api?.browser.newTab({ url }).catch(() => undefined);
-            }, 90);
-          }}
+          onClose={closeChromePage}
+          onNavigate={navigateFromChromePage}
+          onOpenPage={switchChromePage}
+          onOpenSettings={openChromeSettings}
+          onOpenUrl={openExternalFromChromePage}
           onNotice={setNotice}
         />
         </React.Suspense>
@@ -1373,21 +1357,18 @@ export default function App(): React.JSX.Element {
       ) : null}
 
       <AppDialogs
-        permReq={permReq}
-        onRespondPermission={respondPermission}
-        activeAsk={activeAsk}
-        onRespondAsk={respondAsk}
-        otherSessionAsk={otherSessionAsk}
+        permReq={permReq} onRespondPermission={respondPermission}
+        activeAsk={activeAsk} onRespondAsk={respondAsk}
+        otherSessionAsk={otherSessionAsk} otherSessionPerm={otherSessionPerm}
         onSwitchSession={switchSession}
-        notice={notice}
-        miniWindow={miniWindow}
+        notice={notice} miniWindow={miniWindow}
         onDismissNotice={() => setNotice("")}
       />
     </>
   );
 
   if (!miniWindow) {
-    return <div style={styles.app}>{body}</div>;
+    return <div style={styles.app}>{body}<SplashScreen visible={splashVisible} status={splashStatus} steps={splashSteps} /></div>;
   }
 
   // 独立小窗：透明窗口 + 一块可几何过渡的面板（Slime float 同款）。

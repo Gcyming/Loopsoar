@@ -8,7 +8,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BACKUP_DIR, VERSION_FILE, backupBeforeUpgrade } from "../../packages/shell/src/main/dataBackup.js";
+import {
+  BACKUP_DIR,
+  OFFICE_PREVIEW_CACHE_DIR,
+  SKIP_NAMES,
+  VERSION_FILE,
+  backupBeforeUpgrade,
+} from "../../packages/shell/src/main/dataBackup.js";
 
 let root = "";
 
@@ -71,6 +77,29 @@ describe("backupBeforeUpgrade", () => {
     expect(result.copiedFiles).toBe(3);
     const record = JSON.parse(fs.readFileSync(path.join(root, VERSION_FILE), "utf8")) as { version: string };
     expect(record.version).toBe("0.0.2");
+  });
+
+  it("Office 预览缓存（office-preview）是可再生缓存，不进入备份", () => {
+    backupBeforeUpgrade({ dataDir: root, version: "0.0.1", now: () => 1 });
+    write("config/preferences.json", "{}");
+    write("office-preview/3f2a.pdf", "%PDF-1.7");
+    write("office-preview/soffice-profile/fonts.cache", "cache");
+    expect(SKIP_NAMES.has(OFFICE_PREVIEW_CACHE_DIR)).toBe(true);
+
+    const result = backupBeforeUpgrade({
+      dataDir: root,
+      version: "0.0.2",
+      now: () => Date.parse("2026-11-21T08:00:00.000Z"),
+      log: () => undefined,
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.backupDir).toBeTruthy();
+    const backupDir = result.backupDir as string;
+    expect(fs.existsSync(path.join(backupDir, OFFICE_PREVIEW_CACHE_DIR))).toBe(false);
+    expect(fs.existsSync(path.join(backupDir, "config/preferences.json"))).toBe(true);
+    expect(result.skipped).toContain(OFFICE_PREVIEW_CACHE_DIR);
+    expect(result.copiedFiles).toBe(1);
   });
 
   it("版本文件损坏：按首次启动处理，不抛错", () => {

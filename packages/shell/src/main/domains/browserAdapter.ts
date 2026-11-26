@@ -40,10 +40,11 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
 
   handleTrusted(deps, "browser:newTab", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    const p = (payload ?? {}) as { url?: string; afterTabId?: string };
+    const p = (payload ?? {}) as { url?: string; afterTabId?: string; openerTabId?: string };
     // 用户点「+」永远开在全局用户标签里：即使当前正在看任务工作区，也不该把空白页塞进任务组。
     const result = await deps.browser.newTab(p.url, USER_TABS_SESSION, "user", {
       ...(p.afterTabId ? { afterTabId: p.afterTabId, forceNew: true } : {}),
+      ...(p.openerTabId ? { openerId: p.openerTabId } : {}),
     });
     deps.browser.showUserTabs();
     return result;
@@ -89,6 +90,12 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   handleTrusted(deps, "browser:selectTab", (payload) => {
     if (!deps.browser) return { selected: false };
     return { selected: deps.browser.selectTab((payload as { tabId: string }).tabId, deps.browser.visibleSessionId()) };
+  });
+
+  handleTrusted(deps, "browser:moveTab", (payload) => {
+    if (!deps.browser) return { ok: false };
+    const p = payload as { tabId: string; targetTabId: string; after?: boolean };
+    return { ok: deps.browser.moveTab(p.tabId, p.targetTabId, p.after === true, deps.browser.visibleSessionId()) };
   });
 
   handleTrusted(deps, "browser:listTabs", () => ({
@@ -158,17 +165,19 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   // 前进 / 后退 / 刷新（应用内导航历史栈）
   handleTrusted(deps, "browser:back", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    return deps.browser.goBack((payload as { tabId?: string } | null)?.tabId);
+    // UI 控制的是「用户当前看到的标签组」：必须用 visibleSession，不能落到后台 activeSession，
+    // 否则用户看着用户标签时点后退/刷新，改的是另一个会话里隐藏的页面。
+    return deps.browser.goBack((payload as { tabId?: string } | null)?.tabId, deps.browser.visibleSessionId());
   });
 
   handleTrusted(deps, "browser:forward", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    return deps.browser.goForward((payload as { tabId?: string } | null)?.tabId);
+    return deps.browser.goForward((payload as { tabId?: string } | null)?.tabId, deps.browser.visibleSessionId());
   });
 
   handleTrusted(deps, "browser:reload", async (payload) => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    return deps.browser.reload((payload as { tabId?: string } | null)?.tabId);
+    return deps.browser.reload((payload as { tabId?: string } | null)?.tabId, deps.browser.visibleSessionId());
   });
 
   // 底部开发者工具面板：渲染层在布局变化时把高度同步给主进程；open=false 表示用户收起。
@@ -231,20 +240,20 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
   }));
 
   handleTrusted(deps, "browser:downloadAction", (payload) => {
-    const p = payload as { id: string; action: "cancel" | "open" | "showInFolder" | "remove" };
+    const p = payload as { id: string; action: "cancel" | "open" | "showInFolder" | "remove" | "deleteFile" | "start" | "alwaysOpen" };
     return { ok: deps.downloads?.action(p.id, p.action) ?? false };
   });
 
   handleTrusted(deps, "browser:snapshot", async () => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    const snapshot = await deps.browser.snapshot();
+    const snapshot = await deps.browser.snapshot(deps.browser.visibleSessionId());
     if (!snapshot) return { ok: false, error: "无活动网页（先导航）" };
     return { ok: true, ...snapshot };
   });
 
   handleTrusted(deps, "browser:screenshot", async () => {
     if (!deps.browser) return { ok: false, error: "浏览器宿主未装配" };
-    const data = await deps.browser.screenshot();
+    const data = await deps.browser.screenshot(deps.browser.visibleSessionId());
     if (!data) return { ok: false, error: "无活动网页（先导航）" };
     return { ok: true, data };
   });

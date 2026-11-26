@@ -66,8 +66,10 @@ export function UrlPanel({ urls, onOpenUrl }: { urls: ReferenceGroups["urls"]; o
 
 export function RefPanel({ files }: { files: ReferenceGroups["files"] }): React.ReactElement | null {
   const tr = useT();
-  if (files.length === 0) return null;
+  // 钩子必须在提前 return 之前调用：files 从 0 变非 0 时多出一个 useState，
+  // React 会报 #310「Rendered more hooks than during the previous render」→ 整树卸载（黑屏）。
   const [open, setOpen] = React.useState(false);
+  if (files.length === 0) return null;
   return (
     <div className="ref-panel">
       <button type="button" className="ref-panel-head is-button" onClick={() => setOpen((value) => !value)} title={open ? "收起参考文件" : "展开参考文件"}>

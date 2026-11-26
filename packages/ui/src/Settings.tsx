@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BADGE } from "./theme.js";
@@ -38,45 +38,7 @@ import type {
  * 语言切换由 i18n.ts 的 setLanguage 广播，本组件通过 useT 订阅即时重渲染。
  */
 
-type SectionId =
-  | "general"
-  | "searchengine"
-  | "appearance"
-  | "permissions"
-  | "providers"
-  | "rules"
-  | "loop"
-  | "schedules"
-  | "skills"
-  | "memory"
-  | "extensions"
-  | "browser-extensions"
-  | "mcp"
-  | "terminal-env"
-  | "storage"
-  | "advanced"
-  | "about";
-
-/** 侧栏分区：group 为分组 key（渲染时再翻译，避免语言切换后仍是旧语言）。 */
-const SECTIONS: { id: SectionId; icon: string; group: "basic" | "capability" | "data" | "other" }[] = [
-  { id: "general", group: "basic", icon: "settings" },
-  { id: "searchengine", group: "basic", icon: "search" },
-  { id: "appearance", group: "basic", icon: "capture" },
-  { id: "permissions", group: "basic", icon: "check" },
-  { id: "providers", group: "capability", icon: "cloud-upload" },
-  { id: "rules", group: "capability", icon: "file" },
-  { id: "loop", group: "capability", icon: "agent" },
-  { id: "schedules", group: "capability", icon: "clock" },
-  { id: "skills", group: "capability", icon: "bulb" },
-  { id: "memory", group: "capability", icon: "notes" },
-  { id: "extensions", group: "capability", icon: "extension-feature" },
-  { id: "browser-extensions", group: "capability", icon: "browser-plugin" },
-  { id: "mcp", group: "capability", icon: "terminal" },
-  { id: "terminal-env", group: "data", icon: "terminal" },
-  { id: "storage", group: "data", icon: "folders" },
-  { id: "advanced", group: "data", icon: "terminal" },
-  { id: "about", group: "other", icon: "bulb" },
-];
+import { SECTIONS, type SectionId } from "./settingsSections.js";
 
 /** 可选搜索引擎（与 Preferences.searchEngine 枚举一致；只保留三家，DuckDuckGo 已下线）。 */
 const SEARCH_ENGINE_OPTIONS: { id: Preferences["searchEngine"]; name: string; host: string }[] = [
@@ -99,6 +61,15 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
 }): React.JSX.Element {
   const tr = useT();
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
+  /**
+   * 已访问的分区：切换分区时旧分区**保持挂载**（只是 display:none），
+   * 否则子组件里的未保存草稿会随卸载一起丢失（用户反馈的「切个分区回来草稿没了」）。
+   * 只在首次访问时挂载，避免打开设置就把所有分区的请求都预加载。
+   */
+  const [visitedSections, setVisitedSections] = useState<SectionId[]>(() => [initialSection ?? "general"]);
+  useEffect(() => {
+    setVisitedSections((prev) => (prev.includes(section) ? prev : [...prev, section]));
+  }, [section]);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [prefs, setPrefs] = useState<Preferences | null>(null);
@@ -216,17 +187,31 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     });
   }, [api]);
 
-  // 通用设置实时生效：变更后 400ms 防抖自动保存（不需要保存按钮）
+  // 通用设置实时生效：变更后 400ms 防抖自动保存（不需要保存按钮）。
+  // 两个防回环点：
+  //   ① onPreferencesSaved 走 ref——App 每次渲染都会传新的内联箭头，直接进依赖会让 effect
+  //      每帧重挂定时器，保存成功 → setPreferences → 父组件重渲染 → 再保存（约 400ms 死循环）；
+  //   ② 记住上一次已保存的序列化值，内容没变就不重复写盘。
+  const onPreferencesSavedRef = useRef(onPreferencesSaved);
+  useEffect(() => {
+    onPreferencesSavedRef.current = onPreferencesSaved;
+  }, [onPreferencesSaved]);
+  const lastSavedPrefsRef = useRef<string>("");
   useEffect(() => {
     if (!api || !prefs || loading) return;
+    const serialized = JSON.stringify(prefs);
+    if (lastSavedPrefsRef.current === serialized) return;
     const timer = setTimeout(() => {
       void api.settings
         .setPreferences(prefs)
-        .then((r) => onPreferencesSaved?.(r.preferences))
+        .then((r) => {
+          lastSavedPrefsRef.current = JSON.stringify(r.preferences);
+          onPreferencesSavedRef.current?.(r.preferences);
+        })
         .catch(() => {});
     }, 400);
     return () => clearTimeout(timer);
-  }, [api, prefs, loading, onPreferencesSaved]);
+  }, [api, prefs, loading]);
 
   // 技能更新（重扫/启停/自动候选）：同步设置页列表，避免自动候选要重开设置才可见
   useEffect(() => {
@@ -312,10 +297,16 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
   }, [api, refreshLoops, tr]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // 供应商编辑弹窗打开时，Esc 只关弹窗（弹窗自己的监听负责）；否则会同时关掉整个设置页，
+      // 用户想取消弹窗却把设置页一起关了。
+      if (editingProviderId !== null) return;
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [editingProviderId, onClose]);
 
   const savePrefs = useCallback(async () => {
     if (!api || !prefs) return;
@@ -329,10 +320,10 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
     catch (e) { bad(e); }
   }, [api, perms, ok, bad, tr]);
 
-  const body = useMemo((): React.JSX.Element | null => {
+  const renderSection = (id: SectionId): React.JSX.Element | null => {
     if (loading) return <div style={S.muted}>{tr("settings.loading")}</div>;
     if (!api) return <div style={S.muted}>{tr("settings.notInShell")}</div>;
-    switch (section) {
+    switch (id) {
       case "appearance":
         return (
           <AppearanceSettingsSection
@@ -561,6 +552,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           try {
             const r = await api.settings.listModels({
               provider: pForm.provider,
+              providerId: editingProviderId && editingProviderId !== "new" ? editingProviderId : undefined,
               baseUrl: pForm.baseUrl,
               model: pForm.model,
               apiFormat: pFormat,
@@ -611,7 +603,14 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           setPModels((prev) => prev.map((m, i) => (i === idx ? { ...m, ...patch } : m)));
         };
         const removeModel = (idx: number): void => {
-          setPModels((prev) => prev.filter((_, i) => i !== idx));
+          const removed = pModels[idx];
+          const remaining = pModels.filter((_, i) => i !== idx);
+          setPModels(remaining);
+          // 删掉的正好是当前使用模型：把 provider.model 一起改到剩余第一个，
+          // 否则保存后聊天 chip 会继续指向一个已不存在的模型。
+          if (removed && pForm.model === removed.id) {
+            setPForm((prev) => ({ ...prev, model: remaining[0]?.id ?? "" }));
+          }
         };
         /** 全选/取消全选：一键切换模型「显示」开关（不影响当前使用模型与参数）。 */
         const shownCount = pModels.filter((m) => m.selected !== false).length;
@@ -746,7 +745,21 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                     <span style={S.icons}>
                       <Btn label={tr("settings.test")} small onClick={() => void api.settings.testProvider({ id: item.id, provider: item.provider, baseUrl: item.baseUrl, model: item.model, headers: item.headers }).then(setTestRes).catch(providerBad)} />
                       <Btn label={tr("settings.edit")} small onClick={() => startEdit(item)} />
-                      <Btn label={tr("settings.delete")} small onClick={() => void api.settings.removeProvider({ id: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); }).catch(providerBad)} />
+                      <Btn
+                        label={tr("settings.delete")}
+                        small
+                        onClick={() => {
+                          if (!window.confirm(tr("settings.providers.deleteConfirm", { name: item.provider || item.id }))) return;
+                          void api.settings
+                            .removeProvider({ id: item.id })
+                            .then(async () => {
+                              await refreshProviders();
+                              await api.settings.getProvider().then(setProvider).catch(() => {});
+                              notifyProviders();
+                            })
+                            .catch(providerBad);
+                        }}
+                      />
                     </span>
                   </div>
                   <div style={S.providerRows}>
@@ -764,8 +777,24 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
                             })
                           : tr("settings.providers.keyMissing")}
                       </span>
-                      {item.hasKey ? (
-                        <Btn label={tr("settings.providers.clear")} small onClick={() => void api.settings.clearApiKey({ providerId: item.id }).then(async () => { await refreshProviders(); await api.settings.getProvider().then(setProvider).catch(() => {}); notifyProviders(); providerOk(tr("settings.providers.cleared")); }).catch(providerBad)} />
+                      {/* 只有「存进密钥库」的 Key 才能在这里清除；环境变量提供的 Key 清不掉，
+                          旧实现仍显示「清除」并提示已清除，但卡片继续显示已保存（自相矛盾）。 */}
+                      {item.keySource === "stored" ? (
+                        <Btn
+                          label={tr("settings.providers.clear")}
+                          small
+                          onClick={() =>
+                            void api.settings
+                              .clearApiKey({ providerId: item.id })
+                              .then(async () => {
+                                await refreshProviders();
+                                await api.settings.getProvider().then(setProvider).catch(() => {});
+                                notifyProviders();
+                                providerOk(tr("settings.providers.cleared"));
+                              })
+                              .catch(providerBad)
+                          }
+                        />
                       ) : null}
                     </div>
                   </div>
@@ -1323,7 +1352,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       default:
         return null;
     }
-  }, [section, loading, api, prefs, locations, perms, pForm, testRes, diag, about, savePrefs, savePerms, bad, providerItems, activeProviderId, editingProviderId, ok, skills, skillsDir, skillSkips, mcpServers, mcpConfigPath, mcpForm, keyInput, pModels, pModelsError, pFetching, pFormat, pRpm, pModelDraft, pModelQuery, loopInfo, loopBusy, reloadLoops, onOpenOnboarding, tr, provider]);
+  };
 
   return (
     <div
@@ -1352,8 +1381,11 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               </React.Fragment>
             ))}
           </nav>
-          <div className="settings-section" key={section} style={S.content}>
-            {body}
+          <div className="settings-section" style={S.content}>
+            {renderSection(section)}
+            {visitedSections.filter((id) => id !== section).map((id) => (
+              <div key={id} style={{ display: "none" }}>{renderSection(id)}</div>
+            ))}
             {notice ? <div style={notice.kind === "ok" ? S.noticeOk : S.noticeErr}>{notice.text}</div> : null}
           </div>
         </div>

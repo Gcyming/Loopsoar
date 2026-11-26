@@ -92,6 +92,15 @@ export function registerChromePopoverDomain(
   deps: ChromePopoverDomainDeps,
   manager: ChromePopoverManager,
 ): void {
+  /** 通知主窗口当前打开的是哪一类浮层（工具栏据此显示对应的「认领」按钮）。 */
+  const pushKind = (kind: ChromePopoverKind): void => {
+    try {
+      deps.push?.("chrome:popoverAction", { action: "popoverKind", payload: { kind } });
+    } catch {
+      // 推送失败不影响浮层本身
+    }
+  };
+
   handleTrusted(withMainSenderGuard(deps), "ui:openPopover", (payload) => {
     const input = (payload ?? {}) as Partial<ChromePopoverOpenPayload> & Record<string, unknown>;
     if (!CHROME_POPOVER_KINDS.includes(input.kind as ChromePopoverKind)) {
@@ -103,15 +112,22 @@ export function registerChromePopoverDomain(
     }
     const lang = input.lang === "zh-CN" || input.lang === "en-US" ? input.lang : undefined;
     const tabId = typeof input.tabId === "string" && input.tabId.length > 0 ? input.tabId : undefined;
-    return manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang, tabId });
+    const opened = manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang, tabId });
+    if (opened.ok) pushKind(input.kind as ChromePopoverKind);
+    return opened;
   });
 
   handleTrusted(withMainSenderGuard(deps), "ui:togglePopover", (payload) => {
-    if (manager.isOpen()) {
-      manager.close();
+    const input = (payload ?? {}) as Partial<ChromePopoverOpenPayload> & Record<string, unknown>;
+    // 只有「点的就是当前已打开的那一类」才收起；点另一个按钮直接切换过去。
+    // 旧实现只要 isOpen 就关，点另一个按钮会先收起、再点一次才打开（用户实测的重复展开）。
+    if (
+      CHROME_POPOVER_KINDS.includes(input.kind as ChromePopoverKind) &&
+      manager.isOpen(input.kind as ChromePopoverKind)
+    ) {
+      manager.close(true);
       return { ok: true, open: false };
     }
-    const input = (payload ?? {}) as Partial<ChromePopoverOpenPayload> & Record<string, unknown>;
     if (!CHROME_POPOVER_KINDS.includes(input.kind as ChromePopoverKind)) {
       return { ok: false, error: "未知浮层类型", open: false };
     }
@@ -121,23 +137,32 @@ export function registerChromePopoverDomain(
     const lang = input.lang === "zh-CN" || input.lang === "en-US" ? input.lang : undefined;
     const tabId = typeof input.tabId === "string" && input.tabId.length > 0 ? input.tabId : undefined;
     const result = manager.open({ kind: input.kind as ChromePopoverKind, anchor: input.anchor as PopoverRect, lang, tabId });
+    if (result.ok) pushKind(input.kind as ChromePopoverKind);
     return { ...result, open: result.ok };
   });
 
   handleTrusted(deps, "ui:closePopover", () => {
-    manager.close();
+    manager.close(true);
     return { ok: true };
   });
 
   handleTrusted(deps, "ui:popoverAction", (payload) => {
     const action = payload as ChromePopoverActionInput;
+    // 更多菜单里的「历史 / 下载 / 收藏」不跳整页，而是在同一锚点把小列表切过去。
+    // 这条动作只在本窗口内切换，不转发给主窗口、也不关闭浮层。
+    const nextKind = (action?.payload as { kind?: unknown } | undefined)?.kind;
+    if (action?.action === "switchPopover" && CHROME_POPOVER_KINDS.includes(nextKind as ChromePopoverKind)) {
+      const result = manager.switchKind(nextKind as ChromePopoverKind);
+      if (result.ok) pushKind(nextKind as ChromePopoverKind);
+      return { ok: result.ok, open: result.ok };
+    }
     try {
       deps.push?.("chrome:popoverAction", action);
     } catch {
       // 推送失败（主窗口正在销毁等）也要继续关闭浮层，避免悬空窗口
     }
     // domain 自己转发 + 关闭（manager.handleAction 的 onAction 仅作为嵌入方直连时的备选）
-    manager.close();
+    manager.close(true);
     return { ok: true };
   });
 }

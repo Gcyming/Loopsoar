@@ -202,6 +202,7 @@ export interface ChatStreamEventOptions {
   setPermReq: (
     value: {
       requestId: string;
+      sessionId?: string;
       toolName: string;
       target?: string;
       kind?: string;
@@ -209,6 +210,8 @@ export interface ChatStreamEventOptions {
       category?: string;
     } | null,
   ) => void;
+  /** 请求被主进程结算（超时/取消/另一处已答）：从队列移除，不能只清当前弹窗。 */
+  resolvePermRequest?: (requestId: string) => void;
   setAskQueue: React.Dispatch<React.SetStateAction<AskUserRequest[]>>;
   setThinkingOpen: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setDownloads: (value: DownloadItem[]) => void;
@@ -233,6 +236,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
     metaFor,
     updateSessionMessages,
     setPermReq,
+    resolvePermRequest,
     setAskQueue,
     setThinkingOpen,
     setDownloads,
@@ -244,6 +248,12 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
     onSteerApplied,
     onStreamSettled,
   } = options;
+
+  /** 下载状态缓存：只在状态跳变（progressing→completed/interrupted）时提示一次；首批只播种。 */
+  const downloadStateRef = React.useRef<{ seeded: boolean; states: Map<string, string> }>({
+    seeded: false,
+    states: new Map(),
+  });
 
   React.useEffect(() => {
     if (!api) return;
@@ -387,6 +397,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           requestId?: string;
           toolName?: string;
           target?: string;
+          sessionId?: string;
           kind?: string;
           reason?: string;
           category?: string;
@@ -394,6 +405,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
         if (req?.requestId) {
           setPermReq({
             requestId: req.requestId,
+            ...(req.sessionId ? { sessionId: req.sessionId } : {}),
             toolName: req.toolName ?? "工具",
             target: req.target,
             kind: req.kind,
@@ -407,7 +419,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           return api.on("perm:resolved", (payload) => {
             const requestId = (payload as { requestId?: unknown } | null)?.requestId;
             if (typeof requestId !== "string" || !requestId) return;
-            setPermReq(null);
+            resolvePermRequest?.(requestId);
           });
         } catch {
           return () => {};
@@ -469,8 +481,30 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
       })(),
       api.on("browser:downloads", (payload) => {
         const p = payload as { downloads?: DownloadItem[] };
-        if (Array.isArray(p.downloads)) setDownloads(p.downloads);
+        if (!Array.isArray(p.downloads)) return;
+        setDownloads(p.downloads);
+        const cache = downloadStateRef.current;
+        for (const item of p.downloads) {
+          const previous = cache.states.get(item.id);
+          cache.states.set(item.id, item.state);
+          if (!cache.seeded || previous === item.state) continue;
+          if (item.state === "completed") setNotice(`下载完成：${item.filename}（已保存到 ${item.savePath}）`);
+          else if (item.state === "interrupted") setNotice(`下载中断：${item.filename}`);
+        }
+        cache.seeded = true;
       }),
+      // 渲染器崩溃自愈后主进程补推：当前会话仍有流在跑 → 恢复 busy，防止再发第二条流。
+      ((): () => void => {
+        try {
+          return api.on("chat:running", (payload) => {
+            const list = (payload as { sessionIds?: string[] } | null)?.sessionIds;
+            const sid = sessionIdRef.current;
+            if (Array.isArray(list)) setBusy(Boolean(sid && list.includes(sid)));
+          });
+        } catch {
+          return () => {};
+        }
+      })(),
       api.on("browser:tabs", (payload) => {
         const p = payload as { tabs?: TabState[] };
         if (!Array.isArray(p.tabs)) return;

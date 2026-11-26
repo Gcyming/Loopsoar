@@ -23,6 +23,7 @@ export interface LayoutView {
 export interface LayoutTabEntry {
   view: LayoutView;
   url: string;
+  /** 主框架加载中：首次加载（url 仍空）时也据此先把原生视图亮出来。 */
   loading: boolean;
   /** 非 null = 加载失败：隐藏原生视图，让 DOM 错误页接管。 */
   loadFailure: unknown;
@@ -137,10 +138,18 @@ export class BrowserViewLayout {
           entry.lastBounds = bounds;
           entry.layoutDirty = false;
         }
-        // 空标签（新建页）不显示原生视图：否则透明视图会覆盖整个内容区并吞掉鼠标事件
-        // 加载中/失败也不显示：让 DOM 的加载页/错误页露出来（原生视图只能显示 Chromium 白屏/默认错误页）
+        // 只有「没有页面」时才隐藏原生视图（空标签/新建页），否则透明视图会覆盖整个内容区
+        // 并吞掉鼠标事件；加载失败时也让 DOM 错误页露出来。
+        //
+        // 关键：**加载中绝不隐藏**。旧实现在 loading 时隐藏视图、让 DOM 加载页接管，
+        // 用户看到的是整块应用底色（黑边/黑圈）或品牌加载页盖住网页。现在导航期间
+        // 原生视图保持可见：Chromium 自己会保留旧页面直到新页面可绘制，页面永不消失。
+        // 首次加载（新标签输入网址/点链接）时还没有 url，但把原生视图先亮出来：
+        // Chromium 的白底比 DOM 深色加载页更接近浏览器行为，也不会出现「整块黑底」。
         const visible =
-          !this.overlayOpen && Boolean(entry.url) && !entry.loading && entry.loadFailure === null;
+          !this.overlayOpen &&
+          (Boolean(entry.url) || entry.loading) &&
+          entry.loadFailure === null;
         if (entry.lastVisible !== visible) {
           entry.view.setVisible?.(visible);
           entry.view.setBorderRadius?.(LAYOUT.BROWSER_VIEW_RADIUS);

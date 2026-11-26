@@ -10,6 +10,7 @@
     <link rel="icon" href="./favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="./icon-32.png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <script src="/popover-boot.js"></script>
     <title>Loopsoar</title>
     <style>
       /* ══════════════════════════════════════════════════════════════════
@@ -444,8 +445,20 @@
           transform: translateX(420%);
         }
       }
-      .browser-loading-logo {
-        animation: loopsBreathe 2.2s ease-in-out infinite;
+      /* 加载页不再显示大号黑色应用图标（用户反馈点击菜单后像“黑圈”闪一下）：
+         用一个低对比度的品牌色 spinner 表达进度，页面主体不变暗。 */
+      .browser-loading-spinner {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 2px solid rgba(217, 138, 79, 0.2);
+        border-top-color: rgba(217, 138, 79, 0.9);
+        animation: loopsSpin 0.9s linear infinite;
+      }
+      @keyframes loopsSpin {
+        to {
+          transform: rotate(360deg);
+        }
       }
       .browser-loading-bar > span {
         animation: loopsIndeterminate 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
@@ -2101,6 +2114,36 @@
     .icon-btn.is-bookmarked {
       color: var(--ls-accent-hover);
     }
+    /* 列表打开时，对应按钮出现在“更多”左侧并高亮（认领当前列表）。 */
+    .icon-btn.is-popover-claim {
+      background: var(--ls-surface-hover);
+      color: var(--ls-text);
+    }
+    /* 工具栏图标按钮的渐入/渐出：宽度 + 透明度一起过渡，按钮出现/消失时整排图标不硬跳。
+       收起时用负 margin 抵消 topActions 的 2px flex gap，不留下空隙。 */
+    .chrome-action-slot {
+      display: inline-flex;
+      align-items: center;
+      width: 0;
+      margin-left: -2px;
+      opacity: 0;
+      overflow: hidden;
+      flex: none;
+      pointer-events: none;
+      transition:
+        width 160ms cubic-bezier(0.2, 0.7, 0.3, 1),
+        margin-left 160ms cubic-bezier(0.2, 0.7, 0.3, 1),
+        opacity 110ms ease;
+    }
+    .chrome-action-slot.is-open {
+      width: 28px;
+      margin-left: 0;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .chrome-action-slot.is-instant {
+      transition: none;
+    }
     .bookmark-list-btn {
       opacity: 0.7;
     }
@@ -2727,13 +2770,17 @@
     }
     .chrome-pop-shell {
       padding: 8px;
+      box-sizing: border-box;
+      overflow: hidden;
       font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
       outline: none;
     }
     .chrome-pop-card {
       display: flex;
       flex-direction: column;
-      min-width: 220px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       max-height: calc(100vh - 16px);
       border-radius: 12px;
       border: 1px solid var(--ls-border-strong);
@@ -2744,7 +2791,6 @@
       box-shadow: none;
       color: var(--ls-text);
       overflow: hidden;
-      animation: popIn 120ms ease both;
     }
     .chrome-pop-head {
       display: flex;
@@ -2776,6 +2822,7 @@
       align-items: center;
       gap: 9px;
       width: 100%;
+      box-sizing: border-box;
       min-height: 30px;
       padding: 5px 9px;
       border: none;
@@ -2923,11 +2970,67 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .chrome-pop-open-link {
+      background: none;
+      border: 0;
+      padding: 0;
+      font: inherit;
+      line-height: inherit;
+      color: var(--ls-accent);
+      text-align: left;
+      cursor: pointer;
+    }
+    .chrome-pop-open-link:hover { text-decoration: underline; }
+    .download-name-link {
+      display: block;
+      width: 100%;
+      background: none;
+      border: 0;
+      padding: 0;
+      font: inherit;
+      line-height: inherit;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .download-name-link:hover { text-decoration: underline; }
+    /* 长文本单元格：未悬停时单行省略号；悬停整行且确实溢出时，按阅读顺序循环滚动。
+       只做 transform，不改变布局宽度，因此不会产生横向滚动条。 */
+    .chrome-pop-marquee {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chrome-pop-marquee.is-running {
+      text-overflow: clip;
+    }
+    .chrome-pop-marquee-run {
+      display: inline-block;
+      will-change: transform;
+    }
+    .chrome-pop-marquee.is-running .chrome-pop-marquee-run {
+      animation: chrome-pop-marquee var(--ls-marquee-duration, 6s) linear infinite;
+    }
+    @keyframes chrome-pop-marquee {
+      0%,
+      12% {
+        transform: translateX(0);
+      }
+      88%,
+      100% {
+        transform: translateX(calc(-1 * var(--ls-marquee-distance, 0px)));
+      }
+    }
     .chrome-pop-list {
       display: flex;
       flex-direction: column;
       gap: 1px;
       padding: 6px;
+      box-sizing: border-box;
+      /* 纵向可滚，横向永远不滚：长文本交给省略号/悬浮滚动，不能出现横向拖拽条。 */
+      overflow-x: hidden;
       overflow-y: auto;
       max-height: calc(100vh - 96px);
       scrollbar-width: thin;
@@ -3007,6 +3110,7 @@
       justify-content: center;
       gap: 5px;
       width: 100%;
+      box-sizing: border-box;
       height: 28px;
       border: none;
       border-radius: 7px;
@@ -3025,9 +3129,6 @@
     .chrome-pop-viewmore:focus-visible {
       outline: 2px solid rgba(var(--ls-accent-rgb), 0.6);
       outline-offset: 1px;
-    }
-    .chrome-pop-viewmore-icon {
-      color: inherit;
     }
     @media (prefers-reduced-motion: reduce) {
       .chrome-pop-card {
@@ -3192,8 +3293,54 @@
         color: var(--ls-text-faint, #6f6a63);
       }
 </style>
+    <style>
+      /* 首帧静态启动页：React 尚未挂载时先显示，SplashScreen 挂载后由它移除。 */
+      #boot-splash { position: fixed; inset: 0; z-index: 9999; background: var(--ls-bg); display: flex; align-items: center; justify-content: center; }
+      .boot-splash-inner { width: 300px; text-align: center; }
+      .boot-splash-logo { border-radius: 19px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); animation: loopsoar-boot-breathe 2.4s ease-in-out infinite; }
+      .boot-splash-title { font-size: 20px; font-weight: 800; letter-spacing: 0.6px; color: var(--ls-text); margin-top: 18px; }
+      .boot-splash-bar { width: 210px; height: 4px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); margin: 18px auto 12px; overflow: hidden; }
+      .boot-splash-bar span { display: block; width: 38%; height: 100%; border-radius: 3px; background: linear-gradient(90deg, transparent, var(--ls-accent), transparent); animation: loopsoar-boot-slide 1.15s ease-in-out infinite; }
+      .boot-splash-status { font-size: 12.5px; color: var(--ls-text-muted); }
+      @keyframes loopsoar-boot-slide { 0% { transform: translateX(-120%); } 100% { transform: translateX(330%); } }
+      @keyframes loopsoar-boot-breathe { 0%, 100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.04); opacity: 1; } }
+      @keyframes loopsoar-download-pulse { 0%, 100% { transform: scale(0.85); opacity: 0.75; } 50% { transform: scale(1.15); opacity: 1; } }
+      /* 浮层首帧骨架：只在 ?popover= 窗口显示，主窗口完全不受影响。 */
+      /* 只放一个不占布局尺寸的小转圈：不画卡片，就不会出现「骨架卡片 → 真卡片」
+         的高度突变（用户看到的异常大小闪动）。 */
+      #popover-skeleton { display: none; position: fixed; inset: 0; pointer-events: none; }
+      html[data-popover-loading] #popover-skeleton { display: block; }
+      html[data-popover-loading] #boot-splash { display: none !important; }
+      .pop-skel-spinner {
+        position: absolute;
+        top: 14px;
+        left: 16px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.18);
+        border-top-color: rgba(var(--ls-accent-rgb), 0.9);
+        animation: popSkelSpin 0.8s linear infinite;
+      }
+      @keyframes popSkelSpin { to { transform: rotate(360deg); } }
+      /* 浮层卡片不做入场动画：透明子窗口的合成会让任何 opacity/scale 过渡在慢动作里
+         变成「闪一下」；窗口出现本身已经是过渡，卡片首帧直接不透明。 */
+    </style>
   </head>
   <body>
+    <!-- 浮层窗口首帧骨架：popover-boot.js 在 bundle 加载前打标，这里只负责画一张空卡片，
+         避免「点了按钮后半天没反应」。React 挂载后由 PopoverApp 移除。 -->
+    <div id="popover-skeleton" aria-hidden="true">
+      <span class="pop-skel-spinner"></span>
+    </div>
+    <div id="boot-splash" aria-hidden="true">
+      <div class="boot-splash-inner">
+        <img class="boot-splash-logo" src="./logo.png" alt="" width="72" height="72" />
+        <div class="boot-splash-title">Loopsoar</div>
+        <div class="boot-splash-bar"><span></span></div>
+        <div class="boot-splash-status">正在启动…</div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

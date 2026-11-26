@@ -128,7 +128,8 @@ describe("dismissAllPopovers（全局收起入口）", () => {
     };
     expect(isNativePageVisible(base)).toBe(false);
     expect(isNativePageVisible({ ...base, currentUrl: "https://example.com" })).toBe(true);
-    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", loading: true })).toBe(false);
+    // 加载中仍然可见：导航期间原生视图继续画旧页面（不能露出黑底/加载页）
+    expect(isNativePageVisible({ ...base, currentUrl: "https://example.com" })).toBe(true);
     expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", loadFailure: "ERR" })).toBe(false);
     expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", vibeModeActive: true })).toBe(false);
     expect(isNativePageVisible({ ...base, currentUrl: "https://example.com", miniWindow: true })).toBe(false);

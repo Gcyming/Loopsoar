@@ -19,7 +19,7 @@ import {
 export interface WebContentsLike {
   /** WebContents id（真实 Electron 必有；测试假实现可缺省）。 */
   id?: number;
-  loadURL(url: string): Promise<void>;
+  loadURL(url: string, options?: { extraHeaders?: string }): Promise<void>;
   getURL(): string;
   capturePage(): Promise<{ toPNG(): Buffer }>;
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
@@ -51,6 +51,8 @@ export interface WebContentsAdapterOptions {
   onClose?: () => void;
   /** 页面主动导航（用户点链接 / 页面重定向 / SPA 路由）→ 让外壳同步地址栏与标签状态。 */
   onNavigate?: (url: string) => void;
+  /** 网页焦点下的浏览器快捷键（Ctrl+T/W/R/M、Ctrl+Shift+T/K）→ 外壳转给渲染层执行。 */
+  onShortcut?: (action: string) => void;
   /** 页面标题变化 → 标签标题同步。 */
   onTitle?: (title: string) => void;
   /** 页面图标更新（已转成 data: URL：渲染层 CSP 只允许 self/data:）。 */
@@ -161,6 +163,29 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
     zoomFactor = Math.max(0.5, Math.min(2, next));
     wc.setZoomFactor?.(zoomFactor);
   });
+  // 浏览器标签快捷键：网页（WebContentsView）有独立焦点，主窗口 keydown 收不到；
+  // 不转发的话用户点进网页后 Ctrl+T/W/R 全部失效（与 Chrome 体验不一致）。
+  if (opts.onShortcut) {
+    wc.on("before-input-event", (...args) => {
+      const event = args[0] as { preventDefault?: () => void } | undefined;
+      const input = args[1] as
+        | { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean; alt?: boolean }
+        | undefined;
+      if (!input || input.type !== "keyDown" || !(input.control || input.meta) || input.alt) return;
+      const key = (input.key ?? "").toLowerCase();
+      let action: string | null = null;
+      if (input.shift) {
+        if (key === "t") action = "reopen-tab";
+        else if (key === "k") action = "duplicate-tab";
+      } else if (key === "t") action = "new-tab";
+      else if (key === "w") action = "close-tab";
+      else if (key === "r") action = "reload";
+      else if (key === "m") action = "mute-tab";
+      if (!action) return;
+      event?.preventDefault?.();
+      opts.onShortcut?.(action);
+    });
+  }
   if (opts.onDevToolsRequest) {
     wc.on("before-input-event", (...args) => {
       const event = args[0] as { preventDefault?: () => void } | undefined;
@@ -199,8 +224,9 @@ export function createWebContentsViewAdapter(opts: WebContentsAdapterOptions): B
   }
 
   return {
-    async navigate(url: string) {
-      await wc.loadURL(url);
+    async navigate(url: string, referer?: string) {
+      // 只有程序化导航（Agent 打开页面内链接 / window.open）才补 Referer；用户输入地址时不带。
+      await wc.loadURL(url, referer ? { extraHeaders: `Referer: ${referer}\n` } : undefined);
       await waitDomReady();
       // 不再「导航后打标」：引用由 snapshot() 每次现算，导航只负责清空旧注册表（见 handleNavigation）
       return { url: wc.getURL() || url };

@@ -67,6 +67,15 @@ describe("resolveOmniboxInput", () => {
     expect(resolveOmniboxInput("data:text/html,<h1>x</h1>").kind).toBe("invalid");
   });
 
+  it("带冒号的搜索词按搜索处理（不能当未知协议拒绝）", () => {
+    const r = resolveOmniboxInput("c: 语言");
+    expect(r.kind).toBe("search");
+    if (r.kind === "search") expect(r.query).toBe("c: 语言");
+    expect(resolveOmniboxInput("note: 今天的安排").kind).toBe("search");
+    // 无空格的未知协议仍然是非法（安全边界不放松）
+    expect(resolveOmniboxInput("foo:bar").kind).toBe("invalid");
+  });
+
   it("空输入非法", () => {
     expect(resolveOmniboxInput("   ").kind).toBe("invalid");
   });

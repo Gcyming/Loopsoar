@@ -28,6 +28,8 @@ export interface ChatMessageViewProps {
   contextCap: number;
   contextPct: number;
   thinkingOpen: boolean;
+  /** 当前会话是否有回复正在生成（生成中禁止回滚/重新生成，避免并发流与幽灵消息）。 */
+  busy?: boolean;
   expandAllGroups?: boolean;
   openProducts?: boolean;
   onToggleThinking: () => void;
@@ -44,6 +46,7 @@ export default function ChatMessageView({
   contextCap,
   contextPct,
   thinkingOpen,
+  busy = false,
   expandAllGroups = false,
   openProducts = false,
   onToggleThinking,
@@ -96,9 +99,11 @@ export default function ChatMessageView({
         <div className="msg-hover" style={styles.msgHover}>
           <span style={styles.msgHoverTag}>{mode === "build" ? "Build" : "Plan"}</span>
           <span style={styles.msgTime}>· {timeText}</span>
-          <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
-            <Icon name="reload" size={12} />
-          </button>
+          {busy ? null : (
+            <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.rollbackTitle")} onClick={() => onRollback(m.id)}>
+              <Icon name="reload" size={12} />
+            </button>
+          )}
           <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.forkTitle")} onClick={() => onFork(m.id)}>
             <Icon name="git-branch-fill" size={12} />
           </button>
@@ -219,7 +224,7 @@ export default function ChatMessageView({
             >
               <Icon name="copy" size={12} />
             </button>
-            {!streaming && m.text ? (
+            {!streaming && m.text && !busy ? (
               <button type="button" className="msg-action" style={styles.msgAction} title={tr("chat.regenerateTitle")} onClick={() => onRegenerate(m.id)}>
                 <Icon name="reload" size={12} />
               </button>

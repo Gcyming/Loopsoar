@@ -99,6 +99,9 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
     streamSettledRef,
   } = options;
 
+  /** 用户在本会话点过「停止」的标记：收尾时保留待发队列但不再自动续发。 */
+  const stopRequestedRef = React.useRef<Set<string>>(new Set());
+
   /** 发送一条文本：立即渲染用户消息 + 助手占位（不等首字），再发起流式请求。 */
   const sendText = useCallback(
     (raw: string, targetSessionId?: string): void => {
@@ -108,6 +111,16 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
       if (!sid) return;
       const meta = metaFor(sid);
       const assistantId = nextId("assistant");
+      const userId = nextId("u");
+      // 保存旧流状态：主进程可能拒绝本次 stream（例如另一个窗口已在同一会话生成），
+      // 拒绝时必须原样恢复，否则旧流的 chunk 会被路由到已撤销的占位消息上。
+      const previousMeta = {
+        activeId: meta.activeId,
+        startedAt: meta.startedAt,
+        firstTokenAt: meta.firstTokenAt,
+        busy: meta.busy,
+        stopping: meta.stopping,
+      };
       meta.activeId = assistantId;
       meta.startedAt = Date.now();
       meta.firstTokenAt = 0;
@@ -115,7 +128,7 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
       meta.stopping = false;
       updateSessionMessages(sid, (prev) => [
         ...prev,
-        { id: nextId("u"), role: "user", text, status: "done", createdAt: Date.now() },
+        { id: userId, role: "user", text, status: "done", createdAt: Date.now() },
         {
           id: assistantId,
           role: "assistant",
@@ -130,15 +143,38 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
       setNotice("");
       void api.chat
         .stream({ message: text, sessionId: sid, mode, reasoningEffort: reasoningEffort || undefined })
-        .catch((err: unknown) => {
-          meta.busy = false;
+        .then((result) => {
+          if (result?.accepted !== false) return;
+          // 被拒（会话已有流/已删除）：撤销乐观插入的用户消息与占位，恢复发送前的运行状态，
+          // 把原文放回输入框（用户不必重新输入）。
+          updateSessionMessages(sid, (prev) => prev.filter((m) => m.id !== assistantId && m.id !== userId));
+          Object.assign(meta, previousMeta);
           if (sid === sessionIdRef.current) {
-            setBusy(false);
+            setInput((prev) => (prev.trim() ? prev : text));
+            setBusy(previousMeta.busy);
+            setNotice(result.error ?? "发送失败：该会话已有回复正在生成");
+          }
+        })
+        .catch((err: unknown) => {
+          // 传输层失败：把占位收成错误消息（否则气泡会永远停留在“输出中”）。
+          meta.busy = previousMeta.busy;
+          meta.activeId = previousMeta.activeId;
+          meta.startedAt = previousMeta.startedAt;
+          meta.firstTokenAt = previousMeta.firstTokenAt;
+          if (sid === sessionIdRef.current) {
+            setBusy(previousMeta.busy);
             setNotice(`发送失败：${err instanceof Error ? err.message : String(err)}`);
           }
+          updateSessionMessages(sid, (prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, status: "error" as const, tail: undefined, errorText: err instanceof Error ? err.message : String(err) }
+                : m,
+            ),
+          );
         });
     },
-    [api, metaFor, mode, provider, reasoningEffort, updateSessionMessages],
+    [api, metaFor, mode, provider, reasoningEffort, setBusy, setInput, setNotice, updateSessionMessages],
   );
 
   /** 首次发送：没有会话时创建（工作区=当前选择；没有选择则未归属），并切换到该会话。 */
@@ -229,18 +265,19 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
    * 此前是"入队即投递"，用户明确否掉了这一形态。
    */
   const queueSteer = useCallback(
-    (raw: string): void => {
+    (raw: string): boolean => {
       const text = raw.trim();
       const sid = sessionIdRef.current;
-      if (!text || !sid || !api) return;
+      if (!text || !sid || !api) return false;
       const current = readPending(sid);
       if (current.length >= PENDING_STEER_MAX) {
         setNotice(`待发队列已满（最多 ${PENDING_STEER_MAX} 条），请等本轮结束后再发`);
-        return;
+        return false;
       }
       const item: PendingSteer = { id: nextId("steer"), text, createdAt: Date.now(), status: "queued" };
       writePending(sid, enqueuePending(current, item));
       setNotice(`已排队（${current.length + 1}/${PENDING_STEER_MAX}）：本轮结束后自动发出；点「引导」可提前并入当前思考`);
+      return true;
     },
     [api, readPending, writePending],
   );
@@ -248,12 +285,13 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
   const send = useCallback((): void => {
     const text = input.trim();
     if (!text || !api) return;
-    setInput("");
     if (busy) {
-      // 运行中：Enter = 待发指令（入队 + 投递，不打断当前输出；slime 语义）
-      queueSteer(text);
+      // 运行中：Enter = 待发指令（入队 + 投递，不打断当前输出；slime 语义）。
+      // 只有真正入队成功才清空输入：队列满时保留原文，避免用户丢消息（旧实现先清空再判满）。
+      if (queueSteer(text)) setInput("");
       return;
     }
+    setInput("");
     void ensureSessionForSend()
       .then((sid) => {
         if (sid) sendText(text, sid);
@@ -264,6 +302,12 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
   /** 回滚到某条用户消息：消息之后的对话删除、内容放回输入框、持久化会话同步截断。 */
   const rollbackTo = useCallback(
     (targetId: string): void => {
+      // 生成中禁止回滚：清空消息后仍在跑的流会继续往缓存写增量，UI 出现「幽灵回复」，
+      // 而落库又按截断后的历史追加，重启后前后不一致（会同时丢上下文和写重复）。
+      if (busy) {
+        setNotice("正在生成回复，请先停止或等待本轮结束后再回滚");
+        return;
+      }
       const idx = messages.findIndex((m) => m.id === targetId);
       if (idx < 0) return;
       const target = messages[idx];
@@ -277,12 +321,17 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
       setNotice("已回滚到该消息，内容已放回输入框");
       void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
     },
-    [api, messages, updateSessionMessages],
+    [api, busy, messages, updateSessionMessages],
   );
 
   /** 重新生成：回滚到上一条用户消息并重发（复用现有 rollback + sendText 通道）。 */
   const regenerate = useCallback(
     (assistantId: string): void => {
+      // 生成中禁止「重新生成」：会并发启动第二条流，两轮内容交错写进同一气泡并重复落库。
+      if (busy) {
+        setNotice("正在生成回复，请先停止或等待本轮结束后再重新生成");
+        return;
+      }
       const idx = messages.findIndex((m) => m.id === assistantId);
       if (idx < 0) return;
       let userIdx = -1;
@@ -302,7 +351,7 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
       void api?.chat.rollback({ keepCount, sessionId: sessionIdRef.current ?? undefined }).catch(() => {});
       window.setTimeout(() => sendText(text), 80);
     },
-    [api, messages, sendText, updateSessionMessages],
+    [api, busy, messages, sendText, updateSessionMessages],
   );
 
   const stop = useCallback((): void => {
@@ -312,17 +361,21 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
     // 标记「用户主动停止」：abort 的 error 事件被 UI 收束为已停止，而不是红色报错
     const meta = metaFor(sid);
     meta.stopping = true;
+    // 停止 = 用户要中断本轮，不能在本轮收尾后立刻把待发队列自动发出去（会像「停不下来」）。
+    stopRequestedRef.current.add(sid);
     setNotice("正在停止…");
     void api.chat
       .stop({ sessionId: sid })
       .then((r) => {
         if (r.stopped) return;
+        stopRequestedRef.current.delete(sid);
         meta.stopping = false;
         meta.busy = false;
         setBusy(false);
         setNotice("当前没有正在运行的回复");
       })
       .catch(() => {
+        stopRequestedRef.current.delete(sid);
         meta.stopping = false;
       });
   }, [api, metaFor]);
@@ -394,11 +447,17 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
         .sessions()
         .then((r) => setSessions(r.sessions))
         .catch(() => undefined);
+      const wasStopped = stopRequestedRef.current.delete(sessionId);
       const current = readPending(sessionId);
       if (current.length === 0) return;
       const requeued = requeueUndelivered(current);
       writePending(sessionId, requeued);
       if (sessionId !== sessionIdRef.current) return;
+      // 用户刚点过停止：保留队列但不自动续发，避免「点了停止还在继续发」。
+      if (wasStopped) {
+        setNotice("已停止；待发指令保留在队列中，可手动发送或删除");
+        return;
+      }
       const next = nextResendable(requeued);
       if (!next) return;
       writePending(sessionId, removePending(requeued, next.id));

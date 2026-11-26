@@ -79,8 +79,12 @@ export interface BrowserLoadFailure {
 }
 
 export interface BrowserAdapter {
-  /** 导航到 URL（等待 domcontentloaded） */
-  navigate(url: string): Promise<{ url: string }>;
+  /**
+   * 导航到 URL（等待 domcontentloaded）。
+   * referer：程序化导航（Agent 直接打开页面里的链接 / window.open）补发的 Referer；
+   * 缺省 = 不补（地址栏输入、后退/前进/刷新与原生浏览器行为一致）。
+   */
+  navigate(url: string, referer?: string): Promise<{ url: string }>;
   /** 页面可访问性快照（语义元素 + 稳定句柄，元素优先于坐标） */
   snapshot(): Promise<BrowserSnapshot>;
   /** 截图（返回 base64 PNG） */

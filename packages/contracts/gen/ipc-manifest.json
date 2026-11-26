@@ -204,6 +204,13 @@
       "hasRequest": true
     },
     {
+      "channel": "browser:moveTab",
+      "domain": "browser",
+      "method": "moveTab",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:resolveFavicon",
       "domain": "browser",
       "method": "resolveFavicon",
@@ -1114,9 +1121,23 @@
       "hasRequest": true
     },
     {
+      "channel": "ui:setContextMenuSuppressed",
+      "domain": "ui",
+      "method": "setContextMenuSuppressed",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "ui:openAgentWindow",
       "domain": "ui",
       "method": "openAgentWindow",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "ui:openBrowserWindow",
+      "domain": "ui",
+      "method": "openBrowserWindow",
       "sensitive": true,
       "hasRequest": true
     },
@@ -1254,6 +1275,13 @@
       "hasRequest": true
     },
     {
+      "channel": "bookmarks:update",
+      "domain": "bookmarks",
+      "method": "update",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:savePage",
       "domain": "browser",
       "method": "savePage",
@@ -1284,6 +1312,7 @@
     "chat:stream:done",
     "chat:stream:error",
     "chat:stream:heartbeat",
+    "chat:running",
     "chat:steer:applied",
     "chat:pauseState",
     "perm:request",
@@ -1308,6 +1337,7 @@
     "chrome:popoverClosed",
     "chrome:dismissPopovers",
     "chrome:devToolsPanel",
+    "browser:shortcut",
     "chrome:agentActivity",
     "chrome:agentWindowClosed",
     "chrome:agentWindowIconMode",

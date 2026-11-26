@@ -271,6 +271,13 @@ export function mergeFetchedProviderModels(
     merged.selected = prev?.selected ?? incoming.selected ?? true;
     models.push(merged);
   }
+  // 上游目录里没有、但本地手工添加的模型必须保留：旧实现只输出 fetched，
+  // 用户点一次「获取模型列表」自己的模型就从表格和配置里消失了（还会被保存覆盖）。
+  for (const prev of existingById.values()) {
+    if (seen.has(prev.id)) continue;
+    seen.add(prev.id);
+    models.push({ ...prev });
+  }
   const enrichedModels = models.filter((model) =>
     MODEL_CAPABILITY_KEYS.some((key) => model[key] !== undefined),
   ).length;

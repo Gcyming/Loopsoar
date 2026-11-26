@@ -52,6 +52,8 @@ export interface DoneInfo {
 
 /** 正文增量：不存在则创建助手消息（并开始时间线），存在则累加。 */
 export function applyChunk(messages: ChatMessage[], id: string, delta: string, options: { tailSeq?: number; now?: number } = {}): ChatMessage[] {
+  // IPC 事件可能缺字段/类型不对：先挡住，避免 delta.length 在渲染期抛错拖垮整棵树。
+  if (typeof delta !== "string" || !delta) return messages;
   const index = messages.findIndex((message) => message.id === id);
   if (index === -1) {
     return [
@@ -95,7 +97,7 @@ export function applyLateChunk(
   delta: string,
   options: { tailSeq?: number; fallbackId?: string; now?: number } = {},
 ): ChatMessage[] {
-  if (!delta) return messages;
+  if (typeof delta !== "string" || !delta) return messages;
   let index = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i].role === "assistant") {
@@ -126,6 +128,7 @@ export function applyLateChunk(
 
 /** 思考增量。 */
 export function applyReasoning(messages: ChatMessage[], id: string, delta: string): ChatMessage[] {
+  if (typeof delta !== "string" || !delta) return messages;
   return messages.map((message) =>
     message.id === id
       ? { ...message, timeline: appendTimelineStep(message.timeline ?? [], { kind: "think", text: delta }) }
@@ -142,8 +145,9 @@ export function applyToolStart(messages: ChatMessage[], id: string, raw: string)
     return messages;
   }
   if (!started.toolCallId || !started.toolName) return messages;
-  const toolCallId = started.toolCallId;
-  const toolName = started.toolName;
+  // 事件来自 IPC/持久化：运行时可能是非字符串，渲染层会 .replace/.match 崩溃，这里先归一。
+  const toolCallId = typeof started.toolCallId === "string" ? started.toolCallId : String(started.toolCallId);
+  const toolName = typeof started.toolName === "string" ? started.toolName : String(started.toolName);
   return messages.map((message) =>
     message.id === id
       ? {
@@ -176,14 +180,36 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
   } catch {
     payload = { result: { ok: false, content: raw.slice(0, 2000) } };
   }
-  const toolName = payload.toolName ?? payload.name ?? payload.tool ?? "工具";
+  const rawToolName =
+    typeof payload.toolName === "string"
+      ? payload.toolName
+      : typeof payload.name === "string"
+        ? payload.name
+        : typeof payload.tool === "string"
+          ? payload.tool
+          : "工具";
+  const toolName = rawToolName || "工具";
   const toolArgs = typeof payload.args === "string" ? safeJson(payload.args) : payload.args;
   const toolResult = payload.result ?? null;
+  // result.content 运行时可能是结构化对象；先归一成字符串，避免 parsePlanItems/.match 抛错。
+  const rawResult = toolResult?.content ?? toolResult?.error;
+  const resultText =
+    typeof rawResult === "string"
+      ? rawResult
+      : rawResult == null
+        ? ""
+        : (() => {
+            try {
+              return JSON.stringify(rawResult);
+            } catch {
+              return String(rawResult);
+            }
+          })();
   const plan = parsePlanArgs(toolName, toolArgs);
   const planItems: PlanItem[] | null =
     plan ??
-    (/todo|plan|task/i.test(toolName) && toolResult?.content ? (() => {
-      const parsed = parsePlanItems(toolResult.content);
+    (/todo|plan|task/i.test(toolName) && resultText ? (() => {
+      const parsed = parsePlanItems(resultText);
       return parsed.length > 0 ? parsed : null;
     })() : null);
 
@@ -192,14 +218,14 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
     let timeline = message.timeline ?? [];
     const running = Boolean(payload.toolCallId) && timeline.some((step) => step.kind === "tool" && step.id === payload.toolCallId);
     timeline = running
-      ? settleToolStep(timeline, payload.toolCallId!, { ok: toolResult?.ok !== false, result: toolResult?.content ?? toolResult?.error })
+      ? settleToolStep(timeline, payload.toolCallId!, { ok: toolResult?.ok !== false, result: resultText || undefined })
       : appendTimelineStep(timeline, {
           kind: "tool",
           id: payload.toolCallId ?? newToolId,
           name: toolName,
           label: toolName,
-          detail: extractToolDetail(toolName, toolArgs, toolResult?.content ?? toolResult?.error ?? ""),
-          result: toolResult?.content ?? toolResult?.error,
+          detail: extractToolDetail(toolName, toolArgs, resultText),
+          result: resultText || undefined,
           ok: toolResult?.ok !== false,
           state: "done",
         });
@@ -210,6 +236,7 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
 
 /** 用户引导（steer）折进时间线。 */
 export function applySteer(messages: ChatMessage[], id: string, text: string): ChatMessage[] {
+  if (typeof text !== "string" || !text.trim()) return messages;
   return messages.map((message) =>
     message.id === id ? { ...message, timeline: appendTimelineStep(message.timeline ?? [], { kind: "steer", text }) } : message,
   );
@@ -316,12 +343,37 @@ export function restoreMessages(
   return history.map((message) => ({
     id: newId(message.role),
     role: message.role,
-    text: message.text,
+    // 持久化历史可能来自旧版本/被外部改坏：text 与 timeline 必须过一遍结构校验，
+    // 否则渲染层的 .trim/.replace 会抛错并带着整棵树一起卸载（黑屏）。
+    text: typeof message.text === "string" ? message.text : "",
     status: "done" as const,
     ...(message.provider ? { provider: message.provider } : {}),
     ...(message.model ? { model: message.model } : {}),
-    timeline: Array.isArray(message.timeline) ? (message.timeline as TimelineStep[]) : undefined,
+    timeline: Array.isArray(message.timeline) ? sanitizeTimeline(message.timeline) : undefined,
   }));
+}
+
+/** 只保留渲染层能安全消费的时间线节点；结构不对的直接丢弃，而不是让渲染期抛错。 */
+function sanitizeTimeline(raw: unknown[]): TimelineStep[] | undefined {
+  const steps: TimelineStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const step = item as Record<string, unknown>;
+    const kind = step.kind;
+    if (kind === "think" || kind === "body" || kind === "steer") {
+      if (typeof step.text !== "string") continue;
+    } else if (kind === "tool") {
+      if (typeof step.id !== "string" || typeof step.name !== "string") continue;
+    } else if (kind === "plan") {
+      if (!Array.isArray(step.items)) continue;
+    } else if (kind === "todo") {
+      if (typeof step.text !== "string" || typeof step.state !== "string") continue;
+    } else {
+      continue;
+    }
+    steps.push(step as unknown as TimelineStep);
+  }
+  return steps.length > 0 ? steps : undefined;
 }
 
 function safeJson(value: string): unknown {

@@ -151,7 +151,11 @@ export interface ChatServiceOptions {
    * 读取图片附件（当前用户轮的 `【附件】<path>`）：返回 base64 供多模态消息使用。
    * 由壳层注入（扩展名白名单 + 6MB 上限在 imageRead 内）；services 不直接碰 fs。
    */
-  readImageAttachment?: (path: string) => { mime: string; base64: string } | null;
+  /**
+   * 读取图片附件 → 多模态 part；返回 { error } 表示「明确失败」（会以 progress 提示用户），
+   * null = 与当前模型无关。旧实现静默丢弃失败，用户会以为模型看到了图。
+   */
+  readImageAttachment?: (path: string) => { mime: string; base64: string } | { error: string } | null;
   /** 权限确认请求回调（壳层推送到渲染层弹窗）。 */
   onPermissionRequest?: (request: PermissionRequestEvent) => void;
   /** 权限确认结算回调（弹窗可能由界面或自动化关闭，统一通知渲染层出队）。 */
@@ -201,6 +205,8 @@ export interface ChatInput {
 /** 权限确认请求（浮层 UI 据此弹窗；requestId 用于 resolvePermission 结算）。 */
 export interface PermissionRequestEvent {
   requestId: string;
+  /** 发起确认的会话：渲染层据此只在对应会话里弹窗（后台会话不抢当前界面）。 */
+  sessionId?: string;
   toolName: string;
   target?: string;
   kind?: string;
@@ -453,6 +459,7 @@ export class InternalToolExecutor {
       // 推送到渲染层弹窗（用户点允许/拒绝 → perm:respond → resolvePermission）
       this.opts.onPermissionRequest?.({
         requestId,
+        sessionId: this.opts.sessionId,
         toolName: toolCall.name,
         target,
         kind,
@@ -522,19 +529,25 @@ export class InternalToolExecutor {
  */
 function imageAttachmentParts(
   text: string,
-  read: ((path: string) => { mime: string; base64: string } | null) | undefined,
-): { type: "image"; mime: string; base64: string }[] {
-  if (!read) return [];
+  read: ((path: string) => { mime: string; base64: string } | { error: string } | null) | undefined,
+): {
+  parts: { type: "image"; mime: string; base64: string }[];
+  skipped: { path: string; reason: string }[];
+} {
   const parts: { type: "image"; mime: string; base64: string }[] = [];
+  const skipped: { path: string; reason: string }[] = [];
+  if (!read) return { parts, skipped };
   const re = /【附件】([^\n]+)/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const path = match[1]?.trim();
     if (!path) continue;
     const image = read(path);
-    if (image) parts.push({ type: "image", mime: image.mime, base64: image.base64 });
+    if (!image) continue;
+    if ("error" in image) skipped.push({ path, reason: image.error });
+    else parts.push({ type: "image", mime: image.mime, base64: image.base64 });
   }
-  return parts;
+  return { parts, skipped };
 }
 
 export class ChatService {
@@ -620,6 +633,11 @@ export class ChatService {
     const { platform, registry, sandbox, agent } = this.opts;
     // 惰性 LLM：设置面板保存供应商后可立即生效（无需重启）
     const sessionId = input.sessionId ?? `sess-${Date.now()}`;
+    // 同一会话不允许并发流：旧实现会直接覆盖 this.aborts/steerBuses，旧流无法停止、
+    // 两轮内容交错写进同一条消息、各自 append 一次。这里 fail-fast，让调用方给出可读提示。
+    if (this.aborts.has(sessionId)) {
+      throw new Error("该会话已有回复正在生成，请先停止或等待本轮结束");
+    }
     // 传入 sessionId：供应商请求头模板里的 {{sessionId}} 按当前会话渲染
     const llm = this.opts.getLlm?.(sessionId) ?? this.opts.llm;
     const chunks: ChunkBatch[] = [];
@@ -757,14 +775,18 @@ export class ChatService {
       }
     }
     const userText = `${withWallClockPrefix(input.message, requestNow)}\n\n${volatileContent}`;
-    const imageParts = imageAttachmentParts(input.message, this.opts.readImageAttachment);
+    const attachment = imageAttachmentParts(input.message, this.opts.readImageAttachment);
+    // 图片附件失败不能静默：明确告诉用户「哪张图没发出去、为什么」，否则会以为模型看图答错。
+    for (const skipped of attachment.skipped) {
+      emit("progress", { note: `图片附件未发送（${skipped.reason}）：${skipped.path}` });
+    }
     const messages = [
       { role: "system" as const, content: stableContent },
       ...compression.messages,
       {
         role: "user" as const,
-        content: imageParts.length > 0
-          ? [{ type: "text" as const, text: userText }, ...imageParts]
+        content: attachment.parts.length > 0
+          ? [{ type: "text" as const, text: userText }, ...attachment.parts]
           : userText,
       },
     ];
@@ -921,7 +943,7 @@ export class ChatService {
       if (!finalText.trim()) {
         finalText =
           outcome === "done"
-            ? "（模型没有返回文本内容）"
+            ? "（模型没有返回文本内容：上游可能异常，已自动重试一次仍为空。请再次发送或切换模型/供应商。）"
             : outcome === "aborted"
               ? "（已停止）"
               : `（任务未完成：${reason}）`;

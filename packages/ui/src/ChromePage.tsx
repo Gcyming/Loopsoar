@@ -12,10 +12,13 @@
  *   · i18n：文案走 chromePage.* 词典（`useT()` 的 tr 调用），词典在 i18nChrome.ts（i18n.ts 已合并）。
  */
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { LAYOUT } from "loopsoar-contracts/layout";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+import DownloadIcon from "./DownloadIcon.js";
 import Settings from "./Settings.js";
+import RowContextMenu, { type RowMenuItem } from "./RowContextMenu.js";
 import { getLanguage, useT } from "./i18n.js";
 import type {
   BookmarkItem,
@@ -66,6 +69,17 @@ function formatTime(at: number | undefined): string {
   });
 }
 
+/** 下载状态文案：文件被删除 > 异常原因 > 基础状态。 */
+function downloadStatusText(item: DownloadItem, tr: (key: string, vars?: Record<string, string | number>) => string): string {
+  if (item.missing) return tr("chromePage.downloads.deleted");
+  if (item.reason === "cancelled") return tr("chromePage.downloads.cancelledByUser");
+  if (item.reason === "permission") return tr("chromePage.downloads.permission");
+  if (item.reason === "app-closed") return tr("chromePage.downloads.appClosed");
+  if (item.reason === "stale") return tr("chromePage.downloads.stale");
+  if (item.state === "interrupted") return tr("chromePage.downloads.failedReason");
+  return tr(downloadStateKey(item.state));
+}
+
 /** 下载状态 → 词典 key。 */
 function downloadStateKey(state: DownloadItem["state"]): string {
   switch (state) {
@@ -100,7 +114,7 @@ function StateBox({ kind, text, onRetry, retryLabel }: {
   );
 }
 
-export default function ChromePage({
+function ChromePage({
   kind,
   api,
   onClose,
@@ -123,6 +137,12 @@ export default function ChromePage({
   /** 左侧索引栏：搜索框 + 分类筛选（致敬 Edge 下载/收藏/历史页的三栏布局）。 */
   const [searchQuery, setSearchQuery] = React.useState("");
   const [sideFilter, setSideFilter] = React.useState("all");
+  type RowMenu =
+    | { kind: "download"; x: number; y: number; item: DownloadItem }
+    | { kind: "bookmark"; x: number; y: number; item: BookmarkItem }
+    | { kind: "history"; x: number; y: number; item: HistoryEntry };
+  const [rowMenu, setRowMenu] = React.useState<RowMenu | null>(null);
+  const [editBookmark, setEditBookmark] = React.useState<{ item: BookmarkItem; title: string; url: string } | null>(null);
 
   const title = tr(`chromePage.title.${kind}`);
 
@@ -199,11 +219,20 @@ export default function ChromePage({
   // Esc = 返回（与设置面板的键盘习惯一致）
   React.useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (editBookmark) {
+        setEditBookmark(null);
+        return;
+      }
+      if (rowMenu) {
+        setRowMenu(null);
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [editBookmark, onClose, rowMenu]);
 
   /* ── 左侧索引栏：搜索 + 分类（Edge 式三栏：索引 / 内容） ── */
   const dayStart = (offset: number): number => {
@@ -323,7 +352,7 @@ export default function ChromePage({
     }
   };
 
-  const downloadAction = (item: DownloadItem, action: "cancel" | "open" | "showInFolder" | "remove"): void => {
+  const downloadAction = (item: DownloadItem, action: "cancel" | "open" | "showInFolder" | "remove" | "start" | "retry"): void => {
     if (!api) return;
     void api.browser
       .downloadAction({ id: item.id, action })
@@ -332,6 +361,62 @@ export default function ChromePage({
           onNotice?.(tr("chromePage.downloads.removed"));
           void loadDownloads();
         }
+      })
+      .catch((e: unknown) => onNotice?.(tr("chromePage.error", { error: errorText(e) })));
+  };
+
+  /** 写剪贴板（失败时退回 textarea + execCommand），返回是否成功。 */
+  const writeClipboard = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      try {
+        return document.execCommand("copy");
+      } catch {
+        return false;
+      } finally {
+        area.remove();
+      }
+    }
+  };
+
+  const copyText = (text: string, doneText: string): void => {
+    void writeClipboard(text).then((ok) => {
+      if (ok) onNotice?.(doneText);
+    });
+  };
+
+  /** 剪切：复制链接并删除书签（本应用没有书签粘贴容器，剪贴板里留下可重新收藏的链接）。 */
+  const cutBookmark = (item: BookmarkItem): void => {
+    if (!api?.bookmarks) return;
+    void (async () => {
+      const copied = await writeClipboard(item.url);
+      try {
+        await api.bookmarks.remove({ id: item.id });
+        onNotice?.(tr(copied ? "chromePage.bookmarks.cutDone" : "chromePage.bookmarks.cutNoCopy"));
+        await loadBookmarks();
+      } catch (e) {
+        onNotice?.(tr("chromePage.error", { error: errorText(e) }));
+      }
+    })();
+  };
+
+  const openInNewWindow = (url: string): void => {
+    const open = api?.ui?.openBrowserWindow;
+    if (typeof open !== "function") {
+      onNavigate(url);
+      return;
+    }
+    void open({ url })
+      .then((result) => {
+        if (!result.ok) onNotice?.(tr("chromePage.error", { error: result.error ?? "open window failed" }));
       })
       .catch((e: unknown) => onNotice?.(tr("chromePage.error", { error: errorText(e) })));
   };
@@ -346,6 +431,113 @@ export default function ChromePage({
       })
       .catch((e: unknown) => onNotice?.(tr("chromePage.error", { error: errorText(e) })));
   };
+
+  const saveBookmarkEdit = async (): Promise<void> => {
+    if (!api?.bookmarks || !editBookmark) return;
+    try {
+      const result = await api.bookmarks.update({ id: editBookmark.item.id, title: editBookmark.title, url: editBookmark.url });
+      if (!result.ok) {
+        onNotice?.(result.error ?? tr("chromePage.error", { error: "update failed" }));
+        return;
+      }
+      onNotice?.(tr("chromePage.bookmarks.updated"));
+      setEditBookmark(null);
+      await loadBookmarks();
+    } catch (e) {
+      onNotice?.(tr("chromePage.error", { error: errorText(e) }));
+    }
+  };
+
+  const removeHistory = (item: HistoryEntry): void => {
+    if (!api) return;
+    void api.browser
+      .historyRemove({ urls: [item.url] })
+      .then((result) => {
+        onNotice?.(tr("chromePage.history.deleted", { count: result.removed }));
+        void loadHistory();
+      })
+      .catch((e: unknown) => onNotice?.(tr("chromePage.error", { error: errorText(e) })));
+  };
+
+  const moreFromSite = (item: HistoryEntry): void => {
+    try {
+      setSideFilter("all");
+      setSearchQuery(new URL(item.url).hostname);
+    } catch {
+      // 非标准 URL：忽略
+    }
+  };
+
+  const deleteDownloadFile = (item: DownloadItem): void => {
+    if (!api) return;
+    void api.browser
+      .downloadAction({ id: item.id, action: "deleteFile" })
+      .then((result) => {
+        onNotice?.(result.ok ? tr("chromePage.downloads.deletedFile") : tr("chromePage.downloads.fileDeleteFailed"));
+        if (result.ok) void loadDownloads();
+      })
+      .catch(() => onNotice?.(tr("chromePage.downloads.fileDeleteFailed")));
+  };
+
+  const alwaysOpenDownload = (item: DownloadItem): void => {
+    if (!api) return;
+    const ext = item.filename.includes(".") ? item.filename.slice(item.filename.lastIndexOf(".")).toLowerCase() : "";
+    void api.browser
+      .downloadAction({ id: item.id, action: "alwaysOpen" })
+      .then((result) => {
+        onNotice?.(result.ok ? tr("chromePage.downloads.alwaysOpenDone", { ext: ext || "?" }) : tr("chromePage.error", { error: "alwaysOpen failed" }));
+      })
+      .catch((e: unknown) => onNotice?.(tr("chromePage.error", { error: errorText(e) })));
+  };
+
+  const rowMenuItems: RowMenuItem[] = (() => {
+    if (!rowMenu) return [];
+    if (rowMenu.kind === "download") {
+      const item = rowMenu.item;
+      const items: RowMenuItem[] = [];
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "open", label: tr("chromePage.downloads.openFile"), icon: "arrow-go", onClick: () => downloadAction(item, "open") });
+      }
+      if (item.state === "progressing") {
+        items.push({ id: "cancel", label: tr("chromePage.downloads.cancel"), icon: "close", onClick: () => downloadAction(item, "cancel") });
+      }
+      if (item.state === "interrupted" || item.state === "cancelled") {
+        items.push({ id: "retry", label: tr("chromePage.downloads.retry"), icon: "refresh", onClick: () => downloadAction(item, "retry") });
+      }
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "always", label: tr("chromePage.downloads.alwaysOpen"), icon: "check", onClick: () => alwaysOpenDownload(item) });
+      }
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "show", label: tr("chromePage.downloads.showInFolder"), icon: "folder", onClick: () => downloadAction(item, "showInFolder") });
+      }
+      items.push({ id: "copy", label: tr("chromePage.downloads.copyLink"), icon: "copy", onClick: () => copyText(item.url, tr("chromePage.downloads.copied")) });
+      if (item.state === "completed" && !item.missing) {
+        items.push({ id: "deleteFile", label: tr("chromePage.downloads.deleteFile"), icon: "delete", danger: true, separatorBefore: true, onClick: () => deleteDownloadFile(item) });
+      }
+      items.push({ id: "remove", label: tr("chromePage.downloads.remove"), icon: "delete-record", danger: true, separatorBefore: item.state !== "completed", onClick: () => downloadAction(item, "remove") });
+      return items;
+    }
+    if (rowMenu.kind === "bookmark") {
+      const item = rowMenu.item;
+      return [
+        { id: "open", label: tr("chromePage.bookmarks.openInNewTab"), icon: "arrow-go", onClick: () => onNavigate(item.url) },
+        { id: "window", label: tr("chromePage.bookmarks.openInNewWindow"), icon: "float", onClick: () => openInNewWindow(item.url) },
+        { id: "cut", label: tr("chromePage.bookmarks.cut"), icon: "link-off", separatorBefore: true, onClick: () => cutBookmark(item) },
+        { id: "edit", label: tr("chromePage.bookmarks.edit"), icon: "edit", onClick: () => setEditBookmark({ item, title: item.title, url: item.url }) },
+        { id: "rename", label: tr("chromePage.bookmarks.rename"), icon: "edit", onClick: () => setEditBookmark({ item, title: item.title, url: item.url }) },
+        { id: "copy", label: tr("chromePage.bookmarks.copyLink"), icon: "copy", onClick: () => copyText(item.url, tr("chromePage.bookmarks.copied")) },
+        { id: "delete", label: tr("chromePage.bookmarks.delete"), icon: "delete", danger: true, separatorBefore: true, onClick: () => removeBookmark(item) },
+      ];
+    }
+    const item = rowMenu.item;
+    return [
+      { id: "open", label: tr("chromePage.history.openInNewTab"), icon: "arrow-go", onClick: () => onNavigate(item.url) },
+      { id: "window", label: tr("chromePage.history.openInNewWindow"), icon: "float", onClick: () => openInNewWindow(item.url) },
+      { id: "copy", label: tr("chromePage.history.copyLink"), icon: "copy", separatorBefore: true, onClick: () => copyText(item.url, tr("chromePage.history.copied")) },
+      { id: "more", label: tr("chromePage.history.moreFromSite"), icon: "globe", onClick: () => moreFromSite(item) },
+      { id: "delete", label: tr("chromePage.history.deleteItem"), icon: "delete", danger: true, separatorBefore: true, onClick: () => removeHistory(item) },
+    ];
+  })();
 
   /* ── 各页内容 ── */
   const historyContent = history.status === "loading" && history.items.length === 0
@@ -398,6 +590,11 @@ export default function ChromePage({
                         ...(selected ? styles.rowSelected : null),
                       }}
                       title={item.url}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setRowMenu({ kind: "history", x: event.clientX, y: event.clientY, item });
+                      }}
                       onClick={() => {
                         if (historySelectMode) toggleHistoryItem(item.url);
                         else onNavigate(item.url);
@@ -451,35 +648,66 @@ export default function ChromePage({
               {visibleDownloads.map((item) => {
                 const pct = Math.round((item.received / Math.max(1, item.total)) * 100);
                 return (
-                  <div key={item.id} style={styles.dlRow}>
-                    <span style={styles.rowIcon}><Icon name="download" size={15} /></span>
+                  <div
+                    key={item.id}
+                    style={styles.dlRow}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setRowMenu({ kind: "download", x: event.clientX, y: event.clientY, item });
+                    }}
+                  >
+                    {item.state === "progressing" && !item.queued ? (
+                      <span style={styles.dlProgressTrack} aria-hidden="true">
+                        <span style={{ ...styles.dlProgressFill, width: `${pct}%` }} />
+                      </span>
+                    ) : null}
+                    <span style={styles.rowIcon}><DownloadIcon url={item.url} filename={item.filename} size={15} /></span>
                     <span style={styles.rowMain}>
-                      <span style={styles.rowTitle}>{item.filename}</span>
+                      {item.state === "completed" && !item.missing ? (
+                        <button
+                          type="button"
+                          className="download-name-link"
+                          style={styles.rowTitle}
+                          title={item.filename}
+                          onClick={() => downloadAction(item, "open")}
+                        >
+                          {item.filename}
+                        </button>
+                      ) : (
+                        <span style={item.missing ? { ...styles.rowTitle, textDecoration: "line-through", opacity: 0.55 } : styles.rowTitle}>{item.filename}</span>
+                      )}
                       <span style={styles.rowUrl}>{tr("chromePage.downloads.savedTo", { path: item.savePath })}</span>
                     </span>
                     <span style={styles.rowMeta}>
-                      <span style={item.state === "interrupted" ? styles.badgeError : styles.badge}>
-                        {tr(downloadStateKey(item.state))}
-                        {item.state === "progressing" ? ` · ${tr("chromePage.downloads.percent", { pct })}` : ""}
+                      <span style={item.missing ? styles.badge : item.state === "interrupted" ? styles.badgeError : styles.badge}>
+                        {item.queued ? tr("browser.downloadQueued") : downloadStatusText(item, tr)}
+                        {item.state === "progressing" && !item.queued ? ` · ${tr("chromePage.downloads.percent", { pct })}` : ""}
                       </span>
                       <span style={styles.rowTime}>{formatTime(item.startedAt)}</span>
                     </span>
                     <span style={styles.rowActions}>
+                      {item.state === "progressing" && item.queued ? (
+                        <button type="button" className="icon-btn" title={tr("browser.downloadStart")} onClick={() => downloadAction(item, "start")}>
+                          <Icon name="play" size={13} />
+                        </button>
+                      ) : null}
                       {item.state === "progressing" ? (
                         <button type="button" className="icon-btn" title={tr("chromePage.downloads.cancel")} onClick={() => downloadAction(item, "cancel")}>
                           <Icon name="close" size={13} />
                         </button>
                       ) : null}
-                      {item.state === "completed" ? (
-                        <button type="button" className="icon-btn" title={tr("chromePage.open")} onClick={() => downloadAction(item, "open")}>
-                          <Icon name="arrow-go" size={13} />
+                      {item.state === "interrupted" || item.state === "cancelled" ? (
+                        <button type="button" className="icon-btn" title={tr("chromePage.downloads.retry")} onClick={() => downloadAction(item, "retry")}>
+                          <Icon name="refresh" size={13} />
                         </button>
                       ) : null}
-                      <button type="button" className="icon-btn" title={tr("chromePage.downloads.showInFolder")} onClick={() => downloadAction(item, "showInFolder")}>
-                        <Icon name="folder" size={13} />
-                      </button>
+                      {item.state === "completed" && !item.missing ? (
+                        <button type="button" className="icon-btn" title={tr("chromePage.downloads.showInFolder")} onClick={() => downloadAction(item, "showInFolder")}>
+                          <Icon name="folder" size={13} />
+                        </button>
+                      ) : null}
                       <button type="button" className="icon-btn" title={tr("chromePage.downloads.remove")} onClick={() => downloadAction(item, "remove")}>
-                        <Icon name="close" size={13} />
+                        <Icon name="delete-record" size={14} />
                       </button>
                     </span>
                   </div>
@@ -498,7 +726,14 @@ export default function ChromePage({
           : (
             <div style={styles.list}>
               {visibleBookmarks.map((item) => (
-                <div key={item.id} style={styles.dlRow}>
+                <div
+                  key={item.id}
+                  style={styles.dlRow}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setRowMenu({ kind: "bookmark", x: event.clientX, y: event.clientY, item });
+                  }}
+                >
                   <button type="button" style={styles.rowButton} title={item.url} onClick={() => onNavigate(item.url)}>
                     <span style={styles.rowIcon}><Icon name="star-filled" size={15} /></span>
                     <span style={styles.rowMain}>
@@ -607,9 +842,47 @@ export default function ChromePage({
           </>
         )}
       </main>
+      {rowMenu ? (
+        <RowContextMenu x={rowMenu.x} y={rowMenu.y} items={rowMenuItems} suppressNativeMenu onClose={() => setRowMenu(null)} />
+      ) : null}
+      {editBookmark ? createPortal(
+        <div style={styles.modalBackdrop} onMouseDown={() => setEditBookmark(null)}>
+          <div style={styles.modal} onMouseDown={(event) => event.stopPropagation()}>
+            <div style={styles.modalTitle}>{tr("chromePage.bookmarks.editTitle")}</div>
+            <label style={styles.field}>
+              <span style={styles.fieldLabel}>{tr("chromePage.bookmarks.titleLabel")}</span>
+              <input
+                autoFocus
+                value={editBookmark.title}
+                onChange={(event) => setEditBookmark({ ...editBookmark, title: event.target.value })}
+                style={styles.input}
+              />
+            </label>
+            <label style={styles.field}>
+              <span style={styles.fieldLabel}>{tr("chromePage.bookmarks.urlLabel")}</span>
+              <input
+                value={editBookmark.url}
+                onChange={(event) => setEditBookmark({ ...editBookmark, url: event.target.value })}
+                style={styles.input}
+              />
+            </label>
+            <div style={styles.modalActions}>
+              <button type="button" className="btn-ghost" style={styles.modalBtn} onClick={() => setEditBookmark(null)}>
+                {tr("chromePage.bookmarks.cancel")}
+              </button>
+              <button type="button" style={{ ...styles.modalBtn, ...styles.modalPrimary }} onClick={() => void saveBookmarkEdit()}>
+                {tr("chromePage.bookmarks.save")}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }
+
+export default React.memo(ChromePage);
 
 const styles: Record<string, React.CSSProperties> = {
   /** 整页覆盖主界面内容区：保留顶部自定义标题栏（窗口拖动/最小化/关闭仍可用），
@@ -716,6 +989,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: BRAND.linen,
     cursor: "pointer",
     transition: "background 120ms, border-color 120ms",
+    contentVisibility: "auto",
+    containIntrinsicSize: "56px",
   },
   rowButton: {
     display: "flex",
@@ -732,6 +1007,10 @@ const styles: Record<string, React.CSSProperties> = {
     font: "inherit",
   },
   dlRow: {
+    position: "relative",
+    overflow: "hidden",
+    contentVisibility: "auto",
+    containIntrinsicSize: "56px",
     display: "flex",
     alignItems: "center",
     gap: 10,
@@ -741,6 +1020,88 @@ const styles: Record<string, React.CSSProperties> = {
     background: BRAND.inkRaised,
     boxSizing: "border-box",
   },
+  /** 下载进度条：贴在行底部，不挤占内容（高光渐变 + 180ms 平滑推进）。 */
+  dlProgressTrack: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 3,
+    overflow: "hidden",
+    background: "rgba(200,118,60,0.16)",
+    pointerEvents: "none",
+  },
+  dlProgressFill: {
+    display: "block",
+    height: "100%",
+    background: "linear-gradient(90deg, rgba(200,118,60,0.5), var(--ls-accent, #c8763c))",
+    transition: "width 180ms ease",
+  },
+  menuBackdrop: { position: "fixed", inset: 0, zIndex: 70, background: "transparent" },
+  downloadMenu: {
+    position: "fixed",
+    zIndex: 71,
+    minWidth: 190,
+    padding: 6,
+    borderRadius: 10,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+  },
+  downloadMenuItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "7px 9px",
+    borderRadius: 7,
+    border: "none",
+    background: "transparent",
+    color: BRAND.linen,
+    fontSize: 12.5,
+    textAlign: "left",
+    cursor: "pointer",
+  },
+  menuSep: { height: 1, background: BRAND.border, margin: "4px 2px" },
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 95,
+    background: "rgba(0,0,0,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modal: {
+    width: 420,
+    maxWidth: "calc(100vw - 32px)",
+    padding: 18,
+    borderRadius: 12,
+    border: `1px solid ${BRAND.borderStrong}`,
+    background: BRAND.inkRaised,
+    boxShadow: "0 24px 64px rgba(0,0,0,0.55)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  modalTitle: { fontSize: 14, fontWeight: 700 },
+  field: { display: "flex", flexDirection: "column", gap: 5, fontSize: 11.5, color: BRAND.linenMuted },
+  fieldLabel: { color: BRAND.linenFaint },
+  input: {
+    height: 32,
+    padding: "0 10px",
+    borderRadius: 8,
+    border: `1px solid ${BRAND.border}`,
+    background: BRAND.ink,
+    color: BRAND.linen,
+    fontSize: 12.5,
+    outline: "none",
+  },
+  modalActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 },
+  modalBtn: { height: 30, padding: "0 12px", borderRadius: 8, border: "none", fontSize: 12, cursor: "pointer" },
+  modalPrimary: { background: "var(--ls-accent, #c8763a)", color: "#fff" },
   // —— 历史批量选择 ——
   rowSelecting: { cursor: "pointer" },
   rowSelected: { borderColor: "rgba(200,118,60,0.55)", background: "rgba(200,118,60,0.10)" },

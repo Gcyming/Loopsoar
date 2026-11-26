@@ -34,6 +34,7 @@ import { registerToastDomain } from "../../packages/shell/src/main/domains/toast
 import { registerCompactDomain } from "../../packages/shell/src/main/domains/compact.ts";
 import { registerChromePopoverDomain } from "../../packages/shell/src/main/domains/chromePopover.ts";
 import { registerAgentWindowDomain } from "../../packages/shell/src/main/domains/agentWindow.ts";
+import { registerBrowserWindowDomain } from "../../packages/shell/src/main/browserWindow.ts";
 import type { ChromePopoverManager } from "../../packages/shell/src/main/chromePopover.ts";
 import { SessionStore } from "../../packages/shell/src/main/sessionStore.ts";
 import { MemoryStore } from "../../packages/core/src/memory/store.ts";
@@ -142,6 +143,7 @@ function assemble(): void {
     onClosed: () => () => {},
     dispose: () => {},
   });
+  registerBrowserWindowDomain({ ...deps, openWindow: () => ({ ok: true }) });
   registerSettingsDomain({
     ...deps,
     platform: {} as LoopsoarPlatform,

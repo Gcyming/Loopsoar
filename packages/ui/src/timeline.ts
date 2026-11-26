@@ -279,7 +279,9 @@ export function formatDurationMs(ms: number | undefined): string {
 
 /** 从 todo_write 结果（Markdown checklist）解析规划条目；解析失败返回空数组。 */
 export function parsePlanItems(raw: string | undefined): PlanItem[] {
-  const text = (raw ?? "").replace(/\r\n/g, "\n");
+  // 调用方可能把结构化工具结果传进来：非字符串直接当空，不让 .replace 抛错。
+  if (typeof raw !== "string" || !raw) return [];
+  const text = raw.replace(/\r\n/g, "\n");
   const lines = text.split("\n").filter((line) => /^\s*-\s*\[[ xX]\]\s+/.test(line));
   return lines.map((line, index) => {
     const done = /^\s*-\s*\[[xX]\]/.test(line);

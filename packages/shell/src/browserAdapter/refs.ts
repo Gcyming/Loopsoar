@@ -407,10 +407,10 @@ function locateJs(resolved: ResolvedTarget): string {
   const norm = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
   let el = null;
   if (KIND === 'text') {
-    const want = MATCH_TEXT;
-    if (want) {
-      const nodes = Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],[role="link"],summary,label'));
-      el = nodes.find((node) => norm(node.innerText || node.textContent || '').indexOf(want) !== -1) || null;
+    if (MATCH_TEXT) {
+      // 优先「文本恰好等于目标」，其次「包含目标的元素里文本最短」：避免 text=下载 先命中整个导航容器。
+      const nodes = Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],[role="link"],summary,label')).sort((a, b) => { const ta = norm(a.innerText || a.textContent || ''), tb = norm(b.innerText || b.textContent || ''); return (ta === MATCH_TEXT ? 0 : 1) - (tb === MATCH_TEXT ? 0 : 1) || ta.length - tb.length; });
+      el = nodes.find((node) => norm(node.innerText || node.textContent || '').indexOf(MATCH_TEXT) !== -1) || null;
     }
   } else if (KIND === 'exactText') {
     const nodes = Array.prototype.slice.call(document.querySelectorAll(SELECTOR));

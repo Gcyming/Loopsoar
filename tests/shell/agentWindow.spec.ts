@@ -232,20 +232,20 @@ function openAndFinish(harness: ReturnType<typeof makeHarness>, sessionId?: stri
 /* ────────────────────────── 几何：computeAgentWindowBounds ────────────────────────── */
 
 describe("computeAgentWindowBounds：贴主窗口右缘 + 工作区夹取", () => {
-  it("默认贴主窗口右缘、顶部对齐浏览器视图（40+48+8=96）", () => {
+  it("默认贴主窗口右缘、顶部对齐浏览器视图（40+48=88）", () => {
     const bounds = computeAgentWindowBounds(MAIN_CONTENT, WORK_AREA);
-    expect(bounds).toEqual({ x: 100 + 1200 - 420 - 8, y: 50 + 96, width: 420, height: 720 });
+    expect(bounds).toEqual({ x: 100 + 1200 - 420 - 8, y: 50 + 88, width: 420, height: 720 });
   });
 
   it("无主窗口内容区 → 贴屏幕工作区右缘（仍对齐浏览器视图顶部）", () => {
-    expect(computeAgentWindowBounds(null, WORK_AREA)).toEqual({ x: 1172, y: 96, width: 420, height: 720 });
+    expect(computeAgentWindowBounds(null, WORK_AREA)).toEqual({ x: 1172, y: 88, width: 420, height: 720 });
   });
 
   it("工作区过小 → 先收缩窗口尺寸，再夹取坐标（不产生负宽高）", () => {
     const bounds = computeAgentWindowBounds({ x: 0, y: 0, width: 800, height: 600 }, { x: 0, y: 0, width: 800, height: 600 });
     expect(bounds.width).toBe(420);
     expect(bounds.height).toBe(600 - AGENT_WINDOW_EDGE_GAP * 2);
-    // y 首选 96 超出下边界（600-584-8=8）→ 夹到 8
+    // y 首选 88 超出下边界（600-584-8=8）→ 夹到 8
     expect(bounds).toEqual({ x: 372, y: 8, width: 420, height: 584 });
   });
 
@@ -254,7 +254,7 @@ describe("computeAgentWindowBounds：贴主窗口右缘 + 工作区夹取", () =
       { x: -1920, y: 0, width: 1920, height: 1040 },
       { x: -1920, y: 0, width: 1920, height: 1040 },
     );
-    expect(bounds).toEqual({ x: -1920 + 1920 - 420 - 8, y: 96, width: 420, height: 720 });
+    expect(bounds).toEqual({ x: -1920 + 1920 - 420 - 8, y: 88, width: 420, height: 720 });
   });
 
   it("主窗口贴近工作区右缘 → x 被夹取，不越界", () => {
@@ -319,7 +319,7 @@ describe("createAgentWindowManager：无边框窗口创建参数", () => {
     const harness = makeHarness();
     harness.manager.open();
     expect(harness.created[0].options.x).toBe(872 + AGENT_WINDOW_SLIDE_OFFSET);
-    expect(harness.created[0].options.y).toBe(146);
+    expect(harness.created[0].options.y).toBe(138);
     harness.manager.dispose();
   });
 
@@ -327,7 +327,7 @@ describe("createAgentWindowManager：无边框窗口创建参数", () => {
     const harness = makeHarness({ getMainWindowContentBounds: undefined });
     expect(harness.manager.open()).toEqual({ ok: true });
     expect(harness.created[0].options.x).toBe(1172 + AGENT_WINDOW_SLIDE_OFFSET);
-    expect(harness.created[0].options.y).toBe(96);
+    expect(harness.created[0].options.y).toBe(88);
     harness.manager.dispose();
   });
 
@@ -510,7 +510,7 @@ describe("createAgentWindowManager：最小化与 webContentsId", () => {
     expect(harness.manager.reposition()).toBe(true);
     expect(win.bounds).toEqual({
       x: 200 + 900 - AGENT_WINDOW_DEFAULT_WIDTH - 8,
-      // 首选 100+96=196 超出工作区下边界（900-720-8=172）→ 夹到 172
+      // 首选 100+88=188 超出工作区下边界（900-720-8=172）→ 夹到 172
       y: 172,
       width: AGENT_WINDOW_DEFAULT_WIDTH,
       height: AGENT_WINDOW_DEFAULT_HEIGHT,

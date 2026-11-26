@@ -54,6 +54,12 @@ export function resolveOmniboxInput(input: string, engine: SearchEngine = "bing"
     return { kind: "search", url: buildSearchUrl(query, engine), query, engine };
   }
 
+  // "c: 语言" / "note: 内容" 这类带冒号的搜索词：冒号后紧跟空白说明它不是 URL
+  // （合法 URL 不会含未编码空格），按搜索处理，不能当成未知协议拒绝。
+  if (/\s/.test(raw) && /^[a-zA-Z][a-zA-Z0-9+.-]*:\s/.test(raw)) {
+    return { kind: "search", url: buildSearchUrl(raw, engine), query: raw, engine };
+  }
+
   // 显式协议：只放行 http/https（与 shell 侧同一套白名单）
   const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(raw);
   if (schemeMatch) {
