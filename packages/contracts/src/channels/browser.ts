@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BookmarkAddSchema, BookmarkRemoveSchema, BookmarkUpdateSchema, BrowserBottomInsetSchema, BrowserCloseTabsSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserMoveTabSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabMuteSchema, BrowserTabPinSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
+import { BookmarkAddSchema, BookmarkRemoveSchema, BookmarkUpdateSchema, BrowserBottomInsetSchema, BrowserClosedTabIndexSchema, BrowserCloseTabsSchema, BrowserCornerColorSchema, BrowserDevToolsPanelSchema, BrowserDevToolsSchema, BrowserDownloadActionSchema, BrowserInstallExtensionSchema, BrowserMoveTabSchema, BrowserNavigateSchema, BrowserNewTabSchema, BrowserResolveFaviconSchema, BrowserScreenshotSchema, BrowserSessionIdSchema, BrowserSetOverlaySchema, BrowserSidebarWidthSchema, BrowserTabIdSchema, BrowserTabMuteSchema, BrowserTabPinSchema, BrowserTabRefSchema, SavePageSchema } from "../validators.js";
 import type { ChannelBinding } from "../validators.js";
 
 /** 通道 browser 域：按域拆分，键顺序由 ../channels/index.ts 统一恢复。 */
@@ -62,6 +62,18 @@ export const browserChannels: Record<string, ChannelBinding> = {
     domain: "browser",
     method: "reopenClosedTab",
     request: null,
+    sensitive: true,
+  },
+  "browser:listClosedTabs": {
+    domain: "browser",
+    method: "listClosedTabs",
+    request: null,
+    sensitive: true,
+  },
+  "browser:reopenClosedTabAt": {
+    domain: "browser",
+    method: "reopenClosedTabAt",
+    request: BrowserClosedTabIndexSchema,
     sensitive: true,
   },
   "browser:endTask": {

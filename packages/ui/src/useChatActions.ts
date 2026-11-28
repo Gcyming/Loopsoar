@@ -282,8 +282,8 @@ export function useChatActions(options: UseChatActionsOptions): ChatActions {
     [api, readPending, writePending],
   );
 
-  const send = useCallback((): void => {
-    const text = input.trim();
+  const send = useCallback((override?: string): void => {
+    const text = (override ?? input).trim();
     if (!text || !api) return;
     if (busy) {
       // 运行中：Enter = 待发指令（入队 + 投递，不打断当前输出；slime 语义）。

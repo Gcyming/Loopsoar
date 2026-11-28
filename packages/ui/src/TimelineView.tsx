@@ -354,6 +354,50 @@ function toDisplayText(value: unknown): string {
   }
 }
 
+/** 截图预览：只拿落盘路径，经 fs.readImage 懒加载 data URL（不把 MB 级 base64 塞进流事件）。 */
+function ToolScreenshot({ path }: { path: string }): React.ReactElement | null {
+  const [src, setSrc] = React.useState<string | null>(null);
+  const [failed, setFailed] = React.useState(false);
+  const [zoomed, setZoomed] = React.useState(false);
+  React.useEffect(() => {
+    let alive = true;
+    const api = (window as unknown as {
+      loopsoarAPI?: { fs?: { readImage?: (args: { path: string }) => Promise<{ ok?: boolean; dataUrl?: string }> } };
+    }).loopsoarAPI;
+    void api?.fs
+      ?.readImage?.({ path })
+      .then((result) => {
+        if (!alive) return;
+        if (result?.ok && result.dataUrl) setSrc(result.dataUrl);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  if (failed) {
+    return (
+      <div className="think-tool-shot-missing" title={path}>
+        截图已保存：{path.split(/[\\/]/).pop()}
+      </div>
+    );
+  }
+  if (!src) return null;
+  return (
+    <img
+      className="think-tool-shot"
+      data-zoomed={zoomed ? "1" : undefined}
+      src={src}
+      alt="浏览器截图"
+      title={zoomed ? "点击还原" : "点击放大"}
+      onClick={(event) => { event.stopPropagation(); setZoomed((value) => !value); }}
+    />
+  );
+}
+
 function ToolNode({
   step,
   stepNo,
@@ -373,6 +417,8 @@ function ToolNode({
   const toolName = typeof step.name === "string" ? step.name : String(step.name ?? "");
   const failed = isToolFailure(toolName, resultRaw, step.ok);
   const running = step.state === "running";
+  const images = step.images ?? [];
+  const [zoomImage, setZoomImage] = React.useState<string | null>(null);
   const { color } = toolCategoryOf(toolName);
   const visual = toolVisual(toolName);
   const status = running ? "执行中" : failed ? "失败" : "成功";
@@ -455,6 +501,29 @@ function ToolNode({
           </button>
         ) : null}
       </div>
+      {step.imagePath ? (
+        <div className="think-tool-shots">
+          <ToolScreenshot path={step.imagePath} />
+        </div>
+      ) : images.length > 0 ? (
+        <div className="think-tool-shots">
+          {images.map((image, index) => {
+            const src = `data:${image.mime};base64,${image.base64}`;
+            const zoomed = zoomImage === src;
+            return (
+              <img
+                key={`${index}-${image.base64.length}`}
+                src={src}
+                alt={`工具截图 ${index + 1}`}
+                title={zoomed ? "点击还原" : "点击放大"}
+                className="think-tool-shot"
+                data-zoomed={zoomed ? "1" : undefined}
+                onClick={(event) => { event.stopPropagation(); setZoomImage(zoomed ? null : src); }}
+              />
+            );
+          })}
+        </div>
+      ) : null}
       {hasBody ? (
         <Collapse open={expanded}>
           <div className="think-tool-detail-box">

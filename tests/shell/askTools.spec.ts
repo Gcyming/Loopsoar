@@ -67,4 +67,54 @@ describe("ask_user 工具", () => {
     expect(result.content).toContain("question");
     expect(bus.size).toBe(0);
   });
+
+  it("结构化选项：返回所选方向与选择后果（不是只回一个词）", async () => {
+    const { registry, bus, pushed } = setup();
+    const tool = registry.get(ASK_USER_TOOL_NAME)!;
+    const pending = tool.execute({
+      agentId: "test",
+      platform: {},
+      params: {
+        question: "部署走哪条路？",
+        header: "部署方案",
+        options: [
+          { label: "Docker", description: "环境一致，镜像体积大" },
+          { label: "裸机", description: "排障直观，依赖要自己装" },
+        ],
+        recommendation: 0,
+      },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    bus.resolve(pushed[0].requestId, { choice: "Docker" });
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("Docker");
+    // 选择后果必须回传给模型：否则它无法把「用户为什么这么选」带进后续决策
+    expect(result.content).toContain("环境一致");
+  });
+
+  it("跳过：按假设继续，但不得声称是用户的选择", async () => {
+    const { registry, bus, pushed } = setup();
+    const tool = registry.get(ASK_USER_TOOL_NAME)!;
+    const pending = tool.execute({
+      agentId: "test",
+      platform: {},
+      params: { question: "选哪个？", options: ["A", "B"] },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    bus.resolve(pushed[0].requestId, { skipped: true });
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("跳过");
+    expect(result.content).toContain("不要声称这是用户的选择");
+  });
+
+  it("只有 1 个选项：拒绝（那是确认框，不是决策分叉）", async () => {
+    const { registry, bus } = setup();
+    const tool = registry.get(ASK_USER_TOOL_NAME)!;
+    const result = await tool.execute({ agentId: "test", platform: {}, params: { question: "确认？", options: ["只有一个"] } });
+    expect(result.ok).toBe(false);
+    expect(result.content).toContain("只给了 1 个选项");
+    expect(bus.size).toBe(0);
+  });
 });

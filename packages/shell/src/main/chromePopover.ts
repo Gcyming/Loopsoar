@@ -62,7 +62,8 @@ export const DEFAULT_POPOVER_SIZES: Record<ChromePopoverKind, PopoverSize> = {
   bookmarks: { width: 340, height: 440 },
   history: { width: 340, height: 460 },
   downloads: { width: 360, height: 440 },
-  workspaces: { width: 230, height: 300 },
+  // 统一标签/工作区面板：需要容纳标签搜索框、标签列表和工作区列表。
+  workspaces: { width: 296, height: 470 },
   // Agent 工作区（折叠标签组）：列出该会话里 Agent 打开/操作过的网页，点一项切过去。
   workspace: { width: 320, height: 380 },
   // 标签页右键菜单：最长项要放得下「重新打开关闭的标签页 + Ctrl+Shift+T」。

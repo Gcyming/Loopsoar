@@ -13,6 +13,7 @@ import { memoryChannels } from "./memory.js";
 import { extensionsChannels } from "./extensions.js";
 import { scheduleChannels } from "./schedule.js";
 import { systemChannels } from "./system.js";
+import { shortcutsChannels } from "./shortcuts.js";
 
 /** 域文件合并表（顺序不重要，最终按 CHANNEL_ORDER 重排）。 */
 const grouped: Record<string, ChannelBinding> = {
@@ -24,6 +25,7 @@ const grouped: Record<string, ChannelBinding> = {
   ...extensionsChannels,
   ...scheduleChannels,
   ...systemChannels,
+  ...shortcutsChannels,
 };
 
 /** 原始通道顺序（与拆分前 CHANNEL_BINDINGS 的 Object.keys 一致）。 */
@@ -54,6 +56,8 @@ const CHANNEL_ORDER = [
   "browser:setTabMuted",
   "browser:setTabPinned",
   "browser:reopenClosedTab",
+  "browser:listClosedTabs",
+  "browser:reopenClosedTabAt",
   "browser:endTask",
   "browser:closeSessionTabs",
   "browser:selectTab",
@@ -211,6 +215,11 @@ const CHANNEL_ORDER = [
   "bookmarks:add",
   "bookmarks:remove",
   "bookmarks:update",
+  "shortcuts:list",
+  "shortcuts:add",
+  "shortcuts:update",
+  "shortcuts:remove",
+  "shortcuts:pin",
   "browser:savePage",
   "terminal:history",
   "terminal:diagnose",

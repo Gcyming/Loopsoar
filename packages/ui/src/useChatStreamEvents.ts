@@ -212,6 +212,11 @@ export interface ChatStreamEventOptions {
   ) => void;
   /** 请求被主进程结算（超时/取消/另一处已答）：从队列移除，不能只清当前弹窗。 */
   resolvePermRequest?: (requestId: string) => void;
+  /**
+   * 上下文占用上报（tool_loop 每轮 progress 事件）：used/cap 均为 token。
+   * measured = 上游返回的 prompt_tokens（最权威）；estimated = 本地按字符类别估算。
+   */
+  setContextUsage?: (sessionId: string, used: number, cap: number, source: "measured" | "estimated") => void;
   setAskQueue: React.Dispatch<React.SetStateAction<AskUserRequest[]>>;
   setThinkingOpen: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setDownloads: (value: DownloadItem[]) => void;
@@ -237,6 +242,7 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
     updateSessionMessages,
     setPermReq,
     resolvePermRequest,
+    setContextUsage,
     setAskQueue,
     setThinkingOpen,
     setDownloads,
@@ -339,11 +345,28 @@ export function useChatStreamEvents(options: ChatStreamEventOptions): void {
           dropped?: number;
           beforeChars?: number;
           afterChars?: number;
+          context?: { used?: unknown; cap?: unknown; source?: unknown };
         } = {};
         try {
           parsed = JSON.parse(raw) as typeof parsed;
         } catch {
           parsed = { note: raw };
+        }
+        // 上下文进度：先更新占用再处理文案（压缩提示 / 普通播报都不影响进度环）。
+        const context = parsed.context;
+        if (
+          context &&
+          typeof context.used === "number" &&
+          context.used >= 0 &&
+          typeof context.cap === "number" &&
+          context.cap > 0
+        ) {
+          setContextUsage?.(
+            sid,
+            Math.round(context.used),
+            Math.round(context.cap),
+            context.source === "measured" ? "measured" : "estimated",
+          );
         }
         if (parsed.compressed) {
           const note = parsed.note ?? `已自动压缩 ${parsed.dropped ?? 0} 条早期消息`;

@@ -4,9 +4,15 @@
 import { describe, expect, it } from "vitest";
 import {
   compressConversation,
+  compressForLoop,
+  estimateMessagesTokens,
+  estimateTokens,
+  estimateToolsTokens,
   historyBudgetChars,
+  LOOP_SUMMARY_MARKER,
   messageChars,
   type CompactableMessage,
+  type TokenizableMessage,
 } from "../../packages/core/src/contextCompress.ts";
 
 function makeHistory(count: number, charsPerMessage = 100): CompactableMessage[] {
@@ -84,5 +90,99 @@ describe("上下文自动压缩", () => {
       tool_calls: [{ id: "1", name: "browser_snapshot", args: { url: "x".repeat(100) } }],
     };
     expect(messageChars(message)).toBeGreaterThan(100);
+  });
+});
+
+describe("token 估算（上下文进度 / loop 压缩共用口径）", () => {
+  it("中文按 1 字/token 计，英文按约 3.6 字符/token 计（旧 4 字符/token 会低估中文）", () => {
+    const zh = estimateTokens("长".repeat(100));
+    const en = estimateTokens("a".repeat(360));
+    expect(zh).toBeGreaterThanOrEqual(99);
+    expect(zh).toBeLessThanOrEqual(101);
+    expect(Math.abs(en - 100)).toBeLessThanOrEqual(2);
+    // 同样字符数下中文 token 更多：这正是旧估算失真的根因
+    expect(estimateTokens("长".repeat(200))).toBeGreaterThan(estimateTokens("a".repeat(200)));
+  });
+
+  it("工具 schema 计入估算（工具面本身也占 prompt）", () => {
+    const withoutTool = estimateMessagesTokens([{ role: "user", content: "hi" }]);
+    expect(estimateToolsTokens([{ name: "browser_snapshot", description: "抓页面", parameters: { type: "object" } }])).toBeGreaterThan(0);
+    expect(estimateMessagesTokens([{ role: "user", content: "hi" }])).toBe(withoutTool);
+  });
+});
+
+function loopHistory(count: number, chars: number): TokenizableMessage[] {
+  return [
+    { role: "system", content: "系统稳定段" },
+    ...Array.from({ length: count }, (_, i) => ({
+      role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      content: "第" + i + "条：" + "长".repeat(chars),
+    })),
+  ];
+}
+
+describe("loop 内上下文压缩", () => {
+  it("预算内原样返回（不压缩），仍给出上下文快照", () => {
+    const messages = loopHistory(4, 50);
+    const result = compressForLoop(messages, { contextWindowTokens: 128_000, toolsTokens: 100 });
+    expect(result.compressed).toBe(false);
+    expect(result.messages).toEqual(messages);
+    expect(result.stats.usedTokens).toBeGreaterThan(0);
+    expect(result.stats.windowTokens).toBe(128_000);
+  });
+
+  it("超窗口：保留最近消息原文，早期消息进滚动纪要", () => {
+    const messages = loopHistory(24, 300);
+    const last = messages[messages.length - 1];
+    const result = compressForLoop(messages, {
+      contextWindowTokens: 6_000,
+      keepRecent: 8,
+      minKeepRecent: 4,
+    });
+    expect(result.compressed).toBe(true);
+    expect(result.afterTokens).toBeLessThan(result.beforeTokens);
+    expect(result.droppedCount).toBeGreaterThan(0);
+    expect(result.messages[0]).toEqual(messages[0]); // system 永远在最前
+    expect(result.messages.some((m) => typeof m.content === "string" && m.content.startsWith(LOOP_SUMMARY_MARKER))).toBe(true);
+    expect(result.messages[result.messages.length - 1].content).toBe(last.content);
+  });
+
+  it("连续压缩不咀嚼上一版纪要：最早的目标仍在（避免逐轮失忆）", () => {
+    const first = compressForLoop(loopHistory(24, 300), { contextWindowTokens: 6000, keepRecent: 8 });
+    expect(first.compressed).toBe(true);
+    // 模拟下一轮继续追加消息
+    const next = [
+      ...first.messages,
+      ...Array.from({ length: 10 }, (_, i) => ({
+        role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: "新消息" + i + "：" + "新".repeat(300),
+      })),
+    ];
+    const second = compressForLoop(next, { contextWindowTokens: 6000, keepRecent: 8 });
+    expect(second.compressed).toBe(true);
+    const summary = second.messages.find(
+      (m) => typeof m.content === "string" && m.content.startsWith(LOOP_SUMMARY_MARKER),
+    );
+    expect(summary).toBeTruthy();
+    // 第一条纪要行（用户最初的第 0 条）必须还在：这就是「不二次摘要」的验收点
+    expect(String(summary?.content)).toContain("第0条");
+  });
+
+  it("边界不切开 assistant(tool_calls)/tool 结果：保留窗口不以 tool 开头", () => {
+    const big = "长".repeat(600);
+    const messages: TokenizableMessage[] = [
+      { role: "system", content: "系统" },
+      { role: "user", content: "任务" + big },
+      { role: "assistant", content: "", tool_calls: [{ name: "file_read", args: { path: "a.txt" } }] },
+      { role: "tool", content: "结果1" + big },
+      { role: "tool", content: "结果2" + big },
+      { role: "assistant", content: "继续" + big },
+      { role: "user", content: "下一步" + big },
+    ];
+    // keepRecent=3 时 cut 落在 tool 上 → 必须回头把 assistant(tool_calls) 一起保留
+    const result = compressForLoop(messages, { contextWindowTokens: 3_000, keepRecent: 3, minKeepRecent: 2 });
+    expect(result.compressed).toBe(true);
+    const afterSummary = result.messages.slice(1);
+    expect(afterSummary[0]?.role).not.toBe("tool");
   });
 });

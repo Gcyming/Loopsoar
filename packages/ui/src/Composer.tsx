@@ -8,6 +8,12 @@
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
+/** 非图片附件的类型徽标：DOCX / XLSX / PPTX / PDF / MD…（没有对应图标时比一个通用文件图标可读）。 */
+function attachmentExt(name: string): string {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 && dot < name.length - 1 ? name.slice(dot + 1).toUpperCase() : "FILE";
+  return ext.slice(0, 4);
+}
 import type { PermissionsState, ProviderStatus, WorkspaceRecord } from "./types.js";
 import type { ModelGroup } from "./modelGroups.js";
 import { formatContextWindow, supportsImageInput } from "./modelGroups.js";
@@ -19,7 +25,8 @@ import Popover from "./AnchoredPopover.js";
 export interface ComposerProps {
   value: string;
   onChange: (value: string) => void;
-  onSend: () => void;
+  /** 发送；可传合成文本（附件标记 + 正文），缺省读输入框。 */
+  onSend: (text?: string) => void;
   onStop: () => void;
   busy: boolean;
   canSend: boolean;
@@ -252,14 +259,70 @@ function Composer({
     });
   };
 
-  /** 剪贴板图片：File → base64 → fs.saveImage（主进程限 6MB/图片白名单）→ 插入附件路径。 */
+  /**
+   * 输入框附件：拖入/粘贴/选择后成为 chips（不再往输入框塞路径文本），
+   * 发送时才序列化成附件标记（主进程据此读取图片像素 / 文档路径）。
+   */
+  const [attachments, setAttachments] = React.useState<
+    { path: string; name: string; kind: "image" | "file"; dataUrl?: string }[]
+  >([]);
+  const removeAttachment = (path: string): void => {
+    setAttachments((prev) => prev.filter((item) => item.path !== path));
+  };
+  const addAttachments = (paths: string[]): void => {
+    const cleaned = paths.map((value) => value.trim()).filter(Boolean);
+    if (cleaned.length === 0) return;
+    const known = new Set(attachments.map((item) => item.path));
+    const fresh = cleaned.filter((path) => !known.has(path));
+    if (fresh.length === 0) return;
+    setAttachments((prev) => {
+      const seen = new Set(prev.map((item) => item.path));
+      const next = [...prev];
+      for (const path of fresh) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        next.push({
+          path,
+          name: path.split(/[\\/]/).pop() || path,
+          kind: /\.(png|jpe?g|webp|gif)$/i.test(path) ? "image" : "file",
+        });
+      }
+      return next;
+    });
+    for (const path of fresh) {
+      if (!/\.(png|jpe?g|webp|gif)$/i.test(path)) continue;
+      void api?.fs
+        .readImage({ path })
+        .then((result) => {
+          if (result?.ok && result.dataUrl) {
+            setAttachments((prev) => prev.map((item) => (item.path === path ? { ...item, dataUrl: result.dataUrl } : item)));
+          }
+        })
+        .catch(() => undefined);
+    }
+    notify(tr("composer.attachmentsAdded", { count: fresh.length }));
+  };
+  const addAttachmentsRef = React.useRef(addAttachments);
+  addAttachmentsRef.current = addAttachments;
+  React.useEffect(() => {
+    // preload 用 webUtils 解析真实路径后 postMessage（File.path 在 Electron 32+ 已移除）。
+    const onFiles = (event: MessageEvent): void => {
+      const data = event.data as { type?: unknown; paths?: unknown } | null;
+      if (!data || data.type !== "loopsoar:composer-files" || !Array.isArray(data.paths)) return;
+      addAttachmentsRef.current(data.paths.filter((value): value is string => typeof value === "string"));
+    };
+    window.addEventListener("message", onFiles);
+    return () => window.removeEventListener("message", onFiles);
+  }, []);
+
+  /** 剪贴板图片：File → base64 → fs.saveImage（主进程限 6MB/图片白名单）→ 加入附件 chips。 */
   const savePastedImages = async (files: File[]): Promise<void> => {
     if (!api?.fs?.saveImage) {
       notify(tr("composer.imageUnavailable"));
       return;
     }
     const errors: string[] = [];
-    let saved = 0;
+    const savedPaths: string[] = [];
     for (const file of files) {
       try {
         const dataBase64 = await readFileAsBase64(file);
@@ -269,8 +332,7 @@ function Composer({
           ...(file.name ? { name: file.name } : {}),
         });
         if (result.ok && result.path) {
-          insertText(tr("composer.insertAttachment", { path: result.path }));
-          saved += 1;
+          savedPaths.push(result.path);
         } else {
           errors.push(result.error ?? "unknown error");
         }
@@ -278,7 +340,7 @@ function Composer({
         errors.push(err instanceof Error ? err.message : String(err));
       }
     }
-    if (saved > 0) notify(tr("composer.imageSaved", { count: saved }));
+    if (savedPaths.length > 0) addAttachments(savedPaths);
     if (errors.length > 0) notify(tr("composer.imageFailed", { error: errors[0] }));
   };
 
@@ -310,7 +372,7 @@ function Composer({
     try {
       const result = await api.dialog.pickPath({ kind: "file", title: tr("composer.pickFile") });
       if (result.canceled || !result.path) return;
-      insertText(tr("composer.insertAttachment", { path: result.path }));
+      addAttachments([result.path]);
     } catch {
       notify(tr("composer.fileUnavailable"));
     }
@@ -410,13 +472,21 @@ function Composer({
    * 「运行中且输入为空」的中断动作由主按钮状态机单独处理（onStop，不经此函数）。
    */
   const requestSend = (): void => {
-    if (!value.trim()) return;
-    onSend();
+    // 附件序列化为标记放在正文前；只有附件、没有文字时也允许发送。
+    const composed = [
+      ...attachments.map((item) => tr("composer.insertAttachment", { path: item.path })),
+      value.trim(),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (!composed) return;
+    onSend(composed);
+    setAttachments([]);
   };
   // 主按钮三态：运行中+空输入 = 中断（不禁用）；运行中+有输入 = 转向发送；
   // 非运行中 = 普通发送（无可发送内容时禁用）。
   const interruptMode = busy && value.trim() === "";
-  const sendDisabled = !busy && !canSend;
+  const sendDisabled = !busy && !canSend && attachments.length === 0;
   usePopover("composer-perm", openMenu === "perm", (next) => {
     if (!next) setOpenMenu(null);
   });
@@ -493,7 +563,17 @@ function Composer({
   };
 
   return (
-    <div style={styles.composer}>
+    <div
+      style={styles.composer}
+      data-composer-dropzone="true"
+      onDragOver={(event) => {
+        // 阻止 Chromium 默认的「把文件拖到窗口 = 导航到 file://」行为。
+        if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      }}
+    >
       {busy ? (
         <div style={styles.runBar} data-testid="composer-run-bar">
           <div style={styles.runBarHead}>
@@ -582,6 +662,29 @@ function Composer({
           <span style={styles.measureChip}>{tr("composer.stop")}</span>
           <span style={styles.measureChip}>{tr("composer.send")}</span>
         </div>
+        {attachments.length > 0 ? (
+          <div style={styles.attachmentRow} data-testid="composer-attachments">
+            {attachments.map((item) => (
+              <span key={item.path} style={styles.attachmentChip} title={item.path}>
+                {item.dataUrl ? (
+                  <img src={item.dataUrl} alt="" style={styles.attachmentThumb} />
+                ) : (
+                  <span style={styles.attachmentExt}>{attachmentExt(item.name)}</span>
+                )}
+                <span style={styles.attachmentName}>{item.name}</span>
+                <button
+                  type="button"
+                  style={styles.attachmentRemove}
+                  title={tr("composer.removeAttachment")}
+                  aria-label={tr("composer.removeAttachment")}
+                  onClick={() => removeAttachment(item.path)}
+                >
+                  <Icon name="close" size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <textarea
           ref={textareaRef}
           value={value}
@@ -616,7 +719,7 @@ function Composer({
                 style={styles.modelMenuItem}
                 onClick={() => {
                   setOpenMenu(null);
-                  onPickAttachment();
+                  void pickFileReference();
                 }}
               >
                 <span style={styles.modelItemName}>
@@ -1098,6 +1201,25 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 46,
     maxHeight: 160,
   },
+  attachmentRow: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "2px 0 6px" },
+  attachmentChip: { display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 220, padding: "3px 6px", border: `1px solid ${BRAND.border}`, borderRadius: 8, background: "transparent" },
+  attachmentThumb: { width: 28, height: 28, borderRadius: 6, objectFit: "cover", flex: "none" },
+  attachmentExt: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 34,
+    height: 22,
+    borderRadius: 4,
+    background: "rgba(var(--ls-accent-rgb), 0.16)",
+    color: "var(--ls-accent)",
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    flex: "none",
+  },
+  attachmentName: { fontSize: 11, color: BRAND.linenMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  attachmentRemove: { display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 0, border: "none", background: "transparent", color: BRAND.linenFaint, cursor: "pointer", flex: "none" },
   chipRow: { display: "flex", alignItems: "center", gap: 5, flexWrap: "nowrap" },
   /** 左下角圆形「+」：圆形框格（用户 2026-11-10）；与 chip 同高但更圆、更醒目一点。 */
   plusBtn: {

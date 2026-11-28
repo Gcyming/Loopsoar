@@ -330,8 +330,14 @@ export const TerminalInterruptSchema = z.object({ terminalId: TerminalIdSchema }
 
 export const AskRespondSchema = z.object({
   requestId: z.string().min(1).max(120),
-  /** 用户回答（自由文本或所选选项文案）；取消时缺省。 */
+  /** 用户回答（自由文本或所选选项文案的组合）；取消/跳过时缺省。 */
   answer: z.string().max(4000).optional(),
+  /** 单选：所选选项的 label（与 answer 二选一即可，answer 优先）。 */
+  choice: z.string().min(1).max(200).optional(),
+  /** 多选：所选选项的 label 列表（最多 8 个，与单选的 choice 互斥）。 */
+  choices: z.array(z.string().min(1).max(200)).max(8).optional(),
+  /** 用户明确跳过（不回答但要求 Agent 继续）；与 cancelled 互斥。 */
+  skipped: z.boolean().optional(),
   cancelled: z.boolean().optional(),
 });
 
@@ -409,6 +415,34 @@ export const OpenChromePopoverSchema = z.object({
   lang: z.enum(["zh-CN", "en-US"]).optional(),
   /** tabmenu 专用：被右键的标签 id。 */
   tabId: z.string().min(1).max(64).optional(),
+});
+
+/* ───────────────────────── 新标签页快捷方式（用户主动添加） ───────────────────────── */
+
+/** 新增快捷方式：网址必填（允许只写 example.com，主进程补 https://）。 */
+export const ShortcutAddSchema = z.object({
+  url: z.string().min(1).max(2000),
+  title: z.string().max(40).optional(),
+  /** 页面图标（data URL）；主进程会丢弃超大图标。 */
+  icon: z.string().max(300_000).optional(),
+});
+
+/** 编辑快捷方式：三项都可选，至少给一项由主进程判断。 */
+export const ShortcutUpdateSchema = z.object({
+  id: z.string().min(1).max(120),
+  url: z.string().max(2000).optional(),
+  title: z.string().max(40).optional(),
+  icon: z.string().max(300_000).optional(),
+});
+
+export const ShortcutRemoveSchema = z.object({ id: z.string().min(1).max(120) });
+
+/** 置顶（移到最前）。 */
+export const ShortcutPinSchema = z.object({ id: z.string().min(1).max(120) });
+
+/** 「最近关闭」里按下标重开：0 = 最新关闭的一条（栈上限 40，与 closedTabStack 的 CLOSED_TAB_LIMIT 对齐）。 */
+export const BrowserClosedTabIndexSchema = z.object({
+  index: z.number().int().min(0).max(39).optional(),
 });
 
 /** 浮层内动作：由主进程转发给主窗口渲染层执行（openPage/navigate/savePage/openSettings…）。 */
@@ -514,9 +548,17 @@ export const PreferencesSchema = z.object({
   language: z.enum(["zh-CN", "en-US"]),
   /** 广告/追踪请求拦截（webRequest 层；默认开启，可在设置·通用关闭）。 */
   adBlockEnabled: z.boolean().optional(),
+  /** 非前台时，任务完成/异常中断/ask_user 询问发系统通知（默认开启）。 */
+  notificationsEnabled: z.boolean().optional(),
+  /** 上述通知同时播放系统默认提示音（默认开启；后续可替换自定义音效）。 */
+  notificationSoundEnabled: z.boolean().optional(),
+  /** 是否把图片内容作为多模态输入发给模型（隐私开关；关闭后图片只保留路径，不上传像素）。 */
+  imageInputEnabled: z.boolean().optional(),
+  /** 上下文压缩触发阈值（占模型窗口比例，0.4~0.9；默认 0.75）。 */
+  contextCompressRatio: z.number().min(0.4).max(0.9).optional(),
   /** 动效强度：full=全部；reduced=弱化；off=关闭（无障碍）。 */
   animations: z.enum(["full", "reduced", "off"]),
-  /** 启动时恢复上次会话（当前为占位开关，会话持久化接入后生效）。 */
+  /** 启动时恢复上次会话（useChatStreamEvents 已接线）。 */
   restoreSession: z.boolean(),
   /** 关闭主窗口时的行为：tray=最小化到系统托盘并继续运行定时任务；quit=直接退出（默认）。 */
   closeBehavior: z.enum(["tray", "quit"]).optional(),

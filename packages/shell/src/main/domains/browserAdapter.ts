@@ -77,6 +77,21 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     return { ok: await deps.browser.setTabPinned(p.tabId, p.pinned, deps.browser.visibleSessionId()) };
   });
 
+  handleTrusted(deps, "browser:listClosedTabs", () => ({
+    tabs: deps.browser?.listClosedTabs?.() ?? [],
+  }));
+  handleTrusted(deps, "browser:reopenClosedTabAt", async (payload) => {
+    if (!deps.browser) return { ok: false };
+    const index = (payload as { index?: number } | null)?.index ?? 0;
+    const result = await deps.browser.reopenClosedTab(deps.browser.visibleSessionId(), index);
+    // 重开的网页可能属于别的标签组：先切到它原来那一组，再选中，用户才能立刻看到。
+    if (result.ok && result.sessionId) {
+      if (result.agentBound) deps.browser.showTask(result.sessionId);
+      else deps.browser.showUserTabs();
+      if (result.tabId) deps.browser.selectTab(result.tabId, result.sessionId);
+    }
+    return result;
+  });
   handleTrusted(deps, "browser:reopenClosedTab", async () => {
     if (!deps.browser) return { ok: false };
     return deps.browser.reopenClosedTab(deps.browser.visibleSessionId());
@@ -121,6 +136,9 @@ export function registerBrowserDomain(deps: BrowserDeps): void {
     }
     return {
       tasks: [...merged.values()],
+      // 统一标签面板需要在 Agent 工作区里也能列出普通标签；单独走一次 listTabs 会把可见组切走。
+      userTabs: deps.browser?.listTabs(USER_TABS_SESSION) ?? [],
+      userSession: USER_TABS_SESSION,
       visibleSession: deps.browser?.visibleSessionId() ?? USER_TABS_SESSION,
     };
   });

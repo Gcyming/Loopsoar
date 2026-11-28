@@ -5,7 +5,45 @@
  * 产物：packages/shell/dist/main.bundle.mjs
  */
 import { build } from "esbuild";
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import path from "node:path";
+
+/**
+ * workspace 包在 dev bundle 里直接走源码。
+ *
+ * 为什么必须这样做：packages/* 的 exports 指向 dist，loopsoar-core/tool_loop 这类子路径
+ * 会被解析到旧 dist —— 改了 core/services 源码却打不进 bundle，界面看起来「没生效」。
+ * 这里把包名映射到 packages/<pkg>/src，并把相对 .js 说明符回退到 .ts（源码内部用 .js 后缀）。
+ */
+const ROOT = process.cwd();
+const PKG_DIR = { "loopsoar-core": "core", "loopsoar-contracts": "contracts", "loopsoar-services": "services" };
+const workspaceSource = {
+  name: "workspace-source",
+  setup(ctx) {
+    ctx.onResolve({ filter: /^loopsoar-(core|contracts|services)(\/.*)?$/ }, (args) => {
+      const [pkg, ...rest] = args.path.split("/");
+      const dir = PKG_DIR[pkg];
+      if (!dir) return null;
+      const sub = rest.join("/") || "index";
+      if (pkg === "loopsoar-contracts" && sub === "ipc") {
+        const ipc = path.join(ROOT, "packages/contracts/gen/ipc.ts");
+        return existsSync(ipc) ? { path: ipc } : null;
+      }
+      const base = path.join(ROOT, "packages", dir, "src", sub);
+      for (const candidate of [base + ".ts", path.join(base, "index.ts")]) {
+        if (existsSync(candidate)) return { path: candidate };
+      }
+      return null;
+    });
+    // 源码内部 import "./x.js" 指向同目录 x.ts；不映射会把缺文件当成模块。
+    ctx.onResolve({ filter: /^\.{1,2}\/.*\.js$/ }, (args) => {
+      const absolute = path.resolve(args.resolveDir, args.path);
+      if (existsSync(absolute)) return null;
+      const asTs = absolute.replace(/\.js$/, ".ts");
+      return existsSync(asTs) ? { path: asTs } : null;
+    });
+  },
+};
 
 await rmSync("packages/shell/dist/main.bundle.mjs", { force: true });
 
@@ -17,6 +55,7 @@ const result = await build({
   target: "node22",
   outfile: "packages/shell/dist/main.bundle.mjs",
   external: ["electron"],
+  plugins: [workspaceSource],
   // electron-updater / builder-util-runtime 是 CJS，内部有动态 require("events") 之类；
   // ESM bundle 里没有 require，esbuild 的 __require 会直接抛 "Dynamic require ... is not supported"。
   // 用 createRequire 在 bundle 顶部补出真正的 require，__require 检测到后就会走它。

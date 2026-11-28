@@ -16,194 +16,10 @@ import { USER_LOCK_HOST_ATTR, USER_LOCK_HOST_ID, TARGET_POINT_SCROLL_JS } from "
 // 兼容旧导入（测试与 browserHost 仍从 refs 取锁脚本）。
 export { USER_LOCK_HOST_ATTR, buildUserLockScript, buildAgentDrivingScript } from "./userLock.js";
 
-/** 页面内最多为多少个元素计算句柄（防巨型页面卡死；显示层另有 80 条预算）。 */
-export const MAX_SNAPSHOT_ELEMENTS = 200;
-
-/** browser_snapshot 文本里最多显示多少个元素（超出提示重新快照）。 */
-export const MAX_VISIBLE_ELEMENTS = 80;
-
-/**
- * 页面脚本返回的原始元素：比对外类型多两个内部字段——
- * matchText（精确文本句柄的判别串）与 parentIndex（最近的可快照祖先在 picked 数组里的下标）。
- * parentIndex 让 --root 子树下钻成为真实能力：父子关系由页面内同一次遍历算出，
- * 不是事后猜选择器前缀。
- */
-export type RawBrowserElement = Omit<BrowserElementSnapshot, "ref" | "parent"> & {
-  matchText?: string;
-  parentIndex?: number;
-};
-
-/**
- * 页面内快照脚本：只读 DOM，不写任何属性。
- * 元素范围＝可交互元素（a/button/input/textarea/select/[role=button]/[contenteditable]/
- * 有 onclick 或 tabindex 的可见元素）+ 标题 h1-h6 + 地标（main/nav/header/footer/aside）。
- */
-export const SNAPSHOT_SCRIPT = `/* loopsoar:snapshot */
-(() => {
-  const MAX = ${MAX_SNAPSHOT_ELEMENTS};
-  const SELECTOR = 'a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable=""],[contenteditable="true"],[onclick],[tabindex],h1,h2,h3,h4,h5,h6,main,nav,header,footer,aside';
-  const norm = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
-  const textOf = (el) => norm(el.innerText || el.textContent || '');
-  const cssEscape = (value) => {
-    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
-    return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
-  };
-  const attrSelector = (tag, attr, value) => {
-    const escaped = String(value).replace(/["\\\\]/g, (ch) => '\\\\' + ch);
-    return tag + '[' + attr + '="' + escaped + '"]';
-  };
-  const isVisible = (el) => {
-    if (!el || el.nodeType !== 1) return false;
-    let rect = null;
-    try { rect = el.getBoundingClientRect(); } catch (err) { return false; }
-    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
-    const style = window.getComputedStyle(el);
-    if (!style) return true;
-    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
-    if (style.opacity === '0') return false;
-    return true;
-  };
-  const isUnique = (selector) => {
-    try { return document.querySelectorAll(selector).length === 1; } catch (err) { return false; }
-  };
-  // 稳定性打分：唯一 id > name > aria-label > data-testid > 精确文本（a/button，≤60）> 结构路径
-  const selectorFor = (el) => {
-    const tag = el.tagName.toLowerCase();
-    const id = el.getAttribute('id');
-    if (id) {
-      const candidate = '#' + cssEscape(id);
-      if (isUnique(candidate)) return { selector: candidate, why: 'id' };
-    }
-    const name = el.getAttribute('name');
-    if (name) {
-      const candidate = attrSelector(tag, 'name', name);
-      if (isUnique(candidate)) return { selector: candidate, why: 'name' };
-    }
-    const aria = el.getAttribute('aria-label');
-    if (aria) {
-      const candidate = attrSelector(tag, 'aria-label', aria);
-      if (isUnique(candidate)) return { selector: candidate, why: 'aria-label' };
-    }
-    const testId = el.getAttribute('data-testid');
-    if (testId) {
-      const candidate = '[data-testid="' + String(testId).replace(/["\\\\]/g, (ch) => '\\\\' + ch) + '"]';
-      if (isUnique(candidate)) return { selector: candidate, why: 'data-testid' };
-    }
-    if (tag === 'a' || tag === 'button') {
-      const text = textOf(el);
-      if (text && text.length <= 60) {
-        const same = Array.prototype.filter.call(document.querySelectorAll(tag), (node) => textOf(node) === text);
-        if (same.length === 1) return { selector: tag, why: 'text', matchText: text };
-      }
-    }
-    let path = '';
-    let node = el;
-    while (node && node.nodeType === 1) {
-      const parent = node.parentElement;
-      if (!parent) break;
-      const index = Array.prototype.indexOf.call(parent.children, node) + 1;
-      const part = node.tagName.toLowerCase() + ':nth-child(' + index + ')';
-      path = path ? part + ' > ' + path : part;
-      if (isUnique(path)) return { selector: path, why: 'path' };
-      if (node === document.body) break;
-      node = parent;
-    }
-    return { selector: path || tag, why: 'path' };
-  };
-  const roleOf = (el) => {
-    const explicit = el.getAttribute('role');
-    if (explicit) return explicit.trim();
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'a') return el.hasAttribute('href') ? 'link' : 'text';
-    if (tag === 'button') return 'button';
-    if (tag === 'textarea') return 'textbox';
-    if (tag === 'select') return 'combobox';
-    if (tag === 'input') {
-      const type = (el.getAttribute('type') || 'text').toLowerCase();
-      if (type === 'checkbox') return 'checkbox';
-      if (type === 'radio') return 'radio';
-      if (type === 'submit' || type === 'button' || type === 'reset' || type === 'image') return 'button';
-      if (type === 'file') return 'file';
-      if (type === 'hidden') return 'hidden';
-      return 'textbox';
-    }
-    if (tag === 'main') return 'main';
-    if (tag === 'nav') return 'navigation';
-    if (tag === 'header') return 'banner';
-    if (tag === 'footer') return 'contentinfo';
-    if (tag === 'aside') return 'complementary';
-    if (/^h[1-6]$/.test(tag)) return 'heading';
-    if (el.isContentEditable) return 'textbox';
-    return 'generic';
-  };
-  const nameOf = (el) => {
-    const aria = el.getAttribute('aria-label');
-    if (aria) return norm(aria).slice(0, 100);
-    const text = textOf(el);
-    if (text) return text.slice(0, 100);
-    const placeholder = el.getAttribute('placeholder');
-    if (placeholder) return norm(placeholder).slice(0, 100);
-    const alt = el.getAttribute('alt');
-    if (alt) return norm(alt).slice(0, 100);
-    const title = el.getAttribute('title');
-    if (title) return norm(title).slice(0, 100);
-    const name = el.getAttribute('name');
-    if (name) return norm(name).slice(0, 100);
-    const type = (el.getAttribute('type') || '').toLowerCase();
-    if (type === 'submit' || type === 'button') return norm(el.value || type);
-    return '';
-  };
-
-  const all = Array.prototype.slice.call(document.querySelectorAll(SELECTOR));
-  const picked = [];
-  let matched = 0;
-  for (let i = 0; i < all.length; i += 1) {
-    const node = all[i];
-    if (!isVisible(node)) continue;
-    matched += 1;
-    if (picked.length < MAX) picked.push(node);
-  }
-  // 父子关系：只在「本次实际入选」的元素之间建立，避免为了树结构把祖先强行塞进快照。
-  // 祖先不在 picked 里就继续向上找，直到根；parentIndex=-1 表示顶层。
-  const pickedIndex = new Map();
-  for (let i = 0; i < picked.length; i += 1) pickedIndex.set(picked[i], i);
-  const parentIndexOf = (el) => {
-    let node = el.parentElement;
-    while (node && node.nodeType === 1) {
-      if (pickedIndex.has(node)) return pickedIndex.get(node);
-      node = node.parentElement;
-    }
-    return -1;
-  };
-  const elements = picked.map((el) => {
-    const tag = el.tagName.toLowerCase();
-    const handle = selectorFor(el);
-    const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : undefined;
-    const role = roleOf(el);
-    const item = { tag: tag, role: role, name: nameOf(el), selector: handle.selector, selectorWhy: handle.why };
-    const parentIndex = parentIndexOf(el);
-    if (parentIndex >= 0) item.parentIndex = parentIndex;
-    if (handle.matchText) item.matchText = handle.matchText;
-    if (type) item.type = type;
-    // 值只在「输入类」元素上回传；密码框不回传（敏感数据默认不进模型上下文）
-    if (role === 'textbox' || role === 'combobox') {
-      const raw = el.value == null ? '' : String(el.value);
-      if (type !== 'password') item.value = raw.slice(0, 200);
-    }
-    const href = el.getAttribute('href');
-    if (tag === 'a' && href) item.href = href.slice(0, 300);
-    if (el.disabled === true) item.disabled = true;
-    if ((type === 'checkbox' || type === 'radio') && typeof el.checked === 'boolean') item.checked = Boolean(el.checked);
-    return item;
-  });
-  return {
-    url: location.href,
-    title: document.title,
-    text: (document.body ? document.body.innerText : '').slice(0, 20000),
-    elements: elements,
-    elementTotal: matched,
-  };
-})()`;
+// 快照脚本与元素原始类型已外置到 snapshotScript.ts（导入方继续从 refs 取，保持不变）。
+import type { RawBrowserElement } from "./snapshotScript.js";
+export { MAX_SNAPSHOT_ELEMENTS, MAX_VISIBLE_ELEMENTS, SNAPSHOT_SCRIPT } from "./snapshotScript.js";
+export type { RawBrowserElement } from "./snapshotScript.js";
 
 /** 一个 ref 的句柄：选择器 +（可选）精确文本消歧串。 */
 export interface RefHandle {
@@ -405,18 +221,37 @@ function locateJs(resolved: ResolvedTarget): string {
   const SELECTOR = ${JSON.stringify(resolved.selector)};
   const MATCH_TEXT = ${JSON.stringify(resolved.matchText ?? "")};
   const norm = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
+  // 同一个选择器常同时命中「隐藏的源 textarea」和「真正可见的编辑器」。
+  // 直接 querySelector 会拿到 DOM 里第一个（往往是隐藏的），点击坐标落在 0,0 或被吸顶栏挡住。
+  const isUsable = (node) => {
+    if (!node || node.nodeType !== 1) return false;
+    let rect;
+    try { rect = node.getBoundingClientRect(); } catch (err) { return false; }
+    if (!rect || rect.width < 2 || rect.height < 2) return false;
+    const style = window.getComputedStyle(node);
+    if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.opacity === '0')) return false;
+    return true;
+  };
   let el = null;
   if (KIND === 'text') {
     if (MATCH_TEXT) {
       // 优先「文本恰好等于目标」，其次「包含目标的元素里文本最短」：避免 text=下载 先命中整个导航容器。
-      const nodes = Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],[role="link"],summary,label')).sort((a, b) => { const ta = norm(a.innerText || a.textContent || ''), tb = norm(b.innerText || b.textContent || ''); return (ta === MATCH_TEXT ? 0 : 1) - (tb === MATCH_TEXT ? 0 : 1) || ta.length - tb.length; });
+      const nodes = Array.prototype.slice.call(document.querySelectorAll('a,button,[role="button"],[role="link"],summary,label'))
+        .filter(isUsable)
+        .sort((a, b) => { const ta = norm(a.innerText || a.textContent || ''), tb = norm(b.innerText || b.textContent || ''); return (ta === MATCH_TEXT ? 0 : 1) - (tb === MATCH_TEXT ? 0 : 1) || ta.length - tb.length; });
       el = nodes.find((node) => norm(node.innerText || node.textContent || '').indexOf(MATCH_TEXT) !== -1) || null;
     }
   } else if (KIND === 'exactText') {
-    const nodes = Array.prototype.slice.call(document.querySelectorAll(SELECTOR));
+    const nodes = Array.prototype.slice.call(document.querySelectorAll(SELECTOR)).filter(isUsable);
     el = nodes.find((node) => norm(node.innerText || node.textContent || '') === MATCH_TEXT) || null;
   } else {
-    try { el = document.querySelector(SELECTOR); } catch (err) { return { ok: false, code: 'INVALID_SELECTOR' }; }
+    try {
+      const nodes = document.querySelectorAll(SELECTOR);
+      for (let i = 0; i < nodes.length; i += 1) {
+        if (isUsable(nodes[i])) { el = nodes[i]; break; }
+      }
+      if (!el && nodes.length > 0) return { ok: false, code: 'ELEMENT_NOT_VISIBLE', matched: nodes.length };
+    } catch (err) { return { ok: false, code: 'INVALID_SELECTOR' }; }
   }
   if (!el) return { ok: false, code: 'ELEMENT_NOT_FOUND' };
 `;
@@ -490,14 +325,26 @@ ${locateJs(resolved)}
     return { tag: node.tagName.toLowerCase(), id: node.getAttribute('id') || undefined, className: cls || undefined, text: text || undefined };
   };
   const rect = el.getBoundingClientRect();
-  const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max(window.innerWidth - 1, 0));
-  const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max(window.innerHeight - 1, 0));
+  const vw = Math.max(window.innerWidth, 1), vh = Math.max(window.innerHeight, 1);
+  const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+  const right = Math.min(vw, rect.right), bottom = Math.min(vh, rect.bottom);
+  const boxWidth = Math.max(right - left, 1), boxHeight = Math.max(bottom - top, 1);
+  // 与 target-point 同一策略：中心被吸顶栏挡住时，改试元素内其他点，避免假报 BLOCKED。
+  const fractions = [[0.5, 0.5], [0.5, 0.22], [0.5, 0.78], [0.22, 0.5], [0.78, 0.5], [0.5, 0.1], [0.5, 0.9]];
+  let firstHit = null;
+  let hitOk = false;
   if (typeof document.elementFromPoint === 'function') {
-    const hit = document.elementFromPoint(cx, cy);
-    // 接管锁浮层是本应用自己画的、Agent 运行期间常驻：它挡住的点击仍然是 Agent 发起的，
-    // 不能判成第三方遮罩 —— 否则锁一打开 Agent 就再也点不动页面。
-    const ownLock = Boolean(hit && (hit.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || hit.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)})));
-    if (hit && hit !== el && !el.contains(hit) && !ownLock) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(hit) };
+    for (let i = 0; i < fractions.length; i += 1) {
+      const x = Math.min(Math.max(left + boxWidth * fractions[i][0], 0), Math.max(vw - 1, 0));
+      const y = Math.min(Math.max(top + boxHeight * fractions[i][1], 0), Math.max(vh - 1, 0));
+      const hit = document.elementFromPoint(x, y);
+      if (!firstHit) firstHit = hit;
+      // 接管锁浮层是本应用自己画的、Agent 运行期间常驻：它挡住的点击仍然是 Agent 发起的，
+      // 不能判成第三方遮罩 —— 否则锁一打开 Agent 就再也点不动页面。
+      const ownLock = Boolean(hit && (hit.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || (hit.hasAttribute && hit.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)}))));
+      if (hit && (hit === el || el.contains(hit) || ownLock)) { hitOk = true; break; }
+    }
+    if (!hitOk) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(firstHit), tried: fractions.length };
   }
   el.click();
   return { ok: true };
@@ -529,19 +376,52 @@ ${options.scrollIntoView === false ? "" : TARGET_POINT_SCROLL_JS}
     text = text.replace(/ +/g, ' ').trim().slice(0, 40);
     return { tag: node.tagName.toLowerCase(), id: node.getAttribute('id') || undefined, className: cls || undefined, text: text || undefined };
   };
+  const tag = el.tagName.toLowerCase();
   const rect = el.getBoundingClientRect();
-  const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max(window.innerWidth - 1, 0));
-  const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max(window.innerHeight - 1, 0));
+  const vw = Math.max(window.innerWidth, 1), vh = Math.max(window.innerHeight, 1);
+  const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+  const right = Math.min(vw, rect.right), bottom = Math.min(vh, rect.bottom);
+  const boxWidth = Math.max(right - left, 1), boxHeight = Math.max(bottom - top, 1);
+  // 中心点可能被吸顶工具栏/固定底栏盖住（高亮块能看见，中心却点不到）。
+  // 依次试中心、上下左右与接近边缘的点，选第一个真正命中的位置；全部被挡才报 BLOCKED。
+  const ownLock = (node) => Boolean(node && (node.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || (node.hasAttribute && node.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)}))));
+  const fractions = [[0.5, 0.5], [0.5, 0.22], [0.5, 0.78], [0.22, 0.5], [0.78, 0.5], [0.5, 0.1], [0.5, 0.9]];
+  let cx = Math.min(Math.max(left + boxWidth / 2, 0), Math.max(vw - 1, 0));
+  let cy = Math.min(Math.max(top + boxHeight / 2, 0), Math.max(vh - 1, 0));
+  let firstHit = null;
+  let clicked = false;
   if (typeof document.elementFromPoint === 'function') {
-    const hit = document.elementFromPoint(cx, cy);
-    const ownLock = Boolean(hit && (hit.id === ${JSON.stringify(USER_LOCK_HOST_ID)} || hit.hasAttribute(${JSON.stringify(USER_LOCK_HOST_ATTR)})));
-    if (hit && hit !== el && !el.contains(hit) && !ownLock) return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(hit) };
+    for (let i = 0; i < fractions.length; i += 1) {
+      const x = Math.min(Math.max(left + boxWidth * fractions[i][0], 0), Math.max(vw - 1, 0));
+      const y = Math.min(Math.max(top + boxHeight * fractions[i][1], 0), Math.max(vh - 1, 0));
+      const hit = document.elementFromPoint(x, y);
+      if (!firstHit) firstHit = hit;
+      if (hit && (hit === el || el.contains(hit) || ownLock(hit))) {
+        cx = x;
+        cy = y;
+        clicked = true;
+        break;
+      }
+    }
+    if (!clicked) {
+      return { ok: false, code: 'BLOCKED_BY_OVERLAY', blocker: describe(firstHit), tried: fractions.length };
+    }
   }
   // 输入类元素的可编辑信息：真实键盘输入需要知道「能不能打字」「是不是多行」。
-  const tag = el.tagName.toLowerCase();
   const inputType = tag === 'input' ? String(el.getAttribute('type') || 'text').toLowerCase() : '';
-  const editable = tag === 'textarea' || (tag === 'input' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].indexOf(inputType) >= 0) || Boolean(el.isContentEditable);
-  const multiline = tag === 'textarea' || Boolean(el.isContentEditable);
+  // 同源 iframe 里的富文本编辑区（UEditor 等）：iframe 本身接收真实点击后，键盘事件会进内层文档。
+  let frameEditable = false;
+  if (tag === 'iframe') {
+    try {
+      const doc = el.contentDocument;
+      const body = doc && doc.body;
+      frameEditable = Boolean(body && (body.isContentEditable || doc.designMode === 'on' || doc.querySelector('[contenteditable=""],[contenteditable="true"]')));
+    } catch (err) {
+      frameEditable = false;
+    }
+  }
+  const editable = frameEditable || tag === 'textarea' || (tag === 'input' && ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].indexOf(inputType) >= 0) || Boolean(el.isContentEditable);
+  const multiline = frameEditable || tag === 'textarea' || Boolean(el.isContentEditable);
   // 可读文案：敏感步骤判定要用它（#e12 / #pay 这类选择器本身没有语义，
   // 只有元素文案才判得出「立即支付」）。aria-label > title > 文本 > value > placeholder > name。
   const labelRaw = el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.textContent || el.value || el.getAttribute('placeholder') || el.getAttribute('name') || '';
@@ -586,7 +466,18 @@ export function buildFocusCheckScript(resolved: ResolvedTarget): string {
 ${locateJs(resolved)}
   const active = document.activeElement;
   if (!active) return { ok: false };
-  return { ok: active === el || el.contains(active), tag: active.tagName ? active.tagName.toLowerCase() : '' };
+  if (active === el || el.contains(active)) return { ok: true, tag: active.tagName ? active.tagName.toLowerCase() : '' };
+  // 富文本 iframe：真实点击后主文档 activeElement 是 iframe，真正焦点在内层 body/contenteditable。
+  if (el.tagName.toLowerCase() === 'iframe') {
+    try {
+      const doc = el.contentDocument;
+      const inner = doc && doc.activeElement;
+      if (inner && (inner === doc.body || inner.isContentEditable || /^(input|textarea)$/i.test(inner.tagName || ''))) {
+        return { ok: true, tag: (inner.tagName || '').toLowerCase(), frame: true };
+      }
+    } catch (err) {}
+  }
+  return { ok: false };
 })()`;
 }
 
@@ -603,7 +494,16 @@ export async function performFocus(
 ${locateJs(resolved)}
   if (typeof el.focus === 'function') el.focus();
   const active = document.activeElement;
-  return { ok: Boolean(active && (active === el || el.contains(active))) };
+  if (active && (active === el || el.contains(active))) return { ok: true };
+  // iframe 编辑区：focus() 后主文档 activeElement 可能是 iframe，内层才是真正的编辑体。
+  if (el.tagName.toLowerCase() === 'iframe') {
+    try {
+      const doc = el.contentDocument;
+      const inner = doc && (doc.activeElement || doc.body);
+      if (inner) return { ok: true, frame: true };
+    } catch (err) {}
+  }
+  return { ok: false };
 })()`)) as { ok?: boolean } | null;
     return page?.ok === true
       ? { ok: true }
@@ -658,6 +558,25 @@ ${locateJs(resolved)}
   const TEXT = ${JSON.stringify(text)};
   el.scrollIntoView({ block: 'center' });
   try { el.focus(); } catch (err) {}
+  if (el.tagName.toLowerCase() === 'iframe') {
+    // 富文本编辑器（UEditor 等）：内容在 iframe 的 contenteditable body 里，
+    // 没有 value 可写；退回直接写 body 文本并派发 input（真实键盘路径仍优先）。
+    let doc = null;
+    try { doc = el.contentDocument; } catch (err) {}
+    const body = doc && doc.body;
+    if (!body) return { ok: false, code: 'TYPE_NOT_EFFECTIVE', actual: '' };
+    try { body.focus(); } catch (err) {}
+    body.textContent = TEXT;
+    try { body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: TEXT })); }
+    catch (err) { body.dispatchEvent(new Event('input', { bubbles: true })); }
+    body.dispatchEvent(new Event('change', { bubbles: true }));
+    const actualFrame = String(body.innerText || body.textContent || '');
+    const normFrame = (value) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    if (normFrame(actualFrame) !== normFrame(TEXT) && normFrame(actualFrame).indexOf(normFrame(TEXT)) === -1) {
+      return { ok: false, code: 'TYPE_NOT_EFFECTIVE', actual: actualFrame.slice(0, 200) };
+    }
+    return { ok: true };
+  }
   if ('value' in el) {
     // 原生 setter：走原型链上的 value 描述符，才能推进 React 的 value tracker
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
@@ -688,7 +607,14 @@ ${locateJs(resolved)}
  */
 export function buildTypeReadbackScript(resolved: ResolvedTarget): string {
   return "/* loopsoar:type-readback */\n(() => {\n" + locateJs(resolved) +
-    "\n  const actual = ('value' in el) ? String(el.value == null ? '' : el.value) : String(el.textContent == null ? '' : el.textContent);\n" +
+    "\n  if (el.tagName.toLowerCase() === 'iframe') {\n" +
+    "    try {\n" +
+    "      const doc = el.contentDocument;\n" +
+    "      const body = doc && doc.body;\n" +
+    "      return { ok: true, value: String((body && (body.innerText || body.textContent)) || '') };\n" +
+    "    } catch (err) { return { ok: false }; }\n" +
+    "  }\n" +
+    "  const actual = ('value' in el) ? String(el.value == null ? '' : el.value) : String(el.textContent == null ? '' : el.textContent);\n" +
     "  return { ok: true, value: actual };\n})()";
 }
 
@@ -895,9 +821,11 @@ export type BrowserActionCode =
   | "STALE_REF"
   | "INVALID_TARGET"
   | "ELEMENT_NOT_FOUND"
+  /** 选择器命中的元素全部不可见（隐藏的源输入框/折叠面板）。 */
+  | "ELEMENT_NOT_VISIBLE"
   | "INVALID_SELECTOR"
   | "TYPE_NOT_EFFECTIVE"
-  /** 点击命中验证失败：目标中心点被别的元素盖住（浮层/遮罩/吸顶条）。 */
+  /** 点击命中验证失败：目标可点击区域被别的元素盖住（浮层/遮罩/吸顶条）。 */
   | "BLOCKED_BY_OVERLAY"
   /** 按键不在白名单。 */
   | "INVALID_KEY"
@@ -940,6 +868,10 @@ interface PageActionResult {
   reason?: string;
   /** 遮挡元素（BLOCKED_BY_OVERLAY）。 */
   blocker?: { tag?: string; id?: string; className?: string; text?: string } | null;
+  /** 命中验证尝试过的落点数（BLOCKED_BY_OVERLAY 诊断用）。 */
+  tried?: number;
+  /** 选择器命中但全部不可见时的命中数量。 */
+  matched?: number;
   /** 目标实际标签（NOT_A_SELECT）。 */
   tag?: string;
   /** 没匹配到的 option 值（OPTION_NOT_FOUND）。 */
@@ -984,8 +916,16 @@ function failureOf(
     return {
       ok: false,
       code: "BLOCKED_BY_OVERLAY",
-      message: `[BLOCKED_BY_OVERLAY] ${labelOf(registry, resolved, target)} 的中心点被${blocker ? `「${blocker}」` : "其他元素"}遮挡，el.click() 可能点不到它。建议：先关闭浮层或等待动画结束，或把目标滚动到可见区域后重新 browser_snapshot，或改用更具体的 CSS 选择器。`,
+      message: `[BLOCKED_BY_OVERLAY] ${labelOf(registry, resolved, target)} 的可点击区域被${blocker ? `「${blocker}」` : "其他元素"}遮挡${typeof page?.tried === "number" ? `（已尝试 ${page.tried} 个落点）` : ""}。建议：先关闭浮层或等待动画结束；若目标是吸顶栏下的输入框，可先 browser_scroll 把它滚到视口中部再试；或重新 browser_snapshot 换一个可见元素。`,
       ...(blocker ? { blocker } : {}),
+    };
+  }
+  if (code === "ELEMENT_NOT_VISIBLE") {
+    const matched = typeof page?.matched === "number" ? `（命中 ${page.matched} 个）` : "";
+    return {
+      ok: false,
+      code: "ELEMENT_NOT_VISIBLE",
+      message: `[ELEMENT_NOT_VISIBLE] 选择器 ${target} 命中的元素全部不可见${matched}：可能是隐藏的源输入框（如 UEditor 的同步 textarea）或折叠面板。请先 browser_snapshot，改用可见的 #eN；富文本编辑区通常用 iframe 或 contenteditable 元素。`,
     };
   }
   if (code === "NOT_A_SELECT") {
@@ -1088,6 +1028,7 @@ export interface TargetPointResult extends BrowserActionResult {
   multiline?: boolean;
   /** 元素可读文案（aria-label/文本/value/placeholder）：敏感步骤判定用，不进状态行。 */
   text?: string;
+  tried?: number;
 }
 
 type PagePointResult = PageActionResult & {

@@ -1,29 +1,61 @@
 /**
- * ask_user 弹窗：Agent 调用 ask_user 工具时暂停任务，向用户提一个问题。
+ * ask_user 弹窗：Agent 调用 ask_user 工具时暂停任务，向用户提一个「决策分叉」问题。
  *
- * 定位：这是「人机协作」的关键一环——不是权限确认，而是 Agent 缺信息时必须由人回答。
- * 交互：选项按钮（点选即回答）/ 自由文本（Ctrl+Enter 提交）/ 取消（Esc 或按钮）。
+ * 定位：这是「人机协作」的关键一环 —— 不是权限确认，而是 Agent 缺信息时必须由人拍板。
+ * 交互（对标 slime 的决策分叉窗口）：
+ *   · 每个选项展示 label（做什么）+ description（选择它的后果/代价），模型推荐项标「推荐」；
+ *   · 单选：点击或按数字键立即回答；
+ *   · 多选：点击切换选中，点「确认选择」提交（可同时补充自由文本）；
+ *   · 永远保留「其他」出口（自由文本）与「跳过，先继续」（不替用户做决定，也不让任务卡死）。
+ *
  * 组件只做展示与本地输入，真正的 IPC 回填（api.ask.respond）由 App 负责：
- *   · answer=null  → 取消（cancelled:true）
- *   · answer=string → 回答内容
+ *   · null              → 取消（cancelled:true）
+ *   · { choice }        → 单选
+ *   · { choices }       → 多选
+ *   · { answer }        → 自由文本
+ *   · { skipped:true }  → 跳过（不回答，但要求 Agent 继续）
  *
- * 无障碍：role=dialog + aria-modal + aria-labelledby/describedby；挂载时聚焦首个可操作元素，
- * Esc 在捕获阶段处理（避免同时触发下层设置面板的 Esc 关闭）；Tab 在弹窗内循环。
+ * 无障碍：role=dialog + aria-modal + aria-labelledby/describedby；挂载时聚焦首个选项，
+ * Esc 在捕获阶段处理（避免同时触发下层面板的 Esc 关闭）；Tab 在弹窗内循环。
  */
 import * as React from "react";
 import { BRAND } from "./theme.js";
 import { Icon } from "./Icon.js";
 import { useT } from "./i18n.js";
-import type { AskUserRequest } from "./types.js";
+import type { AskUserOption, AskUserReply, AskUserRequest } from "./types.js";
 
 export interface AskUserDialogProps {
   /** 挂起中的问题（来自 ask:user 事件）。 */
   request: AskUserRequest;
-  /** 回答或取消；null = 取消。 */
-  onRespond: (answer: string | null) => void;
+  /** 回答 / 跳过 / 取消；null = 取消。 */
+  onRespond: (reply: AskUserReply | null) => void;
+  /** 会话内联卡片（默认 false = 旧的全屏模态；新界面应传 true）。 */
+  inline?: boolean;
 }
 
-export default function AskUserDialog({ request, onRespond }: AskUserDialogProps): React.JSX.Element {
+const MAX_OPTIONS = 8;
+
+/** 兼容旧壳层的 string[]：统一成结构化选项。 */
+function normalizeOptions(raw: AskUserRequest["options"]): AskUserOption[] {
+  if (!Array.isArray(raw)) return [];
+  const list: AskUserOption[] = [];
+  for (const item of raw) {
+    const option: AskUserOption = typeof item === "string" ? { label: item } : item;
+    const label = typeof option.label === "string" ? option.label.trim() : "";
+    if (!label) continue;
+    list.push({
+      label: label.slice(0, 200),
+      ...(typeof option.description === "string" && option.description.trim()
+        ? { description: option.description.trim().slice(0, 300) }
+        : {}),
+      ...(option.recommended === true ? { recommended: true } : {}),
+    });
+    if (list.length >= MAX_OPTIONS) break;
+  }
+  return list;
+}
+
+export default function AskUserDialog({ request, onRespond, inline = false }: AskUserDialogProps): React.JSX.Element {
   const tr = useT();
   const titleId = React.useId();
   const questionId = React.useId();
@@ -31,14 +63,17 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
   const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
   const [text, setText] = React.useState("");
-  /** 每秒推进一次，仅用于倒计时（到期后弹窗由 App 收起，这里只负责如实显示）。 */
+  /** 多选：已选中的 label（顺序即用户点击顺序）。 */
+  const [selected, setSelected] = React.useState<string[]>([]);
+  /** 每秒推进一次，仅用于敏感确认的倒计时（到期后弹窗由 App 收起）。 */
   const [now, setNow] = React.useState(() => Date.now());
 
-  const options = request.options ?? [];
-  // 与 shell 的默认语义一致：未显式声明时，有选项=只让选，无选项=只让打字
-  const allowFreeText = request.allowFreeText ?? options.length === 0;
+  const options = React.useMemo(() => normalizeOptions(request.options), [request.options]);
+  // 与 shell 的默认语义一致：允许自由文本（选项之外永远有「其他」出口）
+  const allowFreeText = request.allowFreeText ?? true;
   /** 敏感步骤确认：不回显选项列表与自由文本，只给「确认执行 / 取消」两个明确动作。 */
   const isSensitive = request.kind === "sensitive";
+  const multiSelect = request.multiSelect === true && options.length > 0 && !isSensitive;
   const remainingMs = typeof request.expiresAt === "number" ? Math.max(0, request.expiresAt - now) : null;
   const expired = remainingMs !== null && remainingMs <= 0;
 
@@ -56,7 +91,7 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
     const target = firstOptionRef.current ?? textRef.current ?? dialogRef.current;
     target?.focus();
     return () => previous?.focus?.();
-  }, [allowFreeText]);
+  }, [allowFreeText, options.length]);
 
   // Esc 取消：捕获阶段拦截并阻断继续传播（否则下层设置面板也会被 Esc 关掉）
   React.useEffect(() => {
@@ -70,17 +105,53 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onRespond]);
 
-  const submitText = (): void => {
+  // 数字键 1..8 直选（单选）：把「点选项」的成本降到一次按键。
+  // 输入框内不拦截（用户可能在写数字）；多选/敏感确认不启用（避免误提交）。
+  React.useEffect(() => {
+    if (isSensitive || multiSelect || options.length === 0) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      const digit = Number.parseInt(event.key, 10);
+      if (!Number.isInteger(digit) || digit < 1 || digit > options.length) return;
+      event.preventDefault();
+      onRespond({ choice: options[digit - 1].label });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isSensitive, multiSelect, options, onRespond]);
+
+  const pick = (option: AskUserOption): void => {
+    if (multiSelect) {
+      setSelected((prev) =>
+        prev.includes(option.label) ? prev.filter((label) => label !== option.label) : [...prev, option.label],
+      );
+      return;
+    }
+    onRespond({ choice: option.label });
+  };
+
+  const submit = (): void => {
     const value = text.trim();
+    if (multiSelect) {
+      if (selected.length === 0 && !value) return;
+      onRespond({
+        ...(selected.length > 0 ? { choices: selected } : {}),
+        ...(value ? { answer: value } : {}),
+      });
+      return;
+    }
     if (!value) return;
-    onRespond(value);
+    onRespond({ answer: value });
   };
 
   const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    // Ctrl/Cmd+Enter：提交自由文本
+    // Ctrl/Cmd+Enter：提交自由文本（多选时连同已选项一起提交）
     if (allowFreeText && event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      submitText();
+      submit();
       return;
     }
     // 基础焦点圈定：Tab 在弹窗内首尾循环，避免焦点跑到遮罩后的界面
@@ -93,7 +164,6 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
     if (focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    // 焦点落在对话框容器本身（点击空白处后）：直接送进首/尾元素
     if (document.activeElement === root) {
       event.preventDefault();
       (event.shiftKey ? last : first).focus();
@@ -110,18 +180,23 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
 
   return (
     <div
-      className="ask-overlay"
-      data-fullpage-overlay="ask"
+      className={inline ? "ask-inline" : "ask-overlay"}
+      data-fullpage-overlay={inline ? undefined : "ask"}
       role="presentation"
-      onMouseDown={(event) => {
-        // 点遮罩空白只把焦点收回弹窗（不误关弹窗：取消必须显式按钮/Esc）
-        if (event.target === event.currentTarget) dialogRef.current?.focus();
-      }}
+      onMouseDown={
+        inline
+          ? undefined
+          : (event) => {
+              // 点遮罩空白只把焦点收回弹窗（不误关弹窗：取消必须显式按钮/Esc）
+              if (event.target === event.currentTarget) dialogRef.current?.focus();
+            }
+      }
     >
       <div
         ref={dialogRef}
         className="ask-dialog"
         data-kind={isSensitive ? "sensitive" : "ask"}
+        data-multi={multiSelect ? "true" : "false"}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -138,6 +213,11 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
           <span id={titleId} className="ask-title">
             {isSensitive ? request.title ?? tr("ask.sensitiveTitle") : tr("ask.title")}
           </span>
+          {!isSensitive && request.header ? (
+            <span className="ask-header-badge" title={request.header}>
+              {request.header}
+            </span>
+          ) : null}
         </div>
         <div id={questionId} className="ask-question">
           {request.question}
@@ -145,7 +225,7 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
         {isSensitive && request.detail && request.detail.length > 0 ? (
           <div className="ask-detail">
             {request.detail.map((row) => (
-              <div key={`${row.label}`} className="ask-detail-row">
+              <div key={row.label} className="ask-detail-row">
                 <span className="ask-detail-label">{row.label}</span>
                 <span className="ask-detail-value" title={row.value}>
                   {row.value}
@@ -156,18 +236,38 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
         ) : null}
         {!isSensitive && options.length > 0 ? (
           <div className="ask-options" role="group" aria-label={tr("ask.ariaOptions")}>
-            {options.map((option, index) => (
-              <button
-                key={`${index}-${option}`}
-                ref={index === 0 ? firstOptionRef : undefined}
-                type="button"
-                className="ask-option"
-                title={tr("ask.optionTitle")}
-                onClick={() => onRespond(option)}
-              >
-                {option}
-              </button>
-            ))}
+            {options.map((option, index) => {
+              const active = multiSelect && selected.includes(option.label);
+              return (
+                <button
+                  key={option.label + "-" + index}
+                  ref={index === 0 ? firstOptionRef : undefined}
+                  type="button"
+                  className="ask-option"
+                  data-recommended={option.recommended ? "true" : "false"}
+                  data-selected={active ? "true" : "false"}
+                  aria-pressed={multiSelect ? active : undefined}
+                  title={option.description ?? tr("ask.optionTitle")}
+                  onClick={() => pick(option)}
+                >
+                  <span className="ask-option-index" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <span className="ask-option-body">
+                    <span className="ask-option-label">
+                      {option.label}
+                      {option.recommended ? <span className="ask-badge-rec">{tr("ask.recommended")}</span> : null}
+                    </span>
+                    {option.description ? <span className="ask-option-desc">{option.description}</span> : null}
+                  </span>
+                  {multiSelect ? (
+                    <span className="ask-option-check" data-on={active ? "true" : "false"} aria-hidden="true">
+                      {active ? <Icon name="check" size={12} /> : null}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
         ) : null}
         {isSensitive ? null : allowFreeText ? (
@@ -200,6 +300,12 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
                 : tr("ask.countdown", { seconds: Math.ceil(remainingMs / 1000) })}
             </span>
           ) : null}
+          {/* 跳过：不替用户选，也不让任务卡死（Agent 会带着假设继续，并在最终回复里说明） */}
+          {!isSensitive ? (
+            <button type="button" className="ask-skip" onClick={() => onRespond({ skipped: true })}>
+              {tr("ask.skip")}
+            </button>
+          ) : null}
           <button type="button" className="ask-cancel" onClick={() => onRespond(null)}>
             {isSensitive ? tr("ask.sensitiveCancel") : tr("ask.cancel")}
           </button>
@@ -209,16 +315,29 @@ export default function AskUserDialog({ request, onRespond }: AskUserDialogProps
               className="ask-submit"
               data-danger="true"
               disabled={expired}
-              onClick={() => onRespond("confirm")}
+              onClick={() => onRespond({ answer: "confirm" })}
             >
               {tr("ask.sensitiveConfirm")}
             </button>
+          ) : multiSelect ? (
+            <button
+              type="button"
+              className="ask-submit"
+              onClick={submit}
+              disabled={selected.length === 0 && !text.trim()}
+              title={tr("ask.hintMulti")}
+            >
+              {selected.length > 0 ? tr("ask.confirmChoices", { count: selected.length }) : tr("ask.submit")}
+            </button>
           ) : allowFreeText ? (
-            <button type="button" className="ask-submit" onClick={submitText} disabled={!text.trim()} title="Ctrl+Enter">
+            <button type="button" className="ask-submit" onClick={submit} disabled={!text.trim()} title="Ctrl+Enter">
               {tr("ask.submit")}
             </button>
           ) : null}
         </div>
+        {!isSensitive && options.length > 0 && !multiSelect && allowFreeText ? (
+          <div className="ask-hint">{tr("ask.hintNumberKeys")}</div>
+        ) : null}
       </div>
     </div>
   );

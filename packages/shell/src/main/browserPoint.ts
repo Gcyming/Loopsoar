@@ -129,8 +129,23 @@ export function buildPointClickScript(x: number, y: number, space: PointSpace = 
   if (!Number.isFinite(px) || !Number.isFinite(py) || px < 0 || py < 0 || px > window.innerWidth || py > window.innerHeight) {
     return { ok: false, code: 'INVALID_ARGS', message: '坐标越界' };
   }
-  const el = document.elementFromPoint(Math.min(px, window.innerWidth - 1), Math.min(py, window.innerHeight - 1));
+  const cx = Math.min(px, window.innerWidth - 1);
+  const cy = Math.min(py, window.innerHeight - 1);
+  const el = document.elementFromPoint(cx, cy);
   if (!el || el === document.documentElement || el === document.body) return { ok: false, code: 'NO_TARGET', message: '没有可点击元素' };
+  // 富文本编辑器（UEditor 等）的编辑体在同源 iframe 里：iframe.click() 不会聚焦内层，
+  // 需要把坐标换算进 frame 再点一次；跨域时保持原行为。
+  if (el.tagName.toLowerCase() === 'iframe') {
+    try {
+      const doc = el.contentDocument;
+      const rect = el.getBoundingClientRect();
+      if (doc) {
+        if (doc.body && typeof doc.body.focus === 'function') doc.body.focus();
+        const inner = doc.elementFromPoint(cx - rect.left, cy - rect.top);
+        if (inner && typeof inner.click === 'function') inner.click();
+      }
+    } catch (err) {}
+  }
   el.click();
   return { ok: true };
 })()`;

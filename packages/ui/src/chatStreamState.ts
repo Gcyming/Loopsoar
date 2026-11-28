@@ -173,7 +173,7 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
     name?: string;
     tool?: string;
     args?: unknown;
-    result?: { ok?: boolean; content?: string; error?: string };
+    result?: { ok?: boolean; content?: string; error?: string; images?: { mime?: unknown; base64?: unknown }[] };
   } = {};
   try {
     payload = JSON.parse(raw) as typeof payload;
@@ -205,6 +205,15 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
               return String(rawResult);
             }
           })();
+  // 工具图片（浏览器截图）：只保留最短必要的图片，避免一次工具调用把大 base64 塞满 React state。
+  const images = (Array.isArray(toolResult?.images) ? toolResult.images : [])
+    .filter((image): image is { mime: string; base64: string } =>
+      Boolean(image) && typeof image.mime === "string" && typeof image.base64 === "string" && image.base64.length > 0)
+    .slice(0, 2);
+  // 浏览器截图：事件里不带 base64（避免 MB 级 IPC），只带落盘路径，UI 用 fs.readImage 懒加载。
+  const screenshotPath = /screenshot|截图/i.test(toolName)
+    ? /已截图[：:]\s*(.+?\.png)(?:\r?\n|$)/i.exec(resultText)?.[1]?.trim()
+    : undefined;
   const plan = parsePlanArgs(toolName, toolArgs);
   const planItems: PlanItem[] | null =
     plan ??
@@ -218,7 +227,12 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
     let timeline = message.timeline ?? [];
     const running = Boolean(payload.toolCallId) && timeline.some((step) => step.kind === "tool" && step.id === payload.toolCallId);
     timeline = running
-      ? settleToolStep(timeline, payload.toolCallId!, { ok: toolResult?.ok !== false, result: resultText || undefined })
+      ? settleToolStep(timeline, payload.toolCallId!, {
+          ok: toolResult?.ok !== false,
+          result: resultText || undefined,
+          ...(images.length > 0 ? { images } : {}),
+          ...(screenshotPath ? { imagePath: screenshotPath } : {}),
+        })
       : appendTimelineStep(timeline, {
           kind: "tool",
           id: payload.toolCallId ?? newToolId,
@@ -228,6 +242,8 @@ export function applyToolResult(messages: ChatMessage[], id: string, raw: string
           result: resultText || undefined,
           ok: toolResult?.ok !== false,
           state: "done",
+          ...(images.length > 0 ? { images } : {}),
+          ...(screenshotPath ? { imagePath: screenshotPath } : {}),
         });
     if (planItems) timeline = foldPlanUpdate(timeline, planItems, lastPlanItems(timeline));
     return { ...message, timeline };

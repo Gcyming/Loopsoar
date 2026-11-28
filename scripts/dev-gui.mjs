@@ -49,6 +49,10 @@ function resolveElectron() {
   throw new Error("未找到 electron 二进制（先在仓库根执行 pnpm install，并确认 electron 下载完成）");
 }
 
+// 先编译 contracts 的 dist：UI 的 tsc 走包 exports（dist），不先更新会出现
+// 「源码加了字段、UI 类型却说没有」的假失败（用户 2026-11-28 实测）。
+// 直接调 tsc（不跑 clean-dist，避免 Windows 上旧进程占用导致 EPERM）。
+await run(process.execPath, [path.join(ROOT, "node_modules/typescript/bin/tsc"), "-p", path.join(ROOT, "packages/contracts/tsconfig.json")]);
 // pnpm 在 Windows 上是 .cmd，需要 shell；node 直接调（脚本路径含空格时不能用 shell 拼接）
 await run(isWin ? "pnpm.cmd" : "pnpm", ["--filter", "loopsoar-ui", "build"], { shell: isWin });
 await run(process.execPath, [path.join(ROOT, "scripts/bundle-shell.mjs")]);

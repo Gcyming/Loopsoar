@@ -13,8 +13,18 @@ export function Head({ t, h }: { t: string; h: string }) {
   return <div style={{ marginBottom: 14 }}><div style={{ fontSize: 15, fontWeight: 700 }}>{t}</div><div style={{ marginTop: 4, fontSize: 11.5, color: BRAND.linenMuted, lineHeight: 1.6 }}>{h}</div></div>;
 }
 
-export function Field({ l, h, children }: { l: string; h?: string; children: React.ReactNode }) {
-  return <div style={S.field}><div style={S.fieldLabel}><span>{l}</span>{h ? <span style={S.fieldHint}>{h}</span> : null}</div><div style={S.fieldCtl}>{children}</div></div>;
+export function Field({ l, h, children, anchor }: { l: string; h?: string; children: React.ReactNode; anchor?: string }) {
+  // anchor：设置搜索直接定位到具体控件（滚动 + 高亮），没有 anchor 的分区只能定位到整页。
+  return (
+    <div
+      id={anchor ? "settings-anchor-" + anchor : undefined}
+      data-settings-anchor={anchor}
+      style={S.field}
+    >
+      <div style={S.fieldLabel}><span>{l}</span>{h ? <span style={S.fieldHint}>{h}</span> : null}</div>
+      <div style={S.fieldCtl}>{children}</div>
+    </div>
+  );
 }
 export function Seg({ v, opts, on }: { v: string; opts: [string, string][]; on: (x: string) => void }) {
   return <div style={S.seg}>{opts.map(([val, label]) => (
@@ -311,13 +321,26 @@ export const S: Record<string, React.CSSProperties> = {
   header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: `1px solid ${BRAND.border}`, background: BRAND.ink },
   title: { fontSize: 13, fontWeight: 700, letterSpacing: 0.5 },
   bodyRow: { display: "flex", flex: 1, minHeight: 0 },
-  nav: { width: 190, flexShrink: 0, borderRight: `1px solid ${BRAND.border}`, padding: 8, display: "flex", flexDirection: "column", gap: 2, background: BRAND.ink, overflowY: "auto" },
+  // overflow 必须 visible：搜索结果是绝对定位浮层，nav 自己滚动会把它裁成 190px 宽。
+  nav: { width: 190, flexShrink: 0, borderRight: `1px solid ${BRAND.border}`, padding: 8, display: "flex", flexDirection: "column", gap: 2, background: BRAND.ink, overflow: "visible" },
+  navList: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 },
   navItem: { display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, border: "none", background: "transparent", color: BRAND.linenMuted, cursor: "pointer", textAlign: "left", transition: "background 120ms, color 120ms" },
   navItemActive: { background: BRAND.ochreSoft, color: BRAND.linen },
   navGroup: { fontSize: 10, color: BRAND.linenFaint, letterSpacing: 0.6, padding: "10px 10px 4px", textTransform: "uppercase" },
   navText: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 },
   navLabel: { fontSize: 12.5, fontWeight: 600 },
   navHint: { fontSize: 10.5, color: BRAND.linenFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  searchWrap: { position: "relative", padding: "2px 2px 8px" },
+  searchBox: { display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 8, border: `1px solid ${BRAND.border}`, background: BRAND.inkRaised },
+  searchInput: { flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", color: BRAND.linen, fontSize: 12 },
+  searchClear: { flex: "none", width: 16, height: 16, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" },
+  searchResults: { position: "absolute", left: 2, top: "100%", width: 360, zIndex: 40, marginTop: 2, padding: 4, maxHeight: 320, overflowY: "auto", borderRadius: 10, border: `1px solid ${BRAND.border}`, background: BRAND.inkRaised, boxShadow: "0 16px 40px rgba(0,0,0,0.45)" },
+  searchItem: { display: "flex", alignItems: "flex-start", gap: 8, width: "100%", padding: "7px 8px", borderRadius: 7, border: "none", background: "transparent", color: BRAND.linen, textAlign: "left", cursor: "pointer" },
+  searchItemActive: { background: BRAND.ochreSoft },
+  searchText: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0 },
+  searchLabel: { fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  searchCrumb: { fontSize: 10, color: BRAND.linenFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  searchEmpty: { padding: "10px 8px", fontSize: 11.5, color: BRAND.linenFaint },
   content: { flex: 1, minWidth: 0, overflowY: "auto", padding: "16px 20px" },
   field: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "10px 0", borderBottom: `1px solid ${BRAND.border}` },
   fieldLabel: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, color: BRAND.linen, minWidth: 140, maxWidth: 400 },

@@ -183,6 +183,20 @@
       "hasRequest": false
     },
     {
+      "channel": "browser:listClosedTabs",
+      "domain": "browser",
+      "method": "listClosedTabs",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "browser:reopenClosedTabAt",
+      "domain": "browser",
+      "method": "reopenClosedTabAt",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
       "channel": "browser:endTask",
       "domain": "browser",
       "method": "endTask",
@@ -1278,6 +1292,41 @@
       "channel": "bookmarks:update",
       "domain": "bookmarks",
       "method": "update",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "shortcuts:list",
+      "domain": "shortcuts",
+      "method": "list",
+      "sensitive": true,
+      "hasRequest": false
+    },
+    {
+      "channel": "shortcuts:add",
+      "domain": "shortcuts",
+      "method": "add",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "shortcuts:update",
+      "domain": "shortcuts",
+      "method": "update",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "shortcuts:remove",
+      "domain": "shortcuts",
+      "method": "remove",
+      "sensitive": true,
+      "hasRequest": true
+    },
+    {
+      "channel": "shortcuts:pin",
+      "domain": "shortcuts",
+      "method": "pin",
       "sensitive": true,
       "hasRequest": true
     },

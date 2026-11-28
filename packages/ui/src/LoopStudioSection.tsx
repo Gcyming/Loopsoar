@@ -150,10 +150,16 @@ export function LoopStudioSection({
   list,
   onReload,
   onError,
+  compressRatio = 0.75,
+  onOpenGeneral,
 }: {
   list: LoopListResult | null;
   onReload: () => Promise<void> | void;
   onError: (message: string) => void;
+  /** 全局上下文压缩阈值（设置 · 通用）；Loop 内每轮工具请求前执行。 */
+  compressRatio?: number;
+  /** 跳转到「通用」调整阈值。 */
+  onOpenGeneral?: () => void;
 }) {
   const tr = useT();
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -349,11 +355,37 @@ export function LoopStudioSection({
       }
       const saved = result.savedId ?? config.id;
       setSelectedId(saved);
-      setNote(tr("settings.loop.saved", { id: saved }));
+      setNote(tr(activate ? "settings.loop.savedActive" : "settings.loop.saved", { id: saved }));
       if (result.loops) {
         const entry = result.loops.find((loop: LoopInfo) => loop.id === saved);
         if (entry) setSelectedReadonly(entry.editable ? null : entry);
       }
+      await refresh();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** 直接启用当前选中的 loop，不必再编译一次；下一轮对话即生效。 */
+  async function activateSelected(): Promise<void> {
+    if (!selectedId) return;
+    const api = window.loopsoarAPI;
+    if (!api) {
+      setLocalError("未在 Electron shell 中运行（window.loopsoarAPI 不存在）");
+      return;
+    }
+    setSaving(true);
+    setLocalError(null);
+    setNote(null);
+    try {
+      const result = await api.loop.setActive({ id: selectedId });
+      if (!result.ok) {
+        setLocalError(result.error ?? tr("settings.loop.saveFailed"));
+        return;
+      }
+      setNote(tr("settings.loop.activated", { id: selectedId }));
       await refresh();
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err));
@@ -396,6 +428,26 @@ export function LoopStudioSection({
         <div style={{ fontSize: 15, fontWeight: 700 }}>{tr("settings.loop.title")}</div>
         <div style={{ marginTop: 4, fontSize: 11.5, color: BRAND.linenMuted, lineHeight: 1.6 }}>
           {tr("settings.loop.hint")}
+        </div>
+      </div>
+
+      <div style={compressCard}>
+        <div style={S.rowBetween}>
+          <div style={compressTitle}>{tr("settings.loop.compressTitle")}</div>
+          <span style={compressPill}>{Math.round(compressRatio * 100)}%</span>
+        </div>
+        <div style={compressText}>
+          {tr("settings.loop.compressBody", {
+            pct: Math.round(compressRatio * 100),
+            target: Math.round(Math.max(0.35, compressRatio - 0.2) * 100),
+          })}
+        </div>
+
+        <div style={compressFoot}>
+          <span>{tr("settings.loop.applyHint")}</span>
+          {onOpenGeneral ? (
+            <Btn label={tr("settings.loop.compressAction")} small onClick={onOpenGeneral} />
+          ) : null}
         </div>
       </div>
 
@@ -600,6 +652,9 @@ export function LoopStudioSection({
                   {tr("settings.loop.activate")}
                 </label>
                 <div style={{ display: "flex", gap: 8 }}>
+                  {selectedId && activeId !== selectedId ? (
+                    <Btn label={tr("settings.loop.activateNow")} small onClick={() => void activateSelected()} />
+                  ) : null}
                   {selectedId ? <Btn label={tr("settings.loop.delete")} small onClick={() => void remove()} /> : null}
                   <Btn label={saving ? tr("settings.loop.saving") : tr("settings.loop.compile")} primary onClick={() => void save()} />
                 </div>
@@ -611,6 +666,37 @@ export function LoopStudioSection({
     </div>
   );
 }
+
+const compressCard: React.CSSProperties = {
+  border: `1px solid ${BRAND.border}`,
+  borderRadius: 10,
+  padding: "10px 12px",
+  marginBottom: 12,
+  background: "rgba(var(--ls-accent-rgb), 0.04)",
+};
+const compressTitle: React.CSSProperties = { fontSize: 12.5, fontWeight: 700 };
+const compressPill: React.CSSProperties = {
+  fontSize: 11,
+  padding: "1px 7px",
+  borderRadius: 999,
+  border: `1px solid ${BRAND.border}`,
+  color: BRAND.linenMuted,
+};
+const compressText: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 11.5,
+  color: BRAND.linenMuted,
+  lineHeight: 1.65,
+};
+const compressFoot: React.CSSProperties = {
+  marginTop: 8,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  fontSize: 11.5,
+  color: BRAND.linenMuted,
+};
 
 const layout: React.CSSProperties = {
   display: "grid",

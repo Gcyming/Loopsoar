@@ -18,14 +18,17 @@ export const LAYOUT = {
    *
    * 历史：0.0.2 及以前网页是「浮在应用底色上的圆角面板」（8px 留白 + 14px 圆角），
    * 但用户在跳转/加载时反复看到页面四周露出应用底色（黑边/黑圈），要求彻底消除。
-   * 现在网页铺满浏览器列：不留任何应用底色缝隙，也不再做圆角裁切（圆角切掉的四角
-   * 只能露出应用底色，无法与任意网页内容对齐）。常量保留是为了兼容既有调用面。
+   * 现在网页主体仍铺满浏览器列（顶部/右侧/底部不留缝），只在左侧留 8px 呼吸位，
+   * 避免网页内容顶到程序左边界；四角仍由壳层遮罩补齐圆角。常量保留是为了兼容既有调用面。
    */
   BROWSER_VIEW_INSET: 0,
-  /** 网页面板右侧留白（历史值 4；与左/上/下一起归零，页面铺满整列）。 */
+  // 左侧单独留白：0 会让网页内容顶到程序左边界（用户反馈「左侧和程序边界挤在一起」）。
+  // 只收左侧，不动顶部/底部/右侧，避免整块页面明显缩小。
+  BROWSER_VIEW_INSET_LEFT: 8,
+  /** 网页面板右侧留白（历史值 4；顶部/右侧/底部归零，仅左侧保留 8px 呼吸位）。 */
   BROWSER_VIEW_INSET_RIGHT: 0,
-  /** 网页面板圆角（0 = 方形铺满；不再用透明度/遮罩制造圆角，避免露出底色）。 */
-  BROWSER_VIEW_RADIUS: 0,
+  /** 网页面板圆角（与窗口/面板语言一致；Windows 原生视图不裁剪内容，壳层用四角遮罩补齐）。 */
+  BROWSER_VIEW_RADIUS: 12,
   /** 右侧 Agent 面板默认宽度（可拖拽覆盖）。 */
   SIDEBAR_WIDTH: 360,
   /** 侧栏宽度/透明度过渡时长（ms）：UI 动效 token 与壳层布局共用。 */
@@ -114,8 +117,9 @@ export function computeBrowserViewBounds(
   const splitterWidth =
     sidebarWidth > 0 && sidebarWidth !== layout.SIDEBAR_COLLAPSED_WIDTH ? layout.SPLITTER_WIDTH : 0;
   const inset = Math.max(0, layout.BROWSER_VIEW_INSET);
+  const insetLeft = Math.max(0, layout.BROWSER_VIEW_INSET_LEFT);
   const insetRight = Math.max(0, layout.BROWSER_VIEW_INSET_RIGHT);
-  const width = Math.max(0, size.width - sidebarWidth - splitterWidth - inset - insetRight);
+  const width = Math.max(0, size.width - sidebarWidth - splitterWidth - insetLeft - insetRight);
   const height = Math.max(
     0,
     size.height -
@@ -127,7 +131,7 @@ export function computeBrowserViewBounds(
       inset * 2,
   );
   return {
-    x: inset,
+    x: insetLeft,
     y: layout.TITLE_BAR_HEIGHT + layout.TOP_BAR_HEIGHT + inset + topInset,
     width,
     height,

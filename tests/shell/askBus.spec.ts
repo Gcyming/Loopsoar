@@ -1,9 +1,10 @@
 /**
- * AskBus：ask_user 挂起/回填/超时/清理。
- * 为什么单独测：这是「等真人回答」的挂起点，超时与取消必须 fail-closed（绝不伪造回答）。
+ * AskBus：ask_user 挂起/回填/超时/清理 + 结构化选项（推荐/多选/跳过/自填）。
+ * 为什么单独测：这是「等真人回答」的挂起点，超时与取消必须 fail-closed（绝不伪造回答）；
+ * 跳过则是「不回答但要求继续」——两者语义不同，不能混成一个 cancelled。
  */
 import { describe, expect, it, vi } from "vitest";
-import { AskBus } from "../../packages/shell/src/main/askBus.ts";
+import { AskBus, normalizeAskAnswer, normalizeAskOptions } from "../../packages/shell/src/main/askBus.ts";
 
 describe("AskBus", () => {
   it("request 推送 ask:user 事件；resolve 回填回答", async () => {
@@ -13,9 +14,17 @@ describe("AskBus", () => {
     expect(bus.size).toBe(1);
     expect(pushed).toHaveLength(1);
     expect(pushed[0].event).toBe("ask:user");
-    const payload = pushed[0].payload as { requestId: string; question: string; options: string[] };
+    const payload = pushed[0].payload as {
+      requestId: string;
+      question: string;
+      options: { label: string; value: string }[];
+    };
     expect(payload.question).toBe("选哪个方案？");
-    expect(payload.options).toEqual(["A", "B"]);
+    // 选项归一为结构化对象：label 给用户看，value 回传（字符串输入 → 两者相同）
+    expect(payload.options).toEqual([
+      { label: "A", value: "A" },
+      { label: "B", value: "B" },
+    ]);
 
     const received = bus.resolve(payload.requestId, { answer: "B" });
     expect(received).toBe(true);
@@ -123,5 +132,97 @@ describe("AskBus", () => {
     await pending;
     expect(Date.now() - started).toBeGreaterThanOrEqual(40); // 下限 50ms（计时抖动容差）
     vi.useRealTimers();
+  });
+});
+
+describe("normalizeAskOptions（结构化选项）", () => {
+  it("字符串与对象混排：保留 description，去重、截断、标注推荐", () => {
+    const result = normalizeAskOptions(
+      [
+        "Docker 部署",
+        { label: "裸机部署", description: "排障直观，但依赖要自己装" },
+        "Docker 部署",
+        { label: "  ", description: "空标签被丢弃" },
+      ],
+      1,
+    );
+    expect(result.options).toHaveLength(2);
+    expect(result.options[1].description).toContain("排障直观");
+    expect(result.options[1].recommended).toBe(true);
+    expect(result.recommendedIndex).toBe(1);
+    expect(result.options[0].recommended).toBeUndefined();
+  });
+
+  it("推荐项支持字符串 label；不存在/越界时不猜", () => {
+    expect(normalizeAskOptions(["A", "B"], "B").recommendedIndex).toBe(1);
+    expect(normalizeAskOptions(["A", "B"], "C").recommendedIndex).toBeUndefined();
+    expect(normalizeAskOptions(["A", "B"], 9).recommendedIndex).toBeUndefined();
+  });
+
+  it("已标注的推荐项在二次归一时保留（工具 → 总线不会丢标记）", () => {
+    const first = normalizeAskOptions(["A", "B"], 0);
+    const second = normalizeAskOptions(first.options);
+    expect(second.recommendedIndex).toBe(0);
+    expect(second.options.filter((option) => option.recommended)).toHaveLength(1);
+  });
+
+  it("最多 8 个选项", () => {
+    const options = Array.from({ length: 20 }, (_, i) => "选项" + i);
+    expect(normalizeAskOptions(options).options).toHaveLength(8);
+  });
+});
+
+describe("normalizeAskAnswer（回答语义）", () => {
+  it("多选 + 自填：choices 与 custom 分离", () => {
+    const answer = normalizeAskAnswer({ choices: ["A", "B"], answer: "另外也考虑 C" });
+    expect(answer.cancelled).toBe(false);
+    expect(answer.choices).toEqual(["A", "B"]);
+    expect(answer.custom).toBe("另外也考虑 C");
+    expect(answer.answer).toBe("另外也考虑 C");
+  });
+
+  it("只选了选项：answer 回填为选项文本，不产生 custom", () => {
+    const answer = normalizeAskAnswer({ choice: "Docker 部署" });
+    expect(answer.choice).toBe("Docker 部署");
+    expect(answer.answer).toBe("Docker 部署");
+    expect(answer.custom).toBeUndefined();
+  });
+
+  it("跳过与取消严格区分", () => {
+    expect(normalizeAskAnswer({ skipped: true })).toEqual({ skipped: true });
+    expect(normalizeAskAnswer({})).toEqual({ cancelled: true });
+    // 既跳过又填了文本：按真回答处理（用户其实说了话）
+    const answered = normalizeAskAnswer({ skipped: true, answer: "用 Docker" });
+    expect(answered.cancelled).toBe(false);
+    expect(answered.answer).toBe("用 Docker");
+  });
+});
+
+describe("AskBus（结构化回填）", () => {
+  it("多选 + 自填：choices 与 custom 都回传", async () => {
+    const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const bus = new AskBus({ push: (event, payload) => events.push({ event, payload: payload as Record<string, unknown> }) });
+    const pending = bus.request({
+      question: "还要改哪些模块？",
+      options: ["压缩", "提问", "UI"],
+      multiSelect: true,
+    });
+    const asked = events.find((item) => item.event === "ask:user");
+    expect(asked?.payload.multiSelect).toBe(true);
+    bus.resolve(String(asked?.payload.requestId), { choices: ["压缩", "提问"], answer: "顺便看下 UI" });
+    const answer = await pending;
+    expect(answer.choices).toEqual(["压缩", "提问"]);
+    expect(answer.custom).toBe("顺便看下 UI");
+  });
+
+  it("跳过：返回 skipped，不冒充用户选择", async () => {
+    const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const bus = new AskBus({ push: (event, payload) => events.push({ event, payload: payload as Record<string, unknown> }) });
+    const pending = bus.request({ question: "选哪个？", options: ["A", "B"] });
+    const asked = events.find((item) => item.event === "ask:user");
+    bus.resolve(String(asked?.payload.requestId), { skipped: true });
+    const answer = await pending;
+    expect(answer.skipped).toBe(true);
+    expect(answer.cancelled).toBeUndefined();
   });
 });

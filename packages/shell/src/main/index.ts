@@ -30,6 +30,8 @@ import { withProviderDefaults } from "./providerDefaults.js";
 import { createDebouncedRunner, USER_TABS_SESSION, type BrowserHost } from "./browserHost.js";
 import { sanitizeBrowserState } from "./browserSessionState.js";
 import { BrowserStateStore } from "./browserStateStore.js";
+import { ClosedTabStore } from "./closedTabStore.js";
+import { flushBrowserStatesOnExit } from "./browserStateFlush.js";
 import { BrowserHistoryStore } from "./browserHistoryStore.js";
 import type { PersistedBrowserState } from "./browserSessionState.js";
 import { registerRuntimeDomain } from "./domains/runtime.js";
@@ -54,11 +56,12 @@ import { checkCommandGuards, compileCommandGuards } from "loopsoar-core/rules/co
 import { registerMemoryTools } from "./memoryTools.js";
 import { buildSessionEpisode } from "./memoryEpisode.js";
 import { registerSearchTools } from "./searchTools.js";
-import { readImageAttachmentForLlm } from "./imageRead.js";
+import { readImageAttachmentWithPrivacy } from "./imageRead.js";
+import { resolveModelContextWindow, resolveModelVision } from "./modelVision.js";
 import { createLoopRuntime } from "./loopRuntime.js";
 import { registerLoopDomain } from "./domains/loop.js";
 import { createScheduledTaskRuntime } from "./scheduledTaskRuntime.js";
-import { showDesktopNotification } from "./desktopNotify.js";
+import { createLazyNotificationRuntime } from "./notificationRuntime.js";
 import { ensureSingleInstance } from "./singleInstance.js";
 import { createBrowserExternalLinks } from "./browserExternalLinks.js";
 import { createRendererPusher, replayBrowserState } from "./rendererBus.js";
@@ -68,6 +71,7 @@ import { registerAskDomain } from "./domains/ask.js";
 import { registerAskTools } from "./askTools.js";
 import { BookmarksStore } from "./bookmarksStore.js";
 import { registerBookmarksDomain } from "./domains/bookmarks.js";
+import { registerShortcutsDomain } from "./domains/shortcuts.js";
 import { registerPageSaveDomain } from "./domains/pageSave.js";
 import { registerMemoryDomain } from "./domains/memory.js";
 import { registerRuleLearningDomain } from "./domains/ruleLearning.js";
@@ -178,8 +182,10 @@ function buildBindings(): { channel: string; domain: string; method: string }[] 
   }));
 }
 
-const pushToRenderer = createRendererPusher(() => BrowserWindow.getAllWindows());
+const sendToRenderer = createRendererPusher(() => BrowserWindow.getAllWindows());
 let mainWindow: BrowserWindow | null = null;
+const notificationRuntime = createLazyNotificationRuntime({ getWindow: () => mainWindow, sendToRenderer });
+const pushToRenderer = notificationRuntime.pushToRenderer;
 let browserHost: BrowserHost | null = null;
 const browserLinks = createBrowserExternalLinks({
   appName: APP_NAME, executablePath: process.env.APPIMAGE ?? process.execPath, appPath: app.isPackaged ? null : process.argv.find((arg) => /main(?:\.bundle)?\.mjs$|main[\\/]index\.js$/.test(arg)) ?? null,
@@ -281,6 +287,7 @@ app.whenReady().then(async () => {
   bootTrace.mark("whenReady");
   try {
     const dirs = ensureWritableDataDirs(app, { allowCwdFallback: !app.isPackaged });
+    notificationRuntime.setConfigDir(dirs.configDir);
     // 安装包没有控制台：把 error/warn 同时写 <dataDir>/logs/main.log（5MB 轮转）。
     installMainLogIfPackaged(dirs.dataDir, app.isPackaged);
     // 升级前自动备份：版本号变化才执行；失败只记录，不阻断启动。
@@ -330,7 +337,7 @@ app.whenReady().then(async () => {
   });
   bootTrace.mark("protocol+ui-dist");
 
-  const core = await createCoreServices({ dirs, appVersion: APP_VERSION, bootTrace, pushToRenderer, safeStorage, isPackaged: app.isPackaged });
+  const core = await createCoreServices({ dirs, appVersion: APP_VERSION, bootTrace, pushToRenderer, safeStorage, isPackaged: app.isPackaged, onAskUser: notificationRuntime.ask });
   const {
     platform,
     registry,
@@ -345,6 +352,7 @@ app.whenReady().then(async () => {
     workspaces,
     worktreesRoot,
     bookmarks,
+    shortcuts,
     resolveSessionRoot,
     terminals,
     extensions,
@@ -414,6 +422,7 @@ app.whenReady().then(async () => {
       const nextMemory = prefs.memoryStorePath?.trim() || path.join(dirs.dataDir, "memory", "memory.json");
       if (nextMemory !== memory.filePath) void memory.relocate(nextMemory);
     },
+    onPermissionsSaved: (permissions: { workspaceRoots: string[] }) => sandbox.setAllowedDirs(permissions.workspaceRoots.map((dir: string) => path.resolve(dir))),
   };
   // 规则守卫缓存：按当前 workspace 的启用规则编译；内容/路径变化才重编译。
   let ruleGuardCache: {
@@ -449,8 +458,8 @@ app.whenReady().then(async () => {
     agent: defaultAgent ? { name: defaultAgent.name, role: defaultAgent.role } : undefined,
     toolAllowlist: defaultAgent?.toolAllowlist,
     readImageAttachment: (filePath: string) => {
-      const active = providers.active();
-      return readImageAttachmentForLlm(filePath, active?.models?.find((m) => m.id === active.model), active?.model ?? "");
+      // 隐私开关：关闭后不读取像素（图片只保留路径），避免「用户以为没发、其实已上传」。
+      return readImageAttachmentWithPrivacy(filePath, providers.active(), loadPreferences(dirs.configDir).imageInputEnabled !== false);
     },
     // 规则文件（AGENTS.md）：每次 stream 重新读取；项目规则按会话所属工作区解析。
     getSystemRules: (sessionId?: string) =>
@@ -513,6 +522,7 @@ app.whenReady().then(async () => {
     onTurnComplete: ({ sessionId, userText, result }) => {
       // 回合结束：关闭当前检查点组（快照保留），落一条 turn trace。
       closeTurn(stores, sessionId, result.usage, result.status, providers.active());
+      notificationRuntime.turn({ sessionId, userText, result });
       if (loadPreferences(dirs.configDir).skillAutoCandidate !== true) return;
       const key = sessionId || "default";
       const now = Date.now();
@@ -554,12 +564,9 @@ app.whenReady().then(async () => {
         ts: m.ts,
       }));
     },
-    // 当前模型上下文窗口（tokens）：用于历史压缩预算；未探测到则回退 core 默认
-    getContextWindow: () => {
-      const active = providers.active();
-      const spec = active?.models?.find((m) => m.id === active.model);
-      return spec?.contextWindow;
-    },
+    getContextWindow: () => resolveModelContextWindow(providers.active()),
+    getContextCompressRatio: () => loadPreferences(dirs.configDir).contextCompressRatio ?? 0.75,
+    getModelVision: () => resolveModelVision(providers.active(), loadPreferences(dirs.configDir).imageInputEnabled !== false),
     // 当前模型最大输出：请求 max_tokens 的唯一来源（Anthropic thinking 预算会据此收敛）
     getMaxOutputTokens: () => {
       const active = providers.active();
@@ -615,6 +622,7 @@ app.whenReady().then(async () => {
   const tabSaveTimers = new Map<string, NodeJS.Timeout>();
   /** 用户标签 + 任务快照统一落盘（旧 browser-user-tabs.json 仅作迁移读取）。 */
   const browserStates = new BrowserStateStore(path.join(dirs.dataDir, "browser-state.json"));
+  const closedTabStore = new ClosedTabStore(path.join(dirs.dataDir, "closed-tabs.json"), 0); // 上限 40，debounce 0
   // 旧版本可能把 task 标记写丢，但任务工作区快照还在：有 agentBound 页的会话必然曾是任务，
   // 启动时补回标记，避免「有折叠工作区但会话列表没有任务徽标」。
   for (const [taskSessionId, state] of browserStates.entries()) {
@@ -734,6 +742,7 @@ app.whenReady().then(async () => {
       initialSessionId,
       devToolsPanel: devToolsPanel ?? undefined,
       onSessionStateChanged: queueBrowserStateSave,
+      onClosedTabsChanged: (entries) => closedTabStore.save(entries),
       // 成功访问（应用内导航/网页内跳转/新标签首屏）→ 追加全局历史
       onVisited: (visit) => {
         browserHistory.record(visit);
@@ -793,6 +802,7 @@ app.whenReady().then(async () => {
   const bootTaskState = bootBrowserState && bootBrowserState.tabs.some((tab) => tab.agentBound === true)
     ? { ...bootBrowserState, tabs: bootBrowserState.tabs.filter((tab) => tab.agentBound === true) }
     : undefined;
+  browserHost.restoreClosedTabs(closedTabStore.load());
   void (async () => {
     if (bootUserState) await browserHost.restoreUserTabs(bootUserState);
     await browserHost.switchSession(initialSessionId, bootTaskState).catch(() => []);
@@ -880,12 +890,7 @@ app.whenReady().then(async () => {
       click: (x, y) => agentPointer?.click(x, y),
       chip: (text) => agentPointer?.chip(text),
     },
-    // 只有视觉模型才把截图作为图片回灌；text-only 模型继续只拿文件路径。
-    visionEnabled: () => {
-      const active = providers.active();
-      const spec = active?.models?.find((m) => m.id === active.model);
-      return spec?.vision === true || spec?.inputModalities?.includes("image") === true;
-    },
+    visionEnabled: () => resolveModelVision(providers.active(), loadPreferences(dirs.configDir).imageInputEnabled !== false),
   });
   registerTerminalTools(registry, resolveSessionRoot);
   registerBackgroundTerminalTools(registry, backgroundTasks, resolveSessionRoot);
@@ -918,28 +923,9 @@ app.whenReady().then(async () => {
   // diagnostics / upload 曾经全部失效的根因。
   bootTrace.mark("tools-registered");
 
-  /** 退出前全量落盘：标签防抖队列可能还没触发，必须同步刷一次。 */
-  const saveAllBrowserStates = (): void => {
-    for (const timer of tabSaveTimers.values()) clearTimeout(timer);
-    tabSaveTimers.clear();
-    for (const meta of sessions.list()) {
-      const state = browserHost?.snapshotSession(meta.id);
-      if (!state || state.tabs.length === 0) continue;
-      // 任务会话把页面关光时保留上一次的任务页快照（与运行时防抖保存同一规则），
-      // 否则退出这一次会把「重新打开任务会话能恢复工作区」的存档覆盖成空。
-      if (sessions.isTask(meta.id) && !state.tabs.some((tab) => tab.agentBound === true)) {
-        browserStates.delete(meta.id);
-        sessions.setTask(meta.id, false);
-        continue;
-      }
-      browserStates.set(meta.id, state);
-    }
-    const userState = browserHost?.snapshotSession(USER_TABS_SESSION);
-    if (userState) {
-      browserStates.set(USER_TABS_SESSION, userState);
-    }
-    browserStates.flush();
-  };
+  /** 退出前全量落盘（标签 + 最近关闭）；实现见 browserStateFlush。 */
+  const saveAllBrowserStates = (): void =>
+    flushBrowserStatesOnExit({ sessions, browserHost, browserStates, closedTabStore, tabSaveTimers, userTabsSession: USER_TABS_SESSION });
   // 下载管理：目录跟随偏好（downloadDir，留空=系统下载目录），变更推送 UI
   const downloads = new DownloadsBridge(() => loadPreferences(dirs.configDir).downloadDir ?? "", () => pushToRenderer("browser:downloads", { downloads: downloads.list() }), documents.handleDownload, (webContents) => browserHost?.handleDownloadSource(webContents.id));
   registerBrowserDataRuntime(registry, () => browserHost, downloads, resolveSessionRoot, (url: string) => session.fromPartition(SESSION_PARTITION).cookies.get({ url }));
@@ -1108,7 +1094,7 @@ app.whenReady().then(async () => {
       pushToRenderer("browser:tabs", { tabs: browserHost.listTabs(), visibleSession: browserHost.visibleSessionId() });
     },
   });
-  createScheduledTaskRuntime({ dataDir: dirs.dataDir, chatDeps, push: pushToRenderer, notify: showDesktopNotification }).start();
+  createScheduledTaskRuntime({ dataDir: dirs.dataDir, chatDeps, push: pushToRenderer, notify: notificationRuntime.system }).start();
   registerMemoryDomain({
     ...deps,
     memory,
@@ -1234,6 +1220,7 @@ app.whenReady().then(async () => {
   syncPointerArea();
 
   registerBookmarksDomain(deps, bookmarks);
+  registerShortcutsDomain(deps, shortcuts);
   registerPageSaveDomain({
     ...deps,
     browser: browserHost ?? undefined,

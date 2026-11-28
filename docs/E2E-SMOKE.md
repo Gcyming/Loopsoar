@@ -61,7 +61,7 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 供应商 A 配置错误、B 正确（active=A） | 自动降级到 B 完成对话（日志/回复可用） |
 | 设置·记忆里已有记忆；问「你还记得之前的偏好吗」 | 命中门控，volatile 注入相关记忆（回复引用历史） |
 | 问「你好」 | 无信号不注入记忆（预期：减少噪声） |
-| 状态栏/设置外无 UI 入口 | `ask_user` 由模型触发时弹出模态：选项/自由文本/取消；取消后模型收到「用户取消，不要编造答案」 |
+| 状态栏/设置外无 UI 入口 | `ask_user` 由模型触发时在会话内插入「决策分叉」卡片（不是弹窗，网页保持可见）：选项（label + 选择后果，推荐项带「推荐」、数字键 1-8 直选）/ 多选（确认后提交）/ 自由文本 / 跳过 / 取消；取消后模型收到「用户取消，不要编造答案」，跳过后模型可按假设继续但不得声称是用户选择 |
 
 ## 4. 浏览器功能面（P3 新增）
 
@@ -107,7 +107,7 @@ LOOPSOAR_DATA_DIR="$PWD/.loopsoar-data-smoke" node scripts/dev-gui.mjs
 | 书签：星标收藏 → `bookmarks.json` 持久化 → 书签浮层展示 | ✅ | `e2e-round3-bookmarks.png` |
 | 页面保存（真实落盘 `saved-pages/*.html`） | ✅ | `e2e-round3-snapshot-save.png` + 落盘文件 |
 | 快照面板（标题/URL/正文/可交互元素/复制） | ✅ | `e2e-round3-snapshot-save.png` |
-| ask_user：mock 模型发起提问 → 弹窗选项 → 点击「生产」→ Agent 继续并收束 | ✅ | `e2e-round3-ask-user.png` |
+| ask_user：mock 模型发起提问 → 会话内卡片选项 → 点击「生产」→ Agent 继续并收束 | ✅ | `e2e-round3-ask-user.png` |
 | Gateway：设置页启动 → `/healthz`+`/v1/models`；配 mock 供应商后非流式回复 + 标准 OpenAI SSE | ✅ | `e2e-round3-gateway*.png` + curl 输出 |
 | 插件：demo-plugin 子进程 ready、工具 `greet` 接入并在设置面板展示 | ✅ | `e2e-round3-plugins.png` + 主进程日志 |
 | Python / Node / Git Bash / C++ 终端会话 | ✅ 6 档全部 spawn；C++ 走 vcvars（另用 MSVC 编译运行 hello world 验证） | `e2e-round3-terminals-all.png` |

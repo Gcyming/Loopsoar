@@ -20,7 +20,7 @@ import { auditClaims, type ClaimFinding } from "loopsoar-core/claims";
 import { applyOutputFilter, createStreamFilter } from "loopsoar-core/filter";
 import type { LoopEvent } from "loopsoar-core/events";
 import { SteerBus } from "loopsoar-core/steerBus";
-import { compressConversation, historyBudgetChars } from "loopsoar-core/contextCompress";
+import { budgetCharsForTokenTarget, compressConversation } from "loopsoar-core/contextCompress";
 import type { ToolRegistry } from "loopsoar-core/tools/registry";
 import type { SandboxManager, PermissionKind } from "loopsoar-core/sandbox";
 import {
@@ -132,8 +132,12 @@ export interface ChatServiceOptions {
    * 返回值同时用于模型可见面（registry.toolSchemas）与执行闸，undefined 才表示「全部可见」。
    */
   getToolAllowlist?: (mode?: "build" | "plan", sessionId?: string, userText?: string) => string[] | undefined;
-  /** 当前模型上下文窗口（tokens）；用于历史自动压缩预算（缺省 6 万字符）。 */
+  /** 当前模型上下文窗口（tokens）；用于历史/loop 自动压缩预算（未标注时按 128k 兜底）。 */
   getContextWindow?: () => number | undefined;
+  /** 上下文压缩触发阈值（占窗口比例；设置 · 通用；缺省 0.75）。 */
+  getContextCompressRatio?: () => number | undefined;
+  /** 当前模型是否支持视觉（undefined = 未知，按支持处理并让上游裁决）。 */
+  getModelVision?: () => boolean | undefined;
   /** 当前模型最大输出（tokens）；作为请求 max_tokens 的上限，未配置则回退 4096。 */
   getMaxOutputTokens?: () => number | undefined;
   /** stable 段校验结果（供壳层日志；changed=false 表示与前一轮同输入下字节一致）。 */
@@ -537,16 +541,30 @@ function imageAttachmentParts(
   const parts: { type: "image"; mime: string; base64: string }[] = [];
   const skipped: { path: string; reason: string }[] = [];
   if (!read) return { parts, skipped };
-  const re = /【附件】([^\n]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    const path = match[1]?.trim();
-    if (!path) continue;
-    const image = read(path);
-    if (!image) continue;
-    if ("error" in image) skipped.push({ path, reason: image.error });
-    else parts.push({ type: "image", mime: image.mime, base64: image.base64 });
-  }
+  // 新格式带闭合标记：路径可以和正文同处一行（旧格式会把「路径 + 用户后写的文字」整段当成路径，
+  // 导致 extname 变成 “.png 除了作业…”，图片永远被判成不支持）。旧格式仍兼容。
+  const closed = /【附件】([^\n]*?)【\/附件】/g;
+  const legacy = /【附件】([^\n]+)/g;
+  const found = new Set<string>();
+  const collect = (regex: RegExp, trimClosingMarker: boolean): void => {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      let path = match[1]?.trim() ?? "";
+      if (!path) continue;
+      if (trimClosingMarker) {
+        const index = path.indexOf("【/附件】");
+        if (index >= 0) path = path.slice(0, index).trim();
+      }
+      if (!path || found.has(path)) continue;
+      found.add(path);
+      const image = read(path);
+      if (!image) continue;
+      if ("error" in image) skipped.push({ path, reason: image.error });
+      else parts.push({ type: "image", mime: image.mime, base64: image.base64 });
+    }
+  };
+  collect(closed, false);
+  collect(legacy, true);
   return { parts, skipped };
 }
 
@@ -754,8 +772,19 @@ export class ChatService {
       content: withWallClockPrefix(m.content, m.ts),
     }));
     // 上下文自动压缩：超预算时把早期消息压成确定性摘要（不额外请求模型，避免"失忆截断"）
+    // 上下文窗口只取一次：回合前压缩（历史）与 loop 内压缩（工具轮）必须用同一个口径。
+    // 预算按 token 目标反推字符数：中文≈1 字/token，旧实现固定 4 字符/token 会高估预算，
+    // 压缩迟迟不触发（中文会话尤其明显）。
+    const configuredWindow = this.opts.getContextWindow?.();
+    // 自定义供应商/模型经常不填 contextWindow。不能因此关闭 loop 内压缩（否则长工具轮永远不折叠），
+    // 用与回合前预算一致的 128k 兜底；已知窗口仍以能力表为准。
+    const contextWindow = configuredWindow && configuredWindow > 0 ? configuredWindow : 128_000;
+    // 阈值来自设置（0.4~0.9）；回合前压缩比 loop 更早一点，给工具结果留余量。
+    const compressRatio = Math.min(0.9, Math.max(0.4, this.opts.getContextCompressRatio?.() ?? 0.75));
+    const targetRatio = Math.max(0.35, compressRatio - 0.2);
+    const historyTargetTokens = Math.floor(contextWindow * targetRatio);
     const compression = compressConversation(rawHistory, {
-      budgetChars: historyBudgetChars(this.opts.getContextWindow?.()),
+      budgetChars: budgetCharsForTokenTarget(rawHistory, historyTargetTokens),
     });
     if (compression.compressed) {
       emit("progress", {
@@ -910,6 +939,11 @@ export class ChatService {
       }
         },
         messages,
+        // 视觉能力明确为 false 时才丢弃工具图片；未知能力仍尝试发送（很多自定义供应商不填能力表）。
+        ...(this.opts.getModelVision?.() === false ? { toolImages: false } : {}),
+        // loop 内上下文压缩：工具轮会在一轮对话里堆大量工具结果，必须每轮请求前检测。
+        // 即使模型能力表没填窗口也传兜底窗口，保证压缩真的在 loop 里运行。
+        context: { windowTokens: contextWindow, triggerRatio: compressRatio, targetRatio },
         reasoningEffort: input.reasoningEffort,
         maxTokens: this.opts.getMaxOutputTokens?.(),
         steers,

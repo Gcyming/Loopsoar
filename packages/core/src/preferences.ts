@@ -38,6 +38,10 @@ export const DEFAULT_PREFERENCES: Preferences = {
   reasoningEffort: "",
   loopId: "",
   adBlockEnabled: true,
+  notificationsEnabled: true,
+  notificationSoundEnabled: true,
+  imageInputEnabled: true,
+  contextCompressRatio: 0.75,
   sensitiveAlwaysConfirm: true,
 };
 
@@ -75,6 +79,8 @@ export function mergePreferences(raw: unknown): Preferences {
     reasoningEffort: parsed.data.reasoningEffort ?? "",
     loopId: parsed.data.loopId ?? "",
     adBlockEnabled: parsed.data.adBlockEnabled ?? true,
+    notificationsEnabled: parsed.data.notificationsEnabled ?? true,
+    notificationSoundEnabled: parsed.data.notificationSoundEnabled ?? true,
     sensitiveAlwaysConfirm: parsed.data.sensitiveAlwaysConfirm ?? true,
     theme: parsed.data.theme ?? "soft",
     sidebarMode: parsed.data.sidebarMode ?? "docked",

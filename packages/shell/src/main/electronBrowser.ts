@@ -28,6 +28,8 @@ import { downloadCompatibleReferer, isDownloadHost } from "./browserNavigationSu
 export interface ElectronBrowserHostOptions {
   initialSessionId?: string;
   onSessionStateChanged?: (sessionId: string, state: PersistedBrowserState) => void;
+  /** 「最近关闭」变化：index 侧防抖落盘（退出后仍保留最近 40 条）。 */
+  onClosedTabsChanged?: (entries: { url: string; title: string; sessionId: string; closedAt: number; agentBound?: boolean; pinned?: boolean }[]) => void;
   /** DNS 解析注入（测试/E2E 可替换；默认用 node:dns）。 */
   resolveIps?: (host: string) => Promise<string[]>;
   /** 浏览器是否允许回环（默认 true：E2E/本地页面需要；LOOPSOAR_STRICT_NET=1 关闭）。 */
@@ -116,6 +118,27 @@ export function isNewTabUrlAllowed(url: string): boolean {
 }
 
 /**
+ * 标签页内**允许**主导航的协议：只有网页地址与空白页。
+ *
+ * 为什么必须显式拦截：页面上一个 `<a href="bitbrowser://…">` 或脚本改 location 到自定义协议时，
+ * Chromium 会把请求交给操作系统；Windows 找不到注册程序就弹出「获取打开此'bitbrowser'链接的应用」
+ * 系统对话框（用户 m04220 截图）。这类跳转既不是用户要的页面，也把浏览器变成了协议启动器，
+ * 有被网页静默唤起本机应用的风险 —— 一律阻止，且不弹任何应用内提示（与 window.open 的处理一致）。
+ */
+export function isInTabNavigationAllowed(url: string): boolean {
+  if (!url) return true;
+  if (url === "about:blank") return true;
+  try {
+    const parsed = new URL(url);
+    // blob: 是页面自建内容（PDF 预览/媒体），没有 OS 交互；其余非网页协议一律挡掉。
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "blob:";
+  } catch {
+    // 非法串交给 Chromium 自己报错，不在这里吞掉。
+    return true;
+  }
+}
+
+/**
  * 可测的 window.open 处理器工厂（抽出纯逻辑，不依赖 electron 实例）：
  *   - 无论 URL 是什么都返回 { action: "deny" }，绝不产生 Electron 独立窗口；
  *   - 仅 http(s) 转成应用内新标签（openInNewTab），其余协议静默忽略。
@@ -168,6 +191,12 @@ function installBrowserRequestGuard(partitionSession: Electron.Session, options:
         // 请求可能已随标签销毁而结束，忽略
       }
     };
+    // 兜底（用户 m04220）：自定义协议（bitbrowser:// 等）一旦交给系统，Windows 会弹
+    // 「没有可打开此链接的应用」。will-navigate 之外再在请求层挡一次，双保险。
+    if (!isInTabNavigationAllowed(details.url) && details.resourceType === "mainFrame") {
+      done({ cancel: true });
+      return;
+    }
     // 应用内文档预览：只放行我们自己登记过的 webContents 加载其 PDF/加载页。
     // data: 仅用于同一预览标签的转换占位页；其它网页仍不能借 data: 绕过策略。
     if (String(details.url).startsWith("file://") || String(details.url).startsWith("data:")) {
@@ -508,19 +537,26 @@ export function createElectronBrowserHost(
         .catch(() => undefined);
     }
   };
+  // 遮罩几何跟随 BROWSER_VIEW_RADIUS：常量写死会和实际圆角对不上，出现「缺一角/多一块」。
+  const cornerRadius = Math.max(4, Math.round(LAYOUT.BROWSER_VIEW_RADIUS));
+  const cornerSize = cornerRadius;
+  const maskCss = (x: string, y: string): string => {
+    const gradient = `radial-gradient(circle ${cornerRadius}px at ${x} ${y},transparent ${cornerRadius - 0.6}px,#000 ${cornerRadius}px)`;
+    return `-webkit-mask:${gradient};mask:${gradient}`;
+  };
   const cornerCss = "html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}"
     + `:root{--corner:${cornerColor}}`
-    + ".c{position:absolute;width:14px;height:14px;background:var(--corner);pointer-events:none}"
-    + ".tl{left:0;top:0;-webkit-mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 14px,transparent 13.4px,#000 14px)}"
-    + ".tr{right:0;top:0;-webkit-mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 0 14px,transparent 13.4px,#000 14px)}"
-    + ".bl{left:0;bottom:0;-webkit-mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 14px 0,transparent 13.4px,#000 14px)}"
-    + ".br{right:0;bottom:0;-webkit-mask:radial-gradient(circle 14px at 0 0,transparent 13.4px,#000 14px);mask:radial-gradient(circle 14px at 0 0,transparent 13.4px,#000 14px)}";
+    + `.c{position:absolute;width:${cornerSize}px;height:${cornerSize}px;background:var(--corner);pointer-events:none}`
+    + `.tl{left:0;top:0;${maskCss(`${cornerRadius}px`, `${cornerRadius}px`)}}`
+    + `.tr{right:0;top:0;${maskCss("0", `${cornerRadius}px`)}}`
+    + `.bl{left:0;bottom:0;${maskCss(`${cornerRadius}px`, "0")}}`
+    + `.br{right:0;bottom:0;${maskCss("0", "0")}}`;
   const cornerHtml = "<!doctype html><html><head><meta charset='utf-8'><style>" + cornerCss + "</style></head><body>"
     + "<div class='c tl'></div><div class='c tr'></div><div class='c bl'></div><div class='c br'></div></body></html>";
 
   const ensureCornerWindow = (): BrowserWindow | null => {
-    // 网页面板已改为方形铺满（BROWSER_VIEW_RADIUS=0）：不再需要四角遮罩，
-    // 也不允许遮罩窗口在任何情况下盖住页面边角（那正是用户看到的“黑圈”）。
+    // 半径为 0 时才关闭遮罩；恢复圆角后由四角遮罩 + setBorderRadius 共同呈现。
+    // 颜色由渲染层的 --ls-surface-raised 同步，避免出现用户看到的“黑圈”。
     if (LAYOUT.BROWSER_VIEW_RADIUS <= 0) return null;
     const parent = getWindow();
     if (!parent || parent.isDestroyed()) return null;
@@ -582,6 +618,7 @@ export function createElectronBrowserHost(
   const host = new BrowserHost({
     initialSessionId: options.initialSessionId,
     onSessionStateChanged: options.onSessionStateChanged,
+    onClosedTabsChanged: options.onClosedTabsChanged,
     onVisited: options.onVisited,
     onTitleChanged: options.onTitleChanged,
     fetchFavicon: fetchFaviconDataUrl,
@@ -651,6 +688,14 @@ export function createElectronBrowserHost(
           openInNewTab(url);
         }),
       );
+      // 自定义协议（bitbrowser://、mailto: 之类）不进系统打开：否则 Windows 会弹「没有可打开此链接的应用」。
+      // 只挡页面发起的主导航；应用自己的 loadURL（file:// 预览、about:blank 新标签）不经过 will-navigate。
+      const blockForeignProtocol = (event: { preventDefault: () => void }, url: string): void => {
+        if (isInTabNavigationAllowed(url)) return;
+        event.preventDefault();
+      };
+      view.webContents.on("will-navigate", blockForeignProtocol);
+      view.webContents.on("will-frame-navigate", (event) => blockForeignProtocol(event, event.url));
       // 网页原生右键菜单：DOM 浮层覆盖不到 WebContentsView，必须由主进程 Menu 接管。
       attachPageContextMenu({
         webContents: view.webContents,

@@ -90,7 +90,11 @@ export function registerInteractTools(env: BrowserToolEnv): void {
 
         if (!point.ok || typeof point.x !== "number" || typeof point.y !== "number") {
           const code = point.code ?? "NO_TARGET";
-          return { ok: false, content: `[${code}] ${point.message ?? (target ? `点击失败：${target}` : "坐标点击失败")}` };
+          const detail = point.message ?? (target ? `点击失败：${target}` : "坐标点击失败");
+          return {
+            ok: false,
+            content: detail.startsWith(`[${code}]`) ? detail : `[${code}] ${detail}`,
+          };
         }
         // 坐标路径的「空白」判定：探测命中了元素，但它既没有文案也不可交互（页面留白/装饰层），
         // 此时派发真实点击只会点空。明确报 NO_TARGET，而不是假装点成功了。
@@ -272,6 +276,11 @@ export function registerInteractTools(env: BrowserToolEnv): void {
           const refreshed = await performTargetPoint(registry, params.target, run, { scrollIntoView: false });
           if (refreshed.ok && typeof refreshed.x === "number" && typeof refreshed.y === "number") point = refreshed;
         }
+        // 目标被浮层/吸顶栏盖住时不能退回原生 setter：那会把值写进看不见的元素，
+        // 返回成功但页面正文没变（用户看到的「输入不生效」）。明确报错并给出可行动建议。
+        if (!point.ok && point.code === "BLOCKED_BY_OVERLAY") {
+          return { ok: false, content: point.message ?? "[BLOCKED_BY_OVERLAY] 输入框被遮挡，无法聚焦" };
+        }
         // 真实键盘优先：点进输入框 → Ctrl+A → 逐字输入 → 回读校验。
         // 不成立（不支持 sendInputEvent / 受控组件拒收 / 非文本元素）时回退原生 setter。
         let result: Awaited<ReturnType<typeof performType>> | null = null;
@@ -279,6 +288,9 @@ export function registerInteractTools(env: BrowserToolEnv): void {
         if (point.ok && point.editable === true && typeof point.x === "number" && typeof point.y === "number") {
           const focused = await host.agentClick(ctx.sessionId, tabId ?? undefined, { x: point.x, y: point.y });
           if (focused) {
+            // 真实鼠标事件是异步进入渲染进程的：立刻读 activeElement 可能还在旧焦点，
+            // 导致「点击成功却报 FOCUS_MISMATCH」。给焦点切换留一个短窗口（iframe 更慢）。
+            await new Promise((resolve) => setTimeout(resolve, point.tag === "iframe" ? 180 : 90));
             const focus = await performFocusCheck(registry, params.target, run);
             if (!focus.ok) return { ok: false, content: focus.message ?? "[FOCUS_MISMATCH] 焦点不在目标输入框" };
           }

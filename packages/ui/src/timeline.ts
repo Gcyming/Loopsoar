@@ -18,6 +18,10 @@ export type TimelineStep =
       result?: string;
       ok?: boolean;
       state: "running" | "done";
+      /** 工具产生的图片（截图）；只在本轮内存里，不写入历史。 */
+      images?: { mime: string; base64: string }[];
+      /** 已落盘的截图路径：UI 通过 fs.readImage 懒加载，避免 base64 走 IPC。 */
+      imagePath?: string;
     }
   | { kind: "plan"; items: PlanItem[] }
   | { kind: "todo"; text: string; state: "start" | "done" }
@@ -41,6 +45,7 @@ export type TimelineEvent =
       result?: string;
       ok?: boolean;
       state?: "running" | "done";
+      images?: { mime: string; base64: string }[];
     }
   | { kind: "plan"; items: PlanItem[] }
   | { kind: "todo"; text: string; state: "start" | "done" }
@@ -91,6 +96,7 @@ export function appendTimelineStep(steps: TimelineStep[], event: TimelineEvent):
     result: event.result,
     ok: event.ok,
     state: event.state ?? (event.result !== undefined ? "done" : "running"),
+    ...(event.images && event.images.length > 0 ? { images: event.images } : {}),
   };
   return [...steps, tool];
 }
@@ -99,11 +105,18 @@ export function appendTimelineStep(steps: TimelineStep[], event: TimelineEvent):
 export function settleToolStep(
   steps: TimelineStep[],
   id: string,
-  patch: { ok?: boolean; result?: string },
+  patch: { ok?: boolean; result?: string; images?: { mime: string; base64: string }[]; imagePath?: string },
 ): TimelineStep[] {
   return steps.map((step) =>
     step.kind === "tool" && step.id === id
-      ? { ...step, state: "done", ok: patch.ok, result: patch.result ?? step.result }
+      ? {
+          ...step,
+          state: "done",
+          ok: patch.ok,
+          result: patch.result ?? step.result,
+          ...(patch.images && patch.images.length > 0 ? { images: patch.images } : {}),
+          ...(patch.imagePath ? { imagePath: patch.imagePath } : {}),
+        }
       : step,
   );
 }

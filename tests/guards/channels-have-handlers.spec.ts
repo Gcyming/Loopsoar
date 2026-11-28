@@ -29,6 +29,8 @@ import { AskBus } from "../../packages/shell/src/main/askBus.ts";
 import type { LoopRuntime } from "../../packages/shell/src/main/loopRuntime.ts";
 import { registerBookmarksDomain } from "../../packages/shell/src/main/domains/bookmarks.ts";
 import { BookmarksStore } from "../../packages/shell/src/main/bookmarksStore.ts";
+import { ShortcutsStore } from "../../packages/shell/src/main/shortcutsStore.ts";
+import { registerShortcutsDomain } from "../../packages/shell/src/main/domains/shortcuts.ts";
 import { registerPageSaveDomain } from "../../packages/shell/src/main/domains/pageSave.ts";
 import { registerToastDomain } from "../../packages/shell/src/main/domains/toast.ts";
 import { registerCompactDomain } from "../../packages/shell/src/main/domains/compact.ts";
@@ -114,6 +116,7 @@ function assemble(): void {
   registerAskDomain(deps, new AskBus({ push: () => {} }));
   registerLoopDomain(deps, fakeLoopRuntime());
   registerBookmarksDomain(deps, new BookmarksStore("C:/tmp/loopsoar-data-test/bookmarks"));
+  registerShortcutsDomain(deps, new ShortcutsStore("C:/tmp/loopsoar-data-test/shortcuts"));
   registerPageSaveDomain({ ...deps, dataDir: "C:/tmp/loopsoar-data-test" });
   registerToastDomain({ ...deps, showToast: () => {} });
   registerCompactDomain({

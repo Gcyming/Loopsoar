@@ -105,6 +105,11 @@ export class SandboxManager {
     this.allowedDirs.push(dir);
   }
 
+  /** 替换额外授权目录（设置页保存权限后即时生效；传空数组 = 撤销全部额外授权）。 */
+  setAllowedDirs(dirs: string[]): void {
+    this.allowedDirs = dirs.map((dir) => dir.trim()).filter(Boolean);
+  }
+
   /** 会话白名单 key：会话 + Agent 双维度，避免 A 会话的授权泄漏到 B 会话。 */
   private approvalKey(agentId: string, sessionId?: string): string {
     return `${sessionId ?? ""}\u0000${agentId}`;
@@ -170,9 +175,12 @@ export class SandboxManager {
     return normTarget === normRoot || normTarget.startsWith(normRoot + "/");
   }
 
-  private isWhitelistedDir(p?: string): boolean {
+  private isWhitelistedDir(p?: string, scopeRoot?: string): boolean {
     if (!p) return false;
-    const t = this.norm(p);
+    // 工具参数常是相对路径；先按本次判定的工作根解析，否则白名单永远匹配不到。
+    const paths = this.paths;
+    const base = scopeRoot?.trim() || this.workspaceRoot;
+    const t = this.norm(paths && !paths.isAbsolute(p) && base ? paths.resolve(base, p) : p);
     return this.allowedDirs.some((d) => {
       const n = this.norm(d);
       return t === n || t.startsWith(n + "/");
@@ -212,7 +220,7 @@ export class SandboxManager {
     const scopeRoot = opts?.workspaceRoot?.trim() ? opts.workspaceRoot : this.workspaceRoot;
 
     // ① 白名单目录命中 → 放行
-    if (this.isWhitelistedDir(target)) {
+    if (this.isWhitelistedDir(target, scopeRoot)) {
       return { action: "allow", level: 0, reason: "白名单目录命中" };
     }
 
@@ -221,7 +229,7 @@ export class SandboxManager {
       kind !== "terminal" &&
       target &&
       !this.isInsideWorkspace(target, scopeRoot) &&
-      !this.isWhitelistedDir(target)
+      !this.isWhitelistedDir(target, scopeRoot)
     ) {
       return { action: "deny", level: 5, reason: "目标越出工作目录且未授权" };
     }

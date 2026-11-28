@@ -19,7 +19,7 @@ export function registerCaptureTools(env: BrowserToolEnv): void {
   env.register({
     name: "browser_screenshot",
     description:
-      "对当前标签页截图（可见区域，PNG）并保存到会话工作根 .loopsoar/screenshots/；可选 selector 先把元素滚动到可视区。视觉模型会直接收到图片附件，text-only 模型只返回路径",
+      "对当前标签页截图（可见区域，PNG）并保存到会话工作根 .loopsoar/screenshots/；可选 selector 先把元素滚动到可视区。视觉模型（或能力未标注的模型）会直接收到图片附件，只有明确 text-only 的模型才只返回路径",
     permissions: { read: true },
     schema: z.object({ selector: z.string().min(1).max(200).optional() }),
     execute: async (ctx): Promise<ToolResult> => {
@@ -53,9 +53,12 @@ export function registerCaptureTools(env: BrowserToolEnv): void {
         fs.writeFileSync(file, buffer);
 
         const size = readPngSize(buffer);
+        // 只有「明确不支持」才不回灌：很多 OpenAI 兼容网关不填能力表，旧逻辑把 undefined
+        // 当 text-only，导致视觉模型也永远收不到截图。未知能力交给上游裁决。
+        // 上限放宽到 3MB：1900x1200 的 PNG 常见 1.5~2.5MB，旧 1.5MB 会静默丢图。
         let attachImage = false;
         try {
-          attachImage = env.hooks?.visionEnabled?.() === true && buffer.length <= 1_500_000;
+          attachImage = env.hooks?.visionEnabled?.() !== false && buffer.length <= 3_000_000;
         } catch {
           // 能力探测失败不应让截图工具失败；退回只返回路径。
         }

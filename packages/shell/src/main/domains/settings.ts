@@ -86,6 +86,8 @@ export interface SettingsDeps extends TrustedIpcDeps {
   onProviderCleared?: () => void;
   /** 通用偏好保存后回调（装配层据此切换工作区根/记忆库位置等）。 */
   onPreferencesSaved?: (prefs: Preferences) => void;
+  /** 权限策略保存后回调（装配层据此刷新沙箱的额外授权目录）。 */
+  onPermissionsSaved?: (permissions: Permissions) => void;
   /** 原生文件/目录选择器（由 index 注入 dialog；不 import electron）。 */
   pickPath?: (kind: "file" | "directory", title?: string) => Promise<string | null>;
   /** 在系统文件管理器中打开目录（由 index 注入；返回空串表示成功）。 */
@@ -710,6 +712,7 @@ export function registerSettingsDomain(deps: SettingsDeps): void {
   handleTrusted(deps, "settings:setPermissions", (payload) => {
     const permissions = mergePermissions(payload);
     writeJsonFile(paths.permissions, permissions);
+    deps.onPermissionsSaved?.(permissions);
     return { saved: true, permissions };
   });
 

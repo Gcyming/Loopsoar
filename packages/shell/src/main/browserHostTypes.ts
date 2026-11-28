@@ -41,6 +41,8 @@ export interface BrowserHostDeps {
   onTabsChanged?: (tabs: TabState[]) => void;
   /** 任一会话的标签状态变化（持久化用）；index 侧做防抖落盘。 */
   onSessionStateChanged?: (sessionId: string, state: PersistedBrowserState) => void;
+  /** 「最近关闭」变化（关闭/重开）：index 侧防抖落盘到 closed-tabs.json。 */
+  onClosedTabsChanged?: (entries: { url: string; title: string; sessionId: string; closedAt: number; agentBound?: boolean; pinned?: boolean }[]) => void;
   /**
    * 成功访问（应用内导航 / 网页内跳转 / 新标签首个页面）。壳层据此追加**全局历史**：
    * 历史面板跨标签/跨会话共享，与标签内部的后退/前进栈互不影响。

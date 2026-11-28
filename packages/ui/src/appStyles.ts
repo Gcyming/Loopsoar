@@ -60,7 +60,7 @@ export const styles: Record<string, React.CSSProperties> = {
   /** 隐藏原生网页视图期间显示的静态底图：只占网页面板几何，不拦截交互。 */
   browserFreeze: {
     position: "absolute",
-    left: LAYOUT.BROWSER_VIEW_INSET,
+    left: LAYOUT.BROWSER_VIEW_INSET_LEFT,
     right: LAYOUT.BROWSER_VIEW_INSET_RIGHT,
     top: LAYOUT.TOP_BAR_HEIGHT + LAYOUT.BROWSER_VIEW_INSET,
     bottom: LAYOUT.BROWSER_VIEW_INSET,

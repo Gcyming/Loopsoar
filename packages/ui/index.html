@@ -612,6 +612,27 @@
         background: transparent;
       }
 
+      /* 设置搜索：输入框 / 结果浮层 / 字段定位高亮 */
+      .settings-search-input::placeholder {
+        color: var(--ls-text-faint);
+      }
+      .settings-search-input:focus-visible {
+        outline: none;
+      }
+      @keyframes settingsAnchorFlash {
+        0% { background: rgba(var(--ls-accent-rgb), 0.26); }
+        100% { background: transparent; }
+      }
+      .settings-anchor-flash {
+        animation: settingsAnchorFlash 1.5s ease both;
+        border-radius: 8px;
+      }
+      html[data-animations="off"] .settings-anchor-flash {
+        animation: none !important;
+        outline: 2px solid var(--ls-accent);
+        outline-offset: 2px;
+      }
+
       /* 设置面板：左侧导航选中态（细条 + 背景） */
       .settings-nav-item:hover {
         background: var(--ls-surface-hover);
@@ -1099,6 +1120,17 @@
 
     /* 工具节点 */
     .think-tool-node { position: relative; margin: 2px 0 7px; animation: fadeIn 160ms ease; }
+    .think-tool-shots { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px 4px; }
+    .think-tool-shot {
+      display: block; width: 100%; max-width: 360px; border-radius: 8px;
+      border: 1px solid var(--ls-border); cursor: zoom-in; background: #0d0f13;
+    }
+    .think-tool-shot[data-zoomed="1"] { max-width: 100%; cursor: zoom-out; }
+    .think-tool-shot-missing {
+      max-width: 360px; padding: 6px 8px; border-radius: 7px; font-size: 11px;
+      border: 1px dashed var(--ls-border); color: #8b93a3;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .think-tool-mark {
       position: absolute; left: -19px; top: 9px; width: 8px; height: 8px; border-radius: 50%;
       background: #8b93a3;
@@ -1858,6 +1890,9 @@
       overscroll-behavior: contain;
     }
     .ask-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
       width: 100%;
       padding: 8px 10px;
       border: 1px solid var(--ls-border);
@@ -1877,6 +1912,129 @@
     }
     .ask-option:active {
       transform: scale(0.99);
+    }
+    /* 决策分类徽章（如「部署方案」）：让用户一眼知道在决定什么。 */
+    .ask-header-badge {
+      margin-left: auto;
+      padding: 1px 7px;
+      border: 1px solid rgba(var(--ls-accent-rgb), 0.45);
+      border-radius: 999px;
+      background: rgba(var(--ls-accent-rgb), 0.12);
+      color: var(--ls-accent);
+      font-size: 10.5px;
+      line-height: 1.6;
+      max-width: 45%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* 选项序号：与数字键快捷键一一对应（1..8）。 */
+    .ask-option-index {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      border: 1px solid var(--ls-border-strong);
+      border-radius: 6px;
+      color: var(--ls-text-faint);
+      font-size: 10.5px;
+      line-height: 16px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .ask-option-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .ask-option-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--ls-text);
+      font-size: 12.8px;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+    /* 选择后果：用户评估代价的依据，不能省。 */
+    .ask-option-desc {
+      color: var(--ls-text-muted);
+      font-size: 11.8px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .ask-badge-rec {
+      flex: none;
+      padding: 0 6px;
+      border: 1px solid rgba(var(--ls-accent-rgb), 0.55);
+      border-radius: 999px;
+      background: rgba(var(--ls-accent-rgb), 0.16);
+      color: var(--ls-accent);
+      font-size: 9.5px;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+    .ask-option[data-recommended="true"] {
+      border-color: rgba(var(--ls-accent-rgb), 0.55);
+      background: rgba(var(--ls-accent-rgb), 0.07);
+    }
+    /* 多选：选中态与勾选框。 */
+    .ask-option[data-selected="true"] {
+      border-color: var(--ls-accent);
+      background: rgba(var(--ls-accent-rgb), 0.14);
+    }
+    .ask-option-check {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      border: 1px solid var(--ls-border-strong);
+      border-radius: 5px;
+      color: var(--ls-bg);
+      font-size: 10.5px;
+      line-height: 14px;
+      text-align: center;
+    }
+    .ask-option-check[data-on="true"] {
+      border-color: var(--ls-accent);
+      background: var(--ls-accent);
+    }
+    /* 跳过：不替用户做决定，也不让任务卡死。 */
+    .ask-skip {
+      margin-right: auto;
+      padding: 5px 10px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--ls-text-faint);
+      font-size: 11.5px;
+      cursor: pointer;
+      transition: color 120ms, border-color 120ms;
+    }
+    .ask-skip:hover {
+      border-color: var(--ls-border-strong);
+      color: var(--ls-text-muted);
+    }
+    .ask-skip:focus-visible {
+      outline: 2px solid rgba(var(--ls-accent-rgb), 0.6);
+      outline-offset: 1px;
+    }
+
+    /* 会话内提问卡（替代模态弹窗）：跟在消息流/待发指令后，答完即消失。 */
+    .ask-inline {
+      padding: 2px 12px 10px;
+      animation: fadeOnly 140ms ease both;
+    }
+    .ask-inline .ask-dialog {
+      width: 100%;
+      max-height: 46vh;
+      box-shadow: none;
+      animation: none;
+    }
+    html[data-animations="off"] .ask-inline {
+      animation: none !important;
     }
 
     /* 敏感步骤确认（ask 事件 kind="sensitive"）：与普通提问视觉区分，强调「看清再点」 */
@@ -3098,6 +3256,101 @@
     .chrome-pop-error {
       color: var(--ls-danger);
       word-break: break-word;
+    }
+    /* 标签页面板（左上按钮）：搜索 + 可滚动的「标签页 / 最近关闭」列表。 */
+    .chrome-pop-card.chrome-pop-workspaces {
+      height: calc(100vh - 16px);
+    }
+    .chrome-pop-switcher {
+      /* 卡片是固定高度：这一层必须 grow，否则内层列表拿不到剩余高度，滚不动也看不全。 */
+      flex: 1;
+      min-height: 0;
+      padding: 0;
+      gap: 0;
+      overflow: hidden;
+    }
+    .chrome-pop-switcher-search {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: none;
+      margin: 6px 6px 3px;
+      padding: 5px 8px;
+      border: 1px solid var(--ls-border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--ls-text-faint);
+    }
+    .chrome-pop-switcher-search:focus-within {
+      border-color: rgba(var(--ls-accent-rgb), 0.55);
+    }
+    .chrome-pop-switcher-search input {
+      flex: 1;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--ls-text);
+      font: inherit;
+      font-size: 12.5px;
+    }
+    .chrome-pop-switcher-search input::placeholder {
+      color: var(--ls-text-faint);
+    }
+    .chrome-pop-switcher-clear {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--ls-text-faint);
+      cursor: pointer;
+    }
+    .chrome-pop-switcher-clear:hover {
+      background: rgba(var(--ls-accent-rgb), 0.14);
+      color: var(--ls-text);
+    }
+    .chrome-pop-switcher-list {
+      flex: 1;
+      min-height: 0;
+      max-height: none;
+      padding: 0 4px 4px;
+    }
+    /* 面板整体收窄后，分区标题与行都要更紧凑，否则文字挤成两三行。 */
+    .chrome-pop-section {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 8px 5px 3px;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      color: var(--ls-text-faint);
+      text-transform: uppercase;
+    }
+    .chrome-pop-section-count {
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+    .chrome-pop-item.is-current {
+      background: rgba(var(--ls-accent-rgb), 0.1);
+      color: var(--ls-text);
+    }
+    /* 收窄后单行高度压到 26px：一屏能显示更多条目，也不至于把副标题挤没。 */
+    .chrome-pop-switcher-list .chrome-pop-item {
+      gap: 7px;
+      min-height: 26px;
+      padding: 4px 7px;
+      font-size: 12px;
+    }
+    .chrome-pop-switcher-list .chrome-pop-sub {
+      font-size: 9.5px;
     }
     .chrome-pop-footer {
       flex: none;

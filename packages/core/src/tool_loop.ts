@@ -8,6 +8,7 @@
  */
 
 import { BudgetUsage, budgetReason, clampLimits } from "./budget.js";
+import { compressForLoop, estimateToolsTokens } from "./contextCompress.js";
 import { LoopEvent, EventSink } from "./events.js";
 import { LOOP_HEALTH, HEARTBEAT_MS } from "loopsoar-contracts/security-policy";
 import { LlmClient, LlmRequest, type LlmMessage } from "./llm/index.js";
@@ -97,6 +98,31 @@ export interface ToolLoopOpts {
   noProgressRounds?: number;                         // 无进度检测阈值（默认 5 轮）
   /** 调用方已组装好的消息（系统提示/记忆/技能/历史）；不传则用默认执行提示。 */
   messages?: LlmMessage[];
+  /**
+   * 上下文预算（loop 内压缩）：提供 windowTokens 后，每轮 LLM 请求前按 token 估算检测，
+   * 超阈值就把早期消息压成滚动纪要（contextCompress.compressForLoop）。
+   * 为什么必须在 loop 里：一轮对话内部会追加大量工具结果，只在回合开始前压缩挡不住
+   * —— 工具轮跑到一半就把上下文撑爆，上游 400 或静默截断。
+   */
+  context?: {
+    /** 模型上下文窗口（tokens）。 */
+    windowTokens: number;
+    /** 触发压缩的占比（占窗口，默认 0.75）。 */
+    triggerRatio?: number;
+    /** 压缩目标占比（默认 0.55）。 */
+    targetRatio?: number;
+    /** 原样保留的最近消息条数（默认 12）。 */
+    keepRecent?: number;
+    /** 保留下限（默认 4）。 */
+    minKeepRecent?: number;
+    /** 纪要每行的字符数（默认 200）。 */
+    summaryItemChars?: number;
+  };
+  /**
+   * 工具结果里的图片是否回灌给模型（默认 true）。
+   * 模型明确不支持视觉时由调用方传 false：否则图片被上游静默丢弃，模型「看不见图」却无从得知。
+   */
+  toolImages?: boolean;
   /** 推理等级（透传厂商；不支持则忽略）。 */
   reasoningEffort?: string;
   /** 模型能力推导的最大输出（tokens）；undefined = 不传，交给上游默认。 */
@@ -206,6 +232,10 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
 
   let finalText = "";
   let seq = 0;
+  /** 上下文仍超预算的告警只发一次：每轮重复提示会刷屏，掩盖真正的新信息。 */
+  let contextOverBudgetWarned = false;
+  /** 「模型不支持视觉、图片未发送」的提示同样只发一次。 */
+  let toolImagesSkippedWarned = false;
   /** 多轮工具对话上下文（首轮由 opts.messages 初始化，之后累积 assistant/tool 消息） */
   let conversation: LlmMessage[] | null = null;
   /** 防循环：相同工具+参数的调用次数统计 */
@@ -214,7 +244,7 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
   const MAX_TOOL_RESULT_IN_CONTEXT = 20_000;
   /** 工具图片回灌上限：只带 1 张、解码后约 1.5MB，防止截图轮次把上下文打爆。 */
   const MAX_TOOL_IMAGES_PER_ROUND = 1;
-  const MAX_TOOL_IMAGE_BYTES = 1_500_000;
+  const MAX_TOOL_IMAGE_BYTES = 3_000_000;
 
   const emit = (type: LoopEvent["type"], data: unknown): void => {
     sink({ seq: seq++, type, data, ts: Date.now() });
@@ -335,9 +365,58 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           { role: "user", content: `【运行中插入的指令】${steerPrompt}` },
         ];
       }
+      // 本轮要发出去的消息（非空引用）：压缩可能替换它，同时写回 conversation 供下一轮使用。
+      let roundMessages: LlmMessage[] = conversation ?? [];
+      conversation = roundMessages;
+      const toolList = tools().filter((tool) => !blockedTools.has(tool.name));
+      // 上下文预算检查（每轮请求前）：估算 = 消息 + 工具 schema（工具面本身可能上万 token）。
+      // 超阈值 → 折叠早期消息；每轮都上报一次 context 快照，UI 进度环随 loop 实时推进。
+      if (opts.context && opts.context.windowTokens > 0) {
+        const compression = compressForLoop<LlmMessage>(roundMessages, {
+          contextWindowTokens: opts.context.windowTokens,
+          ...(opts.context.triggerRatio !== undefined ? { triggerRatio: opts.context.triggerRatio } : {}),
+          ...(opts.context.targetRatio !== undefined ? { targetRatio: opts.context.targetRatio } : {}),
+          ...(opts.context.keepRecent !== undefined ? { keepRecent: opts.context.keepRecent } : {}),
+          ...(opts.context.minKeepRecent !== undefined ? { minKeepRecent: opts.context.minKeepRecent } : {}),
+          ...(opts.context.summaryItemChars !== undefined ? { summaryItemChars: opts.context.summaryItemChars } : {}),
+          toolsTokens: estimateToolsTokens(toolList),
+        });
+        if (compression.compressed) {
+          roundMessages = compression.messages;
+          conversation = roundMessages;
+          emit("progress", {
+            note: `${compression.summary}；剩余窗口约 ${Math.max(0, Math.round((1 - compression.stats.ratio) * 100))}%`,
+            compressed: true,
+            dropped: compression.droppedCount,
+            beforeTokens: compression.beforeTokens,
+            afterTokens: compression.afterTokens,
+            ...(compression.stillOverBudget ? { stillOverBudget: true } : {}),
+          });
+        }
+        if (compression.stillOverBudget && !contextOverBudgetWarned) {
+          contextOverBudgetWarned = true;
+          emit("progress", {
+            note:
+              "上下文仍超出模型窗口（压缩后约 " +
+              compression.stats.usedTokens +
+              " tokens / 窗口 " +
+              compression.stats.windowTokens +
+              "）：工具结果可能被上游截断，建议 /compact 或新建会话",
+            contextOverBudget: true,
+          });
+        }
+        emit("progress", {
+          context: {
+            used: compression.stats.usedTokens,
+            cap: compression.stats.windowTokens,
+            pct: Math.min(100, Math.round(compression.stats.ratio * 100)),
+            source: "estimated",
+          },
+        });
+      }
       const request: LlmRequest = {
-        messages: conversation,
-        tools: tools().filter((tool) => !blockedTools.has(tool.name)),
+        messages: roundMessages,
+        tools: toolList,
         // max_tokens 由模型能力推导（ChatService 注入 getMaxOutputTokens）；未配置时不传，
         // 交给上游默认。长度上限仍由 finish_reason=length 的同轮续写兜底（ADR-0045/0047）。
         maxTokens: opts.maxTokens,
@@ -579,6 +658,18 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
               usage.totalTokens += chunk.tokens ?? 0;
               if (chunk.inputTokens !== undefined) usage.inputTokens = (usage.inputTokens ?? 0) + chunk.inputTokens;
               if (chunk.outputTokens !== undefined) usage.outputTokens = (usage.outputTokens ?? 0) + chunk.outputTokens;
+              // 上游实测 prompt token 是最权威的上下文占用：有它就用它覆盖估算值
+              //（旧 UI 只按可见正文文字 / 4 估算，中文低估 ~3.5 倍，进度环长期失真）。
+              if (chunk.inputTokens !== undefined && chunk.inputTokens > 0 && opts.context && opts.context.windowTokens > 0) {
+                emit("progress", {
+                  context: {
+                    used: chunk.inputTokens,
+                    cap: opts.context.windowTokens,
+                    pct: Math.min(100, Math.round((chunk.inputTokens / opts.context.windowTokens) * 100)),
+                    source: "measured",
+                  },
+                });
+              }
               break;
             }
 
@@ -652,10 +743,18 @@ export async function runToolLoop(opts: ToolLoopOpts): Promise<ToolLoopOutcome> 
           ];
           continue;
         }
-        const toolImages = roundToolCalls
+        const imageResults = roundToolCalls
           .flatMap((call) => (call.result.ok ? (call.result.images ?? []) : []))
-          .filter((img) => img.base64.length * 0.75 <= MAX_TOOL_IMAGE_BYTES)
-          .slice(0, MAX_TOOL_IMAGES_PER_ROUND);
+          .filter((img) => img.base64.length * 0.75 <= MAX_TOOL_IMAGE_BYTES);
+        // 模型不支持视觉：宁可不发（避免上游 400/静默丢弃），但必须让用户看见原因。
+        if (opts.toolImages === false && imageResults.length > 0 && !toolImagesSkippedWarned) {
+          toolImagesSkippedWarned = true;
+          emit("progress", {
+            note: "工具产生了截图/图片，但图片未发送：当前模型不支持视觉，或「设置 · 通用 → 图片输入」已关闭。",
+            imageSkipped: true,
+          });
+        }
+        const toolImages = opts.toolImages === false ? [] : imageResults.slice(0, MAX_TOOL_IMAGES_PER_ROUND);
         conversation = [
           ...conversation,
           {

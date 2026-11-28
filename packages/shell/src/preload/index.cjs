@@ -68,6 +68,29 @@ function installOfficeDropHandler() {
     if (!transfer) return;
     const files = Array.from(transfer.files || []);
     if (!files.length) return;
+    // 输入框区域优先：拖进去应当成为「附件引用」，不是打开文档/导航。
+    // 只有这里能拿到真实路径（File.path 在 Electron 32+ 已移除，必须走 webUtils）。
+    const target = event.target;
+    const inComposer = target && typeof target.closest === "function" && target.closest("[data-composer-dropzone]");
+    if (inComposer) {
+      const allPaths = files
+        .map((file) => {
+          try {
+            return (webUtils && typeof webUtils.getPathForFile === "function" ? webUtils.getPathForFile(file) : "") || "";
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean);
+      if (allPaths.length > 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        // 用 postMessage 而不是 CustomEvent：contextIsolation 下两个世界不共享 JS 对象，
+        // postMessage 走结构化克隆，detail 不会变成 null。
+        window.postMessage({ type: "loopsoar:composer-files", paths: allPaths }, "*");
+        return;
+      }
+    }
     const paths = files.map(officePathOf).filter(Boolean);
     if (!paths.length) return;
     event.preventDefault();

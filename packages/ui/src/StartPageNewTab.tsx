@@ -6,6 +6,8 @@ import BrandWordmark from "./BrandWordmark.js";
 import { useT } from "./i18n.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { autoGrow, hostOf } from "./startPageModel.js";
+import ShortcutsGrid from "./StartPageShortcuts.js";
+import { useShortcuts } from "./useShortcuts.js";
 import { styles } from "./startPageStyles.js";
 import { VibeControls, VibeWorkspacePicker } from "./VibeControls.js";
 import type { VibeControlsProps } from "./VibeControls.js";
@@ -53,9 +55,9 @@ export default function NewTabPage({
 }: NewTabPageProps): React.JSX.Element {
   const tr = useT();
   const api = useLoopsoarApi();
-  const [links, setLinks] = React.useState<{ url: string; title: string; favicon?: string }[]>([]);
-
-  // 快捷入口：取全局历史最近 6 条（没有历史就不显示，保持页面干净）。
+  const shortcuts = useShortcuts();
+  /** 添加弹窗的「建议」：来自历史里的常见站点（只作为填充候选，不自动变成快捷方式）。 */
+  const [suggestions, setSuggestions] = React.useState<{ url: string; title: string }[]>([]);
   React.useEffect(() => {
     if (!api) return;
     let alive = true;
@@ -63,20 +65,24 @@ export default function NewTabPage({
       .history({})
       .then((r) => {
         if (!alive) return;
-        const next = r.entries
-          .slice(0, 6)
-          .map((item) => ({ url: item.url, title: item.title || item.url, favicon: item.favicon }))
-          .filter((item) => item.url);
-        setLinks(next);
-        // 旧历史没有 favicon：按页面 URL 回抓一次（主进程抓取并写回历史），抓到后原地刷新。
-        void Promise.allSettled(
-          next.map(async (link, index) => {
-            if (link.favicon) return;
-            const resolved = await api.browser.resolveFavicon({ url: link.url });
-            if (!resolved?.favicon) return;
-            setLinks((prev) => prev.map((item, i) => (i === index ? { ...item, favicon: resolved.favicon ?? undefined } : item)));
-          }),
-        );
+        // 按「站点」去重并只取站点根地址：同一站点的多个页面不该出现两次，
+        // 建议项的网址也应与它显示的域名一致（用户 m04376：建议只填网站）。
+        const seen = new Set<string>();
+        const next: { url: string; title: string }[] = [];
+        for (const entry of r.entries) {
+          if (!/^https?:\/\//i.test(entry.url)) continue;
+          let origin = "";
+          try {
+            origin = new URL(entry.url).origin;
+          } catch {
+            continue;
+          }
+          if (seen.has(origin)) continue;
+          seen.add(origin);
+          next.push({ url: origin, title: entry.title || origin });
+          if (next.length >= 8) break;
+        }
+        setSuggestions(next);
       })
       .catch(() => undefined);
     return () => {
@@ -165,28 +171,7 @@ export default function NewTabPage({
                   <Icon name="search" size={16} />
                 </button>
               </div>
-              {links.length > 0 ? (
-                <div style={styles.quickLinks} aria-label={tr("browser.ntp.quickLinks")}>
-                  {links.map((link) => {
-                    const host = hostOf(link.url);
-                    const letter = (link.title || host).trim().charAt(0).toUpperCase() || "·";
-                    return (
-                      <button
-                        key={link.url}
-                        type="button"
-                        style={styles.quickLink}
-                        title={link.url}
-                        onClick={() => onOpenUrl(link.url)}
-                      >
-                        <span style={styles.quickTile}>
-                          {link.favicon ? <img src={link.favicon} alt="" width={22} height={22} style={styles.quickFavicon} /> : letter}
-                        </span>
-                        <span style={styles.quickLabel}>{link.title}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
+              <ShortcutsGrid shortcuts={shortcuts} onOpenUrl={onOpenUrl} suggestions={suggestions} />
             </>
           ) : (
             <>

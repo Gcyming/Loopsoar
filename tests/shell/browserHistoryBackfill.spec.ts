@@ -294,8 +294,8 @@ describe("窗口自适应：防抖 + BrowserHost 重排（模拟 resize/maximize
       getWindowSize: () => size,
     });
     await host.navigate("https://example.com/");
-    // 导航后的首次布局：1360x860 → 998x740
-    expect(lastBounds).toEqual({ x: 0, y: 88, width: 998, height: 740 });
+    // 导航后的首次布局：1360x860 → 990x740（左侧留 8px）
+    expect(lastBounds).toEqual({ x: 8, y: 88, width: 990, height: 740 });
 
     let layouts = 0;
     const runner = createDebouncedRunner(() => {
@@ -312,13 +312,13 @@ describe("窗口自适应：防抖 + BrowserHost 重排（模拟 resize/maximize
     await new Promise((resolve) => setTimeout(resolve, 80));
 
     expect(layouts).toBe(1);
-    // 1440x900：宽 1440-360-2=1078；高 900-40-48-32=780
-    expect(lastBounds).toEqual({ x: 0, y: 88, width: 1078, height: 780 });
+    // 1440x900：宽 1440-360-2-8=1070；高 900-40-48-32=780
+    expect(lastBounds).toEqual({ x: 8, y: 88, width: 1070, height: 780 });
     // debugBounds 必须同时给出「计算的 bounds」与「视图真实 getBounds」（E2E 靠它定位没生效的 setBounds）
     expect(host.debugBounds()).toMatchObject({
       window: { width: 1440, height: 900 },
-      bounds: { x: 0, y: 88, width: 1078, height: 780 },
-      actual: { x: 0, y: 88, width: 1078, height: 780 },
+      bounds: { x: 8, y: 88, width: 1070, height: 780 },
+      actual: { x: 8, y: 88, width: 1070, height: 780 },
     });
   });
 });

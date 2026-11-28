@@ -16,7 +16,7 @@ import { createAnthropicClient, createOpenAiClient, inferApiFormat, type LlmClie
 import { AgentRegistry, BUILTIN_AGENT } from "loopsoar-core/agent";
 import { resolveApiKeyFromEnv } from "loopsoar-core/provider";
 import { renderHeaderTemplates } from "loopsoar-contracts/headerTemplate";
-import { loadPreferences, loadProviderConfig, savePreferencesPatch } from "./domains/settings.js";
+import { loadPermissions, loadPreferences, loadProviderConfig, savePreferencesPatch } from "./domains/settings.js";
 import { withProviderDefaults } from "./providerDefaults.js";
 import { MemoryService } from "./memoryService.js";
 import { SessionStore } from "./sessionStore.js";
@@ -28,6 +28,7 @@ import { ExtensionHost } from "./extensions.js";
 import { SkillHost } from "./skills.js";
 import { McpHost } from "./mcpHost.js";
 import { BookmarksStore } from "./bookmarksStore.js";
+import { ShortcutsStore } from "./shortcutsStore.js";
 import { TerminalSessionManager } from "./terminalSession.js";
 import { SubagentTaskStore } from "./subagentTaskStore.js";
 import { AskBus } from "./askBus.js";
@@ -42,6 +43,8 @@ export interface CoreServiceInput {
   appVersion?: string;
   bootTrace: { mark(label: string): void };
   pushToRenderer: (event: string, payload: unknown) => void;
+  /** ask_user 询问推送到渲染层前的旁路（主进程用于系统通知，不改变事件语义）。 */
+  onAskUser?: (payload: { sessionId?: string; question?: string; header?: string }) => void;
   /**
    * 默认工作区根（用户未在设置里选过工作区时生效）。
    * 打包态必须传入 userData 下的目录：安装目录快捷方式的 cwd 是程序目录，
@@ -69,6 +72,8 @@ export async function createCoreServices(input: CoreServiceInput) {
   registerBuiltinMinimal(registry, platform);
   const sandbox = new SandboxManager({ workspaceRoot: fallbackWorkspaceRoot, paths: nodePathPort });
   sandbox.syncKnownTools(registry.list().map((t) => t.name));
+  // 权限设置里的「额外授权工作目录」必须真正进沙箱白名单，否则只是设置页上的空开关。
+  sandbox.setAllowedDirs(loadPermissions(dirs.configDir).workspaceRoots.map((dir) => path.resolve(dir)));
 
   // 偏好（工作区根 / 记忆库位置 / 自动记忆开关）→ 决定后续装配
   const initialPrefs = loadPreferences(dirs.configDir);
@@ -178,6 +183,20 @@ export async function createCoreServices(input: CoreServiceInput) {
     return stored || resolveApiKeyFromEnv(process.env);
   };
   type ProviderEntry = ReturnType<ProviderStore["list"]>[number];
+  /** 供应商 RPM：同一供应商跨会话共享最小请求间隔（留空 = 不主动限制）。 */
+  const rpmLastAt = new Map<string, number>();
+  const throttleByRpm = (client: LlmClient, item: ProviderEntry): LlmClient => {
+    if (!item.rpm || item.rpm <= 0) return client;
+    const intervalMs = 60_000 / item.rpm;
+    return {
+      invoke: async function* (request) {
+        const wait = (rpmLastAt.get(item.id) ?? 0) + intervalMs - Date.now();
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+        rpmLastAt.set(item.id, Date.now());
+        yield* client.invoke(request);
+      },
+    };
+  };
   /** 单个供应商 → LLM 客户端（请求头模板按 sessionId 渲染；缺 key 返回 undefined）。 */
   const buildLlmForProvider = (item: ProviderEntry, sessionId?: string): LlmClient | undefined => {
     const key = resolveProviderKey(item.id);
@@ -198,15 +217,16 @@ export async function createCoreServices(input: CoreServiceInput) {
         : undefined;
     // 端点协议：显式指定优先，auto 按 baseUrl 推断（OpenAI 兼容 / Anthropic Messages）
     const format = item.apiFormat && item.apiFormat !== "auto" ? item.apiFormat : inferApiFormat(item.baseUrl);
-    if (format === "anthropic") {
-      return createAnthropicClient({
-        baseUrl: item.baseUrl.replace(/\/v1$/, ""),
-        apiKey: key,
-        model: item.model,
-        resolveHeaders,
-      });
-    }
-    return createOpenAiClient({ baseUrl: item.baseUrl, apiKey: key, model: item.model, resolveHeaders });
+    const client =
+      format === "anthropic"
+        ? createAnthropicClient({
+            baseUrl: item.baseUrl.replace(/\/v1$/, ""),
+            apiKey: key,
+            model: item.model,
+            resolveHeaders,
+          })
+        : createOpenAiClient({ baseUrl: item.baseUrl, apiKey: key, model: item.model, resolveHeaders });
+    return throttleByRpm(client, item);
   };
 
   /**
@@ -249,7 +269,12 @@ export async function createCoreServices(input: CoreServiceInput) {
   bootTrace.mark("memory-load-started");
 
   // 询问用户总线（ask_user 工具）：ask:user 推渲染层弹窗，回答经 ask:respond 结算（超时按取消）
-  const askBus = new AskBus({ push: (event, payload) => pushToRenderer(event, payload) });
+  const askBus = new AskBus({
+    push: (event, payload) => {
+      if (event === "ask:user") input.onAskUser?.(payload as { sessionId?: string; question?: string; header?: string });
+      pushToRenderer(event, payload);
+    },
+  });
 
   // Agent-Loop 运行时（ADR-0010）：内置 loop + 安全模式回退；选择持久化到偏好（运行时切换即生效）
   const loopRuntime = createLoopRuntime({
@@ -272,6 +297,8 @@ export async function createCoreServices(input: CoreServiceInput) {
   const worktreesRoot = path.join(dirs.dataDir, "worktrees");
   // 书签（浏览器功能面 MVP）：独立 JSON 存储，单实例（多实例会互相覆盖）
   const bookmarks = new BookmarksStore(dirs.dataDir);
+  // 新标签页快捷方式（用户主动添加，可编辑）：与书签同层，独立 JSON。
+  const shortcuts = new ShortcutsStore(dirs.dataDir);
   /** 会话工作根：会话 worktree > 会话工作区 > 活动工作区。 */
   const resolveSessionRoot = (sessionId?: string): string => {
     const worktree = sessionId ? sessions.getWorktree(sessionId) : null;
@@ -340,6 +367,7 @@ export async function createCoreServices(input: CoreServiceInput) {
     workspaces,
     worktreesRoot,
     bookmarks,
+    shortcuts,
     resolveSessionRoot,
     terminals,
     extensions,

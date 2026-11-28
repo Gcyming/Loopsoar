@@ -42,7 +42,7 @@ export interface ScheduledTaskRuntimeOptions {
   push: (event: string, payload: unknown) => void;
   now?: () => number;
   /** 可选桌面通知（index 注入 Electron Notification；测试不注入）。 */
-  notify?: (title: string, body: string) => void;
+  notify?: (title: string, body: string, sessionId?: string) => void;
 }
 
 export interface ScheduledTaskRuntime {
@@ -340,6 +340,7 @@ export function createScheduledTaskRuntime(options: ScheduledTaskRuntimeOptions)
     options.notify?.(
       status === "ok" ? `定时任务完成 · ${task.title}` : `定时任务失败 · ${task.title}`,
       summarize(detail).slice(0, 140),
+      run.sessionId,
     );
   }
 

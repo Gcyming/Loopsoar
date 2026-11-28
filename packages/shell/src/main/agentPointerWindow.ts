@@ -12,6 +12,7 @@
  *
  * 与截图的关系：capturePage 只截网页 WebContents，覆盖窗口不会被拍进证据图，无需临时隐藏。
  */
+import { LAYOUT } from "loopsoar-contracts/layout";
 
 export interface PointerWindowLike {
   setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
@@ -124,10 +125,15 @@ export function buildPointerHtml(): string {
       transition:opacity 140ms ease;}
     #ripple{position:fixed;left:0;top:0;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
       border:2px solid rgba(217,138,79,.9);opacity:0;pointer-events:none;}
-    /* 页框呼吸灯：画在原生覆盖层里（DOM 的呼吸灯在 WebContentsView 之下，四角会被页面直角盖住）。 */
-    #glow{position:absolute;inset:0;border-radius:14px;pointer-events:none;opacity:0;
-      border:2px solid rgba(217,138,79,.9);
-      box-shadow:inset 0 0 18px rgba(217,138,79,.28),0 0 24px 4px rgba(217,138,79,.45);
+    /* 页框呼吸灯：画在原生覆盖层里（DOM 的呼吸灯在 WebContentsView 之下，四角会被页面直角盖住）。
+       用户反馈「光晕不明显、希望往中心多渲染」：除贴边描边外，加一层向页面内部扩散的
+       径向渐变 + 更深的 inset 阴影，让光从四边向中心铺开，但仍保持低透明度不挡内容。 */
+    #glow{position:absolute;inset:0;border-radius:${LAYOUT.BROWSER_VIEW_RADIUS}px;pointer-events:none;opacity:0;overflow:hidden;
+      border:2px solid rgba(217,138,79,.92);
+      background:radial-gradient(ellipse at center, rgba(217,138,79,0) 52%, rgba(217,138,79,.10) 78%, rgba(217,138,79,.24) 100%);
+      /* 只用 inset 阴影：outer box-shadow 会伸出页面矩形，被覆盖窗口的方边界裁成四角方块；
+         用户要的是贴合网页圆角，所以光晕必须完全画在圆角内部。 */
+      box-shadow:inset 0 0 92px rgba(217,138,79,.30),inset 0 0 34px rgba(217,138,79,.34);
       transition:opacity 180ms ease;}
     #glow.on{opacity:.9;animation:glowPulse 1.6s ease-in-out infinite;}
     @keyframes glowPulse{0%,100%{opacity:.45}50%{opacity:1}}
@@ -190,8 +196,15 @@ export function buildPointerHtml(): string {
         window.__lsPointer = (state) => {
           const s = state || {};
           if (glow) {
-            glow.classList.toggle('on', s.glow === true);
-            if (s.glow !== true) glow.style.opacity = '0';
+            // 关闭时写 inline opacity:0 会盖住 .on 的 opacity/动画；再次开启必须清掉 inline 值，
+            // 否则光晕只出现第一次，之后一直不可见（用户反馈「控制时光晕不明显」的隐藏原因之一）。
+            if (s.glow === true) {
+              glow.style.opacity = '';
+              glow.classList.add('on');
+            } else {
+              glow.classList.remove('on');
+              glow.style.opacity = '0';
+            }
           }
           // 光标：热点在左上角，所以整体左移/上移一个偏移量。
           if (typeof s.x === 'number' && typeof s.y === 'number') glideTo(s.x, s.y);

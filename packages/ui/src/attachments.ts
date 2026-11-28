@@ -4,13 +4,25 @@
  */
 export function splitAttachments(text: string): { body: string; docs: string[] } {
   const docs: string[] = [];
-  const re = /【附件】([^\n]+)/g;
+  const found = new Set<string>();
+  const push = (value: string): void => {
+    const path = value.trim();
+    if (!path || found.has(path)) return;
+    found.add(path);
+    docs.push(path);
+  };
+  // 新格式带闭合符：路径可与正文同行；旧格式（无闭合符）继续兼容。
+  const closed = /【附件】([^\n]*?)【\/附件】/g;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    const path = match[1].trim();
-    if (path) docs.push(path);
+  while ((match = closed.exec(text)) !== null) push(match[1]);
+  const legacy = /【附件】([^\n]+)/g;
+  while ((match = legacy.exec(text)) !== null) {
+    let path = match[1].trim();
+    const end = path.indexOf("【/附件】");
+    if (end >= 0) path = path.slice(0, end);
+    push(path);
   }
-  const body = text.replace(re, "").trim();
+  const body = text.replace(closed, "").replace(legacy, "").trim();
   return { body, docs };
 }
 

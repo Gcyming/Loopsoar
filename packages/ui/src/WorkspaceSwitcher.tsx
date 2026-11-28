@@ -20,7 +20,7 @@ import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import type { WorkspaceRecord } from "./types.js";
 
 /** 必须与主进程 DEFAULT_POPOVER_SIZES.workspaces 的宽度一致（左对齐锚点计算依赖它）。 */
-const WORKSPACE_POPOVER_WIDTH = 230;
+const WORKSPACE_POPOVER_WIDTH = 296;
 
 export interface WorkspaceSwitcherProps {
   workspaces: WorkspaceRecord[];

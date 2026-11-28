@@ -122,8 +122,6 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
     selectTab,
     closeTab,
     tabAction,
-    bindWorkspaceToCurrentSession,
-    addWorkspaceForChat,
     changeSidebarMode,
     createFreshSessionAndTab,
     openSettings,
@@ -190,7 +188,18 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
   React.useEffect(() => {
     if (!api) return;
     return api.on("chrome:popoverAction", (payload) => {
-      const p = payload as { action?: string; payload?: { kind?: ChromePageKind; url?: string; tabId?: string; tabAction?: string } };
+      const p = payload as {
+        action?: string;
+        payload?: {
+          kind?: ChromePageKind;
+          url?: string;
+          tabId?: string;
+          tabAction?: string;
+          scope?: "visible" | "user" | "task";
+          sessionId?: string;
+          index?: number;
+        };
+      };
       if (p?.action === "tabAction" && p.payload?.tabId && p.payload?.tabAction) {
         tabAction(p.payload.tabAction as TabMenuAction, p.payload.tabId);
         return;
@@ -206,7 +215,44 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
       }
       if (p?.action === "savePage") savePageRef.current?.();
       if (p?.action === "selectTab" && p.payload?.tabId) {
-        selectTab(p.payload.tabId);
+        const tabId = p.payload.tabId;
+        const scope = p.payload.scope;
+        // 统一标签面板会列出「全局普通标签」和「其他任务的 Agent 标签」；
+        // 先切到对应标签组，再按 tabId 选中，否则 selectTab 只在当前可见组里找。
+        if (scope === "user") {
+          void api.browser
+            .showUserTabs()
+            .then(() => selectTab(tabId))
+            .catch(() => undefined);
+          return;
+        }
+        if (scope === "task" && p.payload.sessionId) {
+          void api.browser
+            .showTask({ sessionId: p.payload.sessionId })
+            .then(() => selectTab(tabId))
+            .catch(() => undefined);
+          return;
+        }
+        selectTab(tabId);
+        return;
+      }
+      // 面板「最近关闭」：主进程会重开网页并切到它所属的标签组，这里只把界面同步过来。
+      if (p?.action === "reopenClosedTab") {
+        const index = typeof p.payload?.index === "number" ? p.payload.index : 0;
+        void api.browser
+          .reopenClosedTabAt({ index })
+          .then(async (result) => {
+            if (!result?.ok) return;
+            // 主进程已经切好标签组并选中：这里只把界面同步到新的活动页。
+            const snapshot = await api.browser.listTabs();
+            setTabs(snapshot.tabs);
+            const active = snapshot.tabs.find((tab) => tab.active);
+            if (active) {
+              setCurrentUrl(active.url ?? "");
+              setAddress(active.url ?? "");
+            }
+          })
+          .catch(() => undefined);
         return;
       }
       // Agent 工作区浮层里的「关闭此网页」：与标签条上的关闭同一条链路（关页不等于关会话）。
@@ -214,17 +260,17 @@ export function useSessionActions(options: UseSessionActionsOptions): SessionAct
         closeTab(p.payload.tabId);
         return;
       }
-      if (p?.action === "selectWorkspace") {
-        const id = (p.payload as { id?: unknown } | undefined)?.id;
-        if (typeof id === "string") bindWorkspaceToCurrentSession(id);
-        return;
-      }
-      if (p?.action === "addWorkspace") {
-        addWorkspaceForChat();
-        return;
-      }
     });
-  }, [api, navigate, bindWorkspaceToCurrentSession, addWorkspaceForChat, tabAction]);
+  }, [
+    api,
+    navigate,
+    tabAction,
+    selectTab,
+    closeTab,
+    setTabs,
+    setAddress,
+    setCurrentUrl,
+  ]);
 
   const refreshSessions = useCallback((): void => {
     if (!api) return;

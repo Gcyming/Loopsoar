@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentSummary,
+  AskUserReply,
   AskUserRequest,
   BootStatus,
   BrowserSnapshotResult,
@@ -36,6 +37,7 @@ import { splitAgentTabs } from "./agentWorkspace.js";
 import { useChromePageTabs } from "./useChromePageTabs.js";
 import type { ChromePageKind, SidebarMode, SidebarModeAction, ThemeMode } from "./types.js";
 import AppDialogs from "./AppDialogs.js";
+import AskUserDialog from "./AskUserDialog.js";
 const SnapshotPanel = React.lazy(() => import("./SnapshotPanel.js"));
 import AgentSidebar from "./AgentSidebar.js";
 import AppBottomPanels from "./AppBottomPanels.js";
@@ -56,6 +58,8 @@ import {
 import { useChatActions } from "./useChatActions.js";
 import { useSessionActions } from "./useSessionActions.js";
 import { nextId } from "./ids.js";
+import { useContextUsage } from "./contextUsage.js";
+import { toAskRespondPayload } from "./askTypes.js";
 import {
   applySteerToLatest,
   createSessionStreamMeta,
@@ -94,7 +98,6 @@ import {
  *   · chatStreamState.ts / timeline.ts —— 事件→消息、消息→时间线的纯函数层。
  * 所有拆分均为「受控 props + 回调」，状态仍集中在本组件，避免出现第二套数据源。
  */
-
 /* ---------------------------------- 主界面 ---------------------------------- */
 
 export default function App(): React.JSX.Element {
@@ -276,15 +279,11 @@ export default function App(): React.JSX.Element {
   const { splashVisible, splashOverlay, splashStatus, splashSteps } = useStartupGate({ boot, preferences, tabs });
   /** 时间线「思考过程」卡的开合（按消息 id；流式中默认展开，收尾后自动收起）。 */
   const [thinkingOpen, setThinkingOpen] = useState<Record<string, boolean>>({});
-  /** 上下文占用估算：used=约 4 字符/token；cap=模型声明上下文窗口 */
-  const contextUsage = useMemo(() => {
-    const spec = provider?.models?.find((m) => m.id === provider.model);
-    const cap = spec?.contextWindow && spec.contextWindow > 0 ? spec.contextWindow : 128000;
-    const chars = messages.reduce((n, m) => n + m.text.length, 0) + input.length;
-    const used = Math.round(chars / 4);
-    return { used, cap, pct: Math.min(100, Math.round((used / cap) * 100)) };
-  }, [messages, input, provider]);
-  const contextPct = contextUsage.pct;
+  const { ring: contextUsage, reportContextUsage } = useContextUsage({
+    sessionId: currentSession,
+    texts: [...messages.map((message) => message.text), input],
+    contextWindow: provider?.models?.find((model) => model.id === provider.model)?.contextWindow,
+  });
   /** 挤压检测：可用宽度 / 内容自然宽度；低于阈值时按钮收缩为圆形图标 */
   const [squeezeRatio, setSqueezeRatio] = useState(1);
   const [compactUi, setCompactUi] = useState(false);
@@ -398,6 +397,7 @@ export default function App(): React.JSX.Element {
     updateSessionMessages,
     setPermReq: addPermRequest,
     resolvePermRequest,
+    setContextUsage: reportContextUsage,
     setAskQueue,
     setThinkingOpen,
     setDownloads,
@@ -731,7 +731,6 @@ export default function App(): React.JSX.Element {
     snapshotData !== null ||
     onboardingOpen ||
     activePageKind !== null ||
-    activeAsk !== null ||
     permReq !== null;
   const activeTabState = tabs.find((tab) => tab.active) ?? null;
   // 与 BrowserHost.applyLayout 的 visible 条件同源：搜索主页/错误/vibe 时原生视图不可见；
@@ -770,7 +769,7 @@ export default function App(): React.JSX.Element {
   }, [askQueue]);
 
   /** 回答/取消 ask_user 弹窗：先出队再回填（避免重复提交），失败只提示不阻塞界面。 */
-  const respondAsk = useCallback((answer: string | null): void => {
+  const respondAsk = useCallback((reply: AskUserReply | null): void => {
     const request = activeAsk;
     if (!request) return;
     setAskQueue((prev) => prev.filter((item) => item.requestId !== request.requestId));
@@ -778,9 +777,9 @@ export default function App(): React.JSX.Element {
       setNotice("未在 Electron shell 中运行，回答无法送达");
       return;
     }
-    const payload = answer === null
+    const payload = reply === null
       ? { requestId: request.requestId, cancelled: true }
-      : { requestId: request.requestId, answer };
+      : toAskRespondPayload(request.requestId, reply);
     void api.ask
       .respond(payload)
       .then((result) => {
@@ -1064,7 +1063,7 @@ export default function App(): React.JSX.Element {
               busy={busy}
               contextUsed={contextUsage.used}
               contextCap={contextUsage.cap}
-              contextPct={contextPct}
+              contextPct={contextUsage.pct}
               hidden={Boolean(currentUrl) && !tabs.find((tab) => tab.active)?.loadFailure && !vibeModeActive}
               thinkingOpen={thinkingOpen}
               onToggleThinking={(id) => setThinkingOpen((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))}
@@ -1170,7 +1169,7 @@ export default function App(): React.JSX.Element {
             mode={mode}
             contextUsed={contextUsage.used}
             contextCap={contextUsage.cap}
-            contextPct={contextPct}
+            contextPct={contextUsage.pct}
             thinkingOpen={thinkingOpen} busy={busy} resumeKey={currentSession ?? undefined}
             expandAllGroups={new URLSearchParams(location.search).get("expandAllGroups") === "1"}
             openProducts={new URLSearchParams(location.search).get("openProducts") === "1"}
@@ -1186,6 +1185,7 @@ export default function App(): React.JSX.Element {
             onInsertNow={insertPendingSteer}
             onRemove={removePendingSteer}
           />
+          {activeAsk ? <AskUserDialog key={activeAsk.requestId} inline request={activeAsk} onRespond={respondAsk} /> : null}
           <Composer
             value={input}
             onChange={setInput}
@@ -1232,7 +1232,7 @@ export default function App(): React.JSX.Element {
               void pickAttachmentPath().then((path) => {
                 if (!path) return;
                 setInput((prev) => (prev ? `${prev}
-【附件】${path}` : `【附件】${path}`));
+【附件】${path}【/附件】` : `【附件】${path}【/附件】`));
                 setNotice("已添加附件（路径已放入消息）");
               });
             }}
@@ -1358,7 +1358,6 @@ export default function App(): React.JSX.Element {
 
       <AppDialogs
         permReq={permReq} onRespondPermission={respondPermission}
-        activeAsk={activeAsk} onRespondAsk={respondAsk}
         otherSessionAsk={otherSessionAsk} otherSessionPerm={otherSessionPerm}
         onSwitchSession={switchSession}
         notice={notice} miniWindow={miniWindow}

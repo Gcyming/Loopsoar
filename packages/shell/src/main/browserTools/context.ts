@@ -402,10 +402,11 @@ export interface BrowserToolHooks {
     chip(text: string): void;
   };
   /**
-   * 当前模型是否支持图片输入。为 true 时 browser_screenshot 会把 PNG 作为
-   * 工具图片回灌到模型上下文（仅当前轮，不写入历史）；text-only 模型仍只拿路径。
+   * 当前模型是否支持图片输入（undefined = 能力表未填，按支持处理，交给上游裁决）。
+   * 为 true/undefined 时 browser_screenshot 会把 PNG 作为工具图片回灌到模型上下文；
+   * 只有明确 false（text-only 或用户在设置里关闭图片输入）才只返回路径。
    */
-  visionEnabled?: () => boolean;
+  visionEnabled?: () => boolean | undefined;
 }
 
 /**

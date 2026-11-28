@@ -23,7 +23,7 @@ import DownloadIcon from "./DownloadIcon.js";
 import RowContextMenu, { type RowMenuItem } from "./RowContextMenu.js";
 import { useLoopsoarApi } from "./useLoopsoarApi.js";
 import { getLanguage, setLanguage, useT } from "./i18n.js";
-import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry, TabState, WorkspaceRecord } from "./types.js";
+import type { BookmarkItem, ChromePopoverKind, DownloadItem, HistoryEntry, TabState } from "./types.js";
 
 export interface PopoverAppProps {
   kind: ChromePopoverKind;
@@ -58,6 +58,29 @@ const HISTORY_PREVIEW = 8;
 const DOWNLOAD_PREVIEW = 5;
 
 const POPOVER_KINDS: ChromePopoverKind[] = ["more", "bookmarks", "history", "downloads", "workspaces", "workspace", "tabmenu"];
+
+/**
+ * 一个 Agent 工作区的多个网页合并成**单独一项**（用户要求）：点它进入该工作区并落到组内当前页，
+ * 不再把每个网页铺成一堆「Agent 工作区 · url」。
+ */
+interface SwitcherWorkspace {
+  sessionId: string;
+  /** 组内全部网页（用来搜索与计数）。 */
+  tabs: TabState[];
+  /** 组内当前活动页（没有 active 标记时取第一条）。 */
+  current: TabState;
+  /** 这一组是否正显示在屏幕上。 */
+  isVisible: boolean;
+}
+
+/** 「最近关闭」条目（主进程内存栈，最多 20 条）。 */
+interface ClosedTabItem {
+  url: string;
+  title: string;
+  sessionId: string;
+  closedAt: number;
+  agentBound: boolean;
+}
 
 function isPopoverKind(value: unknown): value is ChromePopoverKind {
   return typeof value === "string" && POPOVER_KINDS.includes(value as ChromePopoverKind);
@@ -172,10 +195,15 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   const [bookmarks, setBookmarks] = React.useState<BookmarkItem[] | null>(null);
   const [history, setHistory] = React.useState<HistoryEntry[] | null>(null);
   const [downloads, setDownloads] = React.useState<DownloadItem[] | null>(null);
-  const [workspaces, setWorkspaces] = React.useState<WorkspaceRecord[] | null>(null);
   const [workspaceTabs, setWorkspaceTabs] = React.useState<TabState[] | null>(null);
+  const [switcherUserTabs, setSwitcherUserTabs] = React.useState<TabState[] | null>(null);
+  const [switcherWorkspaces, setSwitcherWorkspaces] = React.useState<SwitcherWorkspace[] | null>(null);
+  const [switcherClosed, setSwitcherClosed] = React.useState<ClosedTabItem[] | null>(null);
+  const [switcherVisibleSession, setSwitcherVisibleSession] = React.useState<string | null>(null);
+  const [switcherUserSession, setSwitcherUserSession] = React.useState<string | null>(null);
+  const [switcherQuery, setSwitcherQuery] = React.useState("");
+  const switcherSearchRef = React.useRef<HTMLInputElement | null>(null);
   const [tabMenuTabs, setTabMenuTabs] = React.useState<TabState[] | null>(null);
-  const [activeWorkspaceId, setActiveWorkspaceId] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
   const [rowMenu, setRowMenu] = React.useState<
     | { kind: "download"; x: number; y: number; item: DownloadItem }
@@ -230,9 +258,27 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
         const result = await api?.browser.listTabs();
         setTabMenuTabs(result?.tabs ?? []);
       } else if (kind === "workspaces") {
-        const result = await api?.workspace.list();
-        setWorkspaces(result?.workspaces ?? []);
-        setActiveWorkspaceId(result?.activeId ?? null);
+        const [tabsResult, tasksResult, closedResult] = await Promise.all([
+          api?.browser.listTabs(),
+          api?.browser.listTasks(),
+          api?.browser.listClosedTabs(),
+        ]);
+        const visibleSession = tasksResult?.visibleSession ?? tabsResult?.visibleSession ?? null;
+        setSwitcherVisibleSession(visibleSession);
+        setSwitcherUserSession(tasksResult?.userSession ?? null);
+        // 普通标签：优先取「全局用户标签组」的完整列表（当前正看着 Agent 工作区时 listTabs 只有那几页）。
+        const userTabs = tasksResult?.userTabs ?? (tabsResult?.tabs ?? []).filter((tab) => tab.agentBound !== true);
+        setSwitcherUserTabs(userTabs);
+        // 每个任务合并成一项：组内 active 页作为代表，整组参与搜索。
+        setSwitcherWorkspaces(
+          (tasksResult?.tasks ?? []).map((task) => ({
+            sessionId: task.sessionId,
+            tabs: task.tabs,
+            current: task.tabs.find((tab) => tab.active) ?? task.tabs[0],
+            isVisible: task.sessionId === visibleSession,
+          })),
+        );
+        setSwitcherClosed(closedResult?.tabs ?? []);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -426,31 +472,219 @@ export default function PopoverApp({ kind: kindProp }: PopoverAppProps): React.R
   );
   const emptyView = (label: string): React.ReactElement => <div className="chrome-pop-empty">{label}</div>;
 
-  const renderWorkspaces = (): React.ReactElement => {
-    if (workspaces === null) return loadingView();
+  const switcherSearch = switcherQuery.trim().toLowerCase();
+  const filteredUserTabs = React.useMemo(() => {
+    const list = switcherUserTabs ?? [];
+    if (!switcherSearch) return list;
+    return list.filter((tab) => `${tab.title ?? ""} ${tab.url ?? ""}`.toLowerCase().includes(switcherSearch));
+  }, [switcherUserTabs, switcherSearch]);
+  const filteredAgentWorkspaces = React.useMemo(() => {
+    const list = (switcherWorkspaces ?? []).filter((group) => group.current);
+    if (!switcherSearch) return list;
+    // 合并成一项后，整组里的任一网页命中都算这一项命中。
+    return list.filter((group) =>
+      group.tabs.some((tab) => `${tab.title ?? ""} ${tab.url ?? ""}`.toLowerCase().includes(switcherSearch)),
+    );
+  }, [switcherWorkspaces, switcherSearch]);
+  /** 关闭栈下标必须来自完整列表：搜索过滤后仍要能打开「第 index 条」。 */
+  const filteredClosed = React.useMemo(() => {
+    const list = (switcherClosed ?? []).map((item, index) => ({ item, index }));
+    if (!switcherSearch) return list;
+    return list.filter(({ item }) => `${item.title ?? ""} ${item.url ?? ""}`.toLowerCase().includes(switcherSearch));
+  }, [switcherClosed, switcherSearch]);
+  const switcherTabCount = filteredUserTabs.length + filteredAgentWorkspaces.length;
+  const switcherTotal = switcherTabCount + filteredClosed.length;
+
+  // 打开面板后直接可输入（类似 Arc 的标签搜索）；窗口本身已聚焦，这里抢输入框焦点。
+  React.useEffect(() => {
+    if (kind !== "workspaces") return;
+    const focusSearch = (): void => {
+      if (document.visibilityState !== "visible") return;
+      window.setTimeout(() => switcherSearchRef.current?.focus(), 0);
+    };
+    focusSearch();
+    window.addEventListener("focus", focusSearch);
+    document.addEventListener("visibilitychange", focusSearch);
+    return () => {
+      window.removeEventListener("focus", focusSearch);
+      document.removeEventListener("visibilitychange", focusSearch);
+    };
+  }, [kind]);
+
+  /** 普通标签（用户自己的网页）：一行一个。 */
+  const renderUserTab = (tab: TabState): React.ReactElement => {
+    const label = tab.title || tab.url || tr("browser.startNewTabTitle");
+    const isCurrent = tab.active === true && switcherVisibleSession === switcherUserSession;
     return (
-      <div className="chrome-pop-menu" role="menu" aria-label={tr("browser.workspaceMenuTitle")} onKeyDown={onListKeyDown}>
+      <button
+        key={tab.id}
+        type="button"
+        role="menuitemradio"
+        aria-checked={isCurrent}
+        className={`chrome-pop-item chrome-pop-item-two-line${isCurrent ? " is-current" : ""}`}
+        title={tab.url || label}
+        onClick={() => void dispatch("selectTab", { tabId: tab.id, scope: "user" })}
+      >
+        {isCurrent ? (
+          <Icon name="check" size={14} className="chrome-pop-icon" />
+        ) : tab.favicon ? (
+          <img src={tab.favicon} alt="" width={14} height={14} style={{ flex: "none", borderRadius: 3, objectFit: "cover" }} />
+        ) : (
+          <Icon name="globe" size={14} className="chrome-pop-icon" />
+        )}
+        <span className="chrome-pop-main">
+          <MarqueeText className="chrome-pop-label" text={label} title={tab.url || label} />
+          {tab.url ? <MarqueeText className="chrome-pop-sub" text={tab.url} title={tab.url} /> : null}
+        </span>
+      </button>
+    );
+  };
+
+  /**
+   * 一个 Agent 工作区 = 一项（用户要求「所有工作标签页都单独看成一个标签页」）。
+   * 副标题给出组内页数与代表网址；点它进入该工作区并落到组内当前页。
+   */
+  const renderAgentWorkspace = (group: SwitcherWorkspace): React.ReactElement => {
+    const label = group.current.title || group.current.url || tr("browser.agentWorkspace");
+    const pages = tr("browser.switcherPageCount", { count: group.tabs.length });
+    return (
+      <button
+        key={group.sessionId}
+        type="button"
+        role="menuitemradio"
+        aria-checked={group.isVisible}
+        className={`chrome-pop-item chrome-pop-item-two-line${group.isVisible ? " is-current" : ""}`}
+        title={group.current.url || label}
+        onClick={() =>
+          void dispatch("selectTab", { tabId: group.current.id, scope: "task", sessionId: group.sessionId })
+        }
+      >
+        {group.isVisible ? (
+          <Icon name="check" size={14} className="chrome-pop-icon" />
+        ) : (
+          <Icon name="layers-linked" size={14} className="chrome-pop-icon" />
+        )}
+        <span className="chrome-pop-main">
+          <MarqueeText className="chrome-pop-label" text={label} title={group.current.url || label} />
+          <MarqueeText
+            className="chrome-pop-sub"
+            text={`${tr("browser.switcherAgentGroup")} · ${pages}`}
+            title={group.current.url}
+          />
+        </span>
+      </button>
+    );
+  };
+
+  /** 关闭时间的相对描述（Chrome 式「10 分钟前」），比裸网址更容易扫读。 */
+  const closedAgo = (at: number): string => {
+    if (!at) return "";
+    const diff = Date.now() - at;
+    if (diff < 60_000) return tr("browser.switcherAgoJustNow");
+    const minutes = Math.floor(diff / 60_000);
+    if (minutes < 60) return tr("browser.switcherAgoMinutes", { count: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return tr("browser.switcherAgoHours", { count: hours });
+    return tr("browser.switcherAgoDays", { count: Math.floor(hours / 24) });
+  };
+
+  /** 「最近关闭」一行：点一下按原标签组重开并切过去。 */
+  const renderClosedTab = (item: ClosedTabItem, index: number): React.ReactElement => {
+    const label = item.title || item.url;
+    const ago = closedAgo(item.closedAt);
+    return (
+      <button
+        key={`${item.url}-${item.closedAt}-${index}`}
+        type="button"
+        role="menuitem"
+        className="chrome-pop-item chrome-pop-item-two-line"
+        title={tr("browser.switcherReopenTitle", { url: item.url })}
+        onClick={() => void dispatch("reopenClosedTab", { index })}
+      >
+        <Icon name="restore" size={14} className="chrome-pop-icon" />
+        <span className="chrome-pop-main">
+          <MarqueeText className="chrome-pop-label" text={label} title={item.url} />
+          <MarqueeText
+            className="chrome-pop-sub"
+            text={ago ? `${ago} · ${item.url}` : item.url}
+            title={item.url}
+          />
+        </span>
+      </button>
+    );
+  };
+
+  const renderWorkspaces = (): React.ReactElement => {
+    if (error) return errorView(error);
+    if (switcherUserTabs === null || switcherClosed === null) return loadingView();
+    const noTabs = switcherSearch ? "" : tr("browser.switcherNoTabs");
+    const noClosed = switcherSearch ? "" : tr("browser.switcherNoClosed");
+    return (
+      <div className="chrome-pop-menu chrome-pop-switcher" role="menu" aria-label={tr("browser.workspaceMenuTitle")} onKeyDown={onListKeyDown}>
         <div className="chrome-pop-head">
           <span className="chrome-pop-title">{tr("browser.workspaceMenuTitle")}</span>
+          <span className="chrome-pop-count">{tr("browser.popover.count", { count: switcherTotal })}</span>
         </div>
-        {workspaces.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="menuitemradio"
-            aria-checked={item.id === activeWorkspaceId}
-            className="chrome-pop-item"
-            onClick={() => void dispatch("selectWorkspace", { id: item.id })}
-          >
-            <Icon name={item.id === activeWorkspaceId ? "check" : "folder"} size={14} className="chrome-pop-icon" />
-            <MarqueeText className="chrome-pop-label" text={item.name} />
-          </button>
-        ))}
-        <div className="chrome-pop-sep" role="separator" />
-        <button type="button" role="menuitem" className="chrome-pop-item" onClick={() => void dispatch("addWorkspace")}>
-          <Icon name="workspace-add" size={14} className="chrome-pop-icon" />
-          <span className="chrome-pop-label">{tr("chat.addWorkspace")}</span>
-        </button>
+        <div className="chrome-pop-switcher-search">
+          <Icon name="search" size={13} className="chrome-pop-icon" />
+          <input
+            ref={switcherSearchRef}
+            value={switcherQuery}
+            onChange={(event) => setSwitcherQuery(event.target.value)}
+            placeholder={tr("browser.switcherSearchPlaceholder")}
+            aria-label={tr("browser.switcherSearchPlaceholder")}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.stopPropagation();
+                const first = rootRef.current?.querySelector<HTMLButtonElement>(".chrome-pop-list .chrome-pop-item");
+                if (!first) return;
+                event.preventDefault();
+                first.focus();
+                return;
+              }
+              // 输入框里的 Home/End/↑ 属于文本编辑，不交给列表导航。
+              if (event.key === "ArrowUp" || event.key === "Home" || event.key === "End") event.stopPropagation();
+            }}
+          />
+          {switcherQuery ? (
+            <button
+              type="button"
+              className="chrome-pop-switcher-clear"
+              title={tr("browser.switcherClear")}
+              aria-label={tr("browser.switcherClear")}
+              onClick={() => {
+                setSwitcherQuery("");
+                switcherSearchRef.current?.focus();
+              }}
+            >
+              <Icon name="close" size={12} />
+            </button>
+          ) : null}
+        </div>
+        <div className="chrome-pop-list chrome-pop-switcher-list">
+          <div className="chrome-pop-section">
+            <span>{tr("browser.switcherTabs")}</span>
+            <span className="chrome-pop-section-count">{switcherTabCount}</span>
+          </div>
+          {switcherTabCount === 0
+            ? noTabs
+              ? emptyView(noTabs)
+              : null
+            : [
+                ...filteredUserTabs.map((tab) => renderUserTab(tab)),
+                ...filteredAgentWorkspaces.map((group) => renderAgentWorkspace(group)),
+              ]}
+          <div className="chrome-pop-section">
+            <span>{tr("browser.switcherRecentlyClosed")}</span>
+            <span className="chrome-pop-section-count">{filteredClosed.length}</span>
+          </div>
+          {filteredClosed.length === 0
+            ? noClosed
+              ? emptyView(noClosed)
+              : null
+            : filteredClosed.map(({ item, index }) => renderClosedTab(item, index))}
+          {switcherSearch && switcherTotal === 0 ? emptyView(tr("browser.switcherNoMatches")) : null}
+        </div>
       </div>
     );
   };

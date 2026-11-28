@@ -66,7 +66,13 @@ export function readImageAttachmentForLlm(
   model: { id: string; vision?: boolean; inputModalities?: string[] } | null | undefined,
   modelLabel: string,
 ): { mime: string; base64: string } | { error: string } {
-  if (model?.vision !== true && !model?.inputModalities?.includes("image")) {
+  // 只在「明确不支持」时拒绝：vision=false，或填了输入模态但没有 image。
+  // 很多自定义供应商（OpenAI 兼容网关）不填能力表 —— 旧实现把 undefined 当不支持，
+  // 用户明明用了视觉模型却永远发不出图。未知能力交给上游裁决，错误会以可见提示回来。
+  const modalities = Array.isArray(model?.inputModalities) ? model.inputModalities : [];
+  const explicitlyUnsupported =
+    model?.vision === false || (modalities.length > 0 && !modalities.includes("image"));
+  if (explicitlyUnsupported) {
     return { error: `当前模型（${modelLabel || "未配置"}）不支持图片输入，请切换视觉模型` };
   }
   const image = readImageDataUrl(filePath);
@@ -88,4 +94,20 @@ function magicMatches(mime: string, b: Buffer): boolean {
     return b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP";
   }
   return false;
+}
+
+/** 设置·通用 imageInputEnabled 关闭时，连像素都不读；否则按模型能力走原有读取。 */
+export function readImageAttachmentWithPrivacy(
+  filePath: string,
+  active: { model?: string; models?: { id: string; vision?: boolean; inputModalities?: string[] }[] } | null | undefined,
+  imageInputEnabled: boolean,
+): ReturnType<typeof readImageAttachmentForLlm> {
+  if (!imageInputEnabled) {
+    return { error: "图片输入已在「设置 · 通用」中关闭（隐私开关）" };
+  }
+  return readImageAttachmentForLlm(
+    filePath,
+    active?.models?.find((model) => model.id === active.model),
+    active?.model ?? "",
+  );
 }

@@ -28,7 +28,6 @@ import type {
   PermissionCategory, PermissionsState, Preferences,
   ProviderItem, ProviderModel, ProviderStatus, SkillRecord, TestProviderResult,
 } from "./types.js";
-
 /**
  * 设置面板：通用 / 外观 / 权限（含安全）/ 供应商 / 规则 / 技能 / 记忆 / 扩展 / MCP /
  * 存储 / 高级 / 关于。
@@ -37,8 +36,9 @@ import type {
  * i18n：界面文案全部走 `tr("settings.*")`，词典在 i18nSettings.ts（zh/en 成对）；
  * 语言切换由 i18n.ts 的 setLanguage 广播，本组件通过 useT 订阅即时重渲染。
  */
-
-import { SECTIONS, type SectionId } from "./settingsSections.js";
+import type { SectionId } from "./settingsSections.js";
+import { SettingsNav } from "./SettingsNav.js";
+import { SettingsGeneralExtras } from "./SettingsGeneralExtras.js";
 
 /** 可选搜索引擎（与 Preferences.searchEngine 枚举一致；只保留三家，DuckDuckGo 已下线）。 */
 const SEARCH_ENGINE_OPTIONS: { id: Preferences["searchEngine"]; name: string; host: string }[] = [
@@ -342,6 +342,8 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
             list={loopInfo}
             onReload={async () => { await reloadLoops(); }}
             onError={bad}
+            compressRatio={prefs?.contextCompressRatio ?? 0.75}
+            onOpenGeneral={() => setSection("general")}
           />
         );
 
@@ -382,7 +384,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
       case "general":
         return prefs ? (<div>
           <Head t={tr("settings.general.head")} h={tr("settings.general.headHint")} />
-          <Field l={tr("settings.general.language")}>
+          <Field anchor="language" l={tr("settings.general.language")}>
             <Seg
               v={prefs.language}
               opts={[
@@ -396,7 +398,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               }}
             />
           </Field>
-          <Field l={tr("settings.general.animations")} h={tr("settings.general.animationsHint")}>
+          <Field anchor="animations" l={tr("settings.general.animations")} h={tr("settings.general.animationsHint")}>
             <Seg
               v={prefs.animations}
               opts={[
@@ -407,7 +409,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               on={(x) => setPrefs({ ...prefs, animations: x as Preferences["animations"] })}
             />
           </Field>
-          <Field l={tr("settings.general.browserOpenLayout")} h={tr("settings.general.browserOpenLayoutHint")}>
+          <Field anchor="browserOpenLayout" l={tr("settings.general.browserOpenLayout")} h={tr("settings.general.browserOpenLayoutHint")}>
             <Seg
               v={prefs.browserOpenLayout ?? "docked"}
               opts={[
@@ -418,11 +420,12 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               on={(x) => setPrefs({ ...prefs, browserOpenLayout: x as Preferences["browserOpenLayout"] })}
             />
           </Field>
-          <Field l={tr("settings.general.adBlock")} h={tr("settings.general.adBlockHint")}>
+          <Field anchor="adBlock" l={tr("settings.general.adBlock")} h={tr("settings.general.adBlockHint")}>
             <Toggle v={prefs.adBlockEnabled ?? true} on={(x) => setPrefs({ ...prefs, adBlockEnabled: x })} />
           </Field>
-          <Field l={tr("settings.general.restoreSession")}><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
-          <Field l={tr("settings.general.closeBehavior")} h={tr("settings.general.closeBehaviorHint")}>
+          <SettingsGeneralExtras prefs={prefs} onChange={setPrefs} />
+          <Field anchor="restoreSession" l={tr("settings.general.restoreSession")}><Toggle v={prefs.restoreSession} on={(x) => setPrefs({ ...prefs, restoreSession: x })} /></Field>
+          <Field anchor="closeBehavior" l={tr("settings.general.closeBehavior")} h={tr("settings.general.closeBehaviorHint")}>
             <Seg
               v={prefs.closeBehavior ?? "quit"}
               opts={[
@@ -432,7 +435,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               on={(x) => setPrefs({ ...prefs, closeBehavior: x as "quit" | "tray" })}
             />
           </Field>
-          <Field l={tr("settings.general.maxRounds")} h={tr("settings.general.maxRoundsHint")}>
+          <Field anchor="maxRounds" l={tr("settings.general.maxRounds")} h={tr("settings.general.maxRoundsHint")}>
             <In
               v={String(prefs.agentMaxRounds ?? 80)}
               ph="40"
@@ -485,9 +488,9 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
               />
             </Field>
           ))}
-          <Field l={tr("settings.permissions.confirmDangerous")}>
-            <Toggle v={perms.permissions.confirmDangerousAlways} on={(x) => setPerms({ ...perms, permissions: { ...perms.permissions, confirmDangerousAlways: x } })} />
-          </Field>
+          <div style={S.note}>
+            {tr("settings.permissions.confirmDangerousFixed")}
+          </div>
           <Field l={tr("settings.permissions.workspaceRoots")} h={tr("settings.permissions.workspaceRootsHint")}>
             <Area v={perms.permissions.workspaceRoots.join("\n")} rows={3} on={(x) => setPerms({ ...perms, permissions: { ...perms.permissions, workspaceRoots: x.split("\n").map((s) => s.trim()).filter(Boolean) } })} />
           </Field>
@@ -1367,20 +1370,7 @@ export default function Settings({ api, onClose, onPreferencesSaved, initialSect
           <div style={S.header}><span style={S.title}>{tr("settings.title")}</span><button type="button" className="icon-btn" onClick={onClose} title={tr("settings.close")}><Icon name="close" size={14} /></button></div>
         )}
         <div style={S.bodyRow}>
-          <nav style={S.nav}>
-            {SECTIONS.map((s, index) => (
-              <React.Fragment key={s.id}>
-                {index === 0 || s.group !== SECTIONS[index - 1].group ? (
-                  <div style={S.navGroup}>{tr(`settings.nav.group.${s.group}`)}</div>
-                ) : null}
-              <button key={s.id} type="button" className={`settings-nav-item${section === s.id ? " is-active" : ""}`}
-                style={{ ...S.navItem, ...(section === s.id ? S.navItemActive : {}) }} onClick={() => setSection(s.id)}>
-                <Icon name={s.icon} size={15} style={{ marginTop: 2, flex: "none" }} />
-                <span style={S.navText}><span style={S.navLabel}>{tr(`settings.nav.${s.id}.label`)}</span><span style={S.navHint}>{tr(`settings.nav.${s.id}.hint`)}</span></span>
-              </button>
-              </React.Fragment>
-            ))}
-          </nav>
+          <SettingsNav section={section} onSelect={setSection} />
           <div className="settings-section" style={S.content}>
             {renderSection(section)}
             {visitedSections.filter((id) => id !== section).map((id) => (

@@ -1,5 +1,4 @@
 import type { AskUserRequest } from "./types.js";
-import AskUserDialog from "./AskUserDialog.js";
 import PermissionDialog from "./PermissionDialog.js";
 import Toast from "./Toast.js";
 import { getLanguage, t } from "./i18n.js";
@@ -14,8 +13,6 @@ export interface AppDialogsProps {
     category?: string;
   } | null;
   onRespondPermission: (choice: "allow-once" | "allow-session" | "deny") => void;
-  activeAsk: AskUserRequest | null;
-  onRespondAsk: (answer: string | null) => void;
   otherSessionAsk: AskUserRequest | null;
   /** 其它会话有挂起的权限确认（只给入口，不抢当前界面）。 */
   otherSessionPerm?: { sessionId?: string } | null;
@@ -32,8 +29,6 @@ export interface AppDialogsProps {
 export default function AppDialogs({
   permReq,
   onRespondPermission,
-  activeAsk,
-  onRespondAsk,
   otherSessionAsk,
   otherSessionPerm,
   onSwitchSession,
@@ -45,11 +40,8 @@ export default function AppDialogs({
     <>
       {permReq ? <PermissionDialog request={permReq} onRespond={onRespondPermission} /> : null}
 
-      {/* 询问弹窗：只处理当前会话（后台会话的提问/敏感确认不抢界面） */}
-      {activeAsk ? <AskUserDialog key={activeAsk.requestId} request={activeAsk} onRespond={onRespondAsk} /> : null}
-
-      {/* 其它会话有挂起的确认：给一个可点击入口，点它切到该会话再确认 */}
-      {!activeAsk && otherSessionAsk?.sessionId ? (
+      {/* 当前会话的提问已改为「会话内卡片」（见 App 的 chat 列），这里只处理后台会话入口 */}
+      {otherSessionAsk?.sessionId ? (
         <button
           type="button"
           className="ask-pending-other"
@@ -61,7 +53,7 @@ export default function AppDialogs({
       ) : null}
 
       {/* 其它会话有权限确认：同样给一个可点击入口，切过去再弹窗确认。 */}
-      {!permReq && !activeAsk && !otherSessionAsk && otherSessionPerm?.sessionId ? (
+      {!permReq && !otherSessionAsk && otherSessionPerm?.sessionId ? (
         <button
           type="button"
           className="ask-pending-other"

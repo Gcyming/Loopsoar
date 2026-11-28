@@ -34,7 +34,7 @@ const MARKER_FILES: [string, string][] = [
   ["packages/ui/src/SnapshotPanel.tsx", "snapshot"],
   ["packages/ui/src/Onboarding.tsx", "onboarding"],
   ["packages/ui/src/PermissionDialog.tsx", "permission"],
-  ["packages/ui/src/AskUserDialog.tsx", "ask"],
+  // ask_user 已改为「会话内卡片」（不再有全屏遮罩），故不再登记为整页覆盖层。
 ];
 
 describe("全屏覆盖层从标题栏下方开始", () => {

@@ -7,7 +7,7 @@
  *
  * 语义（与 ChatService 的自动压缩共用同一份纯逻辑 core/contextCompress）：
  *   1. 读取目标会话的持久化消息（SessionStore.loadMessages；缺省 = 当前会话）；
- *   2. 预算 = historyBudgetChars(当前模型 contextWindow)（8K~600K 字符，默认 60K）；
+ *   2. 预算 = 按当前模型 contextWindow 的 55% 反推字符数（按这批消息自己的 token/字符比换算）；
  *   3. 未超预算 → compressed=false，什么都不改（apply 也安全）；
  *   4. 超预算 → 保留最近 14 条原文，更早的消息压成确定性摘要（每条 240 字符），
  *      不额外调用模型（多一次请求 = 多一次失败/延迟/费用）；
@@ -18,8 +18,8 @@
  *   7. 可选 isBusy：会话正在生成时拒绝压缩（避免与流结束时的 append 竞态）。
  */
 import {
+  budgetCharsForTokenTarget,
   compressConversation,
-  historyBudgetChars,
   messageChars,
   type CompactableMessage,
 } from "loopsoar-core/contextCompress";
@@ -151,10 +151,14 @@ export function runCompact(
     if (persisted.length === 0) return failure("会话没有消息，无需压缩", sessionId);
     if (deps.isBusy?.(sessionId)) return failure("会话正在生成中，请稍后再压缩", sessionId);
 
-    const budgetChars = historyBudgetChars(deps.getContextWindow?.());
+    // 预算按 token 目标反推：中文≈1 字/token，固定 4 字符/token 会让中文会话永不触发压缩。
+    const contextWindow = deps.getContextWindow?.();
+    const targetTokens = Math.floor((contextWindow && contextWindow > 0 ? contextWindow : 128_000) * 0.55);
+    const messages = toCompactable(persisted);
+    const budgetChars = budgetCharsForTokenTarget(messages, targetTokens);
     // /compact 是用户显式操作：语义固定为「摘要 + 最近 14 条」（minKeepRecent=14），
     // 不因为预算小就偷偷把保留条数缩到 2 条；若仍超预算由 stillOverBudget 在上层提示。
-    const result = compressConversation(toCompactable(persisted), { budgetChars, minKeepRecent: 14 });
+    const result = compressConversation(messages, { budgetChars, minKeepRecent: 14 });
     const before: CompactStats = { messages: persisted.length, chars: result.beforeChars };
 
     // 未触发压缩：before=after，不写盘、不推送（apply 也保持幂等无副作用）。

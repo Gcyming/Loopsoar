@@ -10,9 +10,9 @@ export const styles: Record<string, CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    // 网页面板：四边留白 + 圆角 + 裁切，与原生 WebContentsView 的 inset/圆角共用同一契约值，
-    // 页面不再顶到窗口边缘（用户反馈的「硬朗直角」）；右侧紧邻会话栏，单独收窄到 4px。
-    margin: `${LAYOUT.BROWSER_VIEW_INSET}px ${LAYOUT.BROWSER_VIEW_INSET_RIGHT}px ${LAYOUT.BROWSER_VIEW_INSET}px ${LAYOUT.BROWSER_VIEW_INSET}px`,
+    // 网页面板：左侧 8px 呼吸位 + 圆角 + 裁切，与原生 WebContentsView 的几何共用同一契约值；
+    // 顶部/右侧/底部仍贴边，页面不再顶到程序左边界。
+    margin: `${LAYOUT.BROWSER_VIEW_INSET}px ${LAYOUT.BROWSER_VIEW_INSET_RIGHT}px ${LAYOUT.BROWSER_VIEW_INSET}px ${LAYOUT.BROWSER_VIEW_INSET_LEFT}px`,
     borderRadius: LAYOUT.BROWSER_VIEW_RADIUS,
     overflow: "hidden",
     boxSizing: "border-box",
@@ -193,49 +193,7 @@ export const styles: Record<string, CSSProperties> = {
     fontSize: 15,
   },
   searchSubmit: { width: 38, height: 38, flex: "none", borderRadius: 12, background: "rgba(200,118,60,0.16)", color: BRAND.ochreHover },
-  quickLinks: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
-    gap: 8,
-    width: "100%",
-    maxWidth: 620,
-    marginTop: 22,
-  },
-  quickLink: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 7,
-    padding: "10px 6px",
-    borderRadius: 12,
-    border: `1px solid transparent`,
-    background: "transparent",
-    color: BRAND.linenMuted,
-    cursor: "pointer",
-    transition: "background 120ms ease, border-color 120ms ease",
-  },
-  quickTile: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: BRAND.inkRaised,
-    border: `1px solid ${BRAND.border}`,
-    color: BRAND.ochreHover,
-    fontSize: 17,
-    fontWeight: 700,
-  },
-  quickFavicon: { borderRadius: 4, objectFit: "contain" },
-  quickLabel: {
-    width: "100%",
-    fontSize: 11,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    textAlign: "center",
-  },
+  // 快捷方式网格改用独立组件自己的样式（StartPageShortcuts.tsx）：旧 quick* 块已删除。
 
   /* ── Vibecoding 输入块 ── */
   vibeWorkspaceRow: { display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6, width: "100%", maxWidth: 720, marginTop: 6 },

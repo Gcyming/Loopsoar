@@ -681,100 +681,21 @@ export interface ChatHistoryMessage {
   model?: string;
 }
 
-/* ── 终端（持久多环境终端；P0 应用内终端面板） ── */
-
-/** 终端配置档：不同解释器 / 工具链环境（与 contracts 的 TerminalProfileKeySchema 对齐）。 */
-export type TerminalProfileKey = "cmd" | "powershell" | "gitbash" | "python" | "node" | "cpp";
-
-/** 配置档种类（shell 环境 / 解释器 REPL / 编译器工具链）。 */
-export type TerminalProfileKind = "shell" | "interpreter" | "toolchain";
-
-/** 配置档能力信息（探测结果）：不可用项 UI 禁用并显示 detail（安装提示）。 */
-export interface TerminalProfileInfo {
-  key: TerminalProfileKey;
-  label: string;
-  description: string;
-  available: boolean;
-  /** 探测到的版本号（如 "Python 3.12.4"），不可用时可能缺省。 */
-  version?: string;
-  /** 不可用原因 / 安装指引 / 额外说明（tooltip 展示）。 */
-  detail?: string;
-  kind: TerminalProfileKind;
-}
-
-/** 终端实例状态：进程退出后条目保留（exited，可回放/关闭），close 后才从列表移除。 */
-export type TerminalSessionState = "starting" | "ready" | "exited" | "error";
-
-/** 一个持久终端实例（主进程签发 terminalId）。 */
-export interface TerminalSessionInfo {
-  terminalId: string;
-  sessionId: string;
-  profile: TerminalProfileKey;
-  cwd: string;
-  state: TerminalSessionState;
-  createdAt: number;
-  /** 标签标题（shell 侧生成）。 */
-  label: string;
-}
-
-/** 终端回放缓冲（切换标签 / 重开面板时恢复输出；主进程环形缓冲上限 512KB）。 */
-export interface TerminalHistoryResult {
-  terminalId: string;
-  profile: string;
-  state: string;
-  /** 原始输出（含 ANSI 转义与 \r；UI 需 stripAnsi + 规范化）。 */
-  data: string;
-}
-
-/** 终端操作通用返回（run / input）。 */
-export interface TerminalActionResult {
-  ok: boolean;
-  error?: string;
-}
-
-/** terminal:data 事件负载：增量输出（stdout+stderr 合流、主进程 30ms 批处理）。 */
-export interface TerminalDataPayload {
-  terminalId: string;
-  data: string;
-}
-
-/** terminal:exit 事件负载：子进程退出（code=null 表示被信号终止）。 */
-export interface TerminalExitPayload {
-  terminalId: string;
-  code: number | null;
-  signal?: string;
-}
-
-/** terminal:state 事件负载：终端状态迁移（可能携带 cwd/label 更新）。 */
-export interface TerminalStatePayload {
-  terminalId: string;
-  state: TerminalSessionState;
-  cwd?: string;
-  label?: string;
-  error?: string;
-}
-
-/* ── 询问用户（ask_user 工具弹窗） ── */
-
-/** ask:user 事件负载（工具挂起等人回答；渲染层弹窗）。 */
-export interface AskUserRequest {
-  requestId: string;
-  question: string;
-  /** 可选项（最多 8 个；点选即回答）。 */
-  options?: string[];
-  /** 是否允许自由文本（缺省语义：无选项时允许）。 */
-  allowFreeText?: boolean;
-  /** 归属会话：缺失表示「当前会话」（兼容旧壳层）；有值时只在对应会话里弹窗。 */
-  sessionId?: string;
-  /** 语义：普通提问 / 敏感步骤确认（决定弹窗的视觉与按钮文案）。 */
-  kind?: "ask" | "sensitive";
-  /** 敏感确认的标题。 */
-  title?: string;
-  /** 敏感确认的上下文行（操作 / 目标 / 原因 / 页面）。 */
-  detail?: { label: string; value: string }[];
-  /** 到期时刻（ms）：用于倒计时与到期自动收起。 */
-  expiresAt?: number;
-}
+/* 终端类型已拆到 terminalTypes.ts（types.d.ts 受 1400 行预算约束）。 */
+export type {
+  TerminalProfileKey,
+  TerminalProfileKind,
+  TerminalProfileInfo,
+  TerminalSessionState,
+  TerminalSessionInfo,
+  TerminalHistoryResult,
+  TerminalActionResult,
+  TerminalDataPayload,
+  TerminalExitPayload,
+  TerminalStatePayload,
+} from "./terminalTypes.js";
+/* ── 询问用户（ask_user 工具弹窗）：类型已拆到 askTypes.ts（本文件受 1400 行预算约束） ── */
+export type { AskUserOption, AskUserReply, AskUserRequest } from "./askTypes.js";
 
 /** ask:respond 返回：是否命中等待中的问题（重复/过期 = false）。 */
 export interface AskRespondResult {
@@ -805,6 +726,18 @@ export interface BookmarkItem {
   id: string;
   url: string;
   title: string;
+  createdAt: number;
+}
+
+export type { ShortcutWriteResult } from "./shortcutTypes.js";
+
+/** 新标签页「快捷方式」（用户主动添加；与历史记录无关）。 */
+export interface ShortcutItem {
+  id: string;
+  url: string;
+  title: string;
+  /** 页面图标（data URL）；缺省时 UI 用首字母块。 */
+  icon?: string;
   createdAt: number;
 }
 
@@ -920,7 +853,16 @@ export interface LoopsoarAPI {
   perm: LoopsoarDomain;
   ask: LoopsoarDomain & {
     /** 回答/取消挂起中的 ask_user 问题；received=false 表示问题已过期或会话已结束。 */
-    respond(payload: { requestId: string; answer?: string; cancelled?: boolean }): Promise<AskRespondResult>;
+    respond(
+      payload: {
+        requestId: string;
+        answer?: string;
+        choice?: string;
+        choices?: string[];
+        skipped?: boolean;
+        cancelled?: boolean;
+      },
+    ): Promise<AskRespondResult>;
   };
   /** 浏览器工具栏浮层（独立子窗口渲染）。 */
   ui: LoopsoarDomain & {
@@ -1044,6 +986,10 @@ export interface LoopsoarAPI {
     setTabMuted(payload: { tabId: string; muted: boolean }): Promise<{ ok: boolean }>;
     setTabPinned(payload: { tabId: string; pinned: boolean }): Promise<{ ok: boolean }>;
     reopenClosedTab(): Promise<{ ok: boolean; tabId?: string }>;
+    /** 最近关闭的网页（新→旧，最多 20 条）：面板「最近关闭」分区的数据源。 */
+    listClosedTabs(): Promise<{ tabs: { url: string; title: string; sessionId: string; closedAt: number; agentBound: boolean }[] }>;
+    /** 按下标重开最近关闭的一条（0 = 最新）。 */
+    reopenClosedTabAt(payload: { index?: number }): Promise<{ ok: boolean; tabId?: string; sessionId?: string; agentBound?: boolean }>;
     /** 删除会话时关闭该会话名下的全部网页（工作区 > 会话 > 网页；删会话才关网页，关网页不删会话）。 */
     closeSessionTabs(payload: { sessionId: string }): Promise<{ closed: number }>;
     selectTab(payload: { tabId: string }): Promise<{ selected: boolean }>;
@@ -1055,7 +1001,7 @@ export interface LoopsoarAPI {
     /** 主题外壳色：四角遮罩/网页切角跟随。 */
     setCornerColor(payload: { color: string }): Promise<{ ok: boolean }>;
     /** 所有任务（跨会话任务条）。 */
-    listTasks(): Promise<{ tasks: { sessionId: string; tabs: TabState[] }[]; visibleSession: string }>;
+    listTasks(): Promise<{ tasks: { sessionId: string; tabs: TabState[] }[]; userTabs?: TabState[]; userSession?: string; visibleSession: string }>;
     /** 进入某个任务的折叠工作区（同时应切到该会话）。 */
     showTask(payload: { sessionId: string }): Promise<{ ok: boolean; tabs: TabState[] }>;
     /** 回到全局用户标签。 */
@@ -1098,6 +1044,18 @@ export interface LoopsoarAPI {
     update(payload: { id: string; title?: string; url?: string }): Promise<{ ok: boolean; bookmark?: BookmarkItem; error?: string }>;
     /** 删除书签；ok=false 表示已不存在（幂等）。 */
     remove(payload: { id: string }): Promise<{ ok: boolean }>;
+  };
+  shortcuts: LoopsoarDomain & {
+    /** 快捷方式列表（添加顺序；上限 24）。 */
+    list(): Promise<{ shortcuts: ShortcutItem[] }>;
+    /** 新增快捷方式；只写 example.com 时主进程补 https://。 */
+    add(payload: { url: string; title?: string; icon?: string }): Promise<ShortcutWriteResult>;
+    /** 编辑标题/网址/图标。 */
+    update(payload: { id: string; title?: string; url?: string; icon?: string }): Promise<ShortcutWriteResult>;
+    /** 删除；ok=false 表示已不存在（幂等）。 */
+    remove(payload: { id: string }): Promise<{ ok: boolean }>;
+    /** 移到最前（右键「移到最前」）。 */
+    pin(payload: { id: string }): Promise<{ ok: boolean }>;
   };
   terminal: LoopsoarDomain & {
     /** 探测本机可用的终端配置档（cmd/PowerShell/Git Bash/Python/Node/C++；裸数组）。 */

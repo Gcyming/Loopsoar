@@ -33,6 +33,7 @@ import type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browse
 import { AgentInputDriver } from "./agentInput.js";
 import { BrowserViewLayout, type LayoutGroup } from "./browserViewLayout.js";
 import { mergeRecent, toTabStates } from "./browserTabView.js";
+import { ClosedTabStack, type ClosedTabView } from "./closedTabStack.js";
 import { downloadCompatibleReferer, refererForNavigation } from "./browserNavigationSupport.js";
 export type { BrowserHostDeps, BrowserVisit, HostView, TabState } from "./browserHostTypes.js";
 
@@ -99,8 +100,8 @@ export class BrowserHost {
   private groups = new Map<string, SessionGroup>();
   /** 控制台/网络旁路观测：不参与标签生命周期，只保留最近 N 条。 */
   private observability = new BrowserObservability();
-  /** 最近关闭的标签（Chrome 式「重新打开关闭的标签页」；只保存在内存，退出后清空）。 */
-  private closedTabs: { url: string; title: string; sessionId: string; agentBound?: boolean; pinned?: boolean }[] = [];
+  /** 最近关闭（Chrome 式；只在内存，退出后清空）——倒序读/按下标取都在 ClosedTabStack 里。 */
+  private closedTabs = new ClosedTabStack((entries) => this.deps.onClosedTabsChanged?.(entries));
   private activeSession: string;
   /** 当前显示的标签组：默认用户全局标签；进入任务会话时指向该会话的 Agent 工作区。 */
   private visibleSession: string;
@@ -946,22 +947,21 @@ export class BrowserHost {
   /** 批量关闭（关闭其他/右侧）：一次遍历，避免 UI 连续 20 次 IPC。 */
   async closeTabs(tabIds: string[], sessionId?: string): Promise<number> {
     let closed = 0;
-    for (const id of tabIds) {
-      if (await this.closeTab(id, sessionId)) closed += 1;
-    }
+    for (const id of tabIds) if (await this.closeTab(id, sessionId)) closed += 1;
     return closed;
   }
 
-  /** 重新打开最近关闭的标签（最多 20 条；只在当前可见会话/原会话仍存在时重开）。 */
-  async reopenClosedTab(sessionId?: string): Promise<{ ok: boolean; tabId?: string }> {
-    const last = this.closedTabs.pop();
+  /** 最近关闭（新→旧）：面板数据源；restore 用于启动时从磁盘恢复（退出后仍保留）。 */
+  listClosedTabs(): ClosedTabView[] { return this.closedTabs.list(); }
+  restoreClosedTabs(raw: unknown): void { this.closedTabs.restore(raw); }
+
+  /** 重开最近关闭的网页（原会话还在就回原标签组）；index 0 = 最新。 */
+  async reopenClosedTab(sessionId?: string, index = 0): Promise<{ ok: boolean; tabId?: string; sessionId?: string; agentBound?: boolean }> {
+    const last = this.closedTabs.take(index);
     if (!last) return { ok: false };
     const targetSession = this.groups.has(last.sessionId) ? last.sessionId : sessionId ?? this.currentSessionForTabs();
-    const result = await this.newTab(last.url, targetSession, last.agentBound ? "agent" : "user", {
-      forceNew: true,
-      pinned: last.pinned,
-    });
-    return result.ok ? { ok: true, tabId: result.tabId } : { ok: false };
+    const result = await this.newTab(last.url, targetSession, last.agentBound ? "agent" : "user", { forceNew: true, pinned: last.pinned });
+    return result.ok ? { ok: true, tabId: result.tabId, sessionId: targetSession, agentBound: last.agentBound === true } : { ok: false };
   }
 
   private currentSessionForTabs(): string {
@@ -1023,15 +1023,9 @@ export class BrowserHost {
     const entry = group.tabs.get(tabId);
     if (!entry) return false;
     const sid = sessionId ?? this.activeSession;
+    // 只有真正有地址的网页才进「最近关闭」：空白新标签页重开没有意义。
     if (entry.url) {
-      this.closedTabs.push({
-        url: entry.url,
-        title: entry.title,
-        sessionId: sid,
-        ...(entry.agentBound ? { agentBound: true } : {}),
-        ...(entry.pinned ? { pinned: true } : {}),
-      });
-      if (this.closedTabs.length > 20) this.closedTabs.shift();
+      this.closedTabs.pushEntry({ url: entry.url, title: entry.title, sessionId: sid, agentBound: entry.agentBound, pinned: entry.pinned });
     }
     // 关闭前先静音：视图销毁/分离的瞬间，页面仍可能继续播放声音。
     entry.view.webContents.setAudioMuted?.(true);
